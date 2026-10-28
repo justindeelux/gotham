@@ -182,3 +182,79 @@ func TestIncidentEventHistoryIsBoundedAndOrdered(t *testing.T) {
 		t.Fatalf("events are not newest first")
 	}
 }
+
+func TestIncidentActiveOrderFiltersAndCursor(t *testing.T) {
+	ctx, cancel := context.WithTimeout(context.Background(), 60*time.Second)
+	defer cancel()
+	st := scratchStore(t)
+
+	suffix := time.Now().UnixNano()
+	owner, err := st.CreateFirstUser(ctx, fmt.Sprintf("inc-order-%d@example.com", suffix), nil)
+	if err != nil {
+		t.Fatalf("create owner: %v", err)
+	}
+	ownerID := pgtype.UUID{Bytes: uuid.UUID(owner.ID.Bytes), Valid: true}
+	base := time.Now().UTC().Add(-48 * time.Hour).Truncate(time.Microsecond)
+
+	criticalOld := incidentParams(uuid.New(), uuid.Nil, "node:crit-old", "firing", base, time.Time{})
+	criticalOld.Severity = "critical"
+	criticalOld.ResourceType = "node"
+	criticalNew := incidentParams(uuid.New(), uuid.Nil, "node:crit-new", "firing", base.Add(2*time.Hour), time.Time{})
+	criticalNew.Severity = "critical"
+	criticalNew.ResourceType = "node"
+	warningOld := incidentParams(uuid.New(), uuid.Nil, "app:warn-old", "firing", base.Add(time.Hour), time.Time{})
+	warningOld.Severity = "warning"
+	warningOld.ResourceType = "application"
+	for _, row := range []sqlc.CreateIncidentParams{criticalNew, warningOld, criticalOld} {
+		if _, err := st.CreateIncident(ctx, row); err != nil {
+			t.Fatalf("create incident: %v", err)
+		}
+	}
+
+	count, err := st.CountActiveIncidents(ctx, sqlc.CountActiveIncidentsParams{IsOwner: true, UserID: ownerID})
+	if err != nil || count != 3 {
+		t.Fatalf("CountActive = %d %v; want 3", count, err)
+	}
+
+	page, err := st.ListIncidents(ctx, sqlc.ListIncidentsParams{IsOwner: true, UserID: ownerID, RowLimit: 2})
+	if err != nil {
+		t.Fatalf("ListIncidents: %v", err)
+	}
+	if len(page) != 2 || page[0].IdentityKey != "node:crit-old" || page[1].IdentityKey != "node:crit-new" {
+		t.Fatalf("active order = %v; want oldest critical first", identityKeys(page))
+	}
+	last := page[len(page)-1]
+	next, err := st.ListIncidents(ctx, sqlc.ListIncidentsParams{
+		IsOwner:    true,
+		UserID:     ownerID,
+		CursorAt:   last.FirstObservedAt,
+		CursorID:   last.ID,
+		CursorRank: 0,
+		RowLimit:   2,
+	})
+	if err != nil {
+		t.Fatalf("ListIncidents cursor: %v", err)
+	}
+	if len(next) != 1 || next[0].IdentityKey != "app:warn-old" {
+		t.Fatalf("cursor page = %v; want the warning row", identityKeys(next))
+	}
+
+	resourceType := "application"
+	filtered, err := st.ListIncidents(ctx, sqlc.ListIncidentsParams{
+		IsOwner:            true,
+		UserID:             ownerID,
+		ResourceTypeFilter: &resourceType,
+		RowLimit:           10,
+	})
+	if err != nil || len(filtered) != 1 {
+		t.Fatalf("resource filter = %d %v; want 1", len(filtered), err)
+	}
+}
+
+func identityKeys(rows []sqlc.Incident) []string {
+	keys := make([]string, 0, len(rows))
+	for _, row := range rows {
+		keys = append(keys, row.IdentityKey)
+	}
+	return keys
+}

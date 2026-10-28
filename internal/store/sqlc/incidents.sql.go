@@ -175,6 +175,47 @@ func (q *Queries) ClearExpiredSnooze(ctx context.Context, arg ClearExpiredSnooze
 	return i, err
 }
 
+const countActiveIncidents = `-- name: CountActiveIncidents :one
+SELECT COUNT(*) FROM incidents i
+WHERE (
+        $1::boolean
+        OR (
+            i.project_id IS NOT NULL
+            AND EXISTS (
+                SELECT 1 FROM project_members m
+                WHERE m.user_id = $2 AND m.project_id = i.project_id
+            )
+        )
+    )
+    AND i.lifecycle <> 'resolved'
+    AND ($3::text IS NULL OR i.lifecycle = $3)
+    AND ($4::text IS NULL OR i.severity = $4)
+    AND ($5::text IS NULL OR i.resource_type = $5)
+`
+
+type CountActiveIncidentsParams struct {
+	IsOwner            bool        `json:"is_owner"`
+	UserID             pgtype.UUID `json:"user_id"`
+	LifecycleFilter    *string     `json:"lifecycle_filter"`
+	SeverityFilter     *string     `json:"severity_filter"`
+	ResourceTypeFilter *string     `json:"resource_type_filter"`
+}
+
+// The dashboard badge counts the same visibility scope as the list without
+// exposing rows a member cannot see.
+func (q *Queries) CountActiveIncidents(ctx context.Context, arg CountActiveIncidentsParams) (int64, error) {
+	row := q.db.QueryRow(ctx, countActiveIncidents,
+		arg.IsOwner,
+		arg.UserID,
+		arg.LifecycleFilter,
+		arg.SeverityFilter,
+		arg.ResourceTypeFilter,
+	)
+	var count int64
+	err := row.Scan(&count)
+	return count, err
+}
+
 const createIncident = `-- name: CreateIncident :one
 INSERT INTO incidents (
     id, identity_key, detector_key, scope_kind, scope_id, node_id, project_id,
@@ -752,28 +793,35 @@ WHERE (
     AND ($3::boolean OR i.lifecycle <> 'resolved')
     AND ($4::text IS NULL OR i.lifecycle = $4)
     AND ($5::text IS NULL OR i.severity = $5)
+    AND ($6::text IS NULL OR i.resource_type = $6)
     AND (
-        $6::timestamptz IS NULL
-        OR (i.updated_at, i.id) < ($6::timestamptz, $7::uuid)
+        $7::timestamptz IS NULL
+        OR (
+            (CASE i.severity WHEN 'critical' THEN 0 ELSE 1 END, i.first_observed_at, i.id)
+            > ($8::integer, $7::timestamptz, $9::uuid)
+        )
     )
-ORDER BY i.updated_at DESC, i.id DESC
-LIMIT $8
+ORDER BY (CASE i.severity WHEN 'critical' THEN 0 ELSE 1 END), i.first_observed_at, i.id
+LIMIT $10
 `
 
 type ListIncidentsParams struct {
-	IsOwner         bool               `json:"is_owner"`
-	UserID          pgtype.UUID        `json:"user_id"`
-	IncludeResolved bool               `json:"include_resolved"`
-	LifecycleFilter *string            `json:"lifecycle_filter"`
-	SeverityFilter  *string            `json:"severity_filter"`
-	CursorAt        pgtype.Timestamptz `json:"cursor_at"`
-	CursorID        pgtype.UUID        `json:"cursor_id"`
-	RowLimit        int32              `json:"row_limit"`
+	IsOwner            bool               `json:"is_owner"`
+	UserID             pgtype.UUID        `json:"user_id"`
+	IncludeResolved    bool               `json:"include_resolved"`
+	LifecycleFilter    *string            `json:"lifecycle_filter"`
+	SeverityFilter     *string            `json:"severity_filter"`
+	ResourceTypeFilter *string            `json:"resource_type_filter"`
+	CursorAt           pgtype.Timestamptz `json:"cursor_at"`
+	CursorRank         int32              `json:"cursor_rank"`
+	CursorID           pgtype.UUID        `json:"cursor_id"`
+	RowLimit           int32              `json:"row_limit"`
 }
 
 // is_owner is resolved from the database role before this query; members only
-// see incidents whose project grant still exists. Then active rows are ordered
-// and limited, so a member cannot count or page through another project.
+// see incidents whose project grant still exists. Active rows put critical
+// before warning and the oldest condition first, so the operator sees the
+// longest-running critical problem at the top.
 func (q *Queries) ListIncidents(ctx context.Context, arg ListIncidentsParams) ([]Incident, error) {
 	rows, err := q.db.Query(ctx, listIncidents,
 		arg.IsOwner,
@@ -781,6 +829,106 @@ func (q *Queries) ListIncidents(ctx context.Context, arg ListIncidentsParams) ([
 		arg.IncludeResolved,
 		arg.LifecycleFilter,
 		arg.SeverityFilter,
+		arg.ResourceTypeFilter,
+		arg.CursorAt,
+		arg.CursorRank,
+		arg.CursorID,
+		arg.RowLimit,
+	)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	items := []Incident{}
+	for rows.Next() {
+		var i Incident
+		if err := rows.Scan(
+			&i.ID,
+			&i.IdentityKey,
+			&i.DetectorKey,
+			&i.ScopeKind,
+			&i.ScopeID,
+			&i.NodeID,
+			&i.ProjectID,
+			&i.ResourceType,
+			&i.ResourceID,
+			&i.ResourceName,
+			&i.Severity,
+			&i.Lifecycle,
+			&i.Coverage,
+			&i.FirstObservedAt,
+			&i.LastObservedAt,
+			&i.LastValidAt,
+			&i.ConfirmedAt,
+			&i.RecoveryStartedAt,
+			&i.ResolvedAt,
+			&i.CloseReason,
+			&i.AcknowledgedAt,
+			&i.AcknowledgedBy,
+			&i.SnoozedUntil,
+			&i.SnoozeNotifiedUntil,
+			&i.DeliveryState,
+			&i.DeliveryHold,
+			&i.DeliveryEvent,
+			&i.DeliveryAttempts,
+			&i.DeliveryError,
+			&i.LastNotifiedSeverity,
+			&i.Evidence,
+			&i.CreatedAt,
+			&i.UpdatedAt,
+			&i.SeveritySince,
+		); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
+const listResolvedIncidents = `-- name: ListResolvedIncidents :many
+SELECT i.id, i.identity_key, i.detector_key, i.scope_kind, i.scope_id, i.node_id, i.project_id, i.resource_type, i.resource_id, i.resource_name, i.severity, i.lifecycle, i.coverage, i.first_observed_at, i.last_observed_at, i.last_valid_at, i.confirmed_at, i.recovery_started_at, i.resolved_at, i.close_reason, i.acknowledged_at, i.acknowledged_by, i.snoozed_until, i.snooze_notified_until, i.delivery_state, i.delivery_hold, i.delivery_event, i.delivery_attempts, i.delivery_error, i.last_notified_severity, i.evidence, i.created_at, i.updated_at, i.severity_since FROM incidents i
+WHERE (
+        $1::boolean
+        OR (
+            i.project_id IS NOT NULL
+            AND EXISTS (
+                SELECT 1 FROM project_members m
+                WHERE m.user_id = $2 AND m.project_id = i.project_id
+            )
+        )
+    )
+    AND i.lifecycle = 'resolved'
+    AND ($3::text IS NULL OR i.severity = $3)
+    AND ($4::text IS NULL OR i.resource_type = $4)
+    AND (
+        $5::timestamptz IS NULL
+        OR (COALESCE(i.resolved_at, i.updated_at), i.id) < ($5::timestamptz, $6::uuid)
+    )
+ORDER BY COALESCE(i.resolved_at, i.updated_at) DESC, i.id DESC
+LIMIT $7
+`
+
+type ListResolvedIncidentsParams struct {
+	IsOwner            bool               `json:"is_owner"`
+	UserID             pgtype.UUID        `json:"user_id"`
+	SeverityFilter     *string            `json:"severity_filter"`
+	ResourceTypeFilter *string            `json:"resource_type_filter"`
+	CursorAt           pgtype.Timestamptz `json:"cursor_at"`
+	CursorID           pgtype.UUID        `json:"cursor_id"`
+	RowLimit           int32              `json:"row_limit"`
+}
+
+// The recent-resolved view is separate from active incidents and is ordered by
+// recovery time, so an old resolved row never displaces the newest recovery.
+func (q *Queries) ListResolvedIncidents(ctx context.Context, arg ListResolvedIncidentsParams) ([]Incident, error) {
+	rows, err := q.db.Query(ctx, listResolvedIncidents,
+		arg.IsOwner,
+		arg.UserID,
+		arg.SeverityFilter,
+		arg.ResourceTypeFilter,
 		arg.CursorAt,
 		arg.CursorID,
 		arg.RowLimit,

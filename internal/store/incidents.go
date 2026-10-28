@@ -28,6 +28,14 @@ func (s *Store) ListIncidents(ctx context.Context, params sqlc.ListIncidentsPara
 	return s.queries.ListIncidents(ctx, params)
 }
 
+func (s *Store) ListResolvedIncidents(ctx context.Context, params sqlc.ListResolvedIncidentsParams) ([]sqlc.Incident, error) {
+	return s.queries.ListResolvedIncidents(ctx, params)
+}
+
+func (s *Store) CountActiveIncidents(ctx context.Context, params sqlc.CountActiveIncidentsParams) (int64, error) {
+	return s.queries.CountActiveIncidents(ctx, params)
+}
+
 func (s *Store) ListActiveNodeIncidents(ctx context.Context) ([]sqlc.Incident, error) {
 	return s.queries.ListActiveNodeIncidents(ctx)
 }

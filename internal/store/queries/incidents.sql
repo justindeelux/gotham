@@ -28,8 +28,9 @@ SELECT * FROM incidents WHERE id = $1 FOR UPDATE;
 
 -- name: ListIncidents :many
 -- is_owner is resolved from the database role before this query; members only
--- see incidents whose project grant still exists. Then active rows are ordered
--- and limited, so a member cannot count or page through another project.
+-- see incidents whose project grant still exists. Active rows put critical
+-- before warning and the oldest condition first, so the operator sees the
+-- longest-running critical problem at the top.
 SELECT i.* FROM incidents i
 WHERE (
         sqlc.arg(is_owner)::boolean
@@ -44,12 +45,59 @@ WHERE (
     AND (sqlc.arg(include_resolved)::boolean OR i.lifecycle <> 'resolved')
     AND (sqlc.narg(lifecycle_filter)::text IS NULL OR i.lifecycle = sqlc.narg(lifecycle_filter))
     AND (sqlc.narg(severity_filter)::text IS NULL OR i.severity = sqlc.narg(severity_filter))
+    AND (sqlc.narg(resource_type_filter)::text IS NULL OR i.resource_type = sqlc.narg(resource_type_filter))
     AND (
         sqlc.narg(cursor_at)::timestamptz IS NULL
-        OR (i.updated_at, i.id) < (sqlc.narg(cursor_at)::timestamptz, sqlc.narg(cursor_id)::uuid)
+        OR (
+            (CASE i.severity WHEN 'critical' THEN 0 ELSE 1 END, i.first_observed_at, i.id)
+            > (sqlc.arg(cursor_rank)::integer, sqlc.narg(cursor_at)::timestamptz, sqlc.narg(cursor_id)::uuid)
+        )
     )
-ORDER BY i.updated_at DESC, i.id DESC
+ORDER BY (CASE i.severity WHEN 'critical' THEN 0 ELSE 1 END), i.first_observed_at, i.id
 LIMIT sqlc.arg(row_limit);
+
+-- name: ListResolvedIncidents :many
+-- The recent-resolved view is separate from active incidents and is ordered by
+-- recovery time, so an old resolved row never displaces the newest recovery.
+SELECT i.* FROM incidents i
+WHERE (
+        sqlc.arg(is_owner)::boolean
+        OR (
+            i.project_id IS NOT NULL
+            AND EXISTS (
+                SELECT 1 FROM project_members m
+                WHERE m.user_id = sqlc.arg(user_id) AND m.project_id = i.project_id
+            )
+        )
+    )
+    AND i.lifecycle = 'resolved'
+    AND (sqlc.narg(severity_filter)::text IS NULL OR i.severity = sqlc.narg(severity_filter))
+    AND (sqlc.narg(resource_type_filter)::text IS NULL OR i.resource_type = sqlc.narg(resource_type_filter))
+    AND (
+        sqlc.narg(cursor_at)::timestamptz IS NULL
+        OR (COALESCE(i.resolved_at, i.updated_at), i.id) < (sqlc.narg(cursor_at)::timestamptz, sqlc.narg(cursor_id)::uuid)
+    )
+ORDER BY COALESCE(i.resolved_at, i.updated_at) DESC, i.id DESC
+LIMIT sqlc.arg(row_limit);
+
+-- name: CountActiveIncidents :one
+-- The dashboard badge counts the same visibility scope as the list without
+-- exposing rows a member cannot see.
+SELECT COUNT(*) FROM incidents i
+WHERE (
+        sqlc.arg(is_owner)::boolean
+        OR (
+            i.project_id IS NOT NULL
+            AND EXISTS (
+                SELECT 1 FROM project_members m
+                WHERE m.user_id = sqlc.arg(user_id) AND m.project_id = i.project_id
+            )
+        )
+    )
+    AND i.lifecycle <> 'resolved'
+    AND (sqlc.narg(lifecycle_filter)::text IS NULL OR i.lifecycle = sqlc.narg(lifecycle_filter))
+    AND (sqlc.narg(severity_filter)::text IS NULL OR i.severity = sqlc.narg(severity_filter))
+    AND (sqlc.narg(resource_type_filter)::text IS NULL OR i.resource_type = sqlc.narg(resource_type_filter));
 
 -- name: ListActiveNodeIncidents :many
 SELECT * FROM incidents

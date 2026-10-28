@@ -421,12 +421,24 @@ func (s *Service) List(ctx context.Context, userID uuid.UUID, filter ListParams)
 	if limit > MaxPageSize {
 		limit = MaxPageSize
 	}
+	scope := ListFilter{
+		UserID:       userID,
+		IsOwner:      owner,
+		Lifecycle:    filter.Lifecycle,
+		Severity:     filter.Severity,
+		ResourceType: filter.ResourceType,
+	}
+	activeCount, err := s.repo.CountActive(ctx, scope)
+	if err != nil {
+		return Page{}, err
+	}
 	rows, err := s.repo.List(ctx, ListFilter{
 		UserID:          userID,
 		IsOwner:         owner,
-		IncludeResolved: filter.IncludeResolved,
+		IncludeResolved: filter.IncludeResolved || filter.Lifecycle != nil && *filter.Lifecycle == LifecycleResolved,
 		Lifecycle:       filter.Lifecycle,
 		Severity:        filter.Severity,
+		ResourceType:    filter.ResourceType,
 		Cursor:          filter.Cursor,
 		// Read one extra row to know whether another page exists without a
 		// count that could disclose hidden rows.
@@ -439,7 +451,19 @@ func (s *Service) List(ctx context.Context, userID uuid.UUID, filter ListParams)
 	if len(rows) > limit {
 		rows = rows[:limit]
 		last := rows[len(rows)-1]
-		next = encodeCursor(Cursor{At: last.UpdatedAt, ID: last.ID})
+		if filter.Lifecycle != nil && *filter.Lifecycle == LifecycleResolved {
+			at := last.UpdatedAt
+			if last.ResolvedAt != nil {
+				at = *last.ResolvedAt
+			}
+			next = encodeCursor(Cursor{At: at, ID: last.ID})
+		} else {
+			next = encodeCursor(Cursor{
+				At:   last.FirstObservedAt,
+				ID:   last.ID,
+				Rank: severityRank(last.Severity),
+			})
+		}
 	}
 	grouping, err := s.nodeGrouping(ctx)
 	if err != nil {
@@ -449,7 +473,14 @@ func (s *Service) List(ctx context.Context, userID uuid.UUID, filter ListParams)
 	for _, inc := range rows {
 		views = append(views, view(inc, grouping, owner))
 	}
-	return Page{Incidents: views, NextCursor: next}, nil
+	return Page{Incidents: views, NextCursor: next, ActiveCount: activeCount}, nil
+}
+
+func severityRank(severity Severity) int {
+	if severity == SeverityCritical {
+		return 0
+	}
+	return 1
 }
 
 func (s *Service) History(ctx context.Context, userID, incidentID uuid.UUID, filter HistoryParams) ([]Event, error) {
@@ -671,6 +702,7 @@ type ListParams struct {
 	IncludeResolved bool
 	Lifecycle       *Lifecycle
 	Severity        *Severity
+	ResourceType    *string
 	Cursor          *Cursor
 	Limit           int
 }

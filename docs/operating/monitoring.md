@@ -86,6 +86,12 @@ mount, purpose, free/total space and free/total inodes, and links to the
 **Metrics** tab for the underlying charts. Suggested action is to inspect
 storage or logs, or reduce load.
 
+The dashboard's **Needs attention** panel aggregates these incidents across the
+resources the caller can see, with acknowledge, snooze, filters and recovery
+status. See
+[Notifications](/using/notifications#needs-attention-on-the-dashboard) for the
+panel's behaviour and access rules.
+
 ## Application and database runtime health
 
 Host pressure is only half of the picture: a node can have spare CPU and disk

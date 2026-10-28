@@ -129,6 +129,41 @@ off by default, so only manual checks in the panel notify unless a check schedul
 has been enabled. These notifications do not enable checks or automatic updates.
 Restarting Gotham clears this memory, so the same available update may notify again.
 
+## Needs attention on the dashboard
+
+The dashboard opens with **Needs attention**, the current state for every
+resource you can see. It is separate from the notification inbox: unread counts
+are event history, while this panel shows which conditions are still active.
+
+Active incidents are sorted critical first and then by how long they have been
+active, so the oldest critical condition comes first. Each row gives the plain
+reason, the resource, when it started, the latest valid observation and the
+coverage of the evidence behind it. **Severity** and **Resource** filters and
+**Load more** keep large result sets bounded. Members only see incidents for
+projects they can currently access; revoking a grant removes the rows and their
+counts immediately.
+
+When a server is unreachable, its dependent application and database incidents
+are grouped beneath it with unknown coverage. Grouping shows what is affected,
+not a proven cause: Gotham does not claim that the server outage caused those
+symptoms.
+
+**Acknowledge** records who is handling the condition and silences delivery;
+**Snooze** silences it for 1 hour or 24 hours, and the row shows the exact
+expiration. Neither action changes the measured severity or lifecycle, and
+opening the inbox or an incident never acknowledges it. Acknowledged and snoozed
+conditions stay visible with their status, and the row shows why delivery is
+held. **Recently resolved** is a separate, bounded view of recoveries.
+
+The panel follows the authenticated realtime channel: a new or recovered incident
+refreshes the open dashboard, a reconnect refetches, and a visible tab falls back
+to a 60-second refresh. Distinct messages distinguish an API outage, no server
+having reported yet, monitoring not being available on the instance, and a
+genuinely healthy system. Links open the application or database detail (and logs
+for runtime failures), the server metrics, or notification settings. Unknown
+detectors and resource types get a neutral label; raw evidence, errors, secrets
+and host paths are never shown for them.
+
 ## Test send and delivery history
 
 **Send test** delivers a synthetic test message to that one channel and reports

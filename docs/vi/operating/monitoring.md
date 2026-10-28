@@ -80,6 +80,12 @@ và độ mới của dữ liệu (mới, cũ hoặc chưa rõ). Thẻ liệt k�
 dung lượng trống/tổng và inode trống/tổng của từng hệ thống tệp, kèm liên kết tới
 tab **Chỉ số**. Gợi ý xử lý là kiểm tra lưu trữ hoặc nhật ký, hay giảm tải.
 
+Bảng **Cần chú ý** trên bảng điều khiển tổng hợp các sự cố này trên những tài
+nguyên người dùng có thể thấy, kèm xác nhận, tạm ẩn, bộ lọc và trạng thái phục
+hồi. Xem
+[Thông báo](/vi/using/notifications#can-chu-y-tren-bang-dieu-khien) để biết cách
+hoạt động và quy tắc truy cập của bảng.
+
 ## Sức khỏe runtime của ứng dụng và cơ sở dữ liệu
 
 Áp lực máy chủ chỉ là một nửa bức tranh: một nút có thể còn CPU và đĩa trong khi

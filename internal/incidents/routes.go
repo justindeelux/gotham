@@ -48,8 +48,9 @@ func Mount(r chi.Router, auth func(http.Handler) http.Handler, userID UserIDFunc
 }
 
 type listEnvelope struct {
-	Incidents  []IncidentView `json:"incidents"`
-	NextCursor string         `json:"next_cursor,omitempty"`
+	Incidents   []IncidentView `json:"incidents"`
+	NextCursor  string         `json:"next_cursor,omitempty"`
+	ActiveCount int            `json:"active_count"`
 }
 
 type incidentEnvelope struct {
@@ -203,6 +204,12 @@ func parseListParams(r *http.Request) (ListParams, error) {
 			return ListParams{}, fmt.Errorf("%w: severity must be warning or critical", ErrValidation)
 		}
 		filter.Severity = &severity
+	}
+	if raw := strings.TrimSpace(query.Get("resource_type")); raw != "" {
+		if len(raw) > 64 {
+			return ListParams{}, fmt.Errorf("%w: resource_type is too long", ErrValidation)
+		}
+		filter.ResourceType = &raw
 	}
 	if raw := strings.TrimSpace(query.Get("lifecycle")); raw != "" {
 		lifecycle := Lifecycle(raw)

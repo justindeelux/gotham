@@ -3,6 +3,7 @@ package incidents
 import (
 	"encoding/base64"
 	"fmt"
+	"strconv"
 	"strings"
 	"time"
 
@@ -51,6 +52,9 @@ type IncidentView struct {
 type Page struct {
 	Incidents  []IncidentView `json:"incidents"`
 	NextCursor string         `json:"next_cursor,omitempty"`
+	// ActiveCount is the number of active incidents in the caller's scope
+	// matching the current filters, independent of the page cursor.
+	ActiveCount int `json:"active_count"`
 }
 
 type EventView struct {
@@ -180,7 +184,11 @@ func uuidString(id uuid.UUID) string {
 }
 
 func encodeCursor(cursor Cursor) string {
-	return base64.RawURLEncoding.EncodeToString([]byte(cursor.At.UTC().Format(time.RFC3339Nano) + "|" + cursor.ID.String()))
+	raw := cursor.At.UTC().Format(time.RFC3339Nano) + "|" + cursor.ID.String()
+	if cursor.Rank != 0 {
+		raw += "|" + strconv.Itoa(cursor.Rank)
+	}
+	return base64.RawURLEncoding.EncodeToString([]byte(raw))
 }
 
 func decodeCursor(raw string) (*Cursor, error) {
@@ -192,8 +200,8 @@ func decodeCursor(raw string) (*Cursor, error) {
 	if err != nil {
 		return nil, fmt.Errorf("%w: invalid cursor", ErrValidation)
 	}
-	parts := strings.SplitN(string(decoded), "|", 2)
-	if len(parts) != 2 {
+	parts := strings.SplitN(string(decoded), "|", 3)
+	if len(parts) < 2 {
 		return nil, fmt.Errorf("%w: invalid cursor", ErrValidation)
 	}
 	at, err := time.Parse(time.RFC3339Nano, parts[0])
@@ -204,5 +212,12 @@ func decodeCursor(raw string) (*Cursor, error) {
 	if err != nil {
 		return nil, fmt.Errorf("%w: invalid cursor", ErrValidation)
 	}
-	return &Cursor{At: at, ID: id}, nil
+	rank := 0
+	if len(parts) == 3 {
+		rank, err = strconv.Atoi(parts[2])
+		if err != nil {
+			return nil, fmt.Errorf("%w: invalid cursor", ErrValidation)
+		}
+	}
+	return &Cursor{At: at, ID: id, Rank: rank}, nil
 }

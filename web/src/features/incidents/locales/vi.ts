@@ -1,0 +1,109 @@
+const vi = {
+  title: "Cần chú ý",
+  subtitle: "Các sự cố đang hoạt động, lý do và bước tiếp theo hữu ích.",
+  countOne: "{count} sự cố đang hoạt động",
+  countOther: "{count} sự cố đang hoạt động",
+  loading: "Đang tải sự cố",
+  healthy: {
+    title: "Không có gì cần chú ý",
+    body: "Mọi tài nguyên được giám sát đều đang khỏe mạnh.",
+  },
+  noData: {
+    title: "Chưa có dữ liệu giám sát",
+    body: "Thêm máy chủ hoặc ứng dụng để bắt đầu theo dõi sức khỏe tại đây.",
+  },
+  filtered: {
+    title: "Không có sự cố phù hợp",
+    body: "Hãy thử mức độ hoặc tài nguyên khác.",
+  },
+  unavailable: {
+    title: "Giám sát không khả dụng",
+    body: "Không thể đọc dữ liệu sự cố trên phiên bản này. Các thông tin giám sát khác vẫn có thể hoạt động.",
+  },
+  error: {
+    title: "Không thể tải sự cố",
+    body: "Dịch vụ sự cố không phản hồi. Không có thay đổi nào được thực hiện.",
+    retry: "Thử lại",
+  },
+  filters: {
+    severity: "Mức độ",
+    resource: "Tài nguyên",
+    allSeverities: "Tất cả mức độ",
+    allResources: "Tất cả tài nguyên",
+  },
+  severity: {
+    critical: "Nghiêm trọng",
+    warning: "Cảnh báo",
+  },
+  lifecycle: {
+    pending: "Đang xác nhận",
+  },
+  coverage: {
+    fresh: "Dữ liệu mới",
+    partial: "Dữ liệu một phần",
+    stale: "Dữ liệu cũ",
+    unknown: "Không có dữ liệu hiện tại",
+    expected: "Bảo trì dự kiến",
+  },
+  resourceTypes: {
+    application: "Ứng dụng",
+    database: "Cơ sở dữ liệu",
+    service: "Dịch vụ",
+    node: "Máy chủ",
+    filesystem: "Hệ thống tệp",
+    unknown: "Tài nguyên",
+  },
+  unknownResourceName: "Tài nguyên không tên",
+  reasons: {
+    unreachable: "Máy chủ không phản hồi.",
+    cpu: "Mức sử dụng CPU quá cao.",
+    memory: "Mức sử dụng bộ nhớ quá cao.",
+    space: "Dung lượng đĩa sắp hết.",
+    inode: "Hệ thống tệp sắp hết inode.",
+    restart: "Ứng dụng liên tục khởi động lại.",
+    oom: "Ứng dụng đã hết bộ nhớ.",
+    health: "Ứng dụng không vượt qua kiểm tra sức khỏe.",
+    unknown: "Gotham phát hiện sự cố với tài nguyên này.",
+  },
+  started: "Bắt đầu {time}",
+  duration: "Đang hoạt động {duration}",
+  lastValid: "Xác nhận lần cuối {time}",
+  noValid: "Chưa có quan sát hợp lệ",
+  affectedOne: "{count} tài nguyên bị ảnh hưởng",
+  affectedOther: "{count} tài nguyên bị ảnh hưởng",
+  groupedHint:
+    "Các tài nguyên này nằm trên máy chủ này. Gotham không thể xác nhận máy chủ là nguyên nhân.",
+  actions: {
+    acknowledge: "Xác nhận",
+    snooze: "Tạm ẩn",
+    snoozeHour: "1 giờ",
+    snoozeDay: "24 giờ",
+    open: "Mở",
+    logs: "Xem nhật ký",
+    server: "Xem máy chủ",
+    metrics: "Xem số liệu",
+  },
+  status: {
+    acknowledged: "Đã xác nhận",
+    snoozed: "Tạm ẩn đến {time}",
+  },
+  hold: {
+    nodeUnavailable: "Thông báo đang được giữ trong khi máy chủ không khả dụng.",
+    expectedMaintenance: "Thông báo đang được giữ trong thời gian bảo trì dự kiến.",
+    generic: "Thông báo cho sự cố này hiện đang được giữ.",
+    settings: "Cài đặt thông báo",
+  },
+  resolved: {
+    title: "Mới được khắc phục",
+    empty: "Chưa có sự cố nào được khắc phục gần đây.",
+    at: "Đã khắc phục {time}",
+    loadFailed: "Không thể tải các sự cố đã khắc phục.",
+  },
+  loadMore: "Tải thêm",
+  actionsFor: "Hành động cho {name}",
+  snoozeMenu: "Tùy chọn tạm ẩn",
+};
+
+export default vi;
+
+export type IncidentsMessages = typeof vi;

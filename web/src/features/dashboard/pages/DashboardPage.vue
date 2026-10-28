@@ -28,6 +28,7 @@ import DashboardHeader from "@/features/dashboard/components/DashboardHeader.vue
 import RecentDeploysPanel from "@/features/dashboard/components/RecentDeploysPanel.vue";
 import ServerHealthSection from "@/features/dashboard/components/ServerHealthSection.vue";
 import ServersReadyKpi from "@/features/dashboard/components/ServersReadyKpi.vue";
+import NeedsAttentionSection from "@/features/incidents/components/NeedsAttentionSection.vue";
 import GothamIcon from "@/shared/ui/GothamIcon.vue";
 
 const authStore = useAuthStore();
@@ -197,6 +198,8 @@ onMounted(() => {
 
     <div class="dash-split">
       <div class="dash-main">
+        <NeedsAttentionSection />
+
         <RecentDeploysPanel />
 
         <ServerHealthSection

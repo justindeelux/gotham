@@ -247,13 +247,18 @@ func (r *storeBackupRepository) ListRestoresByDatabase(ctx context.Context, data
 }
 
 func (r *storeBackupRepository) CreateBackupSchedule(ctx context.Context, schedule BackupSchedule) (BackupSchedule, error) {
+	maxRunSeconds := schedule.MaxRunSeconds
+	if maxRunSeconds <= 0 {
+		maxRunSeconds = DefaultMaxBackupRunSeconds
+	}
 	row, err := r.store.CreateBackupSchedule(ctx, sqlc.CreateBackupScheduleParams{
-		ID:         pgUUID(schedule.ID),
-		DatabaseID: pgUUID(schedule.DatabaseID),
-		Cron:       schedule.Cron,
-		TargetID:   pgUUID(schedule.TargetID),
-		Enabled:    schedule.Enabled,
-		NextRunAt:  timeToPG(schedule.NextRunAt),
+		ID:            pgUUID(schedule.ID),
+		DatabaseID:    pgUUID(schedule.DatabaseID),
+		Cron:          schedule.Cron,
+		TargetID:      pgUUID(schedule.TargetID),
+		Enabled:       schedule.Enabled,
+		NextRunAt:     timeToPG(schedule.NextRunAt),
+		MaxRunSeconds: int32(maxRunSeconds),
 	})
 	if err != nil {
 		return BackupSchedule{}, fmt.Errorf("databases: create backup schedule: %w", err)
@@ -285,12 +290,18 @@ func (r *storeBackupRepository) ListBackupSchedulesByDatabase(ctx context.Contex
 }
 
 func (r *storeBackupRepository) UpdateBackupSchedule(ctx context.Context, schedule BackupSchedule) (BackupSchedule, error) {
+	maxRunSeconds := schedule.MaxRunSeconds
+	if maxRunSeconds <= 0 {
+		maxRunSeconds = DefaultMaxBackupRunSeconds
+	}
 	row, err := r.store.UpdateBackupSchedule(ctx, sqlc.UpdateBackupScheduleParams{
-		ID:        pgUUID(schedule.ID),
-		Cron:      schedule.Cron,
-		TargetID:  pgUUID(schedule.TargetID),
-		Enabled:   schedule.Enabled,
-		NextRunAt: timeToPG(schedule.NextRunAt),
+		ID:            pgUUID(schedule.ID),
+		Cron:          schedule.Cron,
+		TargetID:      pgUUID(schedule.TargetID),
+		Enabled:       schedule.Enabled,
+		NextRunAt:     timeToPG(schedule.NextRunAt),
+		LastSlotAt:    timeToPG(schedule.LastSlotAt),
+		MaxRunSeconds: int32(maxRunSeconds),
 	})
 	if err != nil {
 		if errors.Is(err, pgx.ErrNoRows) {
@@ -563,15 +574,17 @@ func restoreFromRow(row sqlc.Restore) Restore {
 
 func scheduleFromRow(row sqlc.BackupSchedule) BackupSchedule {
 	return BackupSchedule{
-		ID:         uuidFromPG(row.ID),
-		DatabaseID: uuidFromPG(row.DatabaseID),
-		Cron:       row.Cron,
-		TargetID:   uuidFromPG(row.TargetID),
-		Enabled:    row.Enabled,
-		LastRunAt:  timeFromPG(row.LastRunAt),
-		NextRunAt:  timeFromPG(row.NextRunAt),
-		CreatedAt:  timeFromPG(row.CreatedAt),
-		UpdatedAt:  timeFromPG(row.UpdatedAt),
+		ID:            uuidFromPG(row.ID),
+		DatabaseID:    uuidFromPG(row.DatabaseID),
+		Cron:          row.Cron,
+		TargetID:      uuidFromPG(row.TargetID),
+		Enabled:       row.Enabled,
+		LastRunAt:     timeFromPG(row.LastRunAt),
+		NextRunAt:     timeFromPG(row.NextRunAt),
+		LastSlotAt:    timeFromPG(row.LastSlotAt),
+		MaxRunSeconds: int(row.MaxRunSeconds),
+		CreatedAt:     timeFromPG(row.CreatedAt),
+		UpdatedAt:     timeFromPG(row.UpdatedAt),
 	}
 }
 

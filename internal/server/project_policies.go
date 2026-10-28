@@ -66,6 +66,7 @@ var projectPolicies = map[string]projectPolicy{
 	"GET /api/v1/databases/{id}/backups/{backupId}":                     {kind: "database"},
 	"DELETE /api/v1/databases/{id}/backups/{backupId}":                  {kind: "database"},
 	"GET /api/v1/databases/{id}/restores":                               {kind: "database"},
+	"GET /api/v1/databases/{id}/backup-protection":                      {kind: "database"},
 	"GET /api/v1/databases/{id}/schedules":                              {kind: "database"},
 	"POST /api/v1/databases/{id}/schedules":                             {kind: "database"},
 	"PATCH /api/v1/databases/{id}/schedules/{scheduleId}":               {kind: "database"},

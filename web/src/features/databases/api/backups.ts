@@ -31,8 +31,40 @@ export interface BackupSchedule {
   enabled: boolean;
   next_run_at: string;
   last_run_at?: string;
+  last_slot_at?: string;
+  max_run_seconds: number;
   created_at: string;
   updated_at: string;
+}
+
+export type BackupProtectionStatus =
+  | "not_configured"
+  | "scheduled"
+  | "pending"
+  | "protected"
+  | "running"
+  | "overdue"
+  | "stuck";
+
+export interface BackupProtectionSchedule {
+  schedule_id: string;
+  cron: string;
+  target_id?: string;
+  target_name?: string;
+  status: BackupProtectionStatus;
+  last_success_at?: string;
+  expected_slot_at?: string;
+  deadline_at?: string;
+  overdue_since?: string;
+  overdue_seconds: number;
+  running_since?: string;
+  max_run_seconds: number;
+}
+
+export interface BackupProtectionSummary {
+  database_id: string;
+  status: BackupProtectionStatus;
+  schedules: BackupProtectionSchedule[];
 }
 
 export interface BackupTarget {
@@ -77,12 +109,14 @@ export interface CreateBackupScheduleInput {
   cron: string;
   target_id?: string;
   enabled?: boolean;
+  max_run_seconds?: number;
 }
 
 export interface UpdateBackupScheduleInput {
   cron: string;
   target_id?: string;
   enabled?: boolean;
+  max_run_seconds?: number;
 }
 
 export interface CreateBackupTargetInput {
@@ -141,6 +175,10 @@ interface RestoreListEnvelope {
 
 interface TargetCheckEnvelope {
   check: TargetCheck;
+}
+
+interface BackupProtectionEnvelope {
+  protection: BackupProtectionSummary;
 }
 
 export async function listBackups(
@@ -212,6 +250,9 @@ export async function createSchedule(
   if (input.enabled !== undefined) {
     body.enabled = input.enabled;
   }
+  if (input.max_run_seconds !== undefined) {
+    body.max_run_seconds = input.max_run_seconds;
+  }
   const response = await http.post<ScheduleEnvelope>(
     `/databases/${databaseId}/schedules`,
     body,
@@ -230,6 +271,9 @@ export async function updateSchedule(
   }
   if (input.enabled !== undefined) {
     body.enabled = input.enabled;
+  }
+  if (input.max_run_seconds !== undefined) {
+    body.max_run_seconds = input.max_run_seconds;
   }
   const response = await http.patch<ScheduleEnvelope>(
     `/databases/${databaseId}/schedules/${scheduleId}`,
@@ -283,6 +327,15 @@ export async function testTarget(targetId: string): Promise<TargetCheck> {
     {},
   );
   return response.data.check;
+}
+
+export async function getBackupProtection(
+  databaseId: string,
+): Promise<BackupProtectionSummary> {
+  const response = await http.get<BackupProtectionEnvelope>(
+    `/databases/${databaseId}/backup-protection`,
+  );
+  return response.data.protection;
 }
 
 export function describeBackupError(error: unknown): string {

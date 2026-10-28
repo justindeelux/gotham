@@ -9,6 +9,7 @@ import {
   deleteSchedule,
   deleteTarget,
   describeBackupError,
+  getBackupProtection,
   listBackups,
   listRestores,
   listSchedules,
@@ -19,6 +20,7 @@ import {
   updateTarget,
 } from "@/features/databases/api/backups";
 import type {
+  BackupProtectionSummary,
   BackupSchedule,
   BackupTarget,
   CreateBackupScheduleInput,
@@ -44,6 +46,10 @@ export const useBackupsStore = defineStore("backups", () => {
   const schedulesLoading = ref(false);
   const schedulesActing = ref(false);
 
+  const protectionById = ref<Record<string, BackupProtectionSummary>>({});
+  const protectionLoading = ref(false);
+  const protectionErrorRaw = ref<unknown>(null);
+
   const targets = ref<BackupTarget[]>([]);
   const targetsLoading = ref(false);
   const targetsActing = ref(false);
@@ -67,6 +73,11 @@ export const useBackupsStore = defineStore("backups", () => {
       ? null
       : describeBackupError(schedulesErrorRaw.value),
   );
+  const protectionError = computed<string | null>(() =>
+    protectionErrorRaw.value === null
+      ? null
+      : describeBackupError(protectionErrorRaw.value),
+  );
   const targetsError = computed<string | null>(() =>
     targetsErrorRaw.value === null
       ? null
@@ -83,6 +94,10 @@ export const useBackupsStore = defineStore("backups", () => {
 
   function schedulesOf(databaseId: string): BackupSchedule[] {
     return schedulesById.value[databaseId] ?? [];
+  }
+
+  function protectionOf(databaseId: string): BackupProtectionSummary | null {
+    return protectionById.value[databaseId] ?? null;
   }
 
   function targetOf(targetId: string | undefined): BackupTarget | null {
@@ -219,6 +234,19 @@ export const useBackupsStore = defineStore("backups", () => {
     }
     list[index] = updated;
     schedulesById.value[databaseId] = [...list];
+  }
+
+  async function fetchProtection(databaseId: string): Promise<void> {
+    protectionLoading.value = true;
+    protectionErrorRaw.value = null;
+    try {
+      protectionById.value[databaseId] = await getBackupProtection(databaseId);
+    } catch (err) {
+      protectionErrorRaw.value = err;
+      throw err;
+    } finally {
+      protectionLoading.value = false;
+    }
   }
 
   async function addSchedule(
@@ -362,6 +390,9 @@ export const useBackupsStore = defineStore("backups", () => {
     schedulesLoading.value = false;
     schedulesErrorRaw.value = null;
     schedulesActing.value = false;
+    protectionById.value = {};
+    protectionLoading.value = false;
+    protectionErrorRaw.value = null;
     targets.value = [];
     targetsLoading.value = false;
     targetsErrorRaw.value = null;
@@ -380,6 +411,9 @@ export const useBackupsStore = defineStore("backups", () => {
     schedulesLoading,
     schedulesError,
     schedulesActing,
+    protectionById,
+    protectionLoading,
+    protectionError,
     targets,
     targetsLoading,
     targetsError,
@@ -387,6 +421,7 @@ export const useBackupsStore = defineStore("backups", () => {
     backupsOf,
     restoresOf,
     schedulesOf,
+    protectionOf,
     targetOf,
     fetchBackups,
     refreshBackups,
@@ -396,6 +431,7 @@ export const useBackupsStore = defineStore("backups", () => {
     removeBackup,
     restore,
     fetchSchedules,
+    fetchProtection,
     addSchedule,
     editSchedule,
     removeSchedule,

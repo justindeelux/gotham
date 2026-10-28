@@ -19,6 +19,7 @@ const reasonKeys: Record<string, string> = {
   runtime_oom: "incidents.reasons.oom",
   runtime_health: "incidents.reasons.health",
   domain_reachability: "incidents.reasons.website",
+  backup_protection: "incidents.reasons.backup",
 };
 
 export interface IncidentGroup {

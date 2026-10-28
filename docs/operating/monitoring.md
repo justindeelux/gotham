@@ -181,3 +181,46 @@ The check runs from the control-plane vantage point, so it proves what a user
 reaching that control plane would see. It is not an Internet-wide SLA and does
 not cover regions, external probe fleets, arbitrary TCP/UDP monitors or public
 status pages.
+
+## Database backup protection
+
+Backup protection answers whether each **enabled schedule** has actually
+produced a successful backup for its current slot. It reads the persisted
+schedule and backup rows once per minute in the control plane. It never polls a
+node for metrics, never starts a competing backup and never cancels or mutates a
+running job; individual backup success and failure notifications keep their
+existing behaviour.
+
+### Deadline rules
+
+- The expected slot is the schedule's `next_run_at` while it is still in the
+  past, otherwise the last slot the scheduler advanced past (`last_slot_at`).
+- A slot becomes **overdue 30 minutes after its due time** when no completed
+  backup for the same database and target started at or after the slot. The
+  window is fixed and does not depend on the cron cadence, so daily, weekly and
+  monthly schedules use the same rule rather than a 24-hour threshold.
+- A running backup for that slot defers the deadline. It is **stuck** when its
+  control-plane lease is gone, or, when no lease reader is available, when it
+  has run longer than the schedule's maximum. The maximum defaults to **2
+  hours** and can be set per schedule between **15 minutes and 24 hours**.
+- A successful backup to a different target, an edited or disabled schedule,
+  and a backup that started before the slot do **not** satisfy it.
+- Deleting a database or removing a schedule closes the incident with a
+  resource reason. Disabling a schedule closes it with a policy reason. Neither
+  sends a recovery message.
+- A database with no enabled schedule shows **Backup not configured** and does
+  not open an alert.
+
+The incident resolves only when a qualifying backup succeeds. Its evidence
+shows the last success, the expected slot, the target and the overdue elapsed
+time. The **Backup protection** card on the database's Backups tab shows the
+same summary, and the Needs attention row opens that tab. The observer is a
+read model: it does not verify that a backup can be restored, does not run
+restore tests and does not replace the per-run backup notification.
+
+### Limits
+
+Completion proves that the dump job finished and stored an artifact. It does
+not prove the artifact is restorable, and a restore is a separate action with
+its own result. Retention, replication and storage-provider health are out of
+scope for this check.

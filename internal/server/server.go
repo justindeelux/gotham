@@ -19,6 +19,7 @@ import (
 	"github.com/google/uuid"
 
 	"github.com/justindeelux/gotham/internal/auth"
+	"github.com/justindeelux/gotham/internal/backupwatch"
 	"github.com/justindeelux/gotham/internal/clientip"
 	"github.com/justindeelux/gotham/internal/config"
 	"github.com/justindeelux/gotham/internal/containers"
@@ -90,6 +91,7 @@ type Server struct {
 	monitoring        *monitoring.Service
 	runtime           *runtimewatch.Service
 	domainwatch       *domainwatch.Service
+	backupwatch       *backupwatch.Service
 	certificateExpiry *proxy.CertificateExpiryObserver
 	webhooks          *webhooks.Service
 	metrics           *servers.MetricsSweeper
@@ -482,6 +484,8 @@ func (s *Server) routes() (http.Handler, error) {
 
 		s.backups = s.backupService(containerService)
 		databases.MountBackups(api, s.resourceAuth(), s.resourceAuth(), UserIDFromContext, s.backups)
+		s.backupwatch = s.backupwatchService()
+		backupwatch.Mount(api, s.resourceAuth(), s.backupwatch)
 
 		composeSvc := s.composeService()
 		services.Mount(api, s.resourceAuth(), UserIDFromContext, composeSvc)
@@ -836,6 +840,21 @@ func (s *Server) domainwatchService() *domainwatch.Service {
 	})
 }
 
+func (s *Server) backupwatchService() *backupwatch.Service {
+	if s.persistence == nil || s.incidents == nil || s.backups == nil {
+		return nil
+	}
+	cfg := backupwatch.Config{
+		Store:     backupwatch.NewStoreSource(s.persistence),
+		Incidents: s.incidents,
+		Logger:    s.logger,
+	}
+	if leases, ok := s.backups.(interface{ BackupJobActive(uuid.UUID) bool }); ok {
+		cfg.Leases = leases
+	}
+	return backupwatch.NewService(cfg)
+}
+
 func (s *Server) monitoringService() *monitoring.Service {
 	if s.persistence == nil || s.incidents == nil {
 		return nil
@@ -1101,6 +1120,11 @@ func (s *Server) Run(ctx context.Context) error {
 		watchCtx, cancelWatch := context.WithCancel(ctx)
 		defer cancelWatch()
 		go s.domainwatch.Run(watchCtx)
+	}
+	if s.backupwatch != nil {
+		backupCtx, cancelBackup := context.WithCancel(ctx)
+		defer cancelBackup()
+		go s.backupwatch.Run(backupCtx)
 	}
 	if panel, ok := s.proxy.(interface{ RunPanelCertificates(context.Context) }); ok {
 		panelCtx, cancelPanel := context.WithCancel(ctx)

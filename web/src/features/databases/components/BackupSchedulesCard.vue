@@ -5,6 +5,7 @@ import {
   NCard,
   NEmpty,
   NInput,
+  NInputNumber,
   NPopconfirm,
   NSelect,
   NSpace,
@@ -75,6 +76,11 @@ const backups = inject(databaseBackupsKey)!;
                 <span :title="schedule.last_run_at">
                   {{ relativeTime(schedule.last_run_at) }}
                 </span>
+              </span>
+              <span>
+                · {{ t("databases.backups.protection.maxRunValue", {
+                  minutes: Math.round(schedule.max_run_seconds / 60),
+                }) }}
               </span>
             </NText>
           </div>
@@ -150,6 +156,21 @@ const backups = inject(databaseBackupsKey)!;
           placeholder="0 2 * * *"
           :aria-label="t('databases.backups.schedules.cronAria')"
         />
+        <NText depth="3">
+          {{ t("databases.backups.protection.maxRunLabel") }}
+        </NText>
+        <NInputNumber
+          v-model:value="backups.scheduleMaxRunMinutes.value"
+          :min="15"
+          :max="1440"
+          :step="15"
+          style="width: 150px"
+          :aria-label="t('databases.backups.protection.maxRunAria')"
+        >
+          <template #suffix>
+            {{ t("databases.backups.protection.minutesSuffix") }}
+          </template>
+        </NInputNumber>
         <NSelect
           v-model:value="backups.scheduleTargetId.value"
           :options="backups.scheduleTargetOptions.value"

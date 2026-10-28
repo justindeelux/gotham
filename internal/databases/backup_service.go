@@ -22,6 +22,13 @@ const (
 	defaultSchedulerInterval = 30 * time.Second
 	defaultBackupListLimit   = 50
 	maxBackupListLimit       = 200
+
+	// DefaultMaxBackupRunSeconds is the documented fallback when a running
+	// backup has no live control-plane lease. Owners can tune it per schedule
+	// between 15 minutes and 24 hours.
+	DefaultMaxBackupRunSeconds = 2 * 60 * 60
+	MinMaxBackupRunSeconds     = 15 * 60
+	MaxMaxBackupRunSeconds     = 24 * 60 * 60
 )
 
 type BackupConfig struct {
@@ -80,9 +87,10 @@ type RestoreResult struct {
 }
 
 type ScheduleRequest struct {
-	Cron     string  `json:"cron"`
-	TargetID *string `json:"target_id,omitempty"`
-	Enabled  *bool   `json:"enabled,omitempty"`
+	Cron          string  `json:"cron"`
+	TargetID      *string `json:"target_id,omitempty"`
+	Enabled       *bool   `json:"enabled,omitempty"`
+	MaxRunSeconds *int    `json:"max_run_seconds,omitempty"`
 }
 
 type TargetRequest struct {
@@ -197,6 +205,24 @@ func (m *BackupManager) Close() error {
 		m.scheduler.Close()
 	}
 	return nil
+}
+
+// BackupJobActive reports whether this control plane still holds the backup
+// lease for a database. The backup-protection observer uses it as lease
+// evidence; it never starts or cancels a job itself.
+func (m *BackupManager) BackupJobActive(databaseID uuid.UUID) bool {
+	return m != nil && m.leases.Held(databaseID) == JobLeaseBackup
+}
+
+func normalizeMaxRunSeconds(value *int, fallback int) (int, error) {
+	if value == nil {
+		return fallback, nil
+	}
+	if *value < MinMaxBackupRunSeconds || *value > MaxMaxBackupRunSeconds {
+		return 0, fmt.Errorf("%w: max_run_seconds must be between %d and %d",
+			ErrValidation, MinMaxBackupRunSeconds, MaxMaxBackupRunSeconds)
+	}
+	return *value, nil
 }
 
 func (m *BackupManager) reconcileStaleBackups() {

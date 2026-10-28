@@ -111,15 +111,17 @@ type Backup struct {
 }
 
 type BackupSchedule struct {
-	ID         pgtype.UUID        `json:"id"`
-	DatabaseID pgtype.UUID        `json:"database_id"`
-	Cron       string             `json:"cron"`
-	TargetID   pgtype.UUID        `json:"target_id"`
-	Enabled    bool               `json:"enabled"`
-	LastRunAt  pgtype.Timestamptz `json:"last_run_at"`
-	NextRunAt  pgtype.Timestamptz `json:"next_run_at"`
-	CreatedAt  pgtype.Timestamptz `json:"created_at"`
-	UpdatedAt  pgtype.Timestamptz `json:"updated_at"`
+	ID            pgtype.UUID        `json:"id"`
+	DatabaseID    pgtype.UUID        `json:"database_id"`
+	Cron          string             `json:"cron"`
+	TargetID      pgtype.UUID        `json:"target_id"`
+	Enabled       bool               `json:"enabled"`
+	LastRunAt     pgtype.Timestamptz `json:"last_run_at"`
+	NextRunAt     pgtype.Timestamptz `json:"next_run_at"`
+	CreatedAt     pgtype.Timestamptz `json:"created_at"`
+	UpdatedAt     pgtype.Timestamptz `json:"updated_at"`
+	LastSlotAt    pgtype.Timestamptz `json:"last_slot_at"`
+	MaxRunSeconds int32              `json:"max_run_seconds"`
 }
 
 type BackupTarget struct {

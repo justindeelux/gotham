@@ -56,15 +56,17 @@ type restoreListEnvelope struct {
 }
 
 type scheduleResponse struct {
-	ID         string     `json:"id"`
-	DatabaseID string     `json:"database_id"`
-	Cron       string     `json:"cron"`
-	TargetID   string     `json:"target_id,omitempty"`
-	Enabled    bool       `json:"enabled"`
-	NextRunAt  time.Time  `json:"next_run_at"`
-	LastRunAt  *time.Time `json:"last_run_at,omitempty"`
-	CreatedAt  time.Time  `json:"created_at"`
-	UpdatedAt  time.Time  `json:"updated_at"`
+	ID            string     `json:"id"`
+	DatabaseID    string     `json:"database_id"`
+	Cron          string     `json:"cron"`
+	TargetID      string     `json:"target_id,omitempty"`
+	Enabled       bool       `json:"enabled"`
+	NextRunAt     time.Time  `json:"next_run_at"`
+	LastRunAt     *time.Time `json:"last_run_at,omitempty"`
+	LastSlotAt    *time.Time `json:"last_slot_at,omitempty"`
+	MaxRunSeconds int        `json:"max_run_seconds"`
+	CreatedAt     time.Time  `json:"created_at"`
+	UpdatedAt     time.Time  `json:"updated_at"`
 }
 
 type scheduleEnvelope struct {
@@ -525,13 +527,14 @@ func newRestoreResponse(restore Restore) restoreResponse {
 
 func newScheduleResponse(schedule BackupSchedule) scheduleResponse {
 	response := scheduleResponse{
-		ID:         schedule.ID.String(),
-		DatabaseID: schedule.DatabaseID.String(),
-		Cron:       schedule.Cron,
-		Enabled:    schedule.Enabled,
-		NextRunAt:  schedule.NextRunAt,
-		CreatedAt:  schedule.CreatedAt,
-		UpdatedAt:  schedule.UpdatedAt,
+		ID:            schedule.ID.String(),
+		DatabaseID:    schedule.DatabaseID.String(),
+		Cron:          schedule.Cron,
+		Enabled:       schedule.Enabled,
+		NextRunAt:     schedule.NextRunAt,
+		MaxRunSeconds: schedule.MaxRunSeconds,
+		CreatedAt:     schedule.CreatedAt,
+		UpdatedAt:     schedule.UpdatedAt,
 	}
 	if schedule.TargetID != uuid.Nil {
 		response.TargetID = schedule.TargetID.String()
@@ -539,6 +542,10 @@ func newScheduleResponse(schedule BackupSchedule) scheduleResponse {
 	if !schedule.LastRunAt.IsZero() {
 		lastRun := schedule.LastRunAt
 		response.LastRunAt = &lastRun
+	}
+	if !schedule.LastSlotAt.IsZero() {
+		lastSlot := schedule.LastSlotAt
+		response.LastSlotAt = &lastSlot
 	}
 	return response
 }

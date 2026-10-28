@@ -209,6 +209,7 @@ export function failureText(error: unknown, locale?: string | null): string {
 
 const errorPrefixPackages = new Set([
   "auth",
+  "backupwatch",
   "builds",
   "containers",
   "databases",

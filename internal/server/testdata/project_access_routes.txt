@@ -59,6 +59,7 @@ project GET /api/v1/databases/{id}/backups/{backupId}
 project GET /api/v1/databases/{id}/credentials
 project GET /api/v1/databases/{id}/metrics
 project GET /api/v1/databases/{id}/restores
+project GET /api/v1/databases/{id}/backup-protection
 project GET /api/v1/databases/{id}/schedules
 project GET /api/v1/deployments
 project GET /api/v1/environments/{id}/resources

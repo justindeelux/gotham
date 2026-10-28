@@ -22,11 +22,12 @@ func (m *BackupManager) startRun(ctx context.Context, database Database, target 
 	if err := m.backupsReady(); err != nil {
 		return Backup{}, err
 	}
-	if !m.claim(database.ID) {
+	backupID := uuid.New()
+	if !m.claimRun(database.ID, backupID) {
 		return Backup{}, ErrBackupInFlight
 	}
 	backup := Backup{
-		ID:         uuid.New(),
+		ID:         backupID,
 		DatabaseID: database.ID,
 		ScheduleID: scheduleID,
 		Type:       typ,

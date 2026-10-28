@@ -7,6 +7,7 @@ import {
   NTabs,
 } from "naive-ui";
 import { provide, ref, watch } from "vue";
+import { useRoute } from "vue-router";
 
 import DatabaseBackupsTab from "@/features/databases/components/DatabaseBackupsTab.vue";
 import DatabaseDetailHeader from "@/features/databases/components/DatabaseDetailHeader.vue";
@@ -31,7 +32,10 @@ function t(key: string, params?: Record<string, string | number>): string {
   return String(i18n.global.t(key, params ?? {}));
 }
 
-const activeTab = ref("overview");
+const route = useRoute();
+const activeTab = ref(
+  route.query.tab === "backups" ? "backups" : "overview",
+);
 
 const detail = useDatabaseDetail();
 const backups = useDatabaseBackups(detail.dbId, activeTab);
@@ -40,7 +44,7 @@ provide(databaseDetailKey, detail);
 provide(databaseBackupsKey, backups);
 
 watch(detail.dbId, () => {
-  activeTab.value = "overview";
+  activeTab.value = route.query.tab === "backups" ? "backups" : "overview";
 });
 </script>
 

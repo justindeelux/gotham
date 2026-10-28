@@ -48,16 +48,21 @@ func (m *BackupManager) CreateSchedule(ctx context.Context, userID, databaseID u
 	if req.Enabled != nil {
 		enabled = *req.Enabled
 	}
+	maxRunSeconds, err := normalizeMaxRunSeconds(req.MaxRunSeconds, DefaultMaxBackupRunSeconds)
+	if err != nil {
+		return BackupSchedule{}, err
+	}
 	now := m.now()
 	schedule := BackupSchedule{
-		ID:         uuid.New(),
-		DatabaseID: databaseID,
-		Cron:       cron,
-		TargetID:   targetID,
-		Enabled:    enabled,
-		NextRunAt:  next,
-		CreatedAt:  now,
-		UpdatedAt:  now,
+		ID:            uuid.New(),
+		DatabaseID:    databaseID,
+		Cron:          cron,
+		TargetID:      targetID,
+		Enabled:       enabled,
+		NextRunAt:     next,
+		MaxRunSeconds: maxRunSeconds,
+		CreatedAt:     now,
+		UpdatedAt:     now,
 	}
 	created, err := m.backups.CreateBackupSchedule(ctx, schedule)
 	if err != nil {
@@ -103,11 +108,27 @@ func (m *BackupManager) UpdateSchedule(ctx context.Context, userID, databaseID, 
 	if req.Enabled != nil {
 		enabled = *req.Enabled
 	}
+	maxRunSeconds, err := normalizeMaxRunSeconds(req.MaxRunSeconds, schedule.MaxRunSeconds)
+	if err != nil {
+		return BackupSchedule{}, err
+	}
+	now := m.now()
+	// An edit never erases a missed slot: keep the due time as observed
+	// scheduling evidence so the protection incident is not resolved by
+	// changing the cron or target.
+	if !schedule.NextRunAt.IsZero() && !schedule.NextRunAt.After(now) &&
+		(schedule.LastSlotAt.IsZero() || schedule.NextRunAt.After(schedule.LastSlotAt)) {
+		schedule.LastSlotAt = schedule.NextRunAt
+	}
+	if targetID != schedule.TargetID {
+		schedule.TargetChangedAt = now
+	}
 	schedule.Cron = cron
 	schedule.TargetID = targetID
 	schedule.Enabled = enabled
 	schedule.NextRunAt = next
-	schedule.UpdatedAt = m.now()
+	schedule.MaxRunSeconds = maxRunSeconds
+	schedule.UpdatedAt = now
 	return m.backups.UpdateBackupSchedule(ctx, schedule)
 }
 

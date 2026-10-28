@@ -28,7 +28,7 @@ const backups = inject(databaseBackupsKey)!;
 </script>
 
 <template>
-  <NCard :title="t('databases.backups.runs.title')">
+  <NCard id="backup-runs" :title="t('databases.backups.runs.title')">
     <template #header-extra>
       <NSpace align="center" :size="8">
         <NSelect
@@ -85,6 +85,7 @@ const backups = inject(databaseBackupsKey)!;
       >
         <div
           v-for="backup in (backups.backups.value as DatabaseBackup[])"
+          :id="`backup-run-${backup.id}`"
           :key="backup.id"
           class="backup-row"
         >

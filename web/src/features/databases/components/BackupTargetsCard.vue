@@ -47,6 +47,7 @@ const backups = inject(databaseBackupsKey)!;
       >
         <div
           v-for="target in backups.backupsStore.targets"
+          :id="`backup-target-${target.id}`"
           :key="target.id"
           class="backup-row"
         >

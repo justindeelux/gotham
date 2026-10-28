@@ -181,6 +181,9 @@ func (r *fakeBackupRepository) seedSchedule(schedule BackupSchedule) BackupSched
 	if schedule.NextRunAt.IsZero() {
 		schedule.NextRunAt = time.Now().UTC().Add(-time.Minute)
 	}
+	if schedule.MaxRunSeconds == 0 {
+		schedule.MaxRunSeconds = DefaultMaxBackupRunSeconds
+	}
 	if schedule.CreatedAt.IsZero() {
 		schedule.CreatedAt = time.Now().UTC()
 	}
@@ -534,6 +537,7 @@ func (r *fakeBackupRepository) MarkBackupScheduleRun(_ context.Context, schedule
 	if !ok {
 		return BackupSchedule{}, ErrNotFound
 	}
+	schedule.LastSlotAt = schedule.NextRunAt
 	schedule.LastRunAt = lastRun
 	schedule.NextRunAt = nextRun
 	schedule.UpdatedAt = time.Now().UTC()
@@ -684,6 +688,13 @@ func (r *fakeBackupRepository) DeleteBackupTarget(_ context.Context, targetID, u
 		return BackupTarget{}, ErrNotFound
 	}
 	delete(r.targets, targetID)
+	for id, schedule := range r.schedules {
+		if schedule.TargetID == targetID {
+			schedule.TargetID = uuid.Nil
+			schedule.TargetChangedAt = time.Now().UTC()
+			r.schedules[id] = schedule
+		}
+	}
 	for i, id := range r.targetOrder {
 		if id == targetID {
 			r.targetOrder = append(r.targetOrder[:i], r.targetOrder[i+1:]...)

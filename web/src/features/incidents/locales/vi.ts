@@ -65,6 +65,7 @@ const vi = {
     oom: "Ứng dụng đã hết bộ nhớ.",
     health: "Ứng dụng không vượt qua kiểm tra sức khỏe.",
     website: "Tên miền của ứng dụng không phản hồi như mong đợi.",
+    backup: "Bản sao lưu theo lịch của cơ sở dữ liệu đã quá hạn hoặc bị kẹt.",
     unknown: "Gotham phát hiện sự cố với tài nguyên này.",
   },
   started: "Bắt đầu {time}",

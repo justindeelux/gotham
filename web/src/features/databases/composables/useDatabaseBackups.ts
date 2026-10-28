@@ -46,6 +46,7 @@ export function useDatabaseBackups(
   const scheduleCron = ref("");
   const scheduleTargetId = ref("");
   const scheduleEnabled = ref(true);
+  const scheduleMaxRunMinutes = ref(120);
   const editingScheduleId = ref<string | null>(null);
 
   const targetEditingId = ref<string | null>(null);
@@ -128,6 +129,7 @@ export function useDatabaseBackups(
       backupsStore.fetchBackups(dbId.value),
       backupsStore.fetchRestores(dbId.value),
       backupsStore.fetchSchedules(dbId.value),
+      backupsStore.fetchProtection(dbId.value),
       backupsStore.fetchTargets(),
     ]);
     notifyRestoreOutcomes();
@@ -181,6 +183,7 @@ export function useDatabaseBackups(
     await Promise.allSettled([
       backupsStore.refreshBackups(id),
       backupsStore.refreshRestores(id),
+      backupsStore.fetchProtection(id),
     ]);
     if (epoch !== restorePollEpoch) {
       return;
@@ -259,6 +262,7 @@ export function useDatabaseBackups(
     scheduleCron.value = "";
     scheduleTargetId.value = "";
     scheduleEnabled.value = true;
+    scheduleMaxRunMinutes.value = 120;
   }
 
   function openScheduleEdit(schedule: BackupSchedule): void {
@@ -268,6 +272,14 @@ export function useDatabaseBackups(
       ? schedule.target_id ?? ""
       : "";
     scheduleEnabled.value = schedule.enabled;
+    scheduleMaxRunMinutes.value = Math.round(schedule.max_run_seconds / 60);
+  }
+
+  function validMaxRunMinutes(): boolean {
+    const minutes = scheduleMaxRunMinutes.value;
+    return (
+      Number.isFinite(minutes) && minutes >= 15 && minutes <= 24 * 60
+    );
   }
 
   async function handleCreateSchedule(): Promise<void> {
@@ -276,12 +288,18 @@ export function useDatabaseBackups(
       message.error(resolveValidationMessage(databaseMessages.cronRequired));
       return;
     }
+    if (!validMaxRunMinutes()) {
+      message.error(t("databases.backups.protection.maxRunInvalid"));
+      return;
+    }
+    const maxRunSeconds = Math.round(scheduleMaxRunMinutes.value * 60);
     try {
       if (editingScheduleId.value !== null) {
         await backupsStore.editSchedule(dbId.value, editingScheduleId.value, {
           cron,
           target_id: scheduleTargetId.value,
           enabled: scheduleEnabled.value,
+          max_run_seconds: maxRunSeconds,
         });
         message.success(
           t("databases.backups.schedules.updated", { cron }),
@@ -291,10 +309,12 @@ export function useDatabaseBackups(
           cron,
           target_id: scheduleTargetId.value,
           enabled: scheduleEnabled.value,
+          max_run_seconds: maxRunSeconds,
         });
         message.success(t("databases.backups.schedules.saved", { cron }));
       }
       resetScheduleForm();
+      await backupsStore.fetchProtection(dbId.value);
     } catch (error) {
       message.error(describeBackupError(error));
     }
@@ -498,6 +518,7 @@ export function useDatabaseBackups(
     scheduleCron,
     scheduleTargetId,
     scheduleEnabled,
+    scheduleMaxRunMinutes,
     editingScheduleId,
     targetEditingId,
     targetName,

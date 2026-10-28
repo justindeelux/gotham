@@ -153,6 +153,10 @@ async function openResource(logs = false): Promise<void> {
           environmentId: database.environment_id,
           id: database.id,
         },
+        query:
+          props.incident.detector === "backup_protection"
+            ? { tab: "backups" }
+            : undefined,
       });
     } else {
       const service = await getService(id);

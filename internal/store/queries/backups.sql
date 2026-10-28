@@ -110,8 +110,8 @@ DO UPDATE SET ciphertext = EXCLUDED.ciphertext
 RETURNING *;
 
 -- name: CreateBackupSchedule :one
-INSERT INTO backup_schedules (id, database_id, cron, target_id, enabled, next_run_at)
-VALUES ($1, $2, $3, $4, $5, $6)
+INSERT INTO backup_schedules (id, database_id, cron, target_id, enabled, next_run_at, max_run_seconds)
+VALUES ($1, $2, $3, $4, $5, $6, $7)
 RETURNING *;
 
 -- name: GetBackupSchedule :one
@@ -133,6 +133,9 @@ SET cron = $2,
     target_id = $3,
     enabled = $4,
     next_run_at = $5,
+    last_slot_at = $6,
+    target_changed_at = $7,
+    max_run_seconds = $8,
     updated_at = now()
 WHERE id = $1
 RETURNING *;
@@ -141,6 +144,14 @@ RETURNING *;
 DELETE FROM backup_schedules
 WHERE id = $1
 RETURNING *;
+
+-- name: MarkBackupSchedulesTargetChanged :exec
+-- A target deletion cascades to NULL on the schedule; record the change so a
+-- slot protected by the old target is not re-read as overdue.
+UPDATE backup_schedules
+SET target_changed_at = now(),
+    updated_at = now()
+WHERE target_id = $1;
 
 -- name: ListDueBackupSchedules :many
 SELECT s.*
@@ -151,7 +162,8 @@ ORDER BY s.next_run_at ASC, s.id ASC;
 
 -- name: MarkBackupScheduleRun :one
 UPDATE backup_schedules
-SET last_run_at = $2,
+SET last_slot_at = next_run_at,
+    last_run_at = $2,
     next_run_at = $3,
     updated_at = now()
 WHERE id = $1

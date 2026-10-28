@@ -7,6 +7,8 @@ import { fileURLToPath } from "node:url";
 import { expect, test } from "@playwright/test";
 import type { Page } from "@playwright/test";
 
+import { waitForLayoutSettled } from "./support";
+
 /* global URL, window, getComputedStyle:readonly */
 
 const testsDir = dirname(fileURLToPath(import.meta.url));
@@ -200,6 +202,7 @@ async function openPicker(page: Page) {
   await page.getByRole("button", { name: "Add resource" }).first().click();
   const picker = page.locator(".n-modal.app-modal");
   await expect(picker.getByRole("tab", { name: "Application", exact: true })).toBeVisible();
+  await waitForLayoutSettled(page);
   return picker;
 }
 
@@ -241,6 +244,7 @@ test("picker tiles render the approved monochrome brand glyphs", async ({ page }
   };
   for (const [tab, { colors, glyphs }] of Object.entries(expected)) {
     await picker.getByRole("tab", { name: tab, exact: true }).click();
+    await waitForLayoutSettled(page);
     const cards = picker.locator("button.res-card");
     const frames = cards.locator(".brand-icon");
     await expect(frames).toHaveCount(colors.length);

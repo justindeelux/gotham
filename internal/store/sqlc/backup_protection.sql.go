@@ -13,7 +13,7 @@ import (
 
 const listActiveBackupProtectionIncidents = `-- name: ListActiveBackupProtectionIncidents :many
 SELECT id, identity_key, resource_id FROM incidents
-WHERE lifecycle <> 'resolved' AND detector = 'backup_protection'
+WHERE lifecycle <> 'resolved' AND detector_key = 'backup_protection'
 `
 
 type ListActiveBackupProtectionIncidentsRow struct {

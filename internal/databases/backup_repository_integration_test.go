@@ -191,6 +191,18 @@ func TestBackupRepositoryRoundTrip(t *testing.T) {
 	if err != nil {
 		t.Fatalf("CreateBackupTarget: %v", err)
 	}
+	updatedSchedule, err := repo.UpdateBackupSchedule(ctx, BackupSchedule{
+		ID: late.ID, Cron: "0 3 * * *", TargetID: target.ID, Enabled: true,
+		NextRunAt: now.Add(2 * time.Hour), LastSlotAt: now,
+		TargetChangedAt: now, MaxRunSeconds: 900,
+	})
+	if err != nil {
+		t.Fatalf("UpdateBackupSchedule: %v", err)
+	}
+	if updatedSchedule.Cron != "0 3 * * *" || updatedSchedule.TargetID != target.ID ||
+		updatedSchedule.MaxRunSeconds != 900 || updatedSchedule.TargetChangedAt.IsZero() {
+		t.Fatalf("updated schedule = %+v", updatedSchedule)
+	}
 	if _, err := repo.CreateBackupTarget(ctx, BackupTarget{
 		ID: uuid.New(), UserID: ownerID, Name: target.Name, Kind: TargetLocal,
 	}); err != ErrConflict {

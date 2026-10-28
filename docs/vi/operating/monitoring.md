@@ -192,9 +192,10 @@ thông báo thành công hoặc thất bại của từng lần sao lưu vẫn g
   này cố định và không phụ thuộc tần suất cron, nên lịch ngày, tuần và tháng dùng
   cùng một quy tắc thay vì ngưỡng 24 giờ.
 - Một bản sao lưu đang chạy cho kỳ đó sẽ hoãn hạn. Nó bị **kẹt** khi lease của
-  control plane không còn, hoặc khi không đọc được lease mà thời gian chạy vượt
-  quá mức tối đa của lịch. Mức tối đa mặc định là **2 giờ** và có thể đặt cho
-  từng lịch trong khoảng **15 phút đến 24 giờ**.
+  control plane không còn, hoặc khi thời gian chạy vượt quá mức tối đa của
+  lịch, tùy điều kiện nào đến trước. Lease còn sống không bỏ qua mức tối đa đó.
+  Mức tối đa mặc định là **2 giờ** và có thể đặt cho từng lịch trong khoảng
+  **15 phút đến 24 giờ**.
 - Bản sao lưu thành công tới đích khác, lịch bị sửa hoặc tắt, và bản sao lưu bắt
   đầu trước kỳ đó **không** thỏa mãn kỳ.
 - Đổi đích mở một cửa sổ hạn mới: kỳ tại hoặc trước thời điểm đổi không bị đọc

@@ -28,7 +28,7 @@ const backups = inject(databaseBackupsKey)!;
 </script>
 
 <template>
-  <NCard :title="t('databases.backups.runs.title')">
+  <NCard id="backup-runs" :title="t('databases.backups.runs.title')">
     <template #header-extra>
       <NSpace align="center" :size="8">
         <NSelect

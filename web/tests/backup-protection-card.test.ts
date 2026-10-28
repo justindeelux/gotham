@@ -40,9 +40,15 @@ function schedule(
   };
 }
 
-function mountCard(summary: BackupProtectionSummary | null) {
+function mountCard(
+  summary: BackupProtectionSummary | null,
+  loadedBackupIds: string[] = ["backup-1"],
+) {
   const backups = {
     dbId: databaseId,
+    backups: {
+      value: loadedBackupIds.map((id) => ({ id })),
+    },
     backupsStore: {
       protectionLoading: false,
       protectionError: null,
@@ -81,6 +87,25 @@ describe("backup protection card", () => {
     }
   });
 
+  it("falls back to the runs list when the success is outside the page", () => {
+    const wrapper = mountCard(
+      {
+        database_id: "db-1",
+        status: "protected",
+        schedules: [schedule()],
+      },
+      [],
+    );
+    try {
+      expect(wrapper.find('a[href="#backup-run-backup-1"]').exists()).toBe(
+        false,
+      );
+      expect(wrapper.find('a[href="#backup-runs"]').exists()).toBe(true);
+    } finally {
+      wrapper.unmount();
+    }
+  });
+
   it("shows overdue elapsed time", () => {
     const wrapper = mountCard({
       database_id: "db-1",
@@ -103,18 +128,21 @@ describe("backup protection card", () => {
   });
 
   it("shows a stuck run and links the running backup", () => {
-    const wrapper = mountCard({
-      database_id: "db-1",
-      status: "stuck",
-      schedules: [
-        schedule({
-          status: "stuck",
-          running_since: "2026-10-27T02:00:00Z",
-          running_backup_id: "backup-running",
-          overdue_seconds: 3600,
-        }),
-      ],
-    });
+    const wrapper = mountCard(
+      {
+        database_id: "db-1",
+        status: "stuck",
+        schedules: [
+          schedule({
+            status: "stuck",
+            running_since: "2026-10-27T02:00:00Z",
+            running_backup_id: "backup-running",
+            overdue_seconds: 3600,
+          }),
+        ],
+      },
+      ["backup-1", "backup-running"],
+    );
     try {
       expect(wrapper.text()).toContain("Stuck");
       expect(

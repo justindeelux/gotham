@@ -24,8 +24,8 @@ type IncidentReporter interface {
 }
 
 // LeaseReader reports whether the control plane still holds the lease for the
-// exact backup run. Absence of evidence leaves the MaxRun fallback in charge
-// instead of guessing, and a different run cannot shadow an orphaned row.
+// exact backup run. A live lease never bypasses the MaxRun ceiling, and a
+// different run cannot shadow an orphaned row.
 type LeaseReader interface {
 	BackupRunActive(databaseID, backupID uuid.UUID) bool
 }

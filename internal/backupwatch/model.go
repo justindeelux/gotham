@@ -39,9 +39,9 @@ const (
 	// cadence so weekly and monthly schedules are not held to a 24-hour rule.
 	OverdueGrace = 30 * time.Minute
 
-	// MaxRunDefault is the documented fallback when no live lease can be read.
-	// A qualifying in-progress run defers the deadline but never hides a stale
-	// job forever.
+	// MaxRunDefault bounds a stale in-progress run even while a live lease is
+	// still held. The maximum is enforced for every lease state, so a live job
+	// cannot hide a hung backup forever.
 	MaxRunDefault = 2 * time.Hour
 	MaxRunMin     = 15 * time.Minute
 	MaxRunMax     = 24 * time.Hour
@@ -54,7 +54,7 @@ type LeaseState int
 
 const (
 	// LeaseUnknown means no lease reader is available (for example a standalone
-	// observer); the documented MaxRun window decides when the job is stuck.
+	// observer); the MaxRun window still decides when the job is stuck.
 	LeaseUnknown LeaseState = iota
 	LeaseLive
 	LeaseExpired

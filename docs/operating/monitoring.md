@@ -200,9 +200,10 @@ existing behaviour.
   window is fixed and does not depend on the cron cadence, so daily, weekly and
   monthly schedules use the same rule rather than a 24-hour threshold.
 - A running backup for that slot defers the deadline. It is **stuck** when its
-  control-plane lease is gone, or, when no lease reader is available, when it
-  has run longer than the schedule's maximum. The maximum defaults to **2
-  hours** and can be set per schedule between **15 minutes and 24 hours**.
+  control-plane lease is gone, or when it has run longer than the schedule's
+  maximum, whichever happens first. A live lease never bypasses that maximum.
+  The maximum defaults to **2 hours** and can be set per schedule between
+  **15 minutes and 24 hours**.
 - A successful backup to a different target, an edited or disabled schedule,
   and a backup that started before the slot do **not** satisfy it.
 - Changing the target starts a fresh deadline window: a slot at or before the

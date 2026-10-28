@@ -57,6 +57,17 @@ function maxRunLabel(seconds: number): string {
     minutes: Math.round(seconds / 60),
   });
 }
+
+// A run older than the loaded page has no element to scroll to; fall back to
+// the runs card instead of leaving a dead anchor.
+function runHref(backupId?: string): string {
+  if (!backupId) {
+    return "#backup-runs";
+  }
+  return backups.backups.value.some((item) => item.id === backupId)
+    ? `#backup-run-${backupId}`
+    : "#backup-runs";
+}
 </script>
 
 <template>
@@ -115,16 +126,13 @@ function maxRunLabel(seconds: number): string {
             <NText depth="3">
               {{ t("databases.backups.protection.lastSuccess") }}
               <a
-                v-if="item.last_success_at && item.last_backup_id"
+                v-if="item.last_success_at"
                 class="protection-link"
-                :href="`#backup-run-${item.last_backup_id}`"
+                :href="runHref(item.last_backup_id)"
                 :title="item.last_success_at"
               >
                 {{ relativeTime(item.last_success_at) }}
               </a>
-              <span v-else-if="item.last_success_at" :title="item.last_success_at">
-                {{ relativeTime(item.last_success_at) }}
-              </span>
               <span v-else>{{ t("databases.backups.protection.never") }}</span>
               <span v-if="item.expected_slot_at">
                 · {{ t("databases.backups.protection.expectedSlot") }}
@@ -146,9 +154,9 @@ function maxRunLabel(seconds: number): string {
                 time: relativeTime(item.running_since),
               }) }}
               <a
-                v-if="item.running_backup_id"
+                v-if="item.running_since"
                 class="protection-link"
-                :href="`#backup-run-${item.running_backup_id}`"
+                :href="runHref(item.running_backup_id)"
               >
                 {{ t("databases.backups.runs.title") }}
               </a>

@@ -48,6 +48,14 @@ func (s *Store) ListFilesystemIdentitiesByNode(ctx context.Context, nodeID pgtyp
 	return s.queries.ListFilesystemIdentitiesByNode(ctx, nodeID)
 }
 
+func (s *Store) ListFilesystemIdentities(ctx context.Context) ([]sqlc.FilesystemIdentity, error) {
+	return s.queries.ListFilesystemIdentities(ctx)
+}
+
+func (s *Store) ListFilesystemUsageBuckets(ctx context.Context, params sqlc.ListFilesystemUsageBucketsParams) ([]sqlc.FilesystemUsageBucket, error) {
+	return s.queries.ListFilesystemUsageBuckets(ctx, params)
+}
+
 func (s *Store) UpsertFilesystemUsageBucket(ctx context.Context, params sqlc.UpsertFilesystemUsageBucketParams) error {
 	return s.queries.UpsertFilesystemUsageBucket(ctx, params)
 }

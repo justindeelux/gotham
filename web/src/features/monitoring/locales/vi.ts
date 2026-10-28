@@ -38,6 +38,9 @@ const vi: MonitoringMessages = {
     criticalFor: "Nghiêm trọng trong",
     downgradeFor: "Hạ mức trong",
     clearFor: "Xóa trong",
+    forecast: "Dự báo đầy dung lượng",
+    forecastHint:
+      "Ước tính khi nào mỗi hệ thống tệp đầy lên từ tối đa 7 ngày lịch sử theo giờ. Cần 24 giờ lịch sử, 12 mẫu theo giờ và 75% độ phủ; mẫu cũ, xu hướng phẳng hoặc thất thường, việc đổi kích thước hay dọn dẹp sẽ tạo mốc mới thay vì đoán. Gotham không bao giờ tự dọn dẹp, đổi kích thước hay xóa dữ liệu.",
     defaultsNote:
       "Mặc định: CPU và bộ nhớ cảnh báo ở 90% trong 5 phút và xóa ở 85% trong 1 phút. Hệ thống tệp cảnh báo ở 90% trong 1 phút, nghiêm trọng ở 95% trong 1 phút, hạ mức ở 90% trong 1 phút và xóa ở 85% trong 1 phút.",
   },
@@ -72,6 +75,7 @@ const vi: MonitoringMessages = {
     memory: "Áp lực bộ nhớ",
     space: "Dung lượng hệ thống tệp",
     inode: "Inode hệ thống tệp",
+    forecast: "Dự báo đầy hệ thống tệp",
   },
   severity: {
     warning: "Cảnh báo",
@@ -84,6 +88,15 @@ const vi: MonitoringMessages = {
     inodes: "Inode",
     available: "còn {available} trên {total}",
     unsupported: "Chưa rõ",
+  },
+  forecast: {
+    estimated: "Với tốc độ hiện tại, khoảng {horizon}",
+    detail: "còn {available} · lịch sử {hours}h · độ khớp {fit}%",
+    nonGrowing: "Không tăng thêm với tốc độ hiện tại",
+    insufficient: "Chưa đủ lịch sử",
+    stale: "Lịch sử đã cũ",
+    lowConfidence: "Xu hướng quá thất thường",
+    unavailable: "Chưa có dự báo",
   },
   resourceHistory: {
     tab: "Số liệu",

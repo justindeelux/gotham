@@ -25,6 +25,7 @@ export interface MonitoringRules {
   memory: Rule;
   space: FilesystemRule;
   inode: FilesystemRule;
+  forecast: boolean;
 }
 
 export interface MonitoringSettings {
@@ -38,13 +39,40 @@ export interface MonitoringSettings {
 }
 
 export interface ActivePressure {
-  detector: "host_cpu" | "host_memory" | "filesystem_space" | "filesystem_inode";
+  detector:
+    | "host_cpu"
+    | "host_memory"
+    | "filesystem_space"
+    | "filesystem_inode"
+    | "filesystem_forecast";
   severity: "warning" | "critical";
   lifecycle: "pending" | "firing" | "resolved";
   resource_name: string;
   evidence: string;
   first_observed_at: string;
   confirmed_at?: string;
+}
+
+export type ForecastStatus =
+  | "estimated"
+  | "insufficient"
+  | "stale"
+  | "low_confidence"
+  | "non_growing";
+
+export interface FilesystemForecast {
+  status: ForecastStatus;
+  available_bytes: number;
+  total_bytes: number;
+  window_from?: string;
+  window_to?: string;
+  span_hours: number;
+  samples: number;
+  coverage: number;
+  slope_bytes_per_hour: number;
+  fit: number;
+  horizon_hours?: number;
+  fill_at?: string;
 }
 
 export interface FilesystemStatus {
@@ -58,6 +86,7 @@ export interface FilesystemStatus {
   total_inodes: number;
   free_inodes: number;
   inode_used_percent: number;
+  forecast?: FilesystemForecast;
 }
 
 export interface NodeStatus {

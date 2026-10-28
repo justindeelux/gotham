@@ -36,6 +36,9 @@ const en = {
     criticalFor: "Critical for",
     downgradeFor: "Downgrade for",
     clearFor: "Clear for",
+    forecast: "Forecast exhaustion",
+    forecastHint:
+      "Estimates when each filesystem fills up from at most 7 days of hourly history. It needs 24 hours of history, 12 hourly samples and 75% coverage; a stale sample, a flat or irregular trend, a resize or a cleanup starts a new baseline instead of guessing. Gotham never cleans up, resizes or deletes data on its own.",
     defaultsNote:
       "Defaults: CPU and memory warn at 90% for 5 minutes and clear at 85% for 1 minute. Filesystems warn at 90% for 1 minute, go critical at 95% for 1 minute, downgrade at 90% for 1 minute and clear at 85% for 1 minute.",
   },
@@ -70,6 +73,7 @@ const en = {
     memory: "Memory pressure",
     space: "Filesystem space",
     inode: "Filesystem inodes",
+    forecast: "Filesystem fill forecast",
   },
   severity: {
     warning: "Warning",
@@ -82,6 +86,15 @@ const en = {
     inodes: "Inodes",
     available: "{available} free of {total}",
     unsupported: "Unknown",
+  },
+  forecast: {
+    estimated: "At the current rate, about {horizon}",
+    detail: "{available} free · {hours}h history · fit {fit}%",
+    nonGrowing: "Not filling at the current rate",
+    insufficient: "Not enough history yet",
+    stale: "History is stale",
+    lowConfidence: "Trend too irregular",
+    unavailable: "No forecast",
   },
   resourceHistory: {
     tab: "Metrics",

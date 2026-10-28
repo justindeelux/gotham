@@ -161,6 +161,41 @@ func (q *Queries) GetNodeMonitoringPolicy(ctx context.Context, nodeID pgtype.UUI
 	return i, err
 }
 
+const listFilesystemIdentities = `-- name: ListFilesystemIdentities :many
+SELECT id, node_id, filesystem_key, path, purpose, segment, total_bytes, total_inodes, first_seen_at, last_seen_at FROM filesystem_identities ORDER BY node_id, path
+`
+
+func (q *Queries) ListFilesystemIdentities(ctx context.Context) ([]FilesystemIdentity, error) {
+	rows, err := q.db.Query(ctx, listFilesystemIdentities)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	items := []FilesystemIdentity{}
+	for rows.Next() {
+		var i FilesystemIdentity
+		if err := rows.Scan(
+			&i.ID,
+			&i.NodeID,
+			&i.FilesystemKey,
+			&i.Path,
+			&i.Purpose,
+			&i.Segment,
+			&i.TotalBytes,
+			&i.TotalInodes,
+			&i.FirstSeenAt,
+			&i.LastSeenAt,
+		); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
 const listFilesystemIdentitiesByNode = `-- name: ListFilesystemIdentitiesByNode :many
 SELECT id, node_id, filesystem_key, path, purpose, segment, total_bytes, total_inodes, first_seen_at, last_seen_at FROM filesystem_identities WHERE node_id = $1 ORDER BY path
 `
@@ -185,6 +220,59 @@ func (q *Queries) ListFilesystemIdentitiesByNode(ctx context.Context, nodeID pgt
 			&i.TotalInodes,
 			&i.FirstSeenAt,
 			&i.LastSeenAt,
+		); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
+const listFilesystemUsageBuckets = `-- name: ListFilesystemUsageBuckets :many
+SELECT identity_id, segment, bucket_at, samples, fresh_samples, partial_samples, unknown_samples, min_used_bytes, max_used_bytes, last_used_bytes, min_used_inodes, max_used_inodes, last_used_inodes, total_bytes, total_inodes, updated_at FROM filesystem_usage_buckets
+WHERE identity_id = $1
+  AND segment = $2
+  AND bucket_at >= $3
+ORDER BY bucket_at
+`
+
+type ListFilesystemUsageBucketsParams struct {
+	IdentityID pgtype.UUID        `json:"identity_id"`
+	Segment    int32              `json:"segment"`
+	BucketAt   pgtype.Timestamptz `json:"bucket_at"`
+}
+
+// Forecasting reads only the current segment and the bounded window, never the
+// raw samples behind a bucket.
+func (q *Queries) ListFilesystemUsageBuckets(ctx context.Context, arg ListFilesystemUsageBucketsParams) ([]FilesystemUsageBucket, error) {
+	rows, err := q.db.Query(ctx, listFilesystemUsageBuckets, arg.IdentityID, arg.Segment, arg.BucketAt)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	items := []FilesystemUsageBucket{}
+	for rows.Next() {
+		var i FilesystemUsageBucket
+		if err := rows.Scan(
+			&i.IdentityID,
+			&i.Segment,
+			&i.BucketAt,
+			&i.Samples,
+			&i.FreshSamples,
+			&i.PartialSamples,
+			&i.UnknownSamples,
+			&i.MinUsedBytes,
+			&i.MaxUsedBytes,
+			&i.LastUsedBytes,
+			&i.MinUsedInodes,
+			&i.MaxUsedInodes,
+			&i.LastUsedInodes,
+			&i.TotalBytes,
+			&i.TotalInodes,
+			&i.UpdatedAt,
 		); err != nil {
 			return nil, err
 		}

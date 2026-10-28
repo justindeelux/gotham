@@ -43,8 +43,49 @@ function detectorLabel(detector: string): string {
       return t("monitoring.detectors.space");
     case "filesystem_inode":
       return t("monitoring.detectors.inode");
+    case "filesystem_forecast":
+      return t("monitoring.detectors.forecast");
     default:
       return detector;
+  }
+}
+
+function horizonLabel(hours: number | undefined): string {
+  if (!hours || hours <= 0) {
+    return "—";
+  }
+  if (hours < 48) {
+    return `${Math.max(1, Math.round(hours))}h`;
+  }
+  const days = hours / 24;
+  return days < 10 ? `${days.toFixed(1)}d` : `${Math.round(days)}d`;
+}
+
+function forecastText(row: FilesystemStatus): { label: string; detail?: string } {
+  const forecast = row.forecast;
+  if (!forecast) {
+    return { label: t("monitoring.forecast.unavailable") };
+  }
+  switch (forecast.status) {
+    case "estimated":
+      return {
+        label: t("monitoring.forecast.estimated", {
+          horizon: horizonLabel(forecast.horizon_hours),
+        }),
+        detail: t("monitoring.forecast.detail", {
+          available: formatBytes(forecast.available_bytes),
+          hours: forecast.span_hours,
+          fit: Math.round(forecast.fit * 100),
+        }),
+      };
+    case "non_growing":
+      return { label: t("monitoring.forecast.nonGrowing") };
+    case "stale":
+      return { label: t("monitoring.forecast.stale") };
+    case "low_confidence":
+      return { label: t("monitoring.forecast.lowConfidence") };
+    default:
+      return { label: t("monitoring.forecast.insufficient") };
   }
 }
 
@@ -61,13 +102,23 @@ const columns = computed<DataTableColumns<FilesystemStatus>>(() => [
   {
     title: t("monitoring.filesystems.space"),
     key: "space",
-    render: (row) =>
-      row.status === "ok"
-        ? `${Math.round(row.used_percent)}% · ${t("monitoring.filesystems.available", {
-            available: formatBytes(row.available_bytes),
-            total: formatBytes(row.total_bytes),
-          })}`
-        : t("monitoring.filesystems.unsupported"),
+    render: (row) => {
+      const space =
+        row.status === "ok"
+          ? `${Math.round(row.used_percent)}% · ${t("monitoring.filesystems.available", {
+              available: formatBytes(row.available_bytes),
+              total: formatBytes(row.total_bytes),
+            })}`
+          : t("monitoring.filesystems.unsupported");
+      const forecast = forecastText(row);
+      return h("div", { class: "space-cell" }, [
+        h("span", space),
+        h("span", { class: "forecast-label" }, forecast.label),
+        forecast.detail
+          ? h("span", { class: "forecast-detail" }, forecast.detail)
+          : null,
+      ]);
+    },
   },
   {
     title: t("monitoring.filesystems.inodes"),
@@ -192,3 +243,22 @@ onMounted(load);
     </NSpin>
   </NCard>
 </template>
+
+<style scoped>
+.space-cell {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  min-width: 0;
+}
+
+.forecast-label {
+  font-size: var(--text-xs);
+  color: var(--fg-2);
+}
+
+.forecast-detail {
+  font-size: var(--text-xs);
+  color: var(--muted);
+}
+</style>

@@ -266,3 +266,25 @@ test.describe("server host pressure", () => {
     }
   });
 });
+
+test.describe("filesystem forecast", () => {
+  test("owner can toggle the forecast and no raw keys reach the page", async ({ page }) => {
+    await page.goto("/settings/monitoring");
+    await expect(page.getByRole("heading", { name: "Monitoring rules" })).toBeVisible();
+
+    const spaceCard = ruleCard(page, "Filesystem space");
+    const toggle = spaceCard.getByRole("switch", { name: "Forecast exhaustion" });
+    await expect(toggle).toBeVisible();
+    await expect(
+      spaceCard.getByText(/needs 24 hours of history|24 giờ lịch sử/),
+    ).toBeVisible();
+
+    const text = await page.locator("body").innerText();
+    expect(text).not.toMatch(/monitoring\.[A-Za-z]+\./);
+    expect(text).not.toMatch(/undefined|NaN/);
+
+    for (const width of widths) {
+      await expectNoHorizontalOverflow(page, width);
+    }
+  });
+});

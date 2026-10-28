@@ -44,6 +44,7 @@ export const monitoringRulesSchema = z
     memory: ruleSchema,
     space: filesystemRuleSchema,
     inode: filesystemRuleSchema,
+    forecast: z.boolean(),
   })
   .superRefine((value, ctx) => {
     for (const key of ["cpu", "memory"] as const) {

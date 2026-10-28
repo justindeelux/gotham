@@ -15,6 +15,7 @@ const reasonKeys: Record<string, string> = {
   host_memory: "incidents.reasons.memory",
   filesystem_space: "incidents.reasons.space",
   filesystem_inode: "incidents.reasons.inode",
+  filesystem_forecast: "incidents.reasons.forecast",
   runtime_restart: "incidents.reasons.restart",
   runtime_oom: "incidents.reasons.oom",
   runtime_health: "incidents.reasons.health",
@@ -138,6 +139,8 @@ export function deliveryHold(hold: string | undefined): DeliveryHold {
       return { kind: "known", key: "incidents.hold.nodeUnavailable" };
     case "expected maintenance":
       return { kind: "known", key: "incidents.hold.expectedMaintenance" };
+    case "grouped under disk space alert":
+      return { kind: "known", key: "incidents.hold.groupedDisk" };
     default:
       return { kind: "known", key: "incidents.hold.generic" };
   }

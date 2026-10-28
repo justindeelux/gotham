@@ -50,9 +50,8 @@ one incident even when the root partition is healthy. A filesystem absent from
 an accepted report is reported as unknown for its space and inode rules, so its
 active incident stays visible and never resolves until fresh evidence arrives.
 
-Not covered: SMART/temperature, directory-size crawls, disk forecasting and
-automatic cleanup. Gotham never deletes data or restarts workloads to relieve
-pressure.
+Not covered: SMART/temperature, directory-size crawls and automatic cleanup.
+Gotham never deletes data or restarts workloads to relieve pressure.
 
 ## History
 
@@ -62,6 +61,49 @@ quality split. When the reported capacity changes (resize or replacement) the
 segment advances, so later forecasting cannot cross the discontinuity. History
 is kept for **30 days** and pruned by the monitoring sweep; active incident rows
 belong to the incident lifecycle and are never pruned by that sweep.
+
+## Filesystem exhaustion forecast
+
+Gotham can estimate when a filesystem will fill from the same hourly history,
+using a deterministic least-squares trend. It never calls an AI provider or an
+external monitoring service, and it never acts on the estimate: no automatic
+cleanup, resize or deletion.
+
+The estimate uses at most the last **7 days** of hourly buckets for the current
+filesystem segment. It needs at least **24 hours of span**, **12 valid hourly
+buckets**, **75% of the hours covered** and a latest observation no older than
+**2 hours**. Reporting frequency cannot raise confidence: extra samples inside
+one hour still count as one hourly point. Missing hours stay gaps and never
+become a zero or a recovery.
+
+A qualified estimate needs positive consumption over the whole window and its
+recent half, a fit of **R² ≥ 0.8** and a positive finite horizon. Otherwise the
+forecast says **not growing**, **not enough history**, **stale history** or
+**trend too irregular** instead of guessing. A single low-space reading is still
+handled by the fixed percentage rules above.
+
+**Resize, remount, replacement and cleanup.** A capacity change advances the
+history segment, so the old trend is never used for the new filesystem. A
+cleanup is identified when free space grows by at least **10% of capacity within
+one hourly bucket**; the forecast starts a new baseline after the jump instead of
+fitting through it. If too little history remains after the reset, the forecast
+reports not enough history.
+
+**Incidents.** A qualified forecast opens a **warning** when the predicted
+exhaustion is within **7 days** and a **critical** within **24 hours**, both after
+two valid hourly evaluations. Critical stays critical until the horizon is
+clearly above **48 hours**, then downgrades to warning. It resolves above
+**14 days** or after two fresh valid evaluations that prove consumption is no
+longer growing. Insufficient or stale evidence leaves an open forecast
+unconfirmed or unknown and never emits a recovered notification. When the same
+filesystem already has a disk-space threshold incident, the forecast is shown
+with it and does not send a second external notification.
+
+**Toggle.** The owner can turn the estimate off in **Monitoring** without a
+custom model editor. Changing rules applies to the next hourly evaluation;
+history is not rewritten and no recovery is emitted. Limits: no inode forecast,
+no per-directory extrapolation, no SMART or hardware failure prediction, and the
+shown date is approximate ("at the current rate"), not a guarantee.
 
 ## Configure rules in the UI
 
@@ -74,8 +116,10 @@ node falls back to the instance rules.
 
 Rules are validated in the form and again by the API: percentages must be finite
 and ordered (`clear < downgrade ≤ warning < critical`), durations must be between
-10 and 3600 seconds, and a node-scoped policy needs an existing node. Changes
-apply to the next observation; history is not re-evaluated and no recovery is
+10 and 3600 seconds, and a node-scoped policy needs an existing node. The
+**Forecast exhaustion** switch enables or disables the filesystem estimate for
+the selected scope; it is on by default. Changes apply to the next observation
+and the next hourly forecast; history is not re-evaluated and no recovery is
 invented.
 
 ## What the node detail shows
@@ -86,9 +130,11 @@ mount, purpose, free/total space and free/total inodes, and links to the
 **Metrics** tab for the underlying charts. Suggested action is to inspect
 storage or logs, or reduce load.
 
-The dashboard's **Needs attention** panel aggregates these incidents across the
-resources the caller can see, with acknowledge, snooze, filters and recovery
-status. See
+The card also shows the approximate fill horizon, the history window, the fit
+and the current free bytes for each filesystem. The dashboard's **Needs
+attention** panel aggregates these incidents across the resources the caller can
+see, with acknowledge, snooze, filters and recovery status; a forecast for a
+filesystem with a disk-space incident is grouped under it. See
 [Notifications](/using/notifications#needs-attention-on-the-dashboard) for the
 panel's behaviour and access rules.
 

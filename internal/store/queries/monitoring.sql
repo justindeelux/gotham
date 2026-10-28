@@ -95,5 +95,17 @@ ON CONFLICT (identity_id, segment, bucket_at) DO UPDATE SET
     total_inodes = EXCLUDED.total_inodes,
     updated_at = EXCLUDED.updated_at;
 
+-- name: ListFilesystemIdentities :many
+SELECT * FROM filesystem_identities ORDER BY node_id, path;
+
+-- name: ListFilesystemUsageBuckets :many
+-- Forecasting reads only the current segment and the bounded window, never the
+-- raw samples behind a bucket.
+SELECT * FROM filesystem_usage_buckets
+WHERE identity_id = $1
+  AND segment = $2
+  AND bucket_at >= $3
+ORDER BY bucket_at;
+
 -- name: DeleteFilesystemUsageBefore :execrows
 DELETE FROM filesystem_usage_buckets WHERE bucket_at < $1;

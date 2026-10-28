@@ -455,16 +455,17 @@ type ActivePressure struct {
 }
 
 type FilesystemStatus struct {
-	Path           string  `json:"path"`
-	Purpose        string  `json:"purpose"`
-	Status         string  `json:"status"`
-	TotalBytes     uint64  `json:"total_bytes"`
-	AvailableBytes uint64  `json:"available_bytes"`
-	UsedPercent    float64 `json:"used_percent"`
-	InodeStatus    string  `json:"inode_status"`
-	TotalInodes    uint64  `json:"total_inodes"`
-	FreeInodes     uint64  `json:"free_inodes"`
-	InodeUsedPct   float64 `json:"inode_used_percent"`
+	Path           string              `json:"path"`
+	Purpose        string              `json:"purpose"`
+	Status         string              `json:"status"`
+	TotalBytes     uint64              `json:"total_bytes"`
+	AvailableBytes uint64              `json:"available_bytes"`
+	UsedPercent    float64             `json:"used_percent"`
+	InodeStatus    string              `json:"inode_status"`
+	TotalInodes    uint64              `json:"total_inodes"`
+	FreeInodes     uint64              `json:"free_inodes"`
+	InodeUsedPct   float64             `json:"inode_used_percent"`
+	Forecast       *FilesystemForecast `json:"forecast,omitempty"`
 }
 
 func (s *Service) NodeStatus(ctx context.Context, nodeID uuid.UUID) (NodeStatus, error) {
@@ -481,6 +482,12 @@ func (s *Service) NodeStatus(ctx context.Context, nodeID uuid.UUID) (NodeStatus,
 		var filesystems []servers.FilesystemObservation
 		if err := json.Unmarshal(row.Filesystems, &filesystems); err == nil {
 			status.Filesystems = filesystemStatuses(mergeAliases(filesystems))
+			forecasts := s.nodeForecasts(ctx, nodeID, s.now().UTC())
+			for i := range status.Filesystems {
+				if forecast, ok := forecasts[status.Filesystems[i].Path]; ok {
+					status.Filesystems[i].Forecast = &forecast
+				}
+			}
 		}
 	case !errors.Is(err, pgx.ErrNoRows):
 		return NodeStatus{}, fmt.Errorf("monitoring: node status: %w", err)

@@ -47,9 +47,9 @@ vùng gốc khỏe. Hệ thống tệp vắng mặt trong một báo cáo đư�
 báo là chưa rõ cho quy tắc dung lượng và inode, nên sự cố đang hoạt động vẫn
 hiển thị và không bao giờ tự phục hồi cho đến khi có bằng chứng mới.
 
-Không bao gồm: SMART/nhiệt độ, quét kích thước thư mục, dự báo dung lượng và dọn
-dẹp tự động. Gotham không bao giờ xóa dữ liệu hay khởi động lại khối lượng công
-việc để giảm áp lực.
+Không bao gồm: SMART/nhiệt độ, quét kích thước thư mục và dọn dẹp tự động.
+Gotham không bao giờ xóa dữ liệu hay khởi động lại khối lượng công việc để giảm
+áp lực.
 
 ## Lịch sử
 
@@ -60,13 +60,55 @@ thước), phân đoạn tăng lên để dự báo sau này không vượt qua 
 sử được giữ **30 ngày** và được lượt dọn giám sát xóa; các dòng sự cố đang hoạt
 động thuộc vòng đời sự cố và không bị lượt dọn này xóa.
 
+
+## Dự báo đầy hệ thống tệp
+
+Gotham có thể ước tính khi nào hệ thống tệp đầy từ chính lịch sử theo giờ, bằng
+xu hướng bình phương nhỏ nhất tất định. Gotham không gọi nhà cung cấp AI hay dịch
+vụ giám sát bên ngoài, và không hành động dựa trên ước tính: không tự dọn dẹp,
+đổi kích thước hay xóa.
+
+Ước tính dùng tối đa **7 ngày** gần nhất của các nhóm theo giờ cho phân đoạn hiện
+tại. Cần ít nhất **24 giờ độ trải**, **12 nhóm giờ hợp lệ**, **75% số giờ có dữ
+liệu** và quan sát mới nhất không cũ hơn **2 giờ**. Tần suất báo cáo không làm
+tăng độ tin cậy: nhiều mẫu trong một giờ vẫn chỉ là một điểm giờ. Giờ thiếu vẫn là
+khoảng trống, không bao giờ thành 0 hay phục hồi.
+
+Ước tính đạt chuẩn cần mức tiêu thụ tăng ở cả cửa sổ đầy đủ và nửa gần nhất, độ
+khớp **R² ≥ 0.8** và thời gian đầy hữu hạn dương. Nếu không, dự báo ghi **không
+tăng**, **chưa đủ lịch sử**, **lịch sử đã cũ** hoặc **xu hướng quá thất thường**
+thay vì đoán. Một lần đọc dung lượng thấp vẫn do quy tắc phần trăm cố định xử lý.
+
+**Đổi kích thước, gắn lại, thay ổ và dọn dẹp.** Thay đổi dung lượng làm tăng phân
+đoạn lịch sử, nên xu hướng cũ không được dùng cho hệ thống tệp mới. Việc dọn dẹp
+được nhận ra khi dung lượng trống tăng ít nhất **10% dung lượng trong một nhóm
+giờ**; dự báo tạo mốc mới sau bước nhảy thay vì khớp xuyên qua. Nếu sau khi đặt
+lại còn quá ít lịch sử, dự báo báo chưa đủ lịch sử.
+
+**Sự cố.** Dự báo đạt chuẩn mở **cảnh báo** khi dự kiến đầy trong **7 ngày** và
+**nghiêm trọng** trong **24 giờ**, sau hai lần đánh giá theo giờ hợp lệ. Nghiêm
+trọng giữ nguyên cho đến khi thời gian đầy rõ ràng trên **48 giờ**, rồi hạ xuống
+cảnh báo. Sự cố được khắc phục khi trên **14 ngày** hoặc sau hai lần đánh giá mới
+hợp lệ chứng minh mức tiêu thụ không còn tăng. Bằng chứng thiếu hoặc cũ để dự báo
+đang mở ở trạng thái chưa xác nhận hoặc chưa rõ và không bao giờ gửi thông báo
+phục hồi. Khi cùng hệ thống tệp đã có sự cố ngưỡng dung lượng, dự báo được hiển
+thị cùng nó và không gửi thông báo bên ngoài thứ hai.
+
+**Công tắc.** Chủ sở hữu có thể tắt ước tính trong **Giám sát** mà không cần
+trình sửa mô hình. Thay đổi quy tắc áp dụng cho lần đánh giá theo giờ tiếp theo;
+lịch sử không bị viết lại và không phát sinh phục hồi. Giới hạn: không dự báo
+inode, không ngoại suy theo thư mục, không dự đoán SMART hay lỗi phần cứng, và
+ngày hiển thị chỉ là gần đúng ("với tốc độ hiện tại"), không phải bảo đảm.
+
 ## Cấu hình quy tắc trên giao diện
 
 Mở **Giám sát** ở thanh bên (chỉ chủ sở hữu). Chọn **Mặc định của instance** để
 sửa quy tắc mọi nút kế thừa, hoặc chọn một nút để lưu thiết lập riêng. Sửa phần
 trăm cảnh báo, nghiêm trọng, hạ mức, xóa và số giây yêu cầu, rồi **Lưu quy tắc**.
 **Khôi phục mặc định** xóa chính sách đã lưu của phạm vi đang chọn: quy tắc
-instance quay về mặc định có sẵn, còn nút quay về quy tắc instance.
+instance quay về mặc định có sẵn, còn nút quay về quy tắc instance. Công tắc
+**Dự báo đầy dung lượng** bật hoặc tắt ước tính hệ thống tệp cho phạm vi đang
+chọn; mặc định là bật.
 
 Quy tắc được kiểm tra trong biểu mẫu và một lần nữa ở API: phần trăm phải hữu hạn
 và đúng thứ tự (`xóa < hạ mức ≤ cảnh báo < nghiêm trọng`), thời lượng từ 10 đến
@@ -74,6 +116,10 @@ và đúng thứ tự (`xóa < hạ mức ≤ cảnh báo < nghiêm trọng`), t
 sát tiếp theo; lịch sử không được đánh giá lại và không tạo ra phục hồi giả.
 
 ## Trang chi tiết nút hiển thị gì
+
+Thẻ **Áp lực máy chủ** trên trang nút cũng hiển thị thời gian đầy gần đúng, cửa
+sổ lịch sử, độ khớp và dung lượng còn trống của từng hệ thống tệp. Dự báo cho một
+hệ thống tệp đã có sự cố dung lượng được gộp dưới sự cố đó trong **Cần chú ý**.
 
 Thẻ **Tổng quan** của nút hiển thị sự cố áp lực đang hoạt động, quan sát gần nhất
 và độ mới của dữ liệu (mới, cũ hoặc chưa rõ). Thẻ liệt kê điểm gắn, mục đích,

@@ -61,6 +61,7 @@ const en = {
     memory: "Memory usage is too high.",
     space: "Disk space is running low.",
     inode: "The filesystem is running out of inodes.",
+    forecast: "The filesystem is filling up.",
     restart: "The application keeps restarting.",
     oom: "The application ran out of memory.",
     health: "The application is not passing its health check.",
@@ -75,7 +76,7 @@ const en = {
   affectedOne: "{count} affected resource",
   affectedOther: "{count} affected resources",
   groupedHint:
-    "These resources sit on this server. Gotham cannot confirm that the server caused them.",
+    "These issues relate to the same resource or server; Gotham groups them so one problem is not reported twice.",
   actions: {
     acknowledge: "Acknowledge",
     snooze: "Snooze",
@@ -93,6 +94,7 @@ const en = {
   hold: {
     nodeUnavailable: "Notifications are held while the server is unavailable.",
     expectedMaintenance: "Notifications are held during expected maintenance.",
+    groupedDisk: "Notifications are grouped with the disk space alert.",
     generic: "Notifications for this issue are currently held.",
     settings: "Notification settings",
   },

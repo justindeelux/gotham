@@ -160,7 +160,7 @@ func (h *handler) acknowledge(w http.ResponseWriter, r *http.Request) {
 		h.writeError(w, err)
 		return
 	}
-	writeJSON(w, http.StatusOK, incidentEnvelope{Incident: view(incident, nil, true)})
+	writeJSON(w, http.StatusOK, incidentEnvelope{Incident: view(incident, groupings{}, true)})
 }
 
 func (h *handler) snooze(w http.ResponseWriter, r *http.Request) {
@@ -184,7 +184,7 @@ func (h *handler) snooze(w http.ResponseWriter, r *http.Request) {
 		h.writeError(w, err)
 		return
 	}
-	writeJSON(w, http.StatusOK, incidentEnvelope{Incident: view(incident, nil, true)})
+	writeJSON(w, http.StatusOK, incidentEnvelope{Incident: view(incident, groupings{}, true)})
 }
 
 func parseListParams(r *http.Request) (ListParams, error) {

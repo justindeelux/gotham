@@ -395,7 +395,7 @@ func (s *Service) Get(ctx context.Context, userID, incidentID uuid.UUID) (Incide
 	if err := s.authorize(ctx, userID, inc); err != nil {
 		return IncidentView{}, err
 	}
-	grouping, err := s.nodeGrouping(ctx)
+	groups, err := s.grouping(ctx)
 	if err != nil {
 		return IncidentView{}, err
 	}
@@ -403,7 +403,7 @@ func (s *Service) Get(ctx context.Context, userID, incidentID uuid.UUID) (Incide
 	if err != nil {
 		return IncidentView{}, err
 	}
-	return view(inc, grouping, owner), nil
+	return view(inc, groups, owner), nil
 }
 
 func (s *Service) List(ctx context.Context, userID uuid.UUID, filter ListParams) (Page, error) {
@@ -465,13 +465,13 @@ func (s *Service) List(ctx context.Context, userID uuid.UUID, filter ListParams)
 			})
 		}
 	}
-	grouping, err := s.nodeGrouping(ctx)
+	groups, err := s.grouping(ctx)
 	if err != nil {
 		return Page{}, err
 	}
 	views := make([]IncidentView, 0, len(rows))
 	for _, inc := range rows {
-		views = append(views, view(inc, grouping, owner))
+		views = append(views, view(inc, groups, owner))
 	}
 	return Page{Incidents: views, NextCursor: next, ActiveCount: activeCount}, nil
 }
@@ -527,18 +527,24 @@ func (s *Service) ActiveNodeIncidents(ctx context.Context) ([]Incident, error) {
 	return s.repo.ListActiveNodeIncidents(ctx)
 }
 
-func (s *Service) nodeGrouping(ctx context.Context) (map[uuid.UUID]Incident, error) {
+func (s *Service) grouping(ctx context.Context) (groupings, error) {
 	rows, err := s.repo.ListActiveNodeIncidents(ctx)
 	if err != nil {
-		return nil, err
+		return groupings{}, err
 	}
-	grouping := make(map[uuid.UUID]Incident, len(rows))
+	out := groupings{
+		node:       make(map[uuid.UUID]Incident, len(rows)),
+		filesystem: make(map[uuid.UUID]Incident, len(rows)),
+	}
 	for _, inc := range rows {
 		if inc.NodeID != uuid.Nil {
-			grouping[inc.NodeID] = inc
+			out.node[inc.NodeID] = inc
+		}
+		if inc.Detector == "filesystem_space" && inc.ResourceType == "filesystem" && inc.ResourceID != uuid.Nil {
+			out.filesystem[inc.ResourceID] = inc
 		}
 	}
-	return grouping, nil
+	return out, nil
 }
 
 // Sweep retries local handoffs, expires snoozes without falsifying health and

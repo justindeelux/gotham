@@ -3,9 +3,11 @@ import {
   NAlert,
   NButton,
   NCard,
+  NFormItem,
   NSelect,
   NSpace,
   NSpin,
+  NSwitch,
   NTag,
   useMessage,
 } from "naive-ui";
@@ -187,6 +189,13 @@ onMounted(async () => {
           <NCard :title="t('monitoring.rules.spaceTitle')">
             <p class="rule-hint">{{ t("monitoring.rules.spaceHint") }}</p>
             <FilesystemRuleFields v-model:rule="rules.space" />
+            <NFormItem :label="t('monitoring.rules.forecast')">
+              <NSwitch
+                v-model:value="rules.forecast"
+                :aria-label="t('monitoring.rules.forecast')"
+              />
+            </NFormItem>
+            <p class="rule-hint">{{ t("monitoring.rules.forecastHint") }}</p>
           </NCard>
           <NCard :title="t('monitoring.rules.inodeTitle')">
             <p class="rule-hint">{{ t("monitoring.rules.inodeHint") }}</p>

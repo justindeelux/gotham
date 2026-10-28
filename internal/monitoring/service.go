@@ -249,10 +249,13 @@ func (s *Service) Sweep(ctx context.Context) error {
 	return nil
 }
 
-// Run drives the staleness and retention sweeps until ctx ends.
+// Run drives the staleness and retention sweeps until ctx ends, and evaluates
+// filesystem forecasts once per hour from retained hourly buckets.
 func (s *Service) Run(ctx context.Context) {
 	ticker := time.NewTicker(sweepInterval)
 	defer ticker.Stop()
+	forecasts := time.NewTicker(forecastInterval)
+	defer forecasts.Stop()
 	for {
 		select {
 		case <-ctx.Done():
@@ -261,6 +264,12 @@ func (s *Service) Run(ctx context.Context) {
 			sweepCtx, cancel := context.WithTimeout(ctx, 10*time.Second)
 			if err := s.Sweep(sweepCtx); err != nil && ctx.Err() == nil {
 				s.logger.Warn("monitoring: sweep", "error", err)
+			}
+			cancel()
+		case <-forecasts.C:
+			forecastCtx, cancel := context.WithTimeout(ctx, forecastSweepTimeout)
+			if err := s.EvaluateForecasts(forecastCtx); err != nil && ctx.Err() == nil {
+				s.logger.Warn("monitoring: forecast sweep", "error", err)
 			}
 			cancel()
 		}
@@ -319,7 +328,7 @@ func (s *Service) nodeEvidenceFresh(ctx context.Context, nodeID uuid.UUID, now t
 
 func isPressureDetector(detector string) bool {
 	switch detector {
-	case DetectorCPU, DetectorMemory, DetectorSpace, DetectorInodes:
+	case DetectorCPU, DetectorMemory, DetectorSpace, DetectorInodes, DetectorForecast:
 		return true
 	default:
 		return false

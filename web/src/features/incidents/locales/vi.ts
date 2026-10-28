@@ -61,6 +61,7 @@ const vi = {
     memory: "Mức sử dụng bộ nhớ quá cao.",
     space: "Dung lượng đĩa sắp hết.",
     inode: "Hệ thống tệp sắp hết inode.",
+    forecast: "Hệ thống tệp đang đầy dần.",
     restart: "Ứng dụng liên tục khởi động lại.",
     oom: "Ứng dụng đã hết bộ nhớ.",
     health: "Ứng dụng không vượt qua kiểm tra sức khỏe.",
@@ -75,7 +76,7 @@ const vi = {
   affectedOne: "{count} tài nguyên bị ảnh hưởng",
   affectedOther: "{count} tài nguyên bị ảnh hưởng",
   groupedHint:
-    "Các tài nguyên này nằm trên máy chủ này. Gotham không thể xác nhận máy chủ là nguyên nhân.",
+    "Các sự cố này liên quan đến cùng một tài nguyên hoặc máy chủ; Gotham gộp chúng để một vấn đề không bị báo hai lần.",
   actions: {
     acknowledge: "Xác nhận",
     snooze: "Tạm ẩn",
@@ -93,6 +94,7 @@ const vi = {
   hold: {
     nodeUnavailable: "Thông báo đang được giữ trong khi máy chủ không khả dụng.",
     expectedMaintenance: "Thông báo đang được giữ trong thời gian bảo trì dự kiến.",
+    groupedDisk: "Thông báo được gộp với cảnh báo dung lượng đĩa.",
     generic: "Thông báo cho sự cố này hiện đang được giữ.",
     settings: "Cài đặt thông báo",
   },

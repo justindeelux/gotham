@@ -80,11 +80,27 @@ type DeliveryView struct {
 	CreatedAt  time.Time `json:"created_at"`
 }
 
-func view(inc Incident, grouping map[uuid.UUID]Incident, showGrouping bool) IncidentView {
+// groupings carries the active rows a symptom can be placed under. Node
+// grouping exists for connectivity; filesystem grouping keeps a forecast next
+// to the disk-space threshold alert for the same mount.
+type groupings struct {
+	node       map[uuid.UUID]Incident
+	filesystem map[uuid.UUID]Incident
+}
+
+func view(inc Incident, grouping groupings, showGrouping bool) IncidentView {
 	coverage := inc.Coverage
 	groupedUnder := ""
-	if inc.NodeID != uuid.Nil {
-		if nodeIncident, ok := grouping[inc.NodeID]; ok && nodeIncident.ID != inc.ID && nodeIncident.Active() {
+	if inc.Detector == "filesystem_forecast" && inc.ResourceID != uuid.Nil {
+		if spaceIncident, ok := grouping.filesystem[inc.ResourceID]; ok && spaceIncident.ID != inc.ID && spaceIncident.Active() {
+			// The forecast is supporting evidence for the threshold alert; it
+			// keeps its own coverage instead of being a node symptom.
+			if showGrouping {
+				groupedUnder = spaceIncident.ID.String()
+			}
+		}
+	} else if inc.NodeID != uuid.Nil {
+		if nodeIncident, ok := grouping.node[inc.NodeID]; ok && nodeIncident.ID != inc.ID && nodeIncident.Active() {
 			// A symptom cannot claim fresh coverage while its node is
 			// unavailable; grouping never resolves it or invents a cause.
 			coverage = CoverageUnknown

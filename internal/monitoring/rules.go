@@ -58,6 +58,9 @@ type Rules struct {
 	Memory Rule           `json:"memory"`
 	Space  FilesystemRule `json:"space"`
 	Inode  FilesystemRule `json:"inode"`
+	// Forecast enables the deterministic filesystem exhaustion estimate. It
+	// has no model editor: the algorithm and its limits are fixed.
+	Forecast bool `json:"forecast"`
 }
 
 // Defaults are the product defaults, not copied from another monitoring tool.
@@ -73,6 +76,7 @@ func Defaults() Rules {
 			Enabled: true, Warning: 90, Critical: 95, Downgrade: 90, Clear: 85,
 			ConfirmSeconds: 60, CriticalSeconds: 60, DowngradeSeconds: 60, ClearSeconds: 60,
 		},
+		Forecast: true,
 	}
 }
 
@@ -148,7 +152,9 @@ func durationBounds(name string, value int) error {
 }
 
 func decodeRules(raw []byte) (Rules, error) {
-	var rules Rules
+	// Start from the defaults so a policy saved before a rule existed keeps the
+	// product default (forecasting is on) instead of decoding to its zero value.
+	rules := Defaults()
 	if err := json.Unmarshal(raw, &rules); err != nil {
 		return Rules{}, fmt.Errorf("monitoring: decode policy: %w", err)
 	}

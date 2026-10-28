@@ -43,8 +43,52 @@ function detectorLabel(detector: string): string {
       return t("monitoring.detectors.space");
     case "filesystem_inode":
       return t("monitoring.detectors.inode");
+    case "filesystem_forecast":
+      return t("monitoring.detectors.forecast");
     default:
       return detector;
+  }
+}
+
+function horizonLabel(hours: number | undefined): string {
+  if (!hours || hours <= 0) {
+    return "—";
+  }
+  if (hours < 48) {
+    return `${Math.max(1, Math.round(hours))}h`;
+  }
+  const days = hours / 24;
+  return days < 10 ? `${days.toFixed(1)}d` : `${Math.round(days)}d`;
+}
+
+function forecastText(
+  row: FilesystemStatus,
+): { label: string; status: string; detail?: string } {
+  const forecast = row.forecast;
+  if (!forecast) {
+    return { label: t("monitoring.forecast.unavailable"), status: "unavailable" };
+  }
+  switch (forecast.status) {
+    case "estimated":
+      return {
+        status: forecast.status,
+        label: t("monitoring.forecast.estimated", {
+          horizon: horizonLabel(forecast.horizon_hours),
+        }),
+        detail: t("monitoring.forecast.detail", {
+          available: formatBytes(forecast.available_bytes),
+          hours: forecast.span_hours,
+          fit: Math.round(forecast.fit * 100),
+        }),
+      };
+    case "non_growing":
+      return { status: forecast.status, label: t("monitoring.forecast.nonGrowing") };
+    case "stale":
+      return { status: forecast.status, label: t("monitoring.forecast.stale") };
+    case "low_confidence":
+      return { status: forecast.status, label: t("monitoring.forecast.lowConfidence") };
+    default:
+      return { status: forecast.status, label: t("monitoring.forecast.insufficient") };
   }
 }
 
@@ -61,13 +105,51 @@ const columns = computed<DataTableColumns<FilesystemStatus>>(() => [
   {
     title: t("monitoring.filesystems.space"),
     key: "space",
-    render: (row) =>
-      row.status === "ok"
-        ? `${Math.round(row.used_percent)}% · ${t("monitoring.filesystems.available", {
-            available: formatBytes(row.available_bytes),
-            total: formatBytes(row.total_bytes),
-          })}`
-        : t("monitoring.filesystems.unsupported"),
+    render: (row) => {
+      const space =
+        row.status === "ok"
+          ? `${Math.round(row.used_percent)}% · ${t("monitoring.filesystems.available", {
+              available: formatBytes(row.available_bytes),
+              total: formatBytes(row.total_bytes),
+            })}`
+          : t("monitoring.filesystems.unsupported");
+      const forecast = forecastText(row);
+      // The cell is rendered inside NDataTable's own render context, so a
+      // scoped class would not reach it. Inline the layout to keep the space
+      // reading and the forecast on separate, readable lines at every width.
+      return h(
+        "div",
+        {
+          class: "space-cell",
+          style: {
+            display: "flex",
+            flexDirection: "column",
+            gap: "4px",
+            minWidth: 0,
+            lineHeight: "1.5",
+          },
+        },
+        [
+          h("span", { style: { overflowWrap: "anywhere" } }, space),
+          h(
+            "span",
+            {
+              class: "forecast-label",
+              "data-forecast-status": forecast.status,
+              style: { fontSize: "var(--text-xs)", color: "var(--fg-2)" },
+            },
+            forecast.label,
+          ),
+          forecast.detail
+            ? h(
+                "span",
+                { class: "forecast-detail", style: { fontSize: "var(--text-xs)", color: "var(--muted)" } },
+                forecast.detail,
+              )
+            : null,
+        ],
+      );
+    },
   },
   {
     title: t("monitoring.filesystems.inodes"),
@@ -133,7 +215,9 @@ onMounted(load);
     </template>
 
     <NSpin :show="loading">
-      <NSpace vertical :size="12">
+      <!-- A plain stack, not NSpace: Naive's Space wraps every child in a
+           keyed item div and duplicated the async filesystem table on update. -->
+      <div class="pressure-stack">
         <NAlert v-if="error" type="error" :show-icon="true">{{ error }}</NAlert>
 
         <NText depth="3">
@@ -188,7 +272,16 @@ onMounted(load);
             {{ t("monitoring.status.openMetrics") }}
           </NButton>
         </NSpace>
-      </NSpace>
+      </div>
     </NSpin>
   </NCard>
 </template>
+
+<style scoped>
+.pressure-stack {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-3);
+  min-width: 0;
+}
+</style>

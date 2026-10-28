@@ -4,6 +4,7 @@ import type { ResourceHistory } from "../src/features/monitoring/api/resourceHis
 import {
   buildResourceCharts,
   chartStepMs,
+  formatRate,
   memoryLimitLabel,
   serviceOptions,
 } from "../src/features/monitoring/utils/resourceHistoryView";
@@ -49,6 +50,13 @@ function history(): ResourceHistory {
 }
 
 describe("resource history view", () => {
+  it("formats tiny rate axis ticks without undefined units", () => {
+    expect(formatRate(0)).toBe("0 B/s");
+    expect(formatRate(0.5)).toBe("0.50 B/s");
+    expect(formatRate(1)).toBe("1 B/s");
+    expect(formatRate(1536)).toBe("1.50 KiB/s");
+  });
+
   it("keeps an unknown metric as a gap instead of a zero", () => {
     const charts = buildResourceCharts(history());
     const network = charts.find((chart) => chart.key === "network");

@@ -22,6 +22,77 @@ async function expectNoHorizontalOverflow(
   expect(overflow, `horizontal overflow at ${width}px`).toBeLessThanOrEqual(1);
 }
 
+function overlaps(
+  a: { x: number; y: number; width: number; height: number },
+  b: { x: number; y: number; width: number; height: number },
+): boolean {
+  return !(
+    a.x + a.width <= b.x ||
+    b.x + b.width <= a.x ||
+    a.y + a.height <= b.y ||
+    b.y + b.height <= a.y
+  );
+}
+
+async function expectChartLabelsInside(
+  page: import("@playwright/test").Page,
+  width: number,
+): Promise<void> {
+  const charts = page.locator(".resource-history__chart");
+  const chartCount = await charts.count();
+  expect(chartCount, `charts at ${width}px`).toBeGreaterThan(0);
+  for (let index = 0; index < chartCount; index += 1) {
+    const chart = charts.nth(index);
+    const box = await chart.boundingBox();
+    expect(box, `chart ${index} box at ${width}px`).not.toBeNull();
+    const labels = chart.locator(".chart__ylabels text, .chart__xlabels text");
+    const labelCount = await labels.count();
+    expect(labelCount, `axis labels in chart ${index} at ${width}px`).toBeGreaterThan(0);
+    for (let labelIndex = 0; labelIndex < labelCount; labelIndex += 1) {
+      const label = labels.nth(labelIndex);
+      const labelBox = await label.boundingBox();
+      expect(labelBox, `axis label ${labelIndex} box at ${width}px`).not.toBeNull();
+      expect(labelBox!.x, `left clip at ${width}px: ${await label.textContent()}`)
+        .toBeGreaterThanOrEqual(box!.x - 1);
+      expect(labelBox!.x + labelBox!.width, `right clip at ${width}px: ${await label.textContent()}`)
+        .toBeLessThanOrEqual(box!.x + box!.width + 1);
+      expect(labelBox!.y, `top clip at ${width}px: ${await label.textContent()}`)
+        .toBeGreaterThanOrEqual(box!.y - 1);
+      expect(labelBox!.y + labelBox!.height, `bottom clip at ${width}px`)
+        .toBeLessThanOrEqual(box!.y + box!.height + 1);
+    }
+
+    const marker = chart.locator("[data-chart-marker-label]");
+    if ((await marker.count()) === 0) {
+      continue;
+    }
+    const markerBox = await marker.first().boundingBox();
+    expect(markerBox, `marker label visible at ${width}px`).not.toBeNull();
+    for (let labelIndex = 0; labelIndex < labelCount; labelIndex += 1) {
+      const label = labels.nth(labelIndex);
+      if (!(await label.evaluate((node) => node.closest(".chart__ylabels") !== null))) {
+        continue;
+      }
+      const labelBox = await label.boundingBox();
+      if (!labelBox) {
+        continue;
+      }
+      expect(
+        overlaps(markerBox!, labelBox),
+        `marker overlaps an axis label at ${width}px`,
+      ).toBe(false);
+    }
+  }
+}
+
+async function expectNoBrokenText(
+  page: import("@playwright/test").Page,
+): Promise<void> {
+  const panel = page.getByTestId("resource-history");
+  await expect(panel.getByText(/monitoring\.[A-Za-z]+\./)).toHaveCount(0);
+  await expect(panel.getByText(/undefined|NaN/)).toHaveCount(0);
+}
+
 function iso(offsetMs: number): string {
   return new Date(Date.now() + offsetMs).toISOString();
 }
@@ -36,10 +107,10 @@ function history(step: "30s" | "5m" = "30s") {
       mem_working_set_bytes: 20_000_000 + index * 1_000_000,
       mem_limit_bytes: 0,
       mem_unlimited: true,
-      net_rx_bps: index === 3 ? null : 1_000 + index * 100,
-      net_tx_bps: 500,
-      disk_read_bps: null,
-      disk_write_bps: 250,
+      net_rx_bps: index === 3 ? null : index % 2,
+      net_tx_bps: 0,
+      disk_read_bps: 1,
+      disk_write_bps: 0,
       latest_at: at,
       replicas: index === 4 ? 1 : 2,
       expected_replicas: 2,
@@ -123,6 +194,7 @@ test.describe("application resource history", () => {
     await expect(page.getByTestId("resource-history-partial")).toBeVisible();
     await expect(page.getByText("Memory limit: unlimited")).toBeVisible();
     await expect(page.getByRole("radio", { name: "24h" })).toBeVisible();
+    await expectNoBrokenText(page);
 
     await page.getByRole("radio", { name: "24h" }).click({ force: true });
     await expect.poll(() => seenRanges).toContain("24h");
@@ -134,11 +206,14 @@ test.describe("application resource history", () => {
     await page.keyboard.press("ArrowRight");
     await expect(page.getByRole("radio", { name: "24h" })).toBeChecked();
     await expect.poll(() => seenRanges.filter((range) => range === "24h").length).toBeGreaterThan(1);
+    await expectNoBrokenText(page);
 
     for (const width of widths) {
       await page.setViewportSize({ width, height: 900 });
       await expectNoHorizontalOverflow(page, width);
       await expect(page.locator('[data-chart="cpu"] svg')).toBeVisible();
+      await expectNoBrokenText(page);
+      await expectChartLabelsInside(page, width);
     }
     expect(guardrails.apiFailures).toEqual([]);
   });

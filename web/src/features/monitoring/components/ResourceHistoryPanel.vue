@@ -142,7 +142,12 @@ watch(
 </script>
 
 <template>
-  <NSpace vertical :size="16" style="margin-top: 16px">
+  <NSpace
+    vertical
+    :size="16"
+    style="margin-top: 16px"
+    data-testid="resource-history"
+  >
     <div class="resource-history__toolbar">
       <NRadioGroup
         :value="range"
@@ -171,7 +176,7 @@ watch(
         {{ t("monitoring.resourceHistory.partial") }}
       </NTag>
       <NText depth="3">
-        {{ t("monitoring.resourceHistory.pointCount", { count: history?.series.length ?? 0 }) }}
+        {{ t("monitoring.resourceHistory.seriesCount", { count: history?.series.length ?? 0 }) }}
       </NText>
       <NButton
         size="small"

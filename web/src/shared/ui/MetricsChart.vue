@@ -37,9 +37,12 @@ const props = withDefaults(defineProps<Props>(), {
 });
 
 const width = 600;
-const padLeft = 46;
+// Room for rate labels such as "999.99 MiB/s" without clipping at the left
+// edge. The top padding keeps the deployment-marker label clear of the top
+// Y-axis tick while the plot stays inside the same card.
+const padLeft = 96;
 const padRight = 12;
-const padTop = 10;
+const padTop = 26;
 const padBottom = 22;
 
 const allPoints = computed<ChartPoint[]>(() =>
@@ -88,6 +91,17 @@ function y(value: number): number {
 
 function project(at: number, value: number): { x: number; y: number } {
   return { x: x(at), y: y(value) };
+}
+
+function markerAnchor(at: number): "start" | "middle" | "end" {
+  const px = x(at);
+  if (px <= padLeft + 28) {
+    return "start";
+  }
+  if (px >= width - padRight - 28) {
+    return "end";
+  }
+  return "middle";
 }
 
 const baseline = computed<number>(() => padTop + plotHeight.value);
@@ -201,7 +215,12 @@ const ariaLabel = computed<string>(() => {
             :y2="baseline"
             data-chart-marker
           />
-          <text :x="x(marker.at)" :y="padTop - 2" text-anchor="middle">
+          <text
+            :x="x(marker.at)"
+            :y="padTop - 12"
+            :text-anchor="markerAnchor(marker.at)"
+            data-chart-marker-label
+          >
             {{ marker.label }}
           </text>
         </template>

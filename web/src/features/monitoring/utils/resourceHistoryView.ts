@@ -33,6 +33,14 @@ export function formatCores(value: number): string {
 }
 
 export function formatRate(value: number): string {
+  if (!Number.isFinite(value)) {
+    return "—";
+  }
+  // A half-unit Y tick must stay readable; formatBytes is byte-oriented and
+  // would round 0.5 to "1 B".
+  if (value > 0 && value < 1) {
+    return `${value.toFixed(2)} B/s`;
+  }
   return `${formatBytes(value)}/s`;
 }
 

@@ -4,6 +4,7 @@ import { ref } from "vue";
 import {
   acknowledgeIncident,
   incidentErrorStatus,
+  incidentMaxPageSize,
   incidentPageLimit,
   listIncidents,
   resolvedIncidentLimit,
@@ -49,12 +50,18 @@ export const useIncidentsStore = defineStore("incidents", () => {
       loading.value = true;
     }
     error.value = null;
+    // Keep the pages the operator already loaded so a live update does not
+    // collapse the list or drop focus on a row further down.
+    const limit = Math.min(
+      incidentMaxPageSize,
+      Math.max(incidentPageLimit, items.value.length),
+    );
     try {
       const page = await listIncidents({
         status: "active",
         severity: severity.value || undefined,
         resourceType: resourceType.value || undefined,
-        limit: incidentPageLimit,
+        limit,
       });
       if (token !== refreshSeq) {
         return;
@@ -67,6 +74,16 @@ export const useIncidentsStore = defineStore("incidents", () => {
     } catch (errorValue) {
       if (token !== refreshSeq) {
         return;
+      }
+      const status = incidentErrorStatus(errorValue);
+      if (status === 401 || status === 403 || status === 404) {
+        // Access went away or the read model is absent: never leave the
+        // previous grant's rows beside the error.
+        items.value = [];
+        resolved.value = [];
+        resolvedLoaded.value = false;
+        activeCount.value = 0;
+        nextCursor.value = "";
       }
       error.value = errorValue;
       state.value = classify(errorValue);
@@ -81,6 +98,7 @@ export const useIncidentsStore = defineStore("incidents", () => {
     if (!nextCursor.value || loadingMore.value) {
       return;
     }
+    const token = refreshSeq;
     loadingMore.value = true;
     try {
       const page = await listIncidents({
@@ -90,11 +108,16 @@ export const useIncidentsStore = defineStore("incidents", () => {
         limit: incidentPageLimit,
         cursor: nextCursor.value,
       });
+      if (token !== refreshSeq) {
+        return;
+      }
       items.value = [...items.value, ...page.incidents];
       activeCount.value = page.active_count;
       nextCursor.value = page.next_cursor ?? "";
     } catch (errorValue) {
-      error.value = errorValue;
+      if (token === refreshSeq) {
+        error.value = errorValue;
+      }
     } finally {
       loadingMore.value = false;
     }
@@ -119,9 +142,18 @@ export const useIncidentsStore = defineStore("incidents", () => {
 
   function replaceItem(updated: Incident): void {
     const index = items.value.findIndex((item) => item.id === updated.id);
-    if (index >= 0) {
-      items.value.splice(index, 1, updated);
+    if (index < 0) {
+      return;
     }
+    const existing = items.value[index];
+    // Ack/snooze responses carry no node grouping map; keep the row's
+    // placement and coverage so a child of an offline node stays grouped.
+    items.value.splice(index, 1, {
+      ...updated,
+      grouped_under: existing.grouped_under,
+      coverage: existing.coverage,
+      delivery_hold: existing.delivery_hold,
+    });
   }
 
   async function acknowledge(id: string): Promise<void> {

@@ -258,3 +258,103 @@ func identityKeys(rows []sqlc.Incident) []string {
 	}
 	return keys
 }
+
+func TestIncidentMemberScopeCountsAndResolved(t *testing.T) {
+	ctx, cancel := context.WithTimeout(context.Background(), 60*time.Second)
+	defer cancel()
+	st := scratchStore(t)
+
+	suffix := time.Now().UnixNano()
+	owner, err := st.CreateFirstUser(ctx, fmt.Sprintf("inc-scope-owner-%d@example.com", suffix), nil)
+	if err != nil {
+		t.Fatalf("create owner: %v", err)
+	}
+	member, err := st.CreateUser(ctx, fmt.Sprintf("inc-scope-member-%d@example.com", suffix), nil)
+	if err != nil {
+		t.Fatalf("create member: %v", err)
+	}
+	ownerID := uuid.UUID(owner.ID.Bytes)
+	memberID := uuid.UUID(member.ID.Bytes)
+	granted, other := uuid.New(), uuid.New()
+	for _, project := range []struct {
+		id   uuid.UUID
+		name string
+	}{{granted, "granted"}, {other, "other"}} {
+		if _, err := st.DB.Exec(ctx, `INSERT INTO projects(id, name) VALUES($1,$2)`, project.id, project.name); err != nil {
+			t.Fatalf("insert project: %v", err)
+		}
+	}
+	if err := st.GrantProject(ctx, granted, memberID, ownerID); err != nil {
+		t.Fatalf("grant: %v", err)
+	}
+
+	base := time.Now().UTC().Add(-24 * time.Hour).Truncate(time.Microsecond)
+	resolvedAt := base.Add(time.Hour)
+	rows := []sqlc.CreateIncidentParams{
+		incidentParams(uuid.New(), granted, "app:granted-a", "firing", base, time.Time{}),
+		incidentParams(uuid.New(), granted, "app:granted-b", "firing", base, time.Time{}),
+		incidentParams(uuid.New(), granted, "app:granted-resolved", "resolved", base, resolvedAt),
+		incidentParams(uuid.New(), other, "app:other", "firing", base, time.Time{}),
+		incidentParams(uuid.New(), other, "app:other-resolved", "resolved", base, resolvedAt),
+		incidentParams(uuid.New(), uuid.Nil, "node:global", "firing", base, time.Time{}),
+	}
+	for _, row := range rows {
+		if _, err := st.CreateIncident(ctx, row); err != nil {
+			t.Fatalf("create incident: %v", err)
+		}
+	}
+
+	memberScope := sqlc.CountActiveIncidentsParams{
+		UserID: pgtype.UUID{Bytes: memberID, Valid: true},
+	}
+	count, err := st.CountActiveIncidents(ctx, memberScope)
+	if err != nil || count != 2 {
+		t.Fatalf("member active count = %d %v; want 2", count, err)
+	}
+	ownerCount, err := st.CountActiveIncidents(ctx, sqlc.CountActiveIncidentsParams{
+		IsOwner: true,
+		UserID:  pgtype.UUID{Bytes: ownerID, Valid: true},
+	})
+	if err != nil || ownerCount != 4 {
+		t.Fatalf("owner active count = %d %v; want 4", ownerCount, err)
+	}
+
+	memberPage, err := st.ListIncidents(ctx, sqlc.ListIncidentsParams{
+		UserID:   pgtype.UUID{Bytes: memberID, Valid: true},
+		RowLimit: 10,
+	})
+	if err != nil || len(memberPage) != 2 {
+		t.Fatalf("member list = %d %v; want 2", len(memberPage), err)
+	}
+	memberResolved, err := st.ListResolvedIncidents(ctx, sqlc.ListResolvedIncidentsParams{
+		UserID:   pgtype.UUID{Bytes: memberID, Valid: true},
+		RowLimit: 10,
+	})
+	if err != nil || len(memberResolved) != 1 || memberResolved[0].IdentityKey != "app:granted-resolved" {
+		t.Fatalf("member resolved = %v %v; want only the granted row", identityKeys(memberResolved), err)
+	}
+	ownerResolved, err := st.ListResolvedIncidents(ctx, sqlc.ListResolvedIncidentsParams{
+		IsOwner:  true,
+		UserID:   pgtype.UUID{Bytes: ownerID, Valid: true},
+		RowLimit: 10,
+	})
+	if err != nil || len(ownerResolved) != 2 {
+		t.Fatalf("owner resolved = %d %v; want 2", len(ownerResolved), err)
+	}
+
+	if err := st.RevokeProject(ctx, granted, memberID); err != nil {
+		t.Fatalf("revoke: %v", err)
+	}
+	memberScope.IsOwner = false
+	count, err = st.CountActiveIncidents(ctx, memberScope)
+	if err != nil || count != 0 {
+		t.Fatalf("revoked active count = %d %v; want 0", count, err)
+	}
+	revoked, err := st.ListIncidents(ctx, sqlc.ListIncidentsParams{
+		UserID:   pgtype.UUID{Bytes: memberID, Valid: true},
+		RowLimit: 10,
+	})
+	if err != nil || len(revoked) != 0 {
+		t.Fatalf("revoked list = %d %v; want 0", len(revoked), err)
+	}
+}

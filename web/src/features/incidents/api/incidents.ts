@@ -63,6 +63,7 @@ export interface ListIncidentOptions {
 }
 
 export const incidentPageLimit = 20;
+export const incidentMaxPageSize = 100;
 export const resolvedIncidentLimit = 5;
 
 export function incidentErrorStatus(error: unknown): number | null {

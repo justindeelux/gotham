@@ -1,5 +1,11 @@
 import { expect, test } from "./fixtures";
-import { storageStatePath } from "./support";
+import {
+  loadAccount,
+  seedProjectEnvironment,
+  storageKey,
+  storageStatePath,
+  uniqueSuffix,
+} from "./support";
 import type { Page, Route } from "@playwright/test";
 
 test.use({ storageState: storageStatePath });
@@ -370,4 +376,83 @@ test.describe("needs attention", () => {
       await expect(page.getByRole("button", { name: "Recently resolved" })).toBeVisible();
     }
   });
+});
+
+test("a member sees only granted incidents and loses them after revoke", async ({
+  page,
+  request,
+}) => {
+  const account = loadAccount();
+  const headers = { Authorization: `Bearer ${account.accessToken}` };
+  const project = await seedProjectEnvironment(request, headers);
+  const email = `ui-e2e-attention-${uniqueSuffix()}@example.com`;
+  const password = "Gotham-E2E-Password1";
+  const invite = await request.post("/api/v1/invites", {
+    headers,
+    data: { email, project_ids: [project.projectId] },
+  });
+  expect(invite.status(), await invite.text()).toBe(201);
+  const inviteToken = ((await invite.json()) as { token: string }).token;
+  const register = await request.post("/api/v1/auth/register", {
+    data: { email, password, invite_token: inviteToken },
+  });
+  expect(register.ok(), await register.text()).toBe(true);
+  const member = (await register.json()) as {
+    user: { id: string; email: string; created_at: string };
+    access_token: string;
+    refresh_token: string;
+  };
+
+  let memberRows = [
+    incident("member-1", {
+      project_id: project.projectId,
+      resource_name: "granted-app",
+    }),
+  ];
+  const ownerRows = [
+    incident("owner-only", { resource_name: "owner-only-app" }),
+  ];
+  await page.route("**/api/v1/incidents?*", async (route) => {
+    const auth = route.request().headers()["authorization"] ?? "";
+    const rows =
+      auth === `Bearer ${member.access_token}` ? memberRows : ownerRows;
+    await route.fulfill({
+      json: { incidents: rows, active_count: rows.length },
+    });
+  });
+
+  try {
+    await page.goto("/dashboard");
+    await page.evaluate(
+      ({ key, value }) => localStorage.setItem(key, JSON.stringify(value)),
+      {
+        key: storageKey,
+        value: {
+          user: member.user,
+          accessToken: member.access_token,
+          refreshToken: member.refresh_token,
+        },
+      },
+    );
+    await page.reload();
+
+    await expect(page.getByText("1 active issue")).toBeVisible();
+    await expect(page.getByText("granted-app")).toBeVisible();
+    await expect(page.getByText("owner-only-app")).toHaveCount(0);
+
+    const revoke = await request.delete(
+      `/api/v1/projects/${project.projectId}/members`,
+      { headers, data: { user_id: member.user.id } },
+    );
+    expect(revoke.status(), await revoke.text()).toBe(200);
+    memberRows = [];
+    await page.evaluate(() => window.dispatchEvent(new Event("online")));
+    await expect(page.getByText("0 active issues")).toBeVisible();
+    await expect(page.getByText("granted-app")).toHaveCount(0);
+
+    await page.reload();
+    await expect(page.getByText("0 active issues")).toBeVisible();
+  } finally {
+    await request.delete(`/api/v1/projects/${project.projectId}`, { headers });
+  }
 });

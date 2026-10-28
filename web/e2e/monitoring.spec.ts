@@ -228,9 +228,149 @@ test.describe("server host pressure", () => {
       await expect(row).toBeVisible();
       await expect(row).toContainText("96%");
       await expect(row).toContainText("backup");
+      await expect(
+        page.locator(".n-data-table-base-table-body").filter({ hasText: "/mnt/backup" }),
+      ).toHaveCount(1);
       await expect(page.getByText("No active CPU, memory or filesystem pressure.")).toHaveCount(0);
       for (const width of widths) {
         await expectNoHorizontalOverflow(page, width);
+      }
+    } finally {
+      await request.delete(`/api/v1/servers/${node.id}`, { headers });
+    }
+  });
+
+  test("renders one filesystem table and a separate forecast line at every width", async ({ page, request }) => {
+    const account = loadAccount();
+    const headers = { Authorization: `Bearer ${account.accessToken}` };
+    const node = await createServer(request, headers, "pressure-healthy");
+    const observedAt = new Date().toISOString();
+    let forecast: Record<string, unknown> = {
+      status: "insufficient",
+      available_bytes: 6186466918400,
+      total_bytes: 8014022656000,
+      span_hours: 16,
+      samples: 17,
+      coverage: 1,
+      slope_bytes_per_hour: 0,
+      fit: 0,
+    };
+    await page.route(`**/api/v1/monitoring/nodes/${node.id}/status`, async (route) => {
+      await route.fulfill({
+        status: 200,
+        contentType: "application/json",
+        body: JSON.stringify({
+          status: {
+            node_id: node.id,
+            observed_at: observedAt,
+            coverage: "fresh",
+            active: [],
+            filesystems: [
+              {
+                path: "/var/lib/docker/volumes/gotham-managed-storage",
+                purpose: "docker",
+                status: "ok",
+                total_bytes: 8014022656000,
+                available_bytes: 6186466918400,
+                used_percent: 22.8,
+                inode_status: "ok",
+                total_inodes: 4980736,
+                free_inodes: 4663683,
+                inode_used_percent: 6.4,
+                forecast,
+              },
+            ],
+          },
+        }),
+      });
+    });
+    try {
+      await page.goto(`/servers/${node.id}`);
+      await expect(page.getByText("Host pressure")).toBeVisible();
+      await expect(page.getByText("No active CPU, memory or filesystem pressure.")).toBeVisible();
+      await expect(page.locator(".n-data-table-base-table-body")).toHaveCount(1);
+
+      const states: Array<Record<string, unknown>> = [
+        forecast,
+        {
+          status: "estimated",
+          available_bytes: 6186466918400,
+          total_bytes: 8014022656000,
+          span_hours: 167,
+          samples: 168,
+          coverage: 1,
+          slope_bytes_per_hour: 150000000,
+          fit: 0.97,
+          horizon_hours: 1000,
+        },
+        {
+          status: "low_confidence",
+          available_bytes: 6186466918400,
+          total_bytes: 8014022656000,
+          span_hours: 167,
+          samples: 168,
+          coverage: 1,
+          slope_bytes_per_hour: 150000000,
+          fit: 0.42,
+        },
+        {
+          status: "stale",
+          available_bytes: 6186466918400,
+          total_bytes: 8014022656000,
+          span_hours: 40,
+          samples: 30,
+          coverage: 0.75,
+          slope_bytes_per_hour: 0,
+          fit: 0,
+        },
+        {
+          status: "non_growing",
+          available_bytes: 6186466918400,
+          total_bytes: 8014022656000,
+          span_hours: 167,
+          samples: 168,
+          coverage: 1,
+          slope_bytes_per_hour: 0,
+          fit: 0.91,
+        },
+      ];
+
+      for (const width of widths) {
+        for (const state of states) {
+          forecast = state;
+          await page.getByRole("button", { name: "Refresh" }).click();
+          await expect(page.locator(".space-cell .forecast-label")).toHaveAttribute(
+            "data-forecast-status",
+            String(state.status),
+          );
+          await expect(page.locator(".n-data-table-base-table-body")).toHaveCount(1);
+
+          await page.setViewportSize({ width, height: 900 });
+          // One evaluate keeps both measurements in the same layout pass; two
+          // locator calls can straddle a table re-render.
+          const cell = await page.locator(".space-cell").first().evaluate((node) => {
+            const spans = Array.from(node.querySelectorAll(":scope > span")) as HTMLElement[];
+            const box = (element?: HTMLElement) => {
+              const rect = element?.getBoundingClientRect();
+              return rect ? { y: rect.y, height: rect.height } : null;
+            };
+            return {
+              space: box(spans[0]),
+              forecast: box(spans[1]),
+              text: node.textContent ?? "",
+            };
+          });
+          expect(cell.space, `space text at ${width}px`).not.toBeNull();
+          expect(cell.forecast, `forecast at ${width}px`).not.toBeNull();
+          expect(
+            cell.forecast!.y,
+            `forecast must start below the space text at ${width}px (${String(state.status)})`,
+          ).toBeGreaterThanOrEqual(cell.space!.y + cell.space!.height - 1);
+
+          expect(cell.text).not.toMatch(/monitoring\.[A-Za-z]+\./);
+          expect(cell.text).not.toMatch(/undefined|NaN/);
+          await expectNoHorizontalOverflow(page, width);
+        }
       }
     } finally {
       await request.delete(`/api/v1/servers/${node.id}`, { headers });

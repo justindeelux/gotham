@@ -283,7 +283,7 @@ func forecastSeverity(horizon time.Duration, current incidents.Severity) (incide
 		return incidents.SeverityCritical, true
 	case horizon <= forecastWarning:
 		return incidents.SeverityWarning, true
-	case horizon <= forecastClear && current == incidents.SeverityWarning:
+	case horizon <= forecastClear && current != "":
 		return incidents.SeverityWarning, true
 	default:
 		return "", false

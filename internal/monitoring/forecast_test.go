@@ -185,6 +185,7 @@ func TestForecastSeverityHysteresis(t *testing.T) {
 		{"critical holds above a day", 40 * time.Hour, incidents.SeverityCritical, incidents.SeverityCritical, true},
 		{"critical downgrades after two days", 60 * time.Hour, incidents.SeverityCritical, incidents.SeverityWarning, true},
 		{"warning holds until two weeks", 10 * 24 * time.Hour, incidents.SeverityWarning, incidents.SeverityWarning, true},
+		{"critical downgrades before two weeks", 10 * 24 * time.Hour, incidents.SeverityCritical, incidents.SeverityWarning, true},
 		{"clear above two weeks", 15 * 24 * time.Hour, incidents.SeverityCritical, "", false},
 		{"no trigger between a week and two weeks", 10 * 24 * time.Hour, "", "", false},
 	}

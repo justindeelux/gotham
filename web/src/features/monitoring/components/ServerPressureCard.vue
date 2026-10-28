@@ -61,14 +61,17 @@ function horizonLabel(hours: number | undefined): string {
   return days < 10 ? `${days.toFixed(1)}d` : `${Math.round(days)}d`;
 }
 
-function forecastText(row: FilesystemStatus): { label: string; detail?: string } {
+function forecastText(
+  row: FilesystemStatus,
+): { label: string; status: string; detail?: string } {
   const forecast = row.forecast;
   if (!forecast) {
-    return { label: t("monitoring.forecast.unavailable") };
+    return { label: t("monitoring.forecast.unavailable"), status: "unavailable" };
   }
   switch (forecast.status) {
     case "estimated":
       return {
+        status: forecast.status,
         label: t("monitoring.forecast.estimated", {
           horizon: horizonLabel(forecast.horizon_hours),
         }),
@@ -79,13 +82,13 @@ function forecastText(row: FilesystemStatus): { label: string; detail?: string }
         }),
       };
     case "non_growing":
-      return { label: t("monitoring.forecast.nonGrowing") };
+      return { status: forecast.status, label: t("monitoring.forecast.nonGrowing") };
     case "stale":
-      return { label: t("monitoring.forecast.stale") };
+      return { status: forecast.status, label: t("monitoring.forecast.stale") };
     case "low_confidence":
-      return { label: t("monitoring.forecast.lowConfidence") };
+      return { status: forecast.status, label: t("monitoring.forecast.lowConfidence") };
     default:
-      return { label: t("monitoring.forecast.insufficient") };
+      return { status: forecast.status, label: t("monitoring.forecast.insufficient") };
   }
 }
 
@@ -111,13 +114,41 @@ const columns = computed<DataTableColumns<FilesystemStatus>>(() => [
             })}`
           : t("monitoring.filesystems.unsupported");
       const forecast = forecastText(row);
-      return h("div", { class: "space-cell" }, [
-        h("span", space),
-        h("span", { class: "forecast-label" }, forecast.label),
-        forecast.detail
-          ? h("span", { class: "forecast-detail" }, forecast.detail)
-          : null,
-      ]);
+      // The cell is rendered inside NDataTable's own render context, so a
+      // scoped class would not reach it. Inline the layout to keep the space
+      // reading and the forecast on separate, readable lines at every width.
+      return h(
+        "div",
+        {
+          class: "space-cell",
+          style: {
+            display: "flex",
+            flexDirection: "column",
+            gap: "4px",
+            minWidth: 0,
+            lineHeight: "1.5",
+          },
+        },
+        [
+          h("span", { style: { overflowWrap: "anywhere" } }, space),
+          h(
+            "span",
+            {
+              class: "forecast-label",
+              "data-forecast-status": forecast.status,
+              style: { fontSize: "var(--text-xs)", color: "var(--fg-2)" },
+            },
+            forecast.label,
+          ),
+          forecast.detail
+            ? h(
+                "span",
+                { class: "forecast-detail", style: { fontSize: "var(--text-xs)", color: "var(--muted)" } },
+                forecast.detail,
+              )
+            : null,
+        ],
+      );
     },
   },
   {
@@ -184,7 +215,9 @@ onMounted(load);
     </template>
 
     <NSpin :show="loading">
-      <NSpace vertical :size="12">
+      <!-- A plain stack, not NSpace: Naive's Space wraps every child in a
+           keyed item div and duplicated the async filesystem table on update. -->
+      <div class="pressure-stack">
         <NAlert v-if="error" type="error" :show-icon="true">{{ error }}</NAlert>
 
         <NText depth="3">
@@ -239,26 +272,16 @@ onMounted(load);
             {{ t("monitoring.status.openMetrics") }}
           </NButton>
         </NSpace>
-      </NSpace>
+      </div>
     </NSpin>
   </NCard>
 </template>
 
 <style scoped>
-.space-cell {
+.pressure-stack {
   display: flex;
   flex-direction: column;
-  gap: 2px;
+  gap: var(--space-3);
   min-width: 0;
-}
-
-.forecast-label {
-  font-size: var(--text-xs);
-  color: var(--fg-2);
-}
-
-.forecast-detail {
-  font-size: var(--text-xs);
-  color: var(--muted);
 }
 </style>

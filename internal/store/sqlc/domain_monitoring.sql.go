@@ -87,11 +87,16 @@ SELECT
     s.updated_at AS settings_updated_at,
     COALESCE(dep.state, '') AS deployment_state,
     dep.started_at AS deployment_started_at,
-    dep.finished_at AS deployment_finished_at
+    dep.finished_at AS deployment_finished_at,
+    (dep.state IS NOT NULL)::boolean AS has_deployment,
+    COALESCE(rms.desired_state, 'running') AS desired_state,
+    rms.grace_until AS runtime_grace_until
 FROM application_domains d
 JOIN applications a ON a.id = d.application_id
 JOIN environments e ON e.id = a.environment_id
 LEFT JOIN domain_monitor_settings s ON s.domain_id = d.id
+LEFT JOIN runtime_monitor_settings rms
+    ON rms.resource_type = 'application' AND rms.resource_id = a.id
 LEFT JOIN LATERAL (
     SELECT state, started_at, finished_at
     FROM deployments
@@ -126,6 +131,9 @@ type GetDomainProbeTargetRow struct {
 	DeploymentState      string             `json:"deployment_state"`
 	DeploymentStartedAt  pgtype.Timestamptz `json:"deployment_started_at"`
 	DeploymentFinishedAt pgtype.Timestamptz `json:"deployment_finished_at"`
+	HasDeployment        bool               `json:"has_deployment"`
+	DesiredState         string             `json:"desired_state"`
+	RuntimeGraceUntil    pgtype.Timestamptz `json:"runtime_grace_until"`
 }
 
 func (q *Queries) GetDomainProbeTarget(ctx context.Context, arg GetDomainProbeTargetParams) (GetDomainProbeTargetRow, error) {
@@ -150,6 +158,9 @@ func (q *Queries) GetDomainProbeTarget(ctx context.Context, arg GetDomainProbeTa
 		&i.DeploymentState,
 		&i.DeploymentStartedAt,
 		&i.DeploymentFinishedAt,
+		&i.HasDeployment,
+		&i.DesiredState,
+		&i.RuntimeGraceUntil,
 	)
 	return i, err
 }
@@ -282,11 +293,16 @@ SELECT
     s.updated_at AS settings_updated_at,
     COALESCE(dep.state, '') AS deployment_state,
     dep.started_at AS deployment_started_at,
-    dep.finished_at AS deployment_finished_at
+    dep.finished_at AS deployment_finished_at,
+    (dep.state IS NOT NULL)::boolean AS has_deployment,
+    COALESCE(rms.desired_state, 'running') AS desired_state,
+    rms.grace_until AS runtime_grace_until
 FROM application_domains d
 JOIN applications a ON a.id = d.application_id
 JOIN environments e ON e.id = a.environment_id
 LEFT JOIN domain_monitor_settings s ON s.domain_id = d.id
+LEFT JOIN runtime_monitor_settings rms
+    ON rms.resource_type = 'application' AND rms.resource_id = a.id
 LEFT JOIN LATERAL (
     SELECT state, started_at, finished_at
     FROM deployments
@@ -317,6 +333,9 @@ type ListDomainProbeTargetsRow struct {
 	DeploymentState      string             `json:"deployment_state"`
 	DeploymentStartedAt  pgtype.Timestamptz `json:"deployment_started_at"`
 	DeploymentFinishedAt pgtype.Timestamptz `json:"deployment_finished_at"`
+	HasDeployment        bool               `json:"has_deployment"`
+	DesiredState         string             `json:"desired_state"`
+	RuntimeGraceUntil    pgtype.Timestamptz `json:"runtime_grace_until"`
 }
 
 func (q *Queries) ListDomainProbeTargets(ctx context.Context) ([]ListDomainProbeTargetsRow, error) {
@@ -347,6 +366,9 @@ func (q *Queries) ListDomainProbeTargets(ctx context.Context) ([]ListDomainProbe
 			&i.DeploymentState,
 			&i.DeploymentStartedAt,
 			&i.DeploymentFinishedAt,
+			&i.HasDeployment,
+			&i.DesiredState,
+			&i.RuntimeGraceUntil,
 		); err != nil {
 			return nil, err
 		}

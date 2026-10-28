@@ -16,6 +16,11 @@ import (
 	"github.com/justindeelux/gotham/internal/store/sqlc"
 )
 
+// ProbeRunner performs one probe; tests substitute a deterministic runner.
+type ProbeRunner interface {
+	Probe(context.Context, Target) Result
+}
+
 // IncidentReporter is the slice of the incident lifecycle this package uses.
 type IncidentReporter interface {
 	Report(context.Context, incidents.Observation) (*incidents.Incident, incidents.Transition, error)
@@ -27,7 +32,7 @@ type Config struct {
 	Incidents IncidentReporter
 	Logger    *slog.Logger
 	Now       func() time.Time
-	Prober    *Prober
+	Prober    ProbeRunner
 	Interval  time.Duration
 	Grace     time.Duration
 	Retention time.Duration
@@ -38,16 +43,16 @@ type Service struct {
 	incidents IncidentReporter
 	logger    *slog.Logger
 	now       func() time.Time
-	prober    *Prober
+	prober    ProbeRunner
 	interval  time.Duration
 	grace     time.Duration
 	retention time.Duration
 	startedAt time.Time
 
-	mu        sync.Mutex
-	nextAt    map[uuid.UUID]time.Time
-	disabled  map[uuid.UUID]bool
-	lastPrune time.Time
+	mu         sync.Mutex
+	nextAt     map[uuid.UUID]time.Time
+	suppressed map[uuid.UUID]string
+	lastPrune  time.Time
 }
 
 func NewService(cfg Config) *Service {
@@ -76,17 +81,17 @@ func NewService(cfg Config) *Service {
 		retention = Retention
 	}
 	return &Service{
-		st:        cfg.Store,
-		incidents: cfg.Incidents,
-		logger:    logger,
-		now:       now,
-		prober:    prober,
-		interval:  interval,
-		grace:     grace,
-		retention: retention,
-		startedAt: now().UTC(),
-		nextAt:    map[uuid.UUID]time.Time{},
-		disabled:  map[uuid.UUID]bool{},
+		st:         cfg.Store,
+		incidents:  cfg.Incidents,
+		logger:     logger,
+		now:        now,
+		prober:     prober,
+		interval:   interval,
+		grace:      grace,
+		retention:  retention,
+		startedAt:  now().UTC(),
+		nextAt:     map[uuid.UUID]time.Time{},
+		suppressed: map[uuid.UUID]string{},
 	}
 }
 
@@ -138,18 +143,12 @@ func (s *Service) tick(ctx context.Context) {
 	var wg sync.WaitGroup
 	for _, row := range targets {
 		target := targetFromRow(row)
-		if !target.Settings.Enabled {
-			s.mu.Lock()
-			already := s.disabled[target.DomainID]
-			s.disabled[target.DomainID] = true
-			s.mu.Unlock()
-			if !already {
-				s.closeIncident(ctx, target, "monitoring_disabled")
-			}
+		if reason := suppressionReason(target); reason != "" {
+			s.suppress(ctx, target, reason)
 			continue
 		}
 		s.mu.Lock()
-		delete(s.disabled, target.DomainID)
+		delete(s.suppressed, target.DomainID)
 		s.mu.Unlock()
 
 		if deploymentInProgress(target, now) {
@@ -209,6 +208,32 @@ func (s *Service) closeRemovedIncidents(ctx context.Context, known map[uuid.UUID
 	}
 }
 
+// suppress closes an incident once per reason and records no sample: a
+// stopped, never-deployed or disabled application is an unknown gap, not a
+// target failure.
+func (s *Service) suppress(ctx context.Context, target Target, reason string) {
+	s.mu.Lock()
+	previous := s.suppressed[target.DomainID]
+	s.suppressed[target.DomainID] = reason
+	s.mu.Unlock()
+	if previous != reason {
+		s.closeIncident(ctx, target, reason)
+	}
+}
+
+func suppressionReason(target Target) string {
+	switch {
+	case !target.Settings.Enabled:
+		return "monitoring_disabled"
+	case target.DesiredState == "stopped":
+		return "intentionally_stopped"
+	case !target.HasDeployment:
+		return "not_deployed"
+	default:
+		return ""
+	}
+}
+
 func (s *Service) prune(ctx context.Context) {
 	now := s.now().UTC()
 	s.mu.Lock()
@@ -231,6 +256,10 @@ func (s *Service) graceUntil(target Target) time.Time {
 		if !at.IsZero() && at.Add(s.grace).After(until) {
 			until = at.Add(s.grace)
 		}
+	}
+	// A runtime start action already stores its own grace end.
+	if target.RuntimeGraceUntil.After(until) {
+		until = target.RuntimeGraceUntil
 	}
 	// A release that just finished gets the same grace as a configuration
 	// change. The gap before the next scheduled probe is therefore longer
@@ -611,6 +640,11 @@ func targetFromRow(row sqlc.ListDomainProbeTargetsRow) Target {
 		target.SettingsUpdated = row.SettingsUpdatedAt.Time.UTC()
 	}
 	target.DeploymentState = row.DeploymentState
+	target.HasDeployment = row.HasDeployment
+	target.DesiredState = row.DesiredState
+	if row.RuntimeGraceUntil.Valid {
+		target.RuntimeGraceUntil = row.RuntimeGraceUntil.Time.UTC()
+	}
 	if row.DeploymentStartedAt.Valid {
 		at := row.DeploymentStartedAt.Time.UTC()
 		target.DeploymentStarted = &at

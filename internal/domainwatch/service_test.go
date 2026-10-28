@@ -13,8 +13,9 @@ import (
 )
 
 type recordingReporter struct {
-	observations []incidents.Observation
-	closed       []string
+	observations  []incidents.Observation
+	closed        []string
+	closedReasons []string
 }
 
 func (r *recordingReporter) Report(_ context.Context, obs incidents.Observation) (*incidents.Incident, incidents.Transition, error) {
@@ -22,8 +23,9 @@ func (r *recordingReporter) Report(_ context.Context, obs incidents.Observation)
 	return nil, incidents.Transition{}, nil
 }
 
-func (r *recordingReporter) Close(_ context.Context, identity, _ string) error {
+func (r *recordingReporter) Close(_ context.Context, identity, reason string) error {
 	r.closed = append(r.closed, identity)
+	r.closedReasons = append(r.closedReasons, reason)
 	return nil
 }
 
@@ -146,5 +148,40 @@ func TestDeploymentSuppressionAndGrace(t *testing.T) {
 	target.DeploymentFinished = &finished
 	if got := svc.graceUntil(target); !got.Equal(finished.Add(ConfigGrace)) {
 		t.Fatalf("deployment grace = %v", got)
+	}
+}
+
+func TestSuppressionReasonCoversStoppedAndNeverDeployed(t *testing.T) {
+	target := serviceTarget()
+	target.HasDeployment = true
+	target.DesiredState = "running"
+	if got := suppressionReason(target); got != "" {
+		t.Fatalf("running deployed target suppressed: %q", got)
+	}
+	target.DesiredState = "stopped"
+	if got := suppressionReason(target); got != "intentionally_stopped" {
+		t.Fatalf("stopped reason = %q", got)
+	}
+	target.DesiredState = "running"
+	target.HasDeployment = false
+	if got := suppressionReason(target); got != "not_deployed" {
+		t.Fatalf("never-deployed reason = %q", got)
+	}
+	target.HasDeployment = true
+	target.Settings.Enabled = false
+	if got := suppressionReason(target); got != "monitoring_disabled" {
+		t.Fatalf("disabled reason = %q", got)
+	}
+}
+
+func TestResumeHonorsRuntimeGrace(t *testing.T) {
+	now := time.Date(2026, 10, 28, 12, 0, 0, 0, time.UTC)
+	svc := &Service{startedAt: now.Add(-time.Hour), grace: ConfigGrace}
+	target := serviceTarget()
+	target.CreatedAt = now.Add(-time.Hour)
+	target.DomainUpdatedAt = now.Add(-time.Hour)
+	target.RuntimeGraceUntil = now.Add(time.Minute)
+	if got := svc.graceUntil(target); !got.Equal(now.Add(time.Minute)) {
+		t.Fatalf("runtime grace = %v", got)
 	}
 }

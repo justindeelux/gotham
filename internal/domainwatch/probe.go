@@ -17,7 +17,6 @@ var (
 	ErrInvalidPath        = errors.New("domainwatch: path must be a relative path on the managed domain")
 	ErrInvalidStatusRange = errors.New("domainwatch: expected status must be between 100 and 599 and ordered")
 	ErrInvalidTimeout     = errors.New("domainwatch: timeout must be between 1 and 30 seconds")
-	ErrUnsafeRedirect     = errors.New("domainwatch: redirect destination is not allowed")
 	ErrBlockedDestination = errors.New("domainwatch: destination resolves to a blocked address")
 )
 
@@ -118,23 +117,30 @@ func (p *Prober) clientFor(timeout time.Duration, rawURL string) *http.Client {
 		Timeout:   timeout,
 		Transport: transport,
 		CheckRedirect: func(req *http.Request, via []*http.Request) error {
-			return redirectPolicy(original, req, via)
+			// An unsafe or over-limit redirect is never followed. Returning
+			// ErrUseLastResponse leaves the 3xx available for the normal
+			// expected-status evaluation, so apex->www or an SSO redirect is
+			// still a healthy site under the default 200-399 range.
+			if redirectPolicy(original, req, via) != nil {
+				return http.ErrUseLastResponse
+			}
+			return nil
 		},
 	}
 }
 
 func redirectPolicy(original *url.URL, req *http.Request, via []*http.Request) error {
 	if len(via) >= maxRedirects {
-		return fmt.Errorf("%w: too many redirects", ErrUnsafeRedirect)
+		return errors.New("domainwatch: too many redirects")
 	}
 	if req.URL.Scheme != "http" && req.URL.Scheme != "https" {
-		return fmt.Errorf("%w: unsupported scheme", ErrUnsafeRedirect)
+		return errors.New("domainwatch: unsupported redirect scheme")
 	}
 	if req.URL.User != nil {
-		return fmt.Errorf("%w: credentials are not allowed", ErrUnsafeRedirect)
+		return errors.New("domainwatch: redirect credentials are not allowed")
 	}
 	if original == nil || !strings.EqualFold(req.URL.Host, original.Host) {
-		return fmt.Errorf("%w: host changed", ErrUnsafeRedirect)
+		return errors.New("domainwatch: redirect host changed")
 	}
 	return nil
 }
@@ -198,9 +204,6 @@ func blockedIP(ip net.IP) bool {
 func classifyProbeError(err error, ctx context.Context) (string, bool) {
 	if errors.Is(err, ErrBlockedDestination) {
 		return ReasonBlockedDestination, true
-	}
-	if errors.Is(err, ErrUnsafeRedirect) {
-		return ReasonUnsafeRedirect, false
 	}
 	if errors.Is(ctx.Err(), context.DeadlineExceeded) || errors.Is(err, context.DeadlineExceeded) {
 		return ReasonTimeout, false

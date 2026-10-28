@@ -134,6 +134,8 @@ Ba lần thử thất bại liên tiếp đã hoàn tất sẽ mở một sự c
 công liên tiếp sẽ phục hồi. Lỗi bộ thực thi hoặc cơ sở dữ liệu, thời gian tắt,
 thay đổi cấu hình và thời gian control plane ngừng hoạt động là khoảng **chưa
 rõ**: không bao giờ tính là lỗi của đích và cũng không tính là thời gian khỏe.
+Ứng dụng đã dừng và ứng dụng chưa triển khai lần nào không bị thử, nên việc dừng
+có chủ đích hoặc ứng dụng trống không thể mở sự cố website.
 Tên miền mới, thay đổi cấu hình và bản phát hành vừa hoàn tất chờ 120 giây
 trước lần thử theo lịch tiếp theo, nên việc triển khai hoặc chỉnh sửa không gây
 cảnh báo lúc khởi động.

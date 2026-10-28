@@ -4,7 +4,6 @@ import (
 	"context"
 	"crypto/x509"
 	"errors"
-	"fmt"
 	"net"
 	"net/http"
 	"net/http/httptest"
@@ -83,23 +82,23 @@ func TestRedirectPolicyRejectsOtherHostsAndSchemes(t *testing.T) {
 		t.Fatalf("same-host redirect rejected: %v", err)
 	}
 	other, _ := http.NewRequest(http.MethodGet, "https://169.254.169.254/latest", nil)
-	if err := redirectPolicy(original, other, []*http.Request{other}); !errors.Is(err, ErrUnsafeRedirect) {
-		t.Fatalf("cross-host redirect error = %v", err)
+	if err := redirectPolicy(original, other, []*http.Request{other}); err == nil {
+		t.Fatal("cross-host redirect was allowed")
 	}
 	ftp, _ := http.NewRequest(http.MethodGet, "ftp://app.example.com/file", nil)
-	if err := redirectPolicy(original, ftp, []*http.Request{ftp}); !errors.Is(err, ErrUnsafeRedirect) {
-		t.Fatalf("scheme redirect error = %v", err)
+	if err := redirectPolicy(original, ftp, []*http.Request{ftp}); err == nil {
+		t.Fatal("unsupported redirect scheme was allowed")
 	}
 	withUser, _ := http.NewRequest(http.MethodGet, "https://user:pass@app.example.com/", nil)
-	if err := redirectPolicy(original, withUser, []*http.Request{withUser}); !errors.Is(err, ErrUnsafeRedirect) {
-		t.Fatalf("credential redirect error = %v", err)
+	if err := redirectPolicy(original, withUser, []*http.Request{withUser}); err == nil {
+		t.Fatal("credential redirect was allowed")
 	}
 	tooMany := make([]*http.Request, maxRedirects)
 	for i := range tooMany {
 		tooMany[i] = same
 	}
-	if err := redirectPolicy(original, same, tooMany); !errors.Is(err, ErrUnsafeRedirect) {
-		t.Fatalf("redirect bound error = %v", err)
+	if err := redirectPolicy(original, same, tooMany); err == nil {
+		t.Fatal("redirect limit was not enforced")
 	}
 }
 
@@ -123,7 +122,6 @@ func TestClassifyProbeError(t *testing.T) {
 		unsupported bool
 	}{
 		{"blocked", ErrBlockedDestination, ReasonBlockedDestination, true},
-		{"unsafe redirect", fmt.Errorf("%w: host changed", ErrUnsafeRedirect), ReasonUnsafeRedirect, false},
 		{"dns", &dnsFailure{err: &net.DNSError{Err: "no such host", Name: "x"}}, ReasonDNS, false},
 		{"timeout", context.DeadlineExceeded, ReasonTimeout, false},
 		{"tls", x509.HostnameError{Certificate: &x509.Certificate{}, Host: "x"}, ReasonTLS, false},
@@ -188,18 +186,74 @@ func TestProbeTLSFailureIsSeparateEvidence(t *testing.T) {
 	}
 }
 
-func TestProbeRejectsCrossHostRedirect(t *testing.T) {
+func TestProbeEvaluatesCrossHostRedirectWithoutFollowing(t *testing.T) {
+	var dialed []string
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		http.Redirect(w, r, "http://169.254.169.254/latest/meta-data", http.StatusFound)
+		http.Redirect(w, r, "https://sso.other.example/login", http.StatusFound)
 	}))
 	defer server.Close()
 
 	target := testTarget()
 	target.Protocol = "http"
-	prober := &Prober{Now: time.Now, Dial: dialTo(server.Listener.Addr().String())}
+	prober := &Prober{
+		Now: time.Now,
+		Dial: func(ctx context.Context, network, addr string) (net.Conn, error) {
+			dialed = append(dialed, addr)
+			return (&net.Dialer{}).DialContext(ctx, network, server.Listener.Addr().String())
+		},
+	}
 	result := prober.Probe(context.Background(), target)
-	if result.Outcome != OutcomeFailed || result.Reason != ReasonUnsafeRedirect {
-		t.Fatalf("result = %+v", result)
+	if result.Outcome != OutcomeHealthy || result.StatusCode != http.StatusFound {
+		t.Fatalf("cross-host redirect was not evaluated as a healthy 3xx: %+v", result)
+	}
+	if len(dialed) != 1 || dialed[0] != "app.example.com:80" {
+		t.Fatalf("redirect target was contacted: %v", dialed)
+	}
+
+	target.Settings.ExpectedMin = 200
+	target.Settings.ExpectedMax = 299
+	result = prober.Probe(context.Background(), target)
+	if result.Outcome != OutcomeFailed || result.Reason != ReasonUnexpectedStatus || result.StatusCode != http.StatusFound {
+		t.Fatalf("excluded 3xx result = %+v", result)
+	}
+	if len(dialed) != 2 {
+		t.Fatalf("redirect target was contacted on the second probe: %v", dialed)
+	}
+}
+
+func TestProbeStopsAtRedirectLimitWithoutFollowing(t *testing.T) {
+	var dialed []string
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch r.URL.Path {
+		case "/":
+			http.Redirect(w, r, "/r1", http.StatusFound)
+		case "/r1":
+			http.Redirect(w, r, "/r2", http.StatusFound)
+		case "/r2":
+			http.Redirect(w, r, "/r3", http.StatusFound)
+		case "/r3":
+			http.Redirect(w, r, "/r4", http.StatusFound)
+		default:
+			w.WriteHeader(http.StatusOK)
+		}
+	}))
+	defer server.Close()
+
+	target := testTarget()
+	target.Protocol = "http"
+	prober := &Prober{
+		Now: time.Now,
+		Dial: func(ctx context.Context, network, addr string) (net.Conn, error) {
+			dialed = append(dialed, addr)
+			return (&net.Dialer{}).DialContext(ctx, network, server.Listener.Addr().String())
+		},
+	}
+	result := prober.Probe(context.Background(), target)
+	if result.Outcome != OutcomeHealthy || result.StatusCode != http.StatusFound {
+		t.Fatalf("redirect limit result = %+v", result)
+	}
+	if len(dialed) != maxRedirects {
+		t.Fatalf("followed past the redirect limit: %d requests", len(dialed))
 	}
 }
 
@@ -219,5 +273,24 @@ func TestProbeTimeoutIsReportedAsTimeout(t *testing.T) {
 	result := prober.Probe(context.Background(), target)
 	if result.Outcome != OutcomeFailed || result.Reason != ReasonTimeout {
 		t.Fatalf("result = %+v", result)
+	}
+}
+
+func TestProbeFollowsSameHostRedirect(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path == "/" {
+			http.Redirect(w, r, "/final", http.StatusFound)
+			return
+		}
+		w.WriteHeader(http.StatusOK)
+	}))
+	defer server.Close()
+
+	target := testTarget()
+	target.Protocol = "http"
+	prober := &Prober{Now: time.Now, Dial: dialTo(server.Listener.Addr().String())}
+	result := prober.Probe(context.Background(), target)
+	if result.Outcome != OutcomeHealthy || result.StatusCode != http.StatusOK {
+		t.Fatalf("same-host redirect result = %+v", result)
 	}
 }

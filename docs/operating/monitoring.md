@@ -139,8 +139,10 @@ instead of suggesting that the safeguards be bypassed.
 Three consecutive completed failing probes open one incident. Two consecutive
 successful probes recover it. Probe executor or database failures, disabled
 periods, configuration changes and control-plane downtime are **unknown**
-gaps: they never count as target failure and never count as healthy time. New
-domains, configuration changes and a release that just finished honour a
+gaps: they never count as target failure and never count as healthy time.
+Stopped applications and applications without a first deployment are not
+probed, so a deliberate stop or an empty app cannot open a website incident.
+New domains, configuration changes and a release that just finished honour a
 120-second grace before the next scheduled probe, so a deploy or edit cannot
 page on startup.
 

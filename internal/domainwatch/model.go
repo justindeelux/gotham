@@ -125,6 +125,12 @@ type Target struct {
 	DeploymentState    string
 	DeploymentStarted  *time.Time
 	DeploymentFinished *time.Time
+	HasDeployment      bool
+	// DesiredState and RuntimeGraceUntil come from the same runtime monitor
+	// settings that own start/stop intent, so a stopped application is an
+	// unknown gap rather than a website failure.
+	DesiredState      string
+	RuntimeGraceUntil time.Time
 }
 
 // URL is the derived probe URL. It is built only from the managed domain and

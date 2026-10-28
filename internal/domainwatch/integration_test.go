@@ -285,3 +285,98 @@ func TestDisabledDomainClosesIncidentAndSettingsArmGrace(t *testing.T) {
 		t.Fatal("out-of-range timeout was accepted")
 	}
 }
+
+type countingRunner struct {
+	calls int
+	now   func() time.Time
+}
+
+func (r *countingRunner) Probe(_ context.Context, _ Target) Result {
+	r.calls++
+	return Result{Outcome: OutcomeHealthy, StatusCode: 200, Latency: 10 * time.Millisecond, At: r.now()}
+}
+
+func TestTickSuppressesStoppedAndNeverDeployedThenResumes(t *testing.T) {
+	fixture := newIntegrationFixture(t)
+	ctx := context.Background()
+	now := fixture.now
+	runner := &countingRunner{now: func() time.Time { return now }}
+	reporter := &recordingReporter{}
+	svc := NewService(Config{
+		Store:     fixture.store,
+		Incidents: reporter,
+		Now:       func() time.Time { return now },
+		Prober:    runner,
+		Grace:     ConfigGrace,
+	})
+	svc.startedAt = now.Add(-time.Hour)
+
+	results := func() int {
+		t.Helper()
+		rows, err := fixture.store.ListDomainProbeResults(ctx, sqlc.ListDomainProbeResultsParams{
+			DomainID:   pgUUID(fixture.domainID),
+			ObservedAt: pgTimestamptz(now.Add(-time.Hour)),
+			Limit:      10,
+		})
+		if err != nil {
+			t.Fatalf("results: %v", err)
+		}
+		return len(rows)
+	}
+
+	// No deployment yet: never probes and closes as not_deployed.
+	svc.tick(ctx)
+	if runner.calls != 0 || results() != 0 {
+		t.Fatalf("never-deployed app was probed: calls=%d results=%d", runner.calls, results())
+	}
+	if len(reporter.closedReasons) == 0 || reporter.closedReasons[0] != "not_deployed" {
+		t.Fatalf("never-deployed close reasons = %v", reporter.closedReasons)
+	}
+
+	// First deployment makes the target probeable once its grace has passed.
+	if _, err := fixture.store.DB.Exec(ctx, `INSERT INTO deployments
+		(application_id, kind, state, started_at, finished_at)
+		VALUES ($1, 'deploy', 'running', $2, $3)`,
+		fixture.appID, now.Add(-5*time.Minute), now.Add(-4*time.Minute)); err != nil {
+		t.Fatalf("insert deployment: %v", err)
+	}
+	svc.tick(ctx)
+	if runner.calls != 1 {
+		t.Fatalf("running deployed app was not probed: calls=%d", runner.calls)
+	}
+	if results() != 1 {
+		t.Fatalf("probe result not persisted: %d", results())
+	}
+
+	// Stopping the application suppresses probes and closes any incident.
+	if _, err := fixture.store.DB.Exec(ctx, `INSERT INTO runtime_monitor_settings
+		(resource_type, resource_id, desired_state)
+		VALUES ('application', $1, 'stopped')`, fixture.appID); err != nil {
+		t.Fatalf("stop app: %v", err)
+	}
+	svc.tick(ctx)
+	if runner.calls != 1 {
+		t.Fatalf("stopped app was probed: calls=%d", runner.calls)
+	}
+	if len(reporter.closedReasons) < 2 || reporter.closedReasons[len(reporter.closedReasons)-1] != "intentionally_stopped" {
+		t.Fatalf("stopped close reasons = %v", reporter.closedReasons)
+	}
+
+	// Starting again arms the runtime grace: no probe until it expires.
+	now = now.Add(time.Minute)
+	if _, err := fixture.store.DB.Exec(ctx, `UPDATE runtime_monitor_settings
+		SET desired_state = 'running', grace_until = $2 WHERE resource_type = 'application' AND resource_id = $1`,
+		fixture.appID, now.Add(ConfigGrace)); err != nil {
+		t.Fatalf("start app: %v", err)
+	}
+	svc.tick(ctx)
+	if runner.calls != 1 {
+		t.Fatalf("started app ignored runtime grace: calls=%d", runner.calls)
+	}
+
+	now = now.Add(ConfigGrace + time.Second)
+	svc.tick(ctx)
+	if runner.calls != 2 {
+		t.Fatalf("started app did not resume probing: calls=%d", runner.calls)
+	}
+}

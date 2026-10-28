@@ -3,6 +3,7 @@ import type {
   ResourceHistoryRange,
   ResourceHistorySeries,
 } from "@/features/monitoring/api/resourceHistory";
+import { niceCeil } from "@/shared/ui/chartModel";
 import type { ChartSeries } from "@/shared/ui/MetricsChart.vue";
 import { formatBytes } from "@/shared/utils/format";
 
@@ -30,6 +31,39 @@ export function formatCores(value: number): string {
     return "—";
   }
   return value >= 10 ? value.toFixed(1) : value.toFixed(2);
+}
+
+// Below this value a two-decimal core label collapses adjacent ticks to the
+// same text, so the axis switches to millicores ("5 m").
+const millicoreThreshold = 0.01;
+
+export function maxCPUCores(history: ResourceHistory | null): number {
+  let max = 0;
+  for (const series of history?.series ?? []) {
+    for (const point of series.points) {
+      if (point.cpu_cores != null && point.cpu_cores > max) {
+        max = point.cpu_cores;
+      }
+    }
+  }
+  return max;
+}
+
+export function formatCoresForMax(max: number): (_value: number) => string {
+  if (!Number.isFinite(max) || max <= 0 || max >= millicoreThreshold) {
+    return formatCores;
+  }
+  // The chart's own ceiling determines the tick step. Enough decimals for the
+  // smallest step keeps 0 / half / ceiling labels pairwise distinct.
+  const stepMilli = (niceCeil(max) / 2) * 1000;
+  const decimals =
+    stepMilli >= 1 ? 0 : Math.min(6, Math.ceil(-Math.log10(stepMilli)));
+  return (value: number): string => {
+    if (!Number.isFinite(value)) {
+      return "—";
+    }
+    return `${(value * 1000).toFixed(decimals)} m`;
+  };
 }
 
 export function formatRate(value: number): string {
@@ -111,11 +145,12 @@ export function buildResourceCharts(history: ResourceHistory | null): ResourceCh
   }
   const last = lastPoint(history);
   const latestAt = last?.latest_at ?? "";
+  const formatCPU = formatCoresForMax(maxCPUCores(history));
   return [
     {
       key: "cpu",
       series: pointSeries(history, (point) => point.cpu_cores),
-      latest: last?.cpu_cores != null ? formatCores(last.cpu_cores) : "—",
+      latest: last?.cpu_cores != null ? formatCPU(last.cpu_cores) : "—",
       latestAt,
     },
     {

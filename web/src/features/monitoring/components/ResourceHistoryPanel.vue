@@ -24,8 +24,9 @@ import { getResourceHistory } from "@/features/monitoring/api/resourceHistory";
 import {
   buildResourceCharts,
   chartStepMs,
-  formatCores,
+  formatCoresForMax,
   formatRate,
+  maxCPUCores,
   memoryLimitLabel,
   resourceRanges,
   serviceOptions,
@@ -53,6 +54,7 @@ const error = ref<string | null>(null);
 let requestToken = 0;
 
 const charts = computed(() => buildResourceCharts(history.value));
+const formatCPU = computed(() => formatCoresForMax(maxCPUCores(history.value)));
 const stepMs = computed(() => chartStepMs(history.value));
 const markers = computed<ChartMarker[]>(() =>
   (history.value?.markers ?? []).map((marker) => ({
@@ -120,7 +122,7 @@ function selectService(value: string): void {
 
 function chartFormatter(key: string): (_value: number) => string {
   if (key === "cpu") {
-    return formatCores;
+    return formatCPU.value;
   }
   if (key === "memory") {
     return formatBytes;

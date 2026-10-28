@@ -142,6 +142,17 @@ function history(step: "30s" | "5m" = "30s") {
   };
 }
 
+function tinyCPUHistory() {
+  const data = history();
+  const values = [0.0004, 0.0008, 0.0012, 0.002, 0.003, 0.004];
+  data.series.forEach((series) => {
+    series.points.forEach((point, index) => {
+      point.cpu_cores = values[index] ?? values[values.length - 1]!;
+    });
+  });
+  return data;
+}
+
 test.use({ storageState: storageStatePath });
 
 test.describe("application resource history", () => {
@@ -216,6 +227,51 @@ test.describe("application resource history", () => {
       await expectChartLabelsInside(page, width);
     }
     expect(guardrails.apiFailures).toEqual([]);
+  });
+
+  test("tiny CPU values keep the three Y-axis ticks distinct", async ({
+    page,
+    request,
+  }) => {
+    const account = loadAccount();
+    const headers = { Authorization: `Bearer ${account.accessToken}` };
+    const server = await request.post("/api/v1/servers", {
+      headers,
+      data: { name: `ui-e2e-rh-${uniqueSuffix()}`, ip: seedNodeAddress, ssh_user: "root" },
+    });
+    expect(server.status(), await server.text()).toBe(201);
+    const { server: node } = (await server.json()) as { server: { id: string } };
+    const { projectId, environmentId } = await seedProjectEnvironment(request, headers);
+    const created = await request.post("/api/v1/applications", {
+      headers,
+      data: {
+        name: `ui-e2e-rh-${uniqueSuffix()}`,
+        environment_id: environmentId,
+        provider: "github",
+        repo: "docker/welcome-to-docker",
+        clone_url: cloneURL,
+        branch: "main",
+        build_pack: "auto",
+        server_id: node.id,
+      },
+    });
+    expect(created.status(), await created.text()).toBe(201);
+    const { application } = (await created.json()) as {
+      application: { id: string };
+    };
+
+    await page.route(
+      `**/api/v1/applications/${application.id}/metrics?*`,
+      (route) => route.fulfill({ json: tinyCPUHistory() }),
+    );
+    await page.goto(
+      `${nestedURL(projectId, environmentId, "applications", application.id)}?tab=metrics`,
+    );
+    const ticks = page.locator('[data-chart="cpu"] .chart__ylabels text');
+    await expect(ticks).toHaveCount(3);
+    const labels = (await ticks.allTextContents()).map((label) => label.trim());
+    expect(new Set(labels).size, `CPU ticks: ${labels.join(", ")}`).toBe(3);
+    await expect(page.getByText("0.00", { exact: true })).toHaveCount(0);
   });
 
   test("an older agent reports history unavailable instead of a healthy empty chart", async ({

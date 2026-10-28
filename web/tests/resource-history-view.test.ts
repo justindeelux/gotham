@@ -4,7 +4,9 @@ import type { ResourceHistory } from "../src/features/monitoring/api/resourceHis
 import {
   buildResourceCharts,
   chartStepMs,
+  formatCoresForMax,
   formatRate,
+  maxCPUCores,
   memoryLimitLabel,
   serviceOptions,
 } from "../src/features/monitoring/utils/resourceHistoryView";
@@ -50,6 +52,31 @@ function history(): ResourceHistory {
 }
 
 describe("resource history view", () => {
+  it("keeps tiny CPU axis ticks pairwise distinct", () => {
+    const millicores = formatCoresForMax(0.008);
+    expect([0, 0.005, 0.01].map(millicores)).toEqual(["0 m", "5 m", "10 m"]);
+    expect(new Set([0, 0.005, 0.01].map(millicores)).size).toBe(3);
+
+    const subMilli = formatCoresForMax(0.0008);
+    expect([0, 0.0005, 0.001].map(subMilli)).toEqual([
+      "0.0 m",
+      "0.5 m",
+      "1.0 m",
+    ]);
+    expect(new Set([0, 0.0005, 0.001].map(subMilli)).size).toBe(3);
+
+    const cores = formatCoresForMax(0.5);
+    expect([0, 0.25, 0.5].map(cores)).toEqual(["0.00", "0.25", "0.50"]);
+  });
+
+  it("uses the CPU maximum and the same formatter for the latest value", () => {
+    const sample = history();
+    sample.series[0]!.points[0]!.cpu_cores = 0.006;
+    expect(maxCPUCores(sample)).toBe(0.006);
+    const chart = buildResourceCharts(sample).find((item) => item.key === "cpu");
+    expect(chart?.latest).toBe("6 m");
+  });
+
   it("formats tiny rate axis ticks without undefined units", () => {
     expect(formatRate(0)).toBe("0 B/s");
     expect(formatRate(0.5)).toBe("0.50 B/s");

@@ -17,6 +17,8 @@ import (
 type Cursor struct {
 	At time.Time
 	ID uuid.UUID
+	// Rank is the severity sort key for active rows: 0 critical, 1 warning.
+	Rank int
 }
 
 type ListFilter struct {
@@ -25,6 +27,7 @@ type ListFilter struct {
 	IncludeResolved bool
 	Lifecycle       *Lifecycle
 	Severity        *Severity
+	ResourceType    *string
 	Cursor          *Cursor
 	Limit           int
 }
@@ -79,6 +82,7 @@ type Repository interface {
 	Transact(ctx context.Context, fn func(Tx) error) error
 	Get(ctx context.Context, id uuid.UUID) (Incident, error)
 	List(ctx context.Context, filter ListFilter) ([]Incident, error)
+	CountActive(ctx context.Context, filter ListFilter) (int, error)
 	ListEvents(ctx context.Context, filter EventFilter) ([]Event, error)
 	ListActiveNodeIncidents(ctx context.Context) ([]Incident, error)
 	ListDeliveries(ctx context.Context, incidentID uuid.UUID, limit int) ([]DeliveryIntent, error)
@@ -112,6 +116,9 @@ func (r *storeRepository) Get(ctx context.Context, id uuid.UUID) (Incident, erro
 }
 
 func (r *storeRepository) List(ctx context.Context, filter ListFilter) ([]Incident, error) {
+	if filter.Lifecycle != nil && *filter.Lifecycle == LifecycleResolved {
+		return r.listResolved(ctx, filter)
+	}
 	params := sqlc.ListIncidentsParams{
 		IsOwner:         filter.IsOwner,
 		UserID:          pgUUID(filter.UserID),
@@ -126,15 +133,66 @@ func (r *storeRepository) List(ctx context.Context, filter ListFilter) ([]Incide
 		value := string(*filter.Severity)
 		params.SeverityFilter = &value
 	}
+	if filter.ResourceType != nil {
+		params.ResourceTypeFilter = filter.ResourceType
+	}
 	if filter.Cursor != nil {
 		params.CursorAt = pgtype.Timestamptz{Time: filter.Cursor.At, Valid: true}
 		params.CursorID = pgUUID(filter.Cursor.ID)
+		params.CursorRank = int32(filter.Cursor.Rank)
 	}
 	rows, err := r.st.ListIncidents(ctx, params)
 	if err != nil {
 		return nil, fmt.Errorf("incidents: list: %w", err)
 	}
 	return incidentsFromRows(rows), nil
+}
+
+func (r *storeRepository) listResolved(ctx context.Context, filter ListFilter) ([]Incident, error) {
+	params := sqlc.ListResolvedIncidentsParams{
+		IsOwner:  filter.IsOwner,
+		UserID:   pgUUID(filter.UserID),
+		RowLimit: int32(filter.Limit),
+	}
+	if filter.Severity != nil {
+		value := string(*filter.Severity)
+		params.SeverityFilter = &value
+	}
+	if filter.ResourceType != nil {
+		params.ResourceTypeFilter = filter.ResourceType
+	}
+	if filter.Cursor != nil {
+		params.CursorAt = pgtype.Timestamptz{Time: filter.Cursor.At, Valid: true}
+		params.CursorID = pgUUID(filter.Cursor.ID)
+	}
+	rows, err := r.st.ListResolvedIncidents(ctx, params)
+	if err != nil {
+		return nil, fmt.Errorf("incidents: list resolved: %w", err)
+	}
+	return incidentsFromRows(rows), nil
+}
+
+func (r *storeRepository) CountActive(ctx context.Context, filter ListFilter) (int, error) {
+	params := sqlc.CountActiveIncidentsParams{
+		IsOwner: filter.IsOwner,
+		UserID:  pgUUID(filter.UserID),
+	}
+	if filter.Lifecycle != nil && *filter.Lifecycle != LifecycleResolved {
+		value := string(*filter.Lifecycle)
+		params.LifecycleFilter = &value
+	}
+	if filter.Severity != nil {
+		value := string(*filter.Severity)
+		params.SeverityFilter = &value
+	}
+	if filter.ResourceType != nil {
+		params.ResourceTypeFilter = filter.ResourceType
+	}
+	count, err := r.st.CountActiveIncidents(ctx, params)
+	if err != nil {
+		return 0, fmt.Errorf("incidents: count active: %w", err)
+	}
+	return int(count), nil
 }
 
 func (r *storeRepository) ListEvents(ctx context.Context, filter EventFilter) ([]Event, error) {

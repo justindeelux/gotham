@@ -72,6 +72,9 @@ func (f *fakeRepo) List(_ context.Context, filter ListFilter) ([]Incident, error
 		if filter.Severity != nil && inc.Severity != *filter.Severity {
 			continue
 		}
+		if filter.ResourceType != nil && inc.ResourceType != *filter.ResourceType {
+			continue
+		}
 		if !filter.IsOwner {
 			if inc.ProjectID == uuid.Nil || !f.grants[filter.UserID][inc.ProjectID] {
 				continue
@@ -79,16 +82,41 @@ func (f *fakeRepo) List(_ context.Context, filter ListFilter) ([]Incident, error
 		}
 		rows = append(rows, *inc)
 	}
-	sort.Slice(rows, func(i, j int) bool {
-		if !rows[i].UpdatedAt.Equal(rows[j].UpdatedAt) {
-			return rows[i].UpdatedAt.After(rows[j].UpdatedAt)
-		}
-		return rows[i].ID.String() > rows[j].ID.String()
-	})
+	resolvedOnly := filter.Lifecycle != nil && *filter.Lifecycle == LifecycleResolved
+	if resolvedOnly {
+		sort.Slice(rows, func(i, j int) bool {
+			left, right := resolvedSortAt(rows[i]), resolvedSortAt(rows[j])
+			if !left.Equal(right) {
+				return left.After(right)
+			}
+			return rows[i].ID.String() > rows[j].ID.String()
+		})
+	} else {
+		sort.Slice(rows, func(i, j int) bool {
+			left, right := severityRank(rows[i].Severity), severityRank(rows[j].Severity)
+			if left != right {
+				return left < right
+			}
+			if !rows[i].FirstObservedAt.Equal(rows[j].FirstObservedAt) {
+				return rows[i].FirstObservedAt.Before(rows[j].FirstObservedAt)
+			}
+			return rows[i].ID.String() < rows[j].ID.String()
+		})
+	}
 	if filter.Cursor != nil {
 		trimmed := rows[:0]
 		for _, row := range rows {
-			if row.UpdatedAt.Before(filter.Cursor.At) || (row.UpdatedAt.Equal(filter.Cursor.At) && row.ID.String() < filter.Cursor.ID.String()) {
+			if resolvedOnly {
+				at := resolvedSortAt(row)
+				if at.Before(filter.Cursor.At) || (at.Equal(filter.Cursor.At) && row.ID.String() < filter.Cursor.ID.String()) {
+					trimmed = append(trimmed, row)
+				}
+				continue
+			}
+			rank := severityRank(row.Severity)
+			if rank > filter.Cursor.Rank ||
+				(rank == filter.Cursor.Rank && (row.FirstObservedAt.After(filter.Cursor.At) ||
+					(row.FirstObservedAt.Equal(filter.Cursor.At) && row.ID.String() > filter.Cursor.ID.String()))) {
 				trimmed = append(trimmed, row)
 			}
 		}
@@ -98,6 +126,38 @@ func (f *fakeRepo) List(_ context.Context, filter ListFilter) ([]Incident, error
 		rows = rows[:filter.Limit]
 	}
 	return rows, nil
+}
+
+func resolvedSortAt(inc Incident) time.Time {
+	if inc.ResolvedAt != nil {
+		return *inc.ResolvedAt
+	}
+	return inc.UpdatedAt
+}
+
+func (f *fakeRepo) CountActive(_ context.Context, filter ListFilter) (int, error) {
+	count := 0
+	for _, inc := range f.incidents {
+		if inc.Lifecycle == LifecycleResolved {
+			continue
+		}
+		if filter.Lifecycle != nil && inc.Lifecycle != *filter.Lifecycle {
+			continue
+		}
+		if filter.Severity != nil && inc.Severity != *filter.Severity {
+			continue
+		}
+		if filter.ResourceType != nil && inc.ResourceType != *filter.ResourceType {
+			continue
+		}
+		if !filter.IsOwner {
+			if inc.ProjectID == uuid.Nil || !f.grants[filter.UserID][inc.ProjectID] {
+				continue
+			}
+		}
+		count++
+	}
+	return count, nil
 }
 
 func (f *fakeRepo) ListEvents(_ context.Context, filter EventFilter) ([]Event, error) {
@@ -364,6 +424,94 @@ func reportOpened(t *testing.T, svc *Service, now *time.Time, projectID uuid.UUI
 	return *inc
 }
 
+func TestServiceListOrdersActiveAndFilters(t *testing.T) {
+	repo := newFakeRepo()
+	svc, _ := testService(t, repo, &fakeAccess{owner: true}, nil)
+	userID := uuid.New()
+	base := time.Date(2026, 1, 1, 12, 0, 0, 0, time.UTC)
+	resolvedAt := base.Add(-time.Hour)
+	rows := []Incident{
+		{
+			ID: uuid.New(), Lifecycle: LifecycleFiring, Severity: SeverityWarning,
+			ResourceType: "application", ResourceName: "warn-old",
+			FirstObservedAt: base.Add(-2 * time.Hour), UpdatedAt: base,
+		},
+		{
+			ID: uuid.New(), Lifecycle: LifecycleFiring, Severity: SeverityCritical,
+			ResourceType: "node", ResourceName: "crit-new",
+			FirstObservedAt: base.Add(-30 * time.Minute), UpdatedAt: base,
+		},
+		{
+			ID: uuid.New(), Lifecycle: LifecycleFiring, Severity: SeverityCritical,
+			ResourceType: "node", ResourceName: "crit-old",
+			FirstObservedAt: base.Add(-3 * time.Hour), UpdatedAt: base,
+		},
+		{
+			ID: uuid.New(), Lifecycle: LifecycleResolved, Severity: SeverityWarning,
+			ResourceType: "application", ResourceName: "resolved",
+			FirstObservedAt: base.Add(-5 * time.Hour), ResolvedAt: &resolvedAt, UpdatedAt: base,
+		},
+	}
+	for _, row := range rows {
+		copied := row
+		repo.incidents[copied.ID] = &copied
+	}
+
+	page, err := svc.List(context.Background(), userID, ListParams{})
+	if err != nil {
+		t.Fatalf("List: %v", err)
+	}
+	if page.ActiveCount != 3 {
+		t.Fatalf("ActiveCount = %d; want 3", page.ActiveCount)
+	}
+	if len(page.Incidents) != 3 {
+		t.Fatalf("active rows = %d; want 3", len(page.Incidents))
+	}
+	want := []string{"crit-old", "crit-new", "warn-old"}
+	for i, name := range want {
+		if page.Incidents[i].ResourceName != name {
+			t.Fatalf("row %d = %q; want %q", i, page.Incidents[i].ResourceName, name)
+		}
+	}
+
+	resourceType := "node"
+	filtered, err := svc.List(context.Background(), userID, ListParams{ResourceType: &resourceType})
+	if err != nil {
+		t.Fatalf("List resource filter: %v", err)
+	}
+	if filtered.ActiveCount != 2 || len(filtered.Incidents) != 2 {
+		t.Fatalf("node filter = %d/%d; want 2/2", filtered.ActiveCount, len(filtered.Incidents))
+	}
+
+	first, err := svc.List(context.Background(), userID, ListParams{Limit: 2})
+	if err != nil {
+		t.Fatalf("List page one: %v", err)
+	}
+	if first.NextCursor == "" || len(first.Incidents) != 2 {
+		t.Fatalf("page one = %+v; want two rows and a cursor", first)
+	}
+	cursor, err := decodeCursor(first.NextCursor)
+	if err != nil {
+		t.Fatalf("decode cursor: %v", err)
+	}
+	second, err := svc.List(context.Background(), userID, ListParams{Limit: 2, Cursor: cursor})
+	if err != nil {
+		t.Fatalf("List page two: %v", err)
+	}
+	if len(second.Incidents) != 1 || second.Incidents[0].ResourceName != "warn-old" {
+		t.Fatalf("page two = %+v; want the warning row", second.Incidents)
+	}
+
+	resolved := LifecycleResolved
+	resolvedPage, err := svc.List(context.Background(), userID, ListParams{Lifecycle: &resolved})
+	if err != nil {
+		t.Fatalf("List resolved: %v", err)
+	}
+	if len(resolvedPage.Incidents) != 1 || resolvedPage.Incidents[0].ResourceName != "resolved" {
+		t.Fatalf("resolved rows = %+v; want the resolved row", resolvedPage.Incidents)
+	}
+}
+
 func TestServiceOpeningAndRecoveryDispatchOnce(t *testing.T) {
 	repo := newFakeRepo()
 	notifier := &fakeNotifier{}
@@ -498,6 +646,9 @@ func TestServiceAuthorizationOwnerMemberAndRevoked(t *testing.T) {
 	if len(page.Incidents) != 1 || page.Incidents[0].ID != projectIncident.ID {
 		t.Fatalf("member saw %+v; want only the granted project incident", page.Incidents)
 	}
+	if page.ActiveCount != 1 {
+		t.Fatalf("member active count = %d; want 1", page.ActiveCount)
+	}
 	if _, err := memberSvc.Get(context.Background(), memberID, nodeIncident.ID); !errors.Is(err, ErrNotFound) {
 		t.Fatalf("member read node incident: %v", err)
 	}
@@ -517,9 +668,16 @@ func TestServiceAuthorizationOwnerMemberAndRevoked(t *testing.T) {
 	if _, err := memberSvc.Get(context.Background(), memberID, projectIncident.ID); !errors.Is(err, ErrNotFound) {
 		t.Fatalf("revoked grant still readable: %v", err)
 	}
+	revokedPage, err := memberSvc.List(context.Background(), memberID, ListParams{})
+	if err != nil || len(revokedPage.Incidents) != 0 || revokedPage.ActiveCount != 0 {
+		t.Fatalf("revoked list = %d/%d %v; want no rows or count", len(revokedPage.Incidents), revokedPage.ActiveCount, err)
+	}
 	ownerPage, err := ownerSvc.List(context.Background(), ownerID, ListParams{})
 	if err != nil || len(ownerPage.Incidents) != 3 {
 		t.Fatalf("owner list = %d %v; want every incident", len(ownerPage.Incidents), err)
+	}
+	if ownerPage.ActiveCount != 3 {
+		t.Fatalf("owner active count = %d; want 3", ownerPage.ActiveCount)
 	}
 }
 

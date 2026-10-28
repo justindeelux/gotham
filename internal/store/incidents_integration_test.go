@@ -182,3 +182,179 @@ func TestIncidentEventHistoryIsBoundedAndOrdered(t *testing.T) {
 		t.Fatalf("events are not newest first")
 	}
 }
+
+func TestIncidentActiveOrderFiltersAndCursor(t *testing.T) {
+	ctx, cancel := context.WithTimeout(context.Background(), 60*time.Second)
+	defer cancel()
+	st := scratchStore(t)
+
+	suffix := time.Now().UnixNano()
+	owner, err := st.CreateFirstUser(ctx, fmt.Sprintf("inc-order-%d@example.com", suffix), nil)
+	if err != nil {
+		t.Fatalf("create owner: %v", err)
+	}
+	ownerID := pgtype.UUID{Bytes: uuid.UUID(owner.ID.Bytes), Valid: true}
+	base := time.Now().UTC().Add(-48 * time.Hour).Truncate(time.Microsecond)
+
+	criticalOld := incidentParams(uuid.New(), uuid.Nil, "node:crit-old", "firing", base, time.Time{})
+	criticalOld.Severity = "critical"
+	criticalOld.ResourceType = "node"
+	criticalNew := incidentParams(uuid.New(), uuid.Nil, "node:crit-new", "firing", base.Add(2*time.Hour), time.Time{})
+	criticalNew.Severity = "critical"
+	criticalNew.ResourceType = "node"
+	warningOld := incidentParams(uuid.New(), uuid.Nil, "app:warn-old", "firing", base.Add(time.Hour), time.Time{})
+	warningOld.Severity = "warning"
+	warningOld.ResourceType = "application"
+	for _, row := range []sqlc.CreateIncidentParams{criticalNew, warningOld, criticalOld} {
+		if _, err := st.CreateIncident(ctx, row); err != nil {
+			t.Fatalf("create incident: %v", err)
+		}
+	}
+
+	count, err := st.CountActiveIncidents(ctx, sqlc.CountActiveIncidentsParams{IsOwner: true, UserID: ownerID})
+	if err != nil || count != 3 {
+		t.Fatalf("CountActive = %d %v; want 3", count, err)
+	}
+
+	page, err := st.ListIncidents(ctx, sqlc.ListIncidentsParams{IsOwner: true, UserID: ownerID, RowLimit: 2})
+	if err != nil {
+		t.Fatalf("ListIncidents: %v", err)
+	}
+	if len(page) != 2 || page[0].IdentityKey != "node:crit-old" || page[1].IdentityKey != "node:crit-new" {
+		t.Fatalf("active order = %v; want oldest critical first", identityKeys(page))
+	}
+	last := page[len(page)-1]
+	next, err := st.ListIncidents(ctx, sqlc.ListIncidentsParams{
+		IsOwner:    true,
+		UserID:     ownerID,
+		CursorAt:   last.FirstObservedAt,
+		CursorID:   last.ID,
+		CursorRank: 0,
+		RowLimit:   2,
+	})
+	if err != nil {
+		t.Fatalf("ListIncidents cursor: %v", err)
+	}
+	if len(next) != 1 || next[0].IdentityKey != "app:warn-old" {
+		t.Fatalf("cursor page = %v; want the warning row", identityKeys(next))
+	}
+
+	resourceType := "application"
+	filtered, err := st.ListIncidents(ctx, sqlc.ListIncidentsParams{
+		IsOwner:            true,
+		UserID:             ownerID,
+		ResourceTypeFilter: &resourceType,
+		RowLimit:           10,
+	})
+	if err != nil || len(filtered) != 1 {
+		t.Fatalf("resource filter = %d %v; want 1", len(filtered), err)
+	}
+}
+
+func identityKeys(rows []sqlc.Incident) []string {
+	keys := make([]string, 0, len(rows))
+	for _, row := range rows {
+		keys = append(keys, row.IdentityKey)
+	}
+	return keys
+}
+
+func TestIncidentMemberScopeCountsAndResolved(t *testing.T) {
+	ctx, cancel := context.WithTimeout(context.Background(), 60*time.Second)
+	defer cancel()
+	st := scratchStore(t)
+
+	suffix := time.Now().UnixNano()
+	owner, err := st.CreateFirstUser(ctx, fmt.Sprintf("inc-scope-owner-%d@example.com", suffix), nil)
+	if err != nil {
+		t.Fatalf("create owner: %v", err)
+	}
+	member, err := st.CreateUser(ctx, fmt.Sprintf("inc-scope-member-%d@example.com", suffix), nil)
+	if err != nil {
+		t.Fatalf("create member: %v", err)
+	}
+	ownerID := uuid.UUID(owner.ID.Bytes)
+	memberID := uuid.UUID(member.ID.Bytes)
+	granted, other := uuid.New(), uuid.New()
+	for _, project := range []struct {
+		id   uuid.UUID
+		name string
+	}{{granted, "granted"}, {other, "other"}} {
+		if _, err := st.DB.Exec(ctx, `INSERT INTO projects(id, name) VALUES($1,$2)`, project.id, project.name); err != nil {
+			t.Fatalf("insert project: %v", err)
+		}
+	}
+	if err := st.GrantProject(ctx, granted, memberID, ownerID); err != nil {
+		t.Fatalf("grant: %v", err)
+	}
+
+	base := time.Now().UTC().Add(-24 * time.Hour).Truncate(time.Microsecond)
+	resolvedAt := base.Add(time.Hour)
+	rows := []sqlc.CreateIncidentParams{
+		incidentParams(uuid.New(), granted, "app:granted-a", "firing", base, time.Time{}),
+		incidentParams(uuid.New(), granted, "app:granted-b", "firing", base, time.Time{}),
+		incidentParams(uuid.New(), granted, "app:granted-resolved", "resolved", base, resolvedAt),
+		incidentParams(uuid.New(), other, "app:other", "firing", base, time.Time{}),
+		incidentParams(uuid.New(), other, "app:other-resolved", "resolved", base, resolvedAt),
+		incidentParams(uuid.New(), uuid.Nil, "node:global", "firing", base, time.Time{}),
+	}
+	for _, row := range rows {
+		if _, err := st.CreateIncident(ctx, row); err != nil {
+			t.Fatalf("create incident: %v", err)
+		}
+	}
+
+	memberScope := sqlc.CountActiveIncidentsParams{
+		UserID: pgtype.UUID{Bytes: memberID, Valid: true},
+	}
+	count, err := st.CountActiveIncidents(ctx, memberScope)
+	if err != nil || count != 2 {
+		t.Fatalf("member active count = %d %v; want 2", count, err)
+	}
+	ownerCount, err := st.CountActiveIncidents(ctx, sqlc.CountActiveIncidentsParams{
+		IsOwner: true,
+		UserID:  pgtype.UUID{Bytes: ownerID, Valid: true},
+	})
+	if err != nil || ownerCount != 4 {
+		t.Fatalf("owner active count = %d %v; want 4", ownerCount, err)
+	}
+
+	memberPage, err := st.ListIncidents(ctx, sqlc.ListIncidentsParams{
+		UserID:   pgtype.UUID{Bytes: memberID, Valid: true},
+		RowLimit: 10,
+	})
+	if err != nil || len(memberPage) != 2 {
+		t.Fatalf("member list = %d %v; want 2", len(memberPage), err)
+	}
+	memberResolved, err := st.ListResolvedIncidents(ctx, sqlc.ListResolvedIncidentsParams{
+		UserID:   pgtype.UUID{Bytes: memberID, Valid: true},
+		RowLimit: 10,
+	})
+	if err != nil || len(memberResolved) != 1 || memberResolved[0].IdentityKey != "app:granted-resolved" {
+		t.Fatalf("member resolved = %v %v; want only the granted row", identityKeys(memberResolved), err)
+	}
+	ownerResolved, err := st.ListResolvedIncidents(ctx, sqlc.ListResolvedIncidentsParams{
+		IsOwner:  true,
+		UserID:   pgtype.UUID{Bytes: ownerID, Valid: true},
+		RowLimit: 10,
+	})
+	if err != nil || len(ownerResolved) != 2 {
+		t.Fatalf("owner resolved = %d %v; want 2", len(ownerResolved), err)
+	}
+
+	if err := st.RevokeProject(ctx, granted, memberID); err != nil {
+		t.Fatalf("revoke: %v", err)
+	}
+	memberScope.IsOwner = false
+	count, err = st.CountActiveIncidents(ctx, memberScope)
+	if err != nil || count != 0 {
+		t.Fatalf("revoked active count = %d %v; want 0", count, err)
+	}
+	revoked, err := st.ListIncidents(ctx, sqlc.ListIncidentsParams{
+		UserID:   pgtype.UUID{Bytes: memberID, Valid: true},
+		RowLimit: 10,
+	})
+	if err != nil || len(revoked) != 0 {
+		t.Fatalf("revoked list = %d %v; want 0", len(revoked), err)
+	}
+}

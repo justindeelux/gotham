@@ -21,6 +21,9 @@ export const useNotificationInboxStore = defineStore("notification-inbox", () =>
   const unreadCount = ref(0);
   const loading = ref(false);
   const failure = ref<unknown>(null);
+  // revision changes whenever a realtime frame arrives or a reconnect refetch
+  // completes, so other live views can refetch without owning a socket.
+  const revision = ref(0);
 
   let socket: ReturnType<typeof useWebSocket> | null = null;
   let subscribedChannel = "";
@@ -64,6 +67,7 @@ export const useNotificationInboxStore = defineStore("notification-inbox", () =>
     }
     items.value = [item, ...items.value];
     unreadCount.value += 1;
+    revision.value += 1;
   }
 
   async function markSeen(): Promise<void> {
@@ -134,7 +138,11 @@ export const useNotificationInboxStore = defineStore("notification-inbox", () =>
         }
         subscribe(notificationsChannel(userId));
         if (connectedOnce) {
-          void refresh().catch(() => undefined);
+          void refresh()
+            .then(() => {
+              revision.value += 1;
+            })
+            .catch(() => undefined);
           return;
         }
         connectedOnce = true;
@@ -178,6 +186,7 @@ export const useNotificationInboxStore = defineStore("notification-inbox", () =>
   return {
     items,
     unreadCount,
+    revision,
     loading,
     failure,
     refresh,

@@ -123,6 +123,40 @@ mặc định cũng tắt, nên chỉ kiểm tra thủ công trên bảng điề
 nếu chưa bật lịch kiểm tra. Thông báo không bật kiểm tra hay cập nhật tự động.
 Khởi động lại Gotham xóa bộ nhớ này, nên cùng bản cập nhật có thể được thông báo lại.
 
+## Cần chú ý trên bảng điều khiển
+
+Bảng điều khiển mở đầu bằng **Cần chú ý**, trạng thái hiện tại của mọi tài nguyên
+bạn có thể thấy. Khu vực này tách khỏi hộp thông báo: số chưa đọc là lịch sử sự
+kiện, còn bảng này cho biết tình trạng nào vẫn đang hoạt động.
+
+Sự cố đang hoạt động được sắp xếp nghiêm trọng trước, sau đó theo thời gian đã
+hoạt động, nên tình trạng nghiêm trọng lâu nhất đứng đầu. Mỗi dòng nêu lý do dễ
+hiểu, tài nguyên, thời điểm bắt đầu, quan sát hợp lệ gần nhất và độ phủ của bằng
+chứng. Bộ lọc **Mức độ** và **Tài nguyên** cùng **Tải thêm** giữ kết quả trong
+giới hạn. Thành viên chỉ thấy sự cố của dự án họ còn quyền truy cập; thu hồi
+quyền sẽ xóa các dòng và số đếm tương ứng ngay lập tức.
+
+Khi một máy chủ không phản hồi, các sự cố ứng dụng và cơ sở dữ liệu phụ thuộc
+được nhóm bên dưới máy chủ với độ phủ chưa xác định. Việc nhóm cho biết tài
+nguyên nào bị ảnh hưởng, không phải nguyên nhân đã được chứng minh: Gotham không
+khẳng định máy chủ mất kết nối là nguyên nhân của các triệu chứng đó.
+
+**Xác nhận** ghi lại người đang xử lý và tắt việc gửi thông báo; **Tạm ẩn** tắt
+thông báo trong 1 giờ hoặc 24 giờ, và dòng sự cố hiển thị chính xác thời điểm hết
+hạn. Cả hai thao tác không đổi mức độ hay vòng đời đã đo, và việc mở hộp thông
+báo hoặc xem sự cố không bao giờ tự xác nhận. Sự cố đã xác nhận hoặc tạm ẩn vẫn
+hiển thị kèm trạng thái, và dòng sự cố cho biết lý do đang giữ thông báo. **Mới
+được khắc phục** là chế độ xem riêng, có giới hạn, cho các lần phục hồi.
+
+Bảng theo kênh thời gian thực đã xác thực: sự cố mới hoặc đã khắc phục làm mới
+bảng đang mở, kết nối lại sẽ tải lại, và tab đang hiển thị có dự phòng làm mới
+mỗi 60 giây. Các thông điệp riêng phân biệt API gặp sự cố, chưa có máy chủ nào
+báo cáo, giám sát không khả dụng trên instance, và hệ thống thực sự khỏe mạnh.
+Liên kết mở chi tiết ứng dụng hoặc cơ sở dữ liệu (và nhật ký với lỗi runtime),
+số liệu máy chủ, hoặc cài đặt thông báo. Bộ phát hiện và loại tài nguyên chưa
+biết nhận nhãn trung tính; bằng chứng thô, lỗi, secret và đường dẫn máy chủ
+không bao giờ được hiển thị cho chúng.
+
 ## Gửi thử và lịch sử gửi
 
 **Gửi thử** gửi một tin nhắn thử tổng hợp tới đúng kênh đó và báo kết quả ngay. Nó

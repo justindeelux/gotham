@@ -29,6 +29,7 @@ import {
   useFilesPaneSession,
 } from "@/features/files/stores/paneSession";
 import { useTrashStore } from "@/features/files/stores/trash";
+import { useIncidentsStore } from "@/features/incidents";
 import {
   useNotificationInboxStore,
   useNotificationsStore,
@@ -156,6 +157,7 @@ export const useAuthStore = defineStore("auth", () => {
       },
       () => useNotificationsStore().reset(),
       () => useNotificationInboxStore().reset(),
+      () => useIncidentsStore().reset(),
       () => useProjectsStore().reset(),
       () => useServicesStore().reset(),
       () => useBackupsStore().reset(),

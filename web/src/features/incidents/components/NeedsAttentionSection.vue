@@ -92,6 +92,7 @@ const resourceOptions = computed(() => {
     "service",
     "node",
     "filesystem",
+    "domain",
   ]);
   for (const incident of store.items) {
     if (incident.resource_type) {

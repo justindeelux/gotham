@@ -35,6 +35,7 @@ project GET /api/v1/applications/{id}/deployments
 project GET /api/v1/applications/{id}/deployments/{deployment_id}
 project GET /api/v1/applications/{id}/deployments/{deployment_id}/logs
 project GET /api/v1/applications/{id}/domains
+project GET /api/v1/applications/{id}/domains/{domainId}/monitoring
 project GET /api/v1/applications/{id}/env
 owner GET /api/v1/applications/{id}/git-credential
 project GET /api/v1/applications/{id}/logs
@@ -152,6 +153,7 @@ project POST /api/v1/applications/{id}/deploy
 owner POST /api/v1/applications/{id}/deploy-key
 project POST /api/v1/applications/{id}/domains
 project POST /api/v1/applications/{id}/domains/{domainId}/primary
+project POST /api/v1/applications/{id}/domains/{domainId}/monitoring/test
 project POST /api/v1/applications/{id}/rollback
 project POST /api/v1/applications/{id}/start
 project POST /api/v1/applications/{id}/stop
@@ -245,6 +247,7 @@ owner POST /api/v1/users/{id}/reset
 public POST /api/v1/webhooks/{provider}
 project PUT /api/v1/applications/{id}
 project PUT /api/v1/applications/{id}/domains/{domainId}
+project PUT /api/v1/applications/{id}/domains/{domainId}/monitoring
 project PUT /api/v1/applications/{id}/env
 owner PUT /api/v1/applications/{id}/git-credential
 owner PUT /api/v1/applications/{id}/storages

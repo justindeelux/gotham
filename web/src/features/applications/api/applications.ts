@@ -202,6 +202,113 @@ export async function setPrimaryDomain(
   await http.post(`/applications/${appId}/domains/${domainId}/primary`, {});
 }
 
+export type WebsiteCheckStatus =
+  | "healthy"
+  | "failing"
+  | "unknown"
+  | "disabled"
+  | "unsupported";
+
+export type WebsiteCheckOutcome = "healthy" | "failed" | "unsupported" | "unknown";
+
+export interface WebsiteCheckPoint {
+  at: string;
+  outcome: WebsiteCheckOutcome;
+  covered_seconds: number;
+}
+
+export interface WebsiteCheckWindow {
+  key: "24h" | "7d";
+  range_seconds: number;
+  observed_seconds: number;
+  healthy_seconds: number;
+  failed_seconds: number;
+  coverage: number;
+  availability?: number;
+  samples: number;
+  average_latency_ms?: number;
+  insufficient_coverage: boolean;
+  points: WebsiteCheckPoint[];
+}
+
+export interface WebsiteCheck {
+  domain_id: string;
+  application_id: string;
+  url: string;
+  probe_location: string;
+  enabled: boolean;
+  path: string;
+  expected_min: number;
+  expected_max: number;
+  timeout_seconds: number;
+  status: WebsiteCheckStatus;
+  reason?: string;
+  coverage: string;
+  last_checked_at?: string;
+  last_status?: number;
+  last_latency_ms?: number;
+  last_success_at?: string;
+  last_failure_at?: string;
+  incident_id?: string;
+  windows: WebsiteCheckWindow[];
+}
+
+export interface WebsiteCheckInput {
+  enabled: boolean;
+  path: string;
+  expected_min: number;
+  expected_max: number;
+  timeout_seconds: number;
+}
+
+export interface WebsiteCheckTestResult {
+  outcome: WebsiteCheckOutcome;
+  reason?: string;
+  status_code?: number;
+  latency_ms?: number;
+  detail?: string;
+}
+
+interface WebsiteCheckEnvelope {
+  website_check: WebsiteCheck;
+}
+
+interface WebsiteCheckTestEnvelope {
+  result: WebsiteCheckTestResult;
+}
+
+export async function getDomainMonitoring(
+  appId: string,
+  domainId: string,
+): Promise<WebsiteCheck> {
+  const response = await http.get<WebsiteCheckEnvelope>(
+    `/applications/${appId}/domains/${domainId}/monitoring`,
+  );
+  return response.data.website_check;
+}
+
+export async function updateDomainMonitoring(
+  appId: string,
+  domainId: string,
+  input: WebsiteCheckInput,
+): Promise<WebsiteCheck> {
+  const response = await http.put<WebsiteCheckEnvelope>(
+    `/applications/${appId}/domains/${domainId}/monitoring`,
+    input,
+  );
+  return response.data.website_check;
+}
+
+export async function testDomainMonitoring(
+  appId: string,
+  domainId: string,
+): Promise<WebsiteCheckTestResult> {
+  const response = await http.post<WebsiteCheckTestEnvelope>(
+    `/applications/${appId}/domains/${domainId}/monitoring/test`,
+  );
+  return response.data.result;
+}
+
 interface DeploymentEnvelope {
   deployment: Deployment;
 }

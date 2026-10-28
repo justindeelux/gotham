@@ -6,6 +6,7 @@ const knownResourceTypes = new Set([
   "service",
   "node",
   "filesystem",
+  "domain",
 ]);
 
 const reasonKeys: Record<string, string> = {
@@ -17,6 +18,7 @@ const reasonKeys: Record<string, string> = {
   runtime_restart: "incidents.reasons.restart",
   runtime_oom: "incidents.reasons.oom",
   runtime_health: "incidents.reasons.health",
+  domain_reachability: "incidents.reasons.website",
 };
 
 export interface IncidentGroup {

@@ -11,6 +11,7 @@ import type {
 import CertificatePanel from "@/features/applications/components/CertificatePanel.vue";
 import DomainFormModal from "@/features/applications/components/DomainFormModal.vue";
 import DomainTable from "@/features/applications/components/DomainTable.vue";
+import WebsiteChecksCard from "@/features/applications/components/WebsiteChecksCard.vue";
 import { useApplicationDomains } from "@/features/applications/composables/useApplicationDomains";
 import { useProxyStore, type Certificate } from "@/features/domains";
 
@@ -104,6 +105,11 @@ function openCertificate(row: ApplicationDomain): void {
         </NText>
       </NSpace>
     </NCard>
+
+    <WebsiteChecksCard
+      :application="props.application"
+      :domains="domains.domains.value"
+    />
 
     <DomainFormModal
       v-model:show="domains.formOpen.value"

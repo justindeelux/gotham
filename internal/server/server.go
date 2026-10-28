@@ -24,6 +24,7 @@ import (
 	"github.com/justindeelux/gotham/internal/containers"
 	"github.com/justindeelux/gotham/internal/databases"
 	"github.com/justindeelux/gotham/internal/deploy"
+	"github.com/justindeelux/gotham/internal/domainwatch"
 	"github.com/justindeelux/gotham/internal/files"
 	"github.com/justindeelux/gotham/internal/githubapp"
 	"github.com/justindeelux/gotham/internal/incidents"
@@ -88,6 +89,7 @@ type Server struct {
 	incidents         *incidents.Service
 	monitoring        *monitoring.Service
 	runtime           *runtimewatch.Service
+	domainwatch       *domainwatch.Service
 	certificateExpiry *proxy.CertificateExpiryObserver
 	webhooks          *webhooks.Service
 	metrics           *servers.MetricsSweeper
@@ -332,6 +334,8 @@ func (s *Server) routes() (http.Handler, error) {
 				nodes.SetRuntimeObserver(s.runtime)
 			}
 		}
+		s.domainwatch = s.domainwatchService()
+		domainwatch.Mount(api, s.resourceAuth(), s.domainwatch)
 
 		containerService := s.containerService()
 		containers.Mount(api, s.resourceAuth(), containerService)
@@ -812,6 +816,17 @@ func (s *Server) incidentService() *incidents.Service {
 	return incidents.NewService(cfg)
 }
 
+func (s *Server) domainwatchService() *domainwatch.Service {
+	if s.persistence == nil || s.incidents == nil {
+		return nil
+	}
+	return domainwatch.NewService(domainwatch.Config{
+		Store:     s.persistence,
+		Incidents: s.incidents,
+		Logger:    s.logger,
+	})
+}
+
 func (s *Server) monitoringService() *monitoring.Service {
 	if s.persistence == nil || s.incidents == nil {
 		return nil
@@ -1065,6 +1080,11 @@ func (s *Server) Run(ctx context.Context) error {
 		monitorCtx, cancelMonitor := context.WithCancel(ctx)
 		defer cancelMonitor()
 		go s.monitoring.Run(monitorCtx)
+	}
+	if s.domainwatch != nil {
+		watchCtx, cancelWatch := context.WithCancel(ctx)
+		defer cancelWatch()
+		go s.domainwatch.Run(watchCtx)
 	}
 	if panel, ok := s.proxy.(interface{ RunPanelCertificates(context.Context) }); ok {
 		panelCtx, cancelPanel := context.WithCancel(ctx)

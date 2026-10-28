@@ -188,6 +188,64 @@ async function mockApi(page: Page): Promise<void> {
       await route.fulfill(json(200, { domains }));
       return;
     }
+    const monitorMatch = path.match(
+      /^\/applications\/app-1\/domains\/([^/]+)\/monitoring$/,
+    );
+    if (method === "GET" && monitorMatch) {
+      const domain = domains.find((row) => row.id === monitorMatch[1]);
+      const points = Array.from({ length: 6 }, (_, index) => ({
+        at: new Date(Date.now() - (6 - index) * 600_000).toISOString(),
+        outcome: index === 3 ? "failed" : "healthy",
+        covered_seconds: 600,
+      }));
+      await route.fulfill(
+        json(200, {
+          website_check: {
+            domain_id: domain?.id ?? "dom-1",
+            application_id: "app-1",
+            url: `https://${domain?.domain ?? "shop.example.com"}/`,
+            probe_location: "control_plane",
+            enabled: true,
+            path: "/",
+            expected_min: 200,
+            expected_max: 399,
+            timeout_seconds: 5,
+            status: "healthy",
+            coverage: "fresh",
+            last_checked_at: new Date().toISOString(),
+            last_status: 200,
+            last_latency_ms: 42,
+            windows: [
+              {
+                key: "24h",
+                range_seconds: 86400,
+                observed_seconds: 80000,
+                healthy_seconds: 79900,
+                failed_seconds: 100,
+                coverage: 0.93,
+                availability: 0.998,
+                samples: 6,
+                average_latency_ms: 42,
+                insufficient_coverage: false,
+                points,
+              },
+              {
+                key: "7d",
+                range_seconds: 604800,
+                observed_seconds: 20000,
+                healthy_seconds: 19900,
+                failed_seconds: 100,
+                coverage: 0.03,
+                samples: 6,
+                insufficient_coverage: true,
+                points,
+              },
+            ],
+          },
+        }),
+      );
+      return;
+    }
     if (method === "GET" && path === "/applications/app-1/deployments") {
       await route.fulfill(json(200, { deployments: [] }));
       return;
@@ -238,6 +296,17 @@ async function boxOf(locator: Locator, label: string) {
   const box = await locator.boundingBox();
   expect(box, `${label} has a box`).not.toBeNull();
   return box!;
+}
+
+async function openWebsiteCard(page: Page): Promise<Locator> {
+  const card = page
+    .locator(".n-card")
+    .filter({
+      has: page.locator(".n-card-header__main", { hasText: "Website checks" }),
+    })
+    .first();
+  await expect(card).toBeVisible();
+  return card;
 }
 
 for (const width of [390, 480, 1280, 1366]) {
@@ -305,6 +374,19 @@ for (const width of [390, 480, 1280, 1366]) {
     );
   });
 
+  test(`website checks fit the page at ${width}px`, async ({ page }) => {
+    await page.setViewportSize({ width, height: 900 });
+    await mockApi(page);
+    await openDomainsTab(page);
+    const card = await openWebsiteCard(page);
+    await expect(card.locator(".check-row")).toHaveCount(3);
+    await expect(card.locator(".spark").first()).toBeVisible();
+    const fitsViewport = await page.evaluate(
+      () => document.documentElement.scrollWidth <= window.innerWidth + 1,
+    );
+    expect(fitsViewport, "page does not scroll horizontally").toBe(true);
+  });
+
   test(`rows expose their routing target at ${width}px`, async ({ page }) => {
     await page.setViewportSize({ width, height: 900 });
     await mockApi(page);
@@ -321,3 +403,20 @@ for (const width of [390, 480, 1280, 1366]) {
     ).toBeVisible();
   });
 }
+
+test("website check settings modal exposes every control", async ({ page }) => {
+  await page.setViewportSize({ width: 1280, height: 900 });
+  await mockApi(page);
+  await openDomainsTab(page);
+  const card = await openWebsiteCard(page);
+  await card.getByRole("button", { name: "Configure" }).first().click();
+  const modal = page.locator(".website-check-modal");
+  await expect(modal).toBeVisible();
+  await expect(modal.getByText("Lowest expected status")).toBeVisible();
+  await expect(modal.getByText("Highest expected status")).toBeVisible();
+  await expect(modal.getByText("Timeout (seconds)")).toBeVisible();
+  await expect(modal.getByText("Path")).toBeVisible();
+  const box = await modal.boundingBox();
+  const viewport = page.viewportSize()!;
+  expect(box!.height).toBeLessThanOrEqual(viewport.height);
+});

@@ -217,6 +217,44 @@ type DomainCertificate struct {
 	OwnerKind     *string            `json:"owner_kind"`
 }
 
+type DomainMonitorSetting struct {
+	DomainID       pgtype.UUID        `json:"domain_id"`
+	Enabled        bool               `json:"enabled"`
+	Path           string             `json:"path"`
+	ExpectedMin    int32              `json:"expected_min"`
+	ExpectedMax    int32              `json:"expected_max"`
+	TimeoutSeconds int32              `json:"timeout_seconds"`
+	UpdatedAt      pgtype.Timestamptz `json:"updated_at"`
+}
+
+type DomainMonitorState struct {
+	DomainID             pgtype.UUID        `json:"domain_id"`
+	ConsecutiveFailures  int32              `json:"consecutive_failures"`
+	ConsecutiveSuccesses int32              `json:"consecutive_successes"`
+	LastOutcome          string             `json:"last_outcome"`
+	LastReason           string             `json:"last_reason"`
+	LastStatus           *int32             `json:"last_status"`
+	LastLatencyMs        *int32             `json:"last_latency_ms"`
+	LastCheckedAt        pgtype.Timestamptz `json:"last_checked_at"`
+	LastCompletedAt      pgtype.Timestamptz `json:"last_completed_at"`
+	LastSuccessAt        pgtype.Timestamptz `json:"last_success_at"`
+	LastFailureAt        pgtype.Timestamptz `json:"last_failure_at"`
+	UpdatedAt            pgtype.Timestamptz `json:"updated_at"`
+}
+
+type DomainProbeResult struct {
+	ID            int64              `json:"id"`
+	DomainID      pgtype.UUID        `json:"domain_id"`
+	ApplicationID pgtype.UUID        `json:"application_id"`
+	ObservedAt    pgtype.Timestamptz `json:"observed_at"`
+	IntervalStart pgtype.Timestamptz `json:"interval_start"`
+	Outcome       string             `json:"outcome"`
+	Reason        string             `json:"reason"`
+	StatusCode    *int32             `json:"status_code"`
+	LatencyMs     *int32             `json:"latency_ms"`
+	ValidSeconds  int32              `json:"valid_seconds"`
+}
+
 type DomainRedirect struct {
 	ID            pgtype.UUID        `json:"id"`
 	ApplicationID pgtype.UUID        `json:"application_id"`

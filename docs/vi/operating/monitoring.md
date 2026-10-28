@@ -111,3 +111,64 @@ tới nhật ký, triển khai. Thông báo runtime là hai sự kiện riêng
 `runtime_failure` và `runtime_recovery`; đăng ký kênh hiện có không bị mở rộng.
 Xem [Sức khỏe runtime](/vi/using/runtime-health) để biết đầy đủ ngữ nghĩa và
 giới hạn.
+
+## Kiểm tra khả năng truy cập website
+
+Tên miền của ứng dụng cũng được kiểm tra từ control plane. Mỗi tên miền được
+quản lý và đang bật nhận một yêu cầu HTTP(S) mỗi 60 giây (có jitter) với thời
+gian chờ 5 giây, độc lập với trình duyệt đang mở. Mặc định dùng `GET /` và chấp
+nhận mã trạng thái 200 đến 399. Chỉ được coi là khỏe khi phản hồi cuối cùng nằm
+trong khoảng mong đợi — chỉ kết nối TCP là chưa đủ.
+
+Kiểm tra chỉ gắn với tên miền ứng dụng được quản lý. Yêu cầu luôn dùng giao thức,
+tên miền và đường dẫn đã cấu hình; Gotham không nhận host bên ngoài, cổng tùy
+chọn, thông tin đăng nhập, header tùy chỉnh hay quy tắc regex trên body. Chuyển
+hướng được theo tối đa ba lần và chỉ trong cùng host; chuyển hướng sang host
+khác làm lần thử thất bại, còn đích phân giải về loopback, mạng riêng, link-local
+hoặc metadata bị chặn. Với triển khai cục bộ, đích bị chặn được báo là độ phủ
+**không hỗ trợ**, không gợi ý bỏ qua lớp bảo vệ.
+
+### Xác nhận và phục hồi
+
+Ba lần thử thất bại liên tiếp đã hoàn tất sẽ mở một sự cố. Hai lần thử thành
+công liên tiếp sẽ phục hồi. Lỗi bộ thực thi hoặc cơ sở dữ liệu, thời gian tắt,
+thay đổi cấu hình và thời gian control plane ngừng hoạt động là khoảng **chưa
+rõ**: không bao giờ tính là lỗi của đích và cũng không tính là thời gian khỏe.
+Tên miền mới, thay đổi cấu hình và bản phát hành vừa hoàn tất chờ 120 giây
+trước lần thử theo lịch tiếp theo, nên việc triển khai hoặc chỉnh sửa không gây
+cảnh báo lúc khởi động.
+
+Lỗi vận chuyển, DNS và TLS, mã trạng thái phản hồi và độ trễ phản hồi thành công
+được lưu thành bằng chứng riêng. Lỗi xác thực chứng chỉ trên yêu cầu thật là bằng
+chứng khả năng truy cập; cảnh báo hết hạn chứng chỉ vẫn dùng quan sát chứng chỉ
+hiện có và không bị nhân đôi.
+
+### Lịch sử và độ phủ
+
+Kết quả phân loại và khoảng quan sát hợp lệ được giữ **30 ngày**. Trang chi tiết
+tên miền trả lịch sử 24 giờ và 7 ngày, độ trễ đạt được và khả dụng quan sát được
+bên cạnh độ phủ. Thời gian chưa rõ không nằm trong mẫu số uptime, lần thử lỗi
+không bị vẽ thành độ trễ 0, và dưới 90% độ phủ giao diện hiển thị thiếu độ phủ
+thay vì một phần trăm uptime riêng lẻ. Khoảng đọc và số điểm biểu đồ đều bị giới
+hạn.
+
+### Cấu hình kiểm tra
+
+Mở tab **Domains** của ứng dụng và dùng thẻ **Kiểm tra website**:
+
+- **Bật/tắt** tắt việc thử theo lịch cho tên miền đó. Tắt cũng đóng sự cố website
+  đang mở.
+- **Đường dẫn** là đường dẫn tương đối như `/` hoặc `/health`; query và fragment
+  bị từ chối.
+- **Mã trạng thái mong đợi** là khoảng bao gồm hai đầu, mặc định 200–399.
+- **Thời gian chờ** từ 1 đến 30 giây.
+- **Thử kiểm tra** chạy một lần ngay và không ghi lịch sử theo lịch cũng không mở
+  sự cố.
+
+Site cần đăng nhập thường trả 401 hoặc 403. Hãy chỉnh khoảng trạng thái mong đợi
+cho các site đó thay vì thêm thông tin đăng nhập.
+
+Kiểm tra chạy từ điểm nhìn của control plane, nên nó chứng minh điều người dùng
+truy cập control plane đó thấy. Đây không phải SLA toàn Internet và không bao gồm
+nhiều vùng, đội thử bên ngoài, giám sát TCP/UDP tùy ý hay trang trạng thái công
+khai.

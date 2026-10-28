@@ -93,6 +93,7 @@ type Server struct {
 	certificateExpiry *proxy.CertificateExpiryObserver
 	webhooks          *webhooks.Service
 	metrics           *servers.MetricsSweeper
+	resourceHistory   *servers.ResourceHistorySweeper
 	sessionSweeper    *auth.SessionSweeper
 	databasesRetainer *databases.RetentionSweeper
 	updates           updates.Service
@@ -176,6 +177,9 @@ func New(cfg *config.Config, logger *slog.Logger, authService AuthService, oauth
 		}
 		if s.metrics != nil {
 			s.metrics.Close()
+		}
+		if s.resourceHistory != nil {
+			s.resourceHistory.Close()
 		}
 		if s.sessionSweeper != nil {
 			s.sessionSweeper.Close()
@@ -284,6 +288,7 @@ func (s *Server) routes() (http.Handler, error) {
 
 		if s.servers != nil {
 			s.mountServerRoutes(api)
+			s.mountResourceHistoryRoutes(api)
 		}
 
 		if s.toolchain == nil {
@@ -301,6 +306,10 @@ func (s *Server) routes() (http.Handler, error) {
 		s.metrics = s.metricsRetention()
 		if s.metrics != nil {
 			s.metrics.Start()
+		}
+		s.resourceHistory = s.resourceHistoryRetention()
+		if s.resourceHistory != nil {
+			s.resourceHistory.Start()
 		}
 
 		s.sessionSweeper = s.sessionRetention()
@@ -864,6 +873,13 @@ func (s *Server) metricsRetention() *servers.MetricsSweeper {
 		return nil
 	}
 	return servers.NewMetricsSweeper(s.persistence, s.logger)
+}
+
+func (s *Server) resourceHistoryRetention() *servers.ResourceHistorySweeper {
+	if s.persistence == nil {
+		return nil
+	}
+	return servers.NewResourceHistorySweeper(s.persistence, s.logger)
 }
 
 func (s *Server) sessionRetention() *auth.SessionSweeper {

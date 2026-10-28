@@ -24,6 +24,7 @@ type fakeDockerClient struct {
 	details        *docker.ContainerDetails
 	detailsByID    map[string]docker.ContainerDetails
 	inspectErrByID map[string]error
+	statsByID      map[string]docker.ContainerStats
 	err            error
 	logs           []byte
 	logStreamErr   error
@@ -66,6 +67,15 @@ func (f *fakeDockerClient) InspectContainer(_ context.Context, id string) (docke
 		return *f.details, nil
 	}
 	return docker.ContainerDetails{}, nil
+}
+
+func (f *fakeDockerClient) ContainerStats(_ context.Context, id string) (docker.ContainerStats, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	if f.err != nil {
+		return docker.ContainerStats{}, f.err
+	}
+	return f.statsByID[id], nil
 }
 
 func (f *fakeDockerClient) ListContainers(_ context.Context, all bool, labels map[string]string, resolveDevices bool) ([]*agentv1.ContainerInfo, error) {

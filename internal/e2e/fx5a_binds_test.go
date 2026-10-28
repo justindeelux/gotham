@@ -23,6 +23,10 @@ func (fakeBindDocker) Version(context.Context) (string, error) { return "test", 
 func (fakeBindDocker) DockerRootDir(context.Context) (string, error) {
 	return "", nil
 }
+func (fakeBindDocker) ContainerStats(context.Context, string) (docker.ContainerStats, error) {
+	return docker.ContainerStats{}, nil
+}
+
 func (fakeBindDocker) InspectContainer(context.Context, string) (docker.ContainerDetails, error) {
 	return docker.ContainerDetails{}, nil
 }

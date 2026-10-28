@@ -497,6 +497,10 @@ func (s *ServerService) RecordObservation(ctx context.Context, nodeID string, re
 	if err != nil {
 		return nil, err
 	}
+	resourceSamples, err := validateContainerSamples(report.GetContainerSamples(), observation.ObservedAt, receivedAt)
+	if err != nil {
+		return nil, err
+	}
 	row, err := s.store.GetServerByNodeID(ctx, &nodeID)
 	if err != nil {
 		if errors.Is(err, pgx.ErrNoRows) {
@@ -565,6 +569,13 @@ func (s *ServerService) RecordObservation(ctx context.Context, nodeID string, re
 	if s.pressure != nil {
 		pressureCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), 5*time.Second)
 		s.pressure.RecordHostPressure(pressureCtx, uuid.UUID(row.ID.Bytes), row.Name, observation)
+		cancel()
+	}
+	// Resource samples are numeric evidence, so they are recorded with their own
+	// bounded context and never delay the observation acknowledgement.
+	if len(resourceSamples) > 0 {
+		sampleCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), 5*time.Second)
+		s.recordResourceSamples(sampleCtx, uuid.UUID(row.ID.Bytes), observation, resourceSamples)
 		cancel()
 	}
 	// Queue detection after the accepted generation is stored. Enqueueing is a

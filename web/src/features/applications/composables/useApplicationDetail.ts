@@ -523,6 +523,7 @@ export function useApplicationDetail() {
     "env",
     "terminal",
     "storage",
+    "metrics",
     "domains",
     "previews",
     "settings",

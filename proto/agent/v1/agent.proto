@@ -1028,6 +1028,32 @@ message ObservationReport {
   repeated FilesystemObservation filesystems = 7;
   ContainerInventory inventory = 8;
   string agent_version = 9;
+  // container_samples carries numeric resource samples for managed containers.
+  // The agent samples at most every 30 seconds, independently of the heartbeat
+  // and of this report's cadence. A missing metric is unknown, never zero.
+  repeated ContainerResourceSample container_samples = 10;
+}
+
+// ContainerResourceSample is one numeric resource sample for a managed
+// container. The control plane maps id back to the ownership labels in the
+// report's inventory; labels, paths and secrets are never carried here.
+message ContainerResourceSample {
+  string id = 1;
+  google.protobuf.Timestamp observed_at = 2;
+  // cpu_cores is CPU used in core units: 1.0 is one full core, so a container
+  // using half a core reports 0.5. WARMING means no previous counter sample.
+  Metric cpu_cores = 3;
+  // mem_working_set_bytes is usage minus reclaimable page cache.
+  Metric mem_working_set_bytes = 4;
+  // mem_limit_bytes is the configured container memory limit. mem_unlimited
+  // means the container has no configured limit; the limit is then unknown,
+  // not zero, and the control plane must not invent a percentage.
+  Metric mem_limit_bytes = 5;
+  bool mem_unlimited = 6;
+  Metric net_rx_bps = 7;
+  Metric net_tx_bps = 8;
+  Metric disk_read_bps = 9;
+  Metric disk_write_bps = 10;
 }
 
 // ObservationAck reports whether the control plane accepted a report.

@@ -11,6 +11,11 @@ import {
 } from "./chartModel";
 import type { ChartPoint, ChartSeries } from "./chartModel";
 
+export interface ChartMarker {
+  at: number;
+  label: string;
+}
+
 export type { ChartPoint, ChartSeries };
 
 const { t } = useI18n();
@@ -21,12 +26,14 @@ interface Props {
   formatValue?: (_value: number) => string;
   yMax?: number;
   height?: number;
+  markers?: ChartMarker[];
 }
 
 const props = withDefaults(defineProps<Props>(), {
   formatValue: (value: number) => String(value),
   yMax: undefined,
   height: 150,
+  markers: () => [],
 });
 
 const width = 600;
@@ -106,6 +113,15 @@ function latest(series: ChartSeries): string {
   return point ? props.formatValue(point.value) : "—";
 }
 
+const visibleMarkers = computed<ChartMarker[]>(() => {
+  if (!hasData.value) {
+    return [];
+  }
+  return props.markers.filter(
+    (marker) => marker.at >= xMin.value && marker.at <= xMax.value,
+  );
+});
+
 const ariaLabel = computed<string>(() => {
   const names = props.series.map((item) => item.name).join(", ");
   return t("common.chart.seriesOf", { names });
@@ -174,6 +190,20 @@ const ariaLabel = computed<string>(() => {
             r="2"
             :fill="item.color"
           />
+        </template>
+      </g>
+      <g v-if="visibleMarkers.length > 0" class="chart__markers">
+        <template v-for="marker in visibleMarkers" :key="`${marker.at}-${marker.label}`">
+          <line
+            :x1="x(marker.at)"
+            :x2="x(marker.at)"
+            :y1="padTop"
+            :y2="baseline"
+            data-chart-marker
+          />
+          <text :x="x(marker.at)" :y="padTop - 2" text-anchor="middle">
+            {{ marker.label }}
+          </text>
         </template>
       </g>
       <g class="chart__xlabels">
@@ -253,5 +283,18 @@ const ariaLabel = computed<string>(() => {
 .chart__area {
   opacity: 0.12;
   stroke: none;
+}
+
+.chart__markers line {
+  stroke: var(--meta);
+  stroke-width: 1;
+  stroke-dasharray: 3 3;
+  vector-effect: non-scaling-stroke;
+}
+
+.chart__markers text {
+  fill: var(--muted);
+  font-family: var(--font-mono);
+  font-size: var(--text-xs);
 }
 </style>

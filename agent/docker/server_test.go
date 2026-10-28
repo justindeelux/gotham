@@ -45,6 +45,10 @@ func (f *fakeDockerClient) InspectContainer(context.Context, string) (ContainerD
 	return ContainerDetails{}, f.err
 }
 
+func (f *fakeDockerClient) ContainerStats(context.Context, string) (ContainerStats, error) {
+	return ContainerStats{}, f.err
+}
+
 func (f *fakeDockerClient) ListContainers(_ context.Context, all bool, labels map[string]string, resolveDevices bool) ([]*agentv1.ContainerInfo, error) {
 	f.listAll = all
 	f.listLabels = labels

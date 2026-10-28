@@ -1842,3 +1842,84 @@ func boolParam(value bool) string {
 	}
 	return "0"
 }
+
+// ContainerStats is one raw Docker stats reading for a single container. The
+// values are monotonic counters; the agent derives rates from consecutive
+// readings so it can use the actual elapsed time and detect counter resets.
+type ContainerStats struct {
+	CPUTotal    uint64
+	SystemCPU   uint64
+	OnlineCPUs  uint32
+	MemoryUsage uint64
+	MemoryCache uint64
+	MemoryLimit uint64
+	NetRx       uint64
+	NetTx       uint64
+	DiskRead    uint64
+	DiskWrite   uint64
+}
+
+// ContainerStats reads one non-streaming stats sample. It deliberately does
+// not use Docker's precomputed rate fields: those depend on the engine's own
+// previous sample, while Gotham keeps a per-container baseline so a reconnect
+// starts a fresh baseline instead of reusing stale state.
+func (c *DockerClient) ContainerStats(ctx context.Context, id string) (ContainerStats, error) {
+	if strings.TrimSpace(id) == "" {
+		return ContainerStats{}, errors.New("docker: container id is required")
+	}
+	var out struct {
+		CPUStats struct {
+			CPUUsage struct {
+				TotalUsage uint64 `json:"total_usage"`
+			} `json:"cpu_usage"`
+			SystemCPUUsage uint64 `json:"system_cpu_usage"`
+			OnlineCPUs     uint32 `json:"online_cpus"`
+		} `json:"cpu_stats"`
+		MemoryStats struct {
+			Usage uint64            `json:"usage"`
+			Limit uint64            `json:"limit"`
+			Stats map[string]uint64 `json:"stats"`
+		} `json:"memory_stats"`
+		Networks map[string]struct {
+			RxBytes uint64 `json:"rx_bytes"`
+			TxBytes uint64 `json:"tx_bytes"`
+		} `json:"networks"`
+		BlkioStats struct {
+			IOServiceBytesRecursive []struct {
+				Operation string `json:"op"`
+				Value     uint64 `json:"value"`
+			} `json:"io_service_bytes_recursive"`
+		} `json:"blkio_stats"`
+	}
+	path := "/containers/" + url.PathEscape(id) + "/stats?stream=false&one-shot=true"
+	if err := c.doJSON(ctx, http.MethodGet, path, nil, &out); err != nil {
+		return ContainerStats{}, err
+	}
+	stats := ContainerStats{
+		CPUTotal:    out.CPUStats.CPUUsage.TotalUsage,
+		SystemCPU:   out.CPUStats.SystemCPUUsage,
+		OnlineCPUs:  out.CPUStats.OnlineCPUs,
+		MemoryUsage: out.MemoryStats.Usage,
+		MemoryLimit: out.MemoryStats.Limit,
+	}
+	// cgroup v2 reports inactive_file; cgroup v1 reports cache. Both are
+	// reclaimable page cache and are subtracted from the working set.
+	if cache, ok := out.MemoryStats.Stats["inactive_file"]; ok {
+		stats.MemoryCache = cache
+	} else if cache, ok := out.MemoryStats.Stats["cache"]; ok {
+		stats.MemoryCache = cache
+	}
+	for _, network := range out.Networks {
+		stats.NetRx += network.RxBytes
+		stats.NetTx += network.TxBytes
+	}
+	for _, entry := range out.BlkioStats.IOServiceBytesRecursive {
+		switch {
+		case strings.EqualFold(entry.Operation, "read"):
+			stats.DiskRead += entry.Value
+		case strings.EqualFold(entry.Operation, "write"):
+			stats.DiskWrite += entry.Value
+		}
+	}
+	return stats, nil
+}

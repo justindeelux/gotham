@@ -11,6 +11,7 @@ import { provide, ref, watch } from "vue";
 import DatabaseBackupsTab from "@/features/databases/components/DatabaseBackupsTab.vue";
 import DatabaseDetailHeader from "@/features/databases/components/DatabaseDetailHeader.vue";
 import DatabaseOverviewPanel from "@/features/databases/components/DatabaseOverviewPanel.vue";
+import ResourceHistoryPanel from "@/features/monitoring/components/ResourceHistoryPanel.vue";
 import RenameDatabaseDialog from "@/features/databases/components/RenameDatabaseDialog.vue";
 import RestoreConfirmDialog from "@/features/databases/components/RestoreConfirmDialog.vue";
 import ProjectBreadcrumb from "@/features/projects/components/ProjectBreadcrumb.vue";
@@ -80,6 +81,17 @@ watch(detail.dbId, () => {
       <NTabs v-model:value="activeTab" type="line" animated>
         <NTabPane name="overview" :tab="t('databases.detail.tabs.overview')">
           <DatabaseOverviewPanel />
+        </NTabPane>
+
+        <NTabPane
+          v-if="detail.database.value"
+          name="metrics"
+          :tab="t('monitoring.resourceHistory.tab')"
+        >
+          <ResourceHistoryPanel
+            resource-type="database"
+            :resource-id="detail.database.value.id"
+          />
         </NTabPane>
 
         <NTabPane name="backups" :tab="t('databases.detail.tabs.backups')">

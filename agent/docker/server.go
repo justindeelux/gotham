@@ -20,6 +20,7 @@ type Client interface {
 	Version(ctx context.Context) (string, error)
 	DockerRootDir(ctx context.Context) (string, error)
 	InspectContainer(ctx context.Context, id string) (ContainerDetails, error)
+	ContainerStats(ctx context.Context, id string) (ContainerStats, error)
 	ListContainers(ctx context.Context, all bool, labels map[string]string, resolveDevices bool) ([]*agentv1.ContainerInfo, error)
 	Start(ctx context.Context, id string) error
 	Stop(ctx context.Context, id string) error

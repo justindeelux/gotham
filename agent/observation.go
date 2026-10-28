@@ -22,6 +22,9 @@ const (
 	inspectConcurrency         = 4
 	maxInventoryContainers     = 256
 	maxObservedFilesystems     = 32
+	containerSampleInterval    = 30 * time.Second
+	containerSampleConcurrency = 4
+	maxContainerSamples        = 256
 )
 
 func WithObservationInterval(interval time.Duration) Option {
@@ -102,6 +105,7 @@ func (a *Agent) collectObservation(ctx context.Context) *agentv1.ObservationRepo
 	} else {
 		observedAt = observedAt.UTC()
 	}
+	inventory := a.collectInventory(ctx)
 	return &agentv1.ObservationReport{
 		NodeId:             a.cfg.NodeID,
 		SessionId:          a.observationSession,
@@ -110,9 +114,107 @@ func (a *Agent) collectObservation(ctx context.Context) *agentv1.ObservationRepo
 		SamplingIntervalMs: a.observationInterval.Milliseconds(),
 		Host:               hostObservation(usage),
 		Filesystems:        a.observeFilesystems(ctx),
-		Inventory:          a.collectInventory(ctx),
+		Inventory:          inventory,
+		ContainerSamples:   a.collectContainerSamples(ctx, inventory),
 		AgentVersion:       a.Version(),
 	}
+}
+
+// collectContainerSamples samples managed running containers at most every 30
+// seconds. It runs on the observation stream, so a slow stats call never blocks
+// the heartbeat stream. Concurrency and the per-call timeout are bounded.
+func (a *Agent) collectContainerSamples(ctx context.Context, inventory *agentv1.ContainerInventory) []*agentv1.ContainerResourceSample {
+	now := time.Now()
+	if a.containerSamples == nil || a.docker == nil || inventory == nil {
+		return nil
+	}
+	ids := make(map[string]struct{}, len(inventory.GetContainers()))
+	candidates := make([]string, 0, len(inventory.GetContainers()))
+	for _, container := range inventory.GetContainers() {
+		ids[container.GetId()] = struct{}{}
+		if container.GetState() == "running" {
+			candidates = append(candidates, container.GetId())
+		}
+	}
+	a.containerSamples.Retain(ids)
+	if !a.containerSampleAt.IsZero() && now.Sub(a.containerSampleAt) < containerSampleInterval {
+		return nil
+	}
+	a.containerSampleAt = now
+
+	sort.Strings(candidates)
+	if len(candidates) > maxContainerSamples {
+		candidates = candidates[:maxContainerSamples]
+	}
+	type result struct {
+		sample *agentv1.ContainerResourceSample
+	}
+	results := make([]result, len(candidates))
+	semaphore := make(chan struct{}, containerSampleConcurrency)
+	var wait sync.WaitGroup
+	for index, id := range candidates {
+		wait.Add(1)
+		go func(index int, id string) {
+			defer wait.Done()
+			semaphore <- struct{}{}
+			defer func() { <-semaphore }()
+			callCtx, cancel := context.WithTimeout(ctx, dockerCallTimeout)
+			defer cancel()
+			counters, err := a.docker.ContainerStats(callCtx, id)
+			if err != nil {
+				a.log.Debug("agent: container stats unavailable", "container_id", id, "error", err)
+				return
+			}
+			sampleAt := time.Now().UTC()
+			sample := a.containerSamples.Observe(id, stats.ContainerCounters{
+				CPUTotal:    counters.CPUTotal,
+				SystemCPU:   counters.SystemCPU,
+				OnlineCPUs:  counters.OnlineCPUs,
+				MemoryUsage: counters.MemoryUsage,
+				MemoryCache: counters.MemoryCache,
+				MemoryLimit: counters.MemoryLimit,
+				NetRx:       counters.NetRx,
+				NetTx:       counters.NetTx,
+				DiskRead:    counters.DiskRead,
+				DiskWrite:   counters.DiskWrite,
+			}, sampleAt)
+			results[index] = result{sample: containerResourceSampleProto(id, sampleAt, sample)}
+		}(index, id)
+	}
+	wait.Wait()
+
+	samples := make([]*agentv1.ContainerResourceSample, 0, len(candidates))
+	for _, item := range results {
+		if item.sample != nil {
+			samples = append(samples, item.sample)
+		}
+	}
+	return samples
+}
+
+func containerResourceSampleProto(id string, at time.Time, sample stats.ContainerSample) *agentv1.ContainerResourceSample {
+	out := &agentv1.ContainerResourceSample{
+		Id:                 id,
+		ObservedAt:         timestamppb.New(at),
+		CpuCores:           containerMetric(sample.CPUCores),
+		MemWorkingSetBytes: &agentv1.Metric{Status: agentv1.MetricStatus_METRIC_STATUS_OK, Value: float64(sample.MemWorkingSetBytes)},
+		MemUnlimited:       sample.MemUnlimited,
+		NetRxBps:           containerMetric(sample.NetRxBps),
+		NetTxBps:           containerMetric(sample.NetTxBps),
+		DiskReadBps:        containerMetric(sample.DiskReadBps),
+		DiskWriteBps:       containerMetric(sample.DiskWriteBps),
+	}
+	if sample.MemLimitBytes != nil {
+		out.MemLimitBytes = &agentv1.Metric{Status: agentv1.MetricStatus_METRIC_STATUS_OK, Value: float64(*sample.MemLimitBytes)}
+	}
+	return out
+}
+
+func containerMetric(value *float64) *agentv1.Metric {
+	if value == nil {
+		return &agentv1.Metric{Status: agentv1.MetricStatus_METRIC_STATUS_WARMING, Reason: "warming"}
+	}
+	return &agentv1.Metric{Status: agentv1.MetricStatus_METRIC_STATUS_OK, Value: *value}
 }
 
 func (a *Agent) nextObservationSequence() uint64 {

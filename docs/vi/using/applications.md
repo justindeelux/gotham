@@ -218,3 +218,33 @@ Dự án không được cấp sẽ bị ẩn.
 
 Chủ sở hữu quản lý node và các bề mặt máy chủ quanh ứng dụng. Xem
 [Thành viên và quyền truy cập](/vi/using/members-access).
+
+## Lịch sử tài nguyên
+
+Tab **Số liệu** vẽ CPU, bộ nhớ, mạng và I/O đĩa cho các container được quản lý của
+ứng dụng trong các khoảng 1 giờ, 24 giờ, 7 ngày và 30 ngày. Agent trên node lấy mẫu
+các container đang chạy khoảng mỗi 30 giây; control plane không bao giờ tự tạo một
+điểm cho khoảng thời gian không nhận được mẫu.
+
+- CPU tính theo lõi: `1.0` là một lõi đầy đủ, `0.5` là nửa lõi.
+- Bộ nhớ là working set: mức dùng của container trừ bộ nhớ đệm trang có thể thu hồi.
+  Khi không có giới hạn bộ nhớ, biểu đồ hiển thị byte và **không giới hạn**, không
+  bao giờ hiển thị phần trăm của một giới hạn tự đặt ra. Khi có giới hạn, giới hạn
+  được hiển thị riêng.
+- Mạng RX/TX và đọc/ghi khối là byte mỗi giây, tính từ chênh lệch bộ đếm đơn điệu
+  theo thời gian thực tế. Mẫu đầu tiên, bộ đếm đặt lại, container khởi động lại hoặc
+  khoảng thời gian không dương là chỗ trống, không phải tốc độ âm hay tăng vọt.
+- Nhãn **một phần** nghĩa là ít nhất một bản sao của dịch vụ không được lấy mẫu
+  trong khoảng đó. Biểu đồ để lộ khoảng trống bao phủ này.
+- Mốc triển khai phân tách các thế hệ container. Một lần triển khai lại giữ lịch sử
+  của ứng dụng và bắt đầu một đoạn mới thay vì trộn container đã thay thế vào dịch
+  vụ hiện tại.
+- Mẫu thô giữ 24 giờ, tổng hợp 1 phút giữ 7 ngày và tổng hợp 1 giờ giữ 30 ngày.
+  Mỗi tầng hết hạn độc lập.
+- Mở bộ chọn **Dịch vụ** để tách một dịch vụ Compose khi ứng dụng có nhiều dịch vụ.
+
+API là `GET /api/v1/applications/{id}/metrics?range=1h|24h|7d|30d&service=`. Nếu
+agent trên node quá cũ để gửi mẫu tài nguyên container, tab báo chưa có lịch sử thay
+vì vẽ một biểu đồ trống trông khỏe mạnh. Thành viên dự án chỉ thấy lịch sử của ứng
+dụng trong dự án được cấp; container không liên quan, đường dẫn máy chủ thô và chi
+tiết máy chủ không bao giờ được đưa vào.

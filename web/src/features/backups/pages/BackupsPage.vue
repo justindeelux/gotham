@@ -190,9 +190,27 @@ function restorePrompt(backup: BackupRun): string {
                     >
                       {{ t("backups.runs.cleanupPending") }}
                     </NTag>
-                    <NTag v-else :type="statusTagType(backup.status)" size="small">
-                      {{ runDisplay("runStatus", backup.status) }}
-                    </NTag>
+                    <NSpace v-else :size="6" align="center">
+                      <NTag :type="statusTagType(backup.status)" size="small">
+                        {{ runDisplay("runStatus", backup.status) }}
+                      </NTag>
+                      <NTag
+                        v-if="backup.status === 'completed' && backup.verified"
+                        size="small"
+                        type="success"
+                        :bordered="false"
+                      >
+                        {{ t("backups.runs.verified") }}
+                      </NTag>
+                      <NTag
+                        v-else-if="backup.status === 'completed'"
+                        size="small"
+                        type="warning"
+                        :bordered="false"
+                      >
+                        {{ t("backups.runs.notVerified") }}
+                      </NTag>
+                    </NSpace>
                     <NText
                       v-if="backup.cleanup_pending && backup.cleanup_error"
                       depth="3"

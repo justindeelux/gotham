@@ -47,9 +47,12 @@ type backupResponse struct {
 	// PauseDuringBackup is the choice the run was started with. False is
 	// meaningful only for applications and services: it labels the run as
 	// possibly inconsistent.
-	PauseDuringBackup bool       `json:"pause_during_backup"`
-	CreatedAt         time.Time  `json:"created_at"`
-	FinishedAt        *time.Time `json:"finished_at,omitempty"`
+	PauseDuringBackup bool `json:"pause_during_backup"`
+	// Verified means the run recorded a checksum, so a restore checks the
+	// artifact before touching the resource. Older rows restore unverified.
+	Verified   bool       `json:"verified"`
+	CreatedAt  time.Time  `json:"created_at"`
+	FinishedAt *time.Time `json:"finished_at,omitempty"`
 }
 
 type backupEnvelope struct {
@@ -652,6 +655,8 @@ func (h *backupHandler) writeError(w http.ResponseWriter, err error) {
 		writeJSON(w, http.StatusConflict, errorBody{Message: err.Error()})
 	case errors.Is(err, ErrBackupNotCompleted):
 		writeJSON(w, http.StatusConflict, errorBody{Message: err.Error()})
+	case errors.Is(err, ErrBackupDamaged):
+		writeJSON(w, http.StatusConflict, errorBody{Message: err.Error()})
 	case errors.Is(err, ErrTargetStranded):
 		writeJSON(w, http.StatusConflict, errorBody{Message: err.Error()})
 	case errors.Is(err, ErrBuiltinProvider):
@@ -720,6 +725,7 @@ func newBackupResponse(backup Backup) backupResponse {
 		CleanupError:      backup.CleanupError,
 		ContainerID:       backup.ContainerID,
 		PauseDuringBackup: backup.PauseDuringBackup,
+		Verified:          backup.ChecksumSHA256 != "",
 		CreatedAt:         backup.CreatedAt,
 	}
 	if backup.ScheduleID != uuid.Nil {

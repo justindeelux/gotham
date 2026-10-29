@@ -106,6 +106,22 @@ const backups = inject(resourceBackupsKey)!;
               <NTag size="small" :bordered="false">
                 {{ runDisplay("runType", backup.type) }}
               </NTag>
+              <NTag
+                v-if="backup.status === 'completed' && backup.verified"
+                size="small"
+                type="success"
+                :bordered="false"
+              >
+                {{ t("backups.runs.verified") }}
+              </NTag>
+              <NTag
+                v-else-if="backup.status === 'completed'"
+                size="small"
+                type="warning"
+                :bordered="false"
+              >
+                {{ t("backups.runs.notVerified") }}
+              </NTag>
               <NTag size="small" :bordered="false">
                 {{
                   backups.providerLabel(

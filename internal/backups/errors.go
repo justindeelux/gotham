@@ -18,4 +18,5 @@ var (
 	ErrProviderHasBackups  = errors.New("backups: storage provider still holds backups")
 	ErrInsufficientSpace   = errors.New("backups: not enough free space on the backup disk")
 	ErrCleanupFailed       = errors.New("backups: could not delete the backup artifact")
+	ErrBackupDamaged       = errors.New("backups: this backup is damaged")
 )

@@ -15,7 +15,8 @@ tất cả tài nguyên nằm ở đây.
 Danh sách hiển thị một dòng cho mỗi lần chạy:
 
 - **Tài nguyên** — ứng dụng, cơ sở dữ liệu hoặc dịch vụ, kèm liên kết tới trang.
-- **Trạng thái** — đang chạy, hoàn tất hoặc thất bại.
+- **Trạng thái** — đang chạy, hoàn tất hoặc thất bại, kèm **Đã xác thực** khi
+  lần chạy đã ghi mã kiểm tra cho tệp (lần chạy cũ hiện **Chưa xác thực**).
 - **Dung lượng** — kích thước bản sao, hoặc `đang tính` khi còn chạy.
 - **Lưu trữ** — nơi lưu trữ đã nhận bản sao.
 - **Bắt đầu** và **Thời lượng** — mốc thời gian của lần chạy.
@@ -47,6 +48,19 @@ Khôi phục ghi đè dữ liệu hiện tại của tài nguyên. Không thể 
 sao lưu mới trước nếu dữ liệu đang chạy vẫn còn quan trọng. Lịch sử khôi phục
 nằm ở tab tài nguyên để một lần khôi phục thất bại vẫn hiện rõ nguyên nhân.
 
+Trước khi khôi phục chạm vào tài nguyên, bảng điều khiển đọc lại tệp sao lưu từ
+nơi lưu trữ và so mã SHA-256 với giá trị đã ghi khi tạo bản sao. Chỉ tệp khớp
+mới được áp dụng. Sai lệch nghĩa là bản sao bị hỏng — tải lên bị cắt, quy tắc
+vòng đời bucket hoặc đĩa hỏng — và quá trình khôi phục dừng với thông báo **bản
+sao lưu này bị hỏng** trong khi tài nguyên vẫn chạy. Bản sao dùng để xác thực nằm
+trong thư mục sao lưu cục bộ, được xóa trên mọi nhánh thoát, và vẫn áp dụng kiểm
+tra dung lượng trống.
+
+Bản sao lưu tạo trước khi có mã kiểm tra không có giá trị đã lưu. Chúng khôi
+phục như trước và hộp thoại khôi phục ghi rõ rằng sẽ không xác thực; danh sách
+lần chạy gắn nhãn **Chưa xác thực**. Hãy tạo bản sao mới nếu dữ liệu còn quan
+trọng.
+
 ## Tab Lưu trữ
 
 Tab **Lưu trữ** chỉ chủ sở hữu thấy. Đây là danh mục cấp chủ sở hữu: cấu hình
@@ -59,8 +73,10 @@ hình.
 Lưu trữ tương thích S3 hoạt động với AWS S3, Cloudflare R2, MinIO và các dịch
 vụ tương tự. Một nơi lưu trữ gồm tên, endpoint, vùng, bucket, tiền tố tùy chọn,
 access key và secret key. Khóa được niêm phong trên máy chủ và không bao giờ
-hiện lại; để trống khi sửa sẽ giữ khóa đã lưu. **Kiểm tra** thử bucket và thông
-tin đăng nhập, hoặc quyền ghi thư mục cục bộ, rồi hiện kết quả ngay tại chỗ.
+hiện lại; để trống khi sửa sẽ giữ khóa đã lưu. **Kiểm tra** ghi, đọc lại và xóa
+một tệp thử nhỏ, nên nơi lưu trữ chỉ đọc hoặc chặn xóa được phát hiện trước lần
+sao lưu thật đầu tiên; với thư mục cục bộ cũng chứng minh đủ vòng ghi-đọc-xóa.
+Kết quả hiện ngay tại chỗ.
 
 Xóa nơi lưu trữ không xóa các bản sao cũ, nhưng không thể đọc lại từ đó, nên
 khôi phục từ các lần chạy đó sẽ thất bại và các lần chạy vẫn hiện là **Nơi lưu

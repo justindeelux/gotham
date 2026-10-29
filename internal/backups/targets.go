@@ -4,7 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
-	"os"
+	"io"
 	"strings"
 
 	"github.com/google/uuid"
@@ -172,31 +172,58 @@ func (m *BackupManager) TestProvider(ctx context.Context, userID, providerID uui
 	if err != nil {
 		return TargetCheck{OK: false, Message: boundedDiag(err.Error())}, nil
 	}
-	s3, ok := store.(*s3Store)
-	if !ok {
-		if err := writableDir(m.localDir); err != nil {
+	if s3, ok := store.(*s3Store); ok {
+		exists, err := s3.bucketExists(ctx)
+		if err != nil {
 			return TargetCheck{OK: false, Message: boundedDiag(err.Error())}, nil
 		}
-		return TargetCheck{OK: true, Message: "local backup directory is ready"}, nil
+		if !exists {
+			return TargetCheck{OK: false, Message: "bucket " + target.Bucket + " does not exist or is not accessible"}, nil
+		}
 	}
-	exists, err := s3.bucketExists(ctx)
-	if err != nil {
+	// A read-only or lifecycle-restricted destination must be reported now,
+	// not after the first real backup has already failed.
+	if err := probeStore(ctx, store); err != nil {
 		return TargetCheck{OK: false, Message: boundedDiag(err.Error())}, nil
 	}
-	if !exists {
-		return TargetCheck{OK: false, Message: "bucket " + target.Bucket + " does not exist or is not accessible"}, nil
+	if store.Kind() == string(TargetS3) {
+		return TargetCheck{OK: true, Message: "connected to " + target.Bucket}, nil
 	}
-	return TargetCheck{OK: true, Message: "connected to " + target.Bucket}, nil
+	return TargetCheck{OK: true, Message: "local backup directory is ready"}, nil
 }
 
-func writableDir(dir string) error {
-	file, err := os.CreateTemp(dir, ".gotham-write-check-*")
+const probePayload = "gotham-backup-probe"
+
+// probeStore writes, reads back and deletes a small object so the check proves
+// the provider can hold and return a backup, not just accept a connection.
+func probeStore(ctx context.Context, store ObjectStore) error {
+	key := ".gotham-probe-" + uuid.NewString()
+	location, err := store.Put(ctx, key, strings.NewReader(probePayload), int64(len(probePayload)))
 	if err != nil {
-		return fmt.Errorf("%w: backup directory is not writable: %v", ErrValidation, err)
+		return fmt.Errorf("%w: the provider is not writable: %v", ErrValidation, err)
 	}
-	name := file.Name()
-	_ = file.Close()
-	_ = os.Remove(name)
+	readErr := func() error {
+		reader, err := store.Get(ctx, location)
+		if err != nil {
+			return err
+		}
+		defer func() { _ = reader.Close() }()
+		got, err := io.ReadAll(io.LimitReader(reader, int64(len(probePayload))+1))
+		if err != nil {
+			return err
+		}
+		if string(got) != probePayload {
+			return errors.New("the probe object came back different")
+		}
+		return nil
+	}()
+	deleteErr := store.Delete(ctx, location)
+	if readErr != nil {
+		return fmt.Errorf("%w: the provider cannot read a backup back: %v", ErrValidation, readErr)
+	}
+	if deleteErr != nil {
+		return fmt.Errorf("%w: the provider does not allow deleting a backup: %v", ErrValidation, deleteErr)
+	}
 	return nil
 }
 

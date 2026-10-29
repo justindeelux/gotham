@@ -18,6 +18,9 @@ type ObjectStore interface {
 	Kind() string
 	Put(ctx context.Context, key string, data io.Reader, size int64) (string, error)
 	Get(ctx context.Context, location string) (io.ReadCloser, error)
+	// Stat reports the stored object size so an upload can be verified after
+	// the fact (a lifecycle rule or a partial write shows up as a mismatch).
+	Stat(ctx context.Context, location string) (int64, error)
 	Delete(ctx context.Context, location string) error
 }
 
@@ -149,6 +152,21 @@ func (s *localStore) Delete(_ context.Context, location string) error {
 	return nil
 }
 
+func (s *localStore) Stat(_ context.Context, location string) (int64, error) {
+	file, err := s.resolve(location)
+	if err != nil {
+		return 0, err
+	}
+	info, err := os.Stat(file)
+	if err != nil {
+		if errors.Is(err, os.ErrNotExist) {
+			return 0, fmt.Errorf("%w: backup file is missing on disk", ErrNotFound)
+		}
+		return 0, fmt.Errorf("backups: stat backup file: %w", err)
+	}
+	return info.Size(), nil
+}
+
 func (s *localStore) resolve(location string) (string, error) {
 	target := strings.TrimPrefix(location, locationFilePrefix)
 	if !filepath.IsAbs(target) {
@@ -250,6 +268,21 @@ func (s *s3Store) Delete(ctx context.Context, location string) error {
 		return fmt.Errorf("backups: delete backup from s3: %w", err)
 	}
 	return nil
+}
+
+func (s *s3Store) Stat(ctx context.Context, location string) (int64, error) {
+	object, err := s.objectFromLocation(location)
+	if err != nil {
+		return 0, err
+	}
+	info, err := s.client.StatObject(ctx, s.bucket, object, minio.StatObjectOptions{})
+	if err != nil {
+		if isS3NotFound(err) {
+			return 0, fmt.Errorf("%w: backup object is missing in %s", ErrNotFound, s.bucket)
+		}
+		return 0, fmt.Errorf("backups: stat backup in s3: %w", err)
+	}
+	return info.Size, nil
 }
 
 func (s *s3Store) bucketExists(ctx context.Context) (bool, error) {

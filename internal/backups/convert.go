@@ -27,6 +27,20 @@ func timeFromPG(v pgtype.Timestamptz) time.Time {
 	return v.Time
 }
 
+func stringFromPG(v *string) string {
+	if v == nil {
+		return ""
+	}
+	return *v
+}
+
+func optionalString(v string) *string {
+	if v == "" {
+		return nil
+	}
+	return &v
+}
+
 func isUniqueViolation(err error) bool {
 	var pgErr *pgconn.PgError
 	return errors.As(err, &pgErr) && pgErr.Code == "23505"

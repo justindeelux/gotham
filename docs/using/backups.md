@@ -15,7 +15,8 @@ here.
 The list shows one row per run:
 
 - **Resource** — the application, database or service and a link to its page.
-- **Status** — running, completed or failed.
+- **Status** — running, completed or failed, plus **Verified** when the run
+  recorded a checksum of its artifact (older runs show **Not verified**).
 - **Size** — the stored artifact size, or `size pending` while the run works.
 - **Storage** — the provider that received the artifact.
 - **Started** and **Duration** — timestamps of the run.
@@ -47,6 +48,18 @@ A restore overwrites the current data of the resource. It cannot be undone, so
 take a fresh backup first if the live data still matters. Restore history stays
 on the resource tab so a failed restore is visible with its cause.
 
+Before a restore touches the resource, the control plane reads the artifact back
+from its provider and checks its SHA-256 checksum against the value recorded
+when the backup was written. Only a matching artifact is applied. A mismatch
+means the backup is damaged — a truncated upload, a bucket lifecycle rule or a
+corrupted disk — and the restore stops with **this backup is damaged** while the
+resource keeps running. The verification copy lives in the local backup
+directory, is removed on every exit path, and the usual free-space guard applies.
+
+Backups written before checksums existed have no stored value. They restore as
+before and the restore dialog says that no verification will run; the run list
+labels them **Not verified**. Take a new backup if the data matters.
+
 ## Storage tab
 
 The **Storage** tab is visible to the owner only. It is an owner-level
@@ -60,9 +73,10 @@ back up with no setup.
 S3-compatible storage works with AWS S3, Cloudflare R2, MinIO and similar
 services. A provider has a name, endpoint, region, bucket, optional key prefix,
 access key and secret key. The keys are sealed on the server and never shown
-back; leaving them blank on an edit keeps the stored ones. **Test** checks the
-bucket and credentials, or the local directory's writability, and shows the
-result inline.
+back; leaving them blank on an edit keeps the stored ones. **Test** writes,
+reads back and deletes a small probe object, so a destination that is read-only
+or blocks deletes is reported before the first real backup; for the local
+directory it proves the same round trip. The result is shown inline.
 
 Deleting a provider does not delete past backups, but they can no longer be read
 back from it, so restores from those runs fail and the runs stay listed as

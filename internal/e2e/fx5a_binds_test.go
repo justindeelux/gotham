@@ -2,6 +2,7 @@ package e2e
 
 import (
 	"context"
+	"io"
 	"net"
 	"testing"
 
@@ -53,6 +54,10 @@ func (fakeBindDocker) Logs(context.Context, string, bool, int64) (<-chan agent.L
 	ch := make(chan agent.LogMessage)
 	close(ch)
 	return ch, nil
+}
+func (fakeBindDocker) VolumeExists(context.Context, string) error { return nil }
+func (fakeBindDocker) ImportArchive(context.Context, string, string, io.Reader) error {
+	return nil
 }
 
 func TestAgentAcceptsTraefikProxyVolumes(t *testing.T) {

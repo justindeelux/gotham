@@ -3,7 +3,9 @@ package docker
 import (
 	"context"
 	"errors"
+	"io"
 	"log/slog"
+	"path/filepath"
 	"regexp"
 	"strings"
 
@@ -31,14 +33,17 @@ type Client interface {
 	CreateContainer(ctx context.Context, req *agentv1.CreateContainerRequest) (string, error)
 	RunImage(ctx context.Context, req *agentv1.CreateContainerRequest) (string, error)
 	Logs(ctx context.Context, id string, follow bool, tail int64) (<-chan LogMessage, error)
+	VolumeExists(ctx context.Context, name string) error
+	ImportArchive(ctx context.Context, containerID, destination string, body io.Reader) error
 }
 
 type DockerServer struct {
 	agentv1.UnimplementedDockerServiceServer
-	docker          Client
-	log             *slog.Logger
-	volumeRoot      string
-	proxyVolumeRoot string
+	docker             Client
+	log                *slog.Logger
+	volumeRoot         string
+	proxyVolumeRoot    string
+	archiveDeniedPaths []string
 }
 
 type DockerServerOption func(*DockerServer)
@@ -59,15 +64,53 @@ func WithProxyVolumeRoot(root string) DockerServerOption {
 	}
 }
 
+// WithArchiveDeniedPaths adds node-local paths that a volume archive may never
+// read or restore. Denial covers the path and everything below it.
+func WithArchiveDeniedPaths(paths ...string) DockerServerOption {
+	return func(s *DockerServer) {
+		for _, path := range paths {
+			cleaned := archiveDeniedPath(path)
+			if cleaned == "" {
+				continue
+			}
+			s.archiveDeniedPaths = append(s.archiveDeniedPaths, cleaned)
+		}
+	}
+}
+
+var defaultArchiveDeniedPaths = []string{
+	"/", "/boot", "/dev", "/etc", "/proc", "/run", "/sys",
+	"/var/run/docker.sock", "/run/docker.sock",
+}
+
+func archiveDeniedPath(raw string) string {
+	cleaned := strings.TrimSpace(raw)
+	cleaned = strings.TrimPrefix(cleaned, "unix://")
+	if cleaned == "" {
+		return ""
+	}
+	cleaned = filepath.Clean(cleaned)
+	if !filepath.IsAbs(cleaned) {
+		return ""
+	}
+	// Compare resolved paths: a denied root reached through a symlink must
+	// still be denied.
+	if resolved, err := filepath.EvalSymlinks(cleaned); err == nil {
+		return resolved
+	}
+	return cleaned
+}
+
 func NewDockerServer(docker Client, log *slog.Logger, options ...DockerServerOption) *DockerServer {
 	if log == nil {
 		log = slog.Default()
 	}
 	server := &DockerServer{
-		docker:          docker,
-		log:             log,
-		volumeRoot:      DefaultManagedVolumeRoot,
-		proxyVolumeRoot: proxy.DefaultRoot,
+		docker:             docker,
+		log:                log,
+		volumeRoot:         DefaultManagedVolumeRoot,
+		proxyVolumeRoot:    proxy.DefaultRoot,
+		archiveDeniedPaths: append([]string(nil), defaultArchiveDeniedPaths...),
 	}
 	for _, option := range options {
 		option(server)
@@ -232,7 +275,7 @@ func dockerError(action string, err error) error {
 	switch {
 	case errors.Is(err, ErrInvalidPortMapping), errors.Is(err, ErrInvalidVolumeBind):
 		return status.Errorf(codes.InvalidArgument, "%s: %v", action, err)
-	case errors.Is(err, ErrDockerNotFound):
+	case errors.Is(err, ErrDockerNotFound), errors.Is(err, ErrDockerVolumeNotFound):
 		return status.Errorf(codes.NotFound, "%s: %v", action, err)
 	case errors.Is(err, ErrDockerImageNotFound):
 		return status.Errorf(codes.InvalidArgument, "%s: %v", action, err)

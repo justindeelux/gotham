@@ -190,3 +190,14 @@ func (f *fakeDockerClient) Logs(context.Context, string, bool, int64) (<-chan Lo
 	close(chunks)
 	return chunks, nil
 }
+
+func (f *fakeDockerClient) VolumeExists(context.Context, string) error {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	return f.err
+}
+
+func (f *fakeDockerClient) ImportArchive(_ context.Context, _ string, _ string, body io.Reader) error {
+	_, err := io.Copy(io.Discard, body)
+	return err
+}

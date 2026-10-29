@@ -24,6 +24,7 @@ type fakeDockerClient struct {
 	version            string
 	err                error
 	logs               []byte
+	logsStderr         []byte
 	logStreamErr       error
 	started            []string
 	stopped            []string
@@ -31,6 +32,10 @@ type fakeDockerClient struct {
 	removed            []string
 	removedVolumes     []string
 	createdID          string
+	imports            []string
+	creates            int
+	lastCreate         *agentv1.CreateContainerRequest
+	details            ContainerDetails
 }
 
 func (f *fakeDockerClient) Version(context.Context) (string, error) {
@@ -42,7 +47,14 @@ func (f *fakeDockerClient) DockerRootDir(context.Context) (string, error) {
 }
 
 func (f *fakeDockerClient) InspectContainer(context.Context, string) (ContainerDetails, error) {
-	return ContainerDetails{}, f.err
+	if f.err != nil {
+		return ContainerDetails{}, f.err
+	}
+	details := f.details
+	if details.State == "" {
+		details.State = "exited"
+	}
+	return details, nil
 }
 
 func (f *fakeDockerClient) ContainerStats(context.Context, string) (ContainerStats, error) {
@@ -106,10 +118,12 @@ func (f *fakeDockerClient) PullImage(context.Context, string, string, string) (s
 	return "sha256:testdigest", nil
 }
 
-func (f *fakeDockerClient) CreateContainer(context.Context, *agentv1.CreateContainerRequest) (string, error) {
+func (f *fakeDockerClient) CreateContainer(_ context.Context, req *agentv1.CreateContainerRequest) (string, error) {
 	if f.err != nil {
 		return "", f.err
 	}
+	f.creates++
+	f.lastCreate = req
 	if f.createdID != "" {
 		return f.createdID, nil
 	}
@@ -132,15 +146,31 @@ func (f *fakeDockerClient) Logs(context.Context, string, bool, int64) (<-chan Lo
 	if f.err != nil {
 		return nil, f.err
 	}
-	chunks := make(chan LogMessage, 2)
+	chunks := make(chan LogMessage, 3)
 	if len(f.logs) > 0 {
 		chunks <- LogMessage{Data: f.logs}
+	}
+	if len(f.logsStderr) > 0 {
+		chunks <- LogMessage{Data: f.logsStderr, Stderr: true}
 	}
 	if f.logStreamErr != nil {
 		chunks <- LogMessage{Err: f.logStreamErr}
 	}
 	close(chunks)
 	return chunks, nil
+}
+
+func (f *fakeDockerClient) VolumeExists(context.Context, string) error {
+	return f.err
+}
+
+func (f *fakeDockerClient) ImportArchive(_ context.Context, containerID, destination string, body io.Reader) error {
+	if f.err != nil {
+		return f.err
+	}
+	f.imports = append(f.imports, containerID+" "+destination)
+	_, err := io.Copy(io.Discard, body)
+	return err
 }
 
 func newDockerServiceClient(t *testing.T, fake *fakeDockerClient) agentv1.DockerServiceClient {

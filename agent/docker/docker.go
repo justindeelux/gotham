@@ -38,6 +38,8 @@ var ErrDockerUnavailable = errors.New("docker: daemon unavailable")
 
 var ErrDockerImageNotFound = errors.New("docker: image not found")
 
+var ErrDockerVolumeNotFound = errors.New("docker: volume not found")
+
 var ErrDockerContainerNotRunning = errors.New("docker: container is not running")
 
 var ErrDockerNoShell = errors.New("docker: container has no supported shell")
@@ -367,6 +369,49 @@ func (c *DockerClient) RemoveVolume(ctx context.Context, name string) error {
 	if !dockerOK(response.StatusCode) {
 		return statusError(http.MethodDelete, path, response)
 	}
+	_, _ = io.Copy(io.Discard, response.Body)
+	return nil
+}
+
+func (c *DockerClient) VolumeExists(ctx context.Context, name string) error {
+	if strings.TrimSpace(name) == "" {
+		return errors.New("docker: volume name is required")
+	}
+	path := "/volumes/" + url.PathEscape(name)
+	response, err := c.doRaw(ctx, http.MethodGet, path, nil, "")
+	if err != nil {
+		return err
+	}
+	if response.StatusCode == http.StatusNotFound {
+		_, _ = io.Copy(io.Discard, response.Body)
+		_ = response.Body.Close()
+		return fmt.Errorf("%w: %s", ErrDockerVolumeNotFound, name)
+	}
+	if !dockerOK(response.StatusCode) {
+		return statusError(http.MethodGet, path, response)
+	}
+	_, _ = io.Copy(io.Discard, response.Body)
+	return response.Body.Close()
+}
+
+// ImportArchive extracts an uncompressed tar stream into destination inside the
+// container, including any volumes mounted below it. The daemon resolves the
+// entries against the destination, so the caller validates them first.
+func (c *DockerClient) ImportArchive(ctx context.Context, containerID, destination string, body io.Reader) error {
+	if strings.TrimSpace(containerID) == "" {
+		return errors.New("docker: container id is required")
+	}
+	query := url.Values{}
+	query.Set("path", destination)
+	path := "/containers/" + url.PathEscape(containerID) + "/archive?" + query.Encode()
+	response, err := c.doRaw(ctx, http.MethodPut, path, body, "application/x-tar")
+	if err != nil {
+		return err
+	}
+	if !dockerOK(response.StatusCode) {
+		return statusError(http.MethodPut, path, response)
+	}
+	defer func() { _ = response.Body.Close() }()
 	_, _ = io.Copy(io.Discard, response.Body)
 	return nil
 }
@@ -1481,7 +1526,10 @@ func dockerOK(status int) bool {
 
 type LogMessage struct {
 	Data []byte
-	Err  error
+	// Stderr marks a chunk the container wrote to stderr. Callers that use the
+	// log stream as a data pipe (volume archives) forward stdout only.
+	Stderr bool
+	Err    error
 }
 
 func decodeLogStream(ctx context.Context, source io.Reader, out chan<- LogMessage) {
@@ -1511,12 +1559,12 @@ func decodeLogStream(ctx context.Context, source io.Reader, out chan<- LogMessag
 					report(ctx, out, fmt.Errorf("truncated log frame: %w", err))
 					return
 				}
-				if n > 0 && !emit(ctx, out, header[:n]) {
+				if n > 0 && !emit(ctx, out, header[:n], false) {
 					return
 				}
 				return
 			default:
-				if n > 0 && !emit(ctx, out, header[:n]) {
+				if n > 0 && !emit(ctx, out, header[:n], false) {
 					return
 				}
 				report(ctx, out, err)
@@ -1525,16 +1573,17 @@ func decodeLogStream(ctx context.Context, source io.Reader, out chan<- LogMessag
 		}
 		size := binary.BigEndian.Uint32(header[4:8])
 		if !validLogHeader(header, size) {
-			if !emit(ctx, out, header) {
+			if !emit(ctx, out, header, false) {
 				return
 			}
 			copyRaw(ctx, reader, out)
 			return
 		}
 		sawFrame = true
+		stderr := header[0] == 2
 		payload := make([]byte, size)
 		n, err = io.ReadFull(reader, payload)
-		if n > 0 && !emit(ctx, out, payload[:n]) {
+		if n > 0 && !emit(ctx, out, payload[:n], stderr) {
 			return
 		}
 		if err != nil {
@@ -1559,7 +1608,7 @@ func copyRaw(ctx context.Context, reader *bufio.Reader, out chan<- LogMessage) {
 		if n > 0 {
 			chunk := make([]byte, n)
 			copy(chunk, buffer[:n])
-			if !emit(ctx, out, chunk) {
+			if !emit(ctx, out, chunk, false) {
 				return
 			}
 		}
@@ -1572,12 +1621,12 @@ func copyRaw(ctx context.Context, reader *bufio.Reader, out chan<- LogMessage) {
 	}
 }
 
-func emit(ctx context.Context, out chan<- LogMessage, data []byte) bool {
+func emit(ctx context.Context, out chan<- LogMessage, data []byte, stderr bool) bool {
 	if len(data) == 0 {
 		return true
 	}
 	select {
-	case out <- LogMessage{Data: data}:
+	case out <- LogMessage{Data: data, Stderr: stderr}:
 		return true
 	case <-ctx.Done():
 		return false

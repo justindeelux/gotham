@@ -549,6 +549,51 @@ func (stubDockerServer) StreamLogs(req *agentv1.StreamLogsRequest, stream grpc.S
 	return nil
 }
 
+func (stubDockerServer) VolumeArchiveCapabilities(context.Context, *agentv1.VolumeArchiveCapabilitiesRequest) (*agentv1.VolumeArchiveCapabilitiesResponse, error) {
+	return &agentv1.VolumeArchiveCapabilitiesResponse{
+		Available:    true,
+		Capabilities: []string{"volume_archive.v1"},
+	}, nil
+}
+
+func (stubDockerServer) ArchiveVolumes(req *agentv1.ArchiveVolumesRequest, stream grpc.ServerStreamingServer[agentv1.ArchiveChunk]) error {
+	if len(req.GetSources()) == 0 {
+		return errors.New("sources are required")
+	}
+	if err := stream.Send(&agentv1.ArchiveChunk{
+		Part: &agentv1.ArchiveChunk_Data{Data: []byte("tar-gz")},
+	}); err != nil {
+		return err
+	}
+	return stream.Send(&agentv1.ArchiveChunk{
+		Part: &agentv1.ArchiveChunk_Result{Result: &agentv1.ArchiveResult{Ok: true}},
+	})
+}
+
+func (stubDockerServer) RestoreVolumes(stream grpc.ClientStreamingServer[agentv1.RestoreVolumesRequest, agentv1.RestoreVolumesResponse]) error {
+	first, err := stream.Recv()
+	if err != nil {
+		return err
+	}
+	header := first.GetHeader()
+	if header == nil {
+		return errors.New("the first message must be a header")
+	}
+	for {
+		message, err := stream.Recv()
+		if errors.Is(err, io.EOF) {
+			break
+		}
+		if err != nil {
+			return err
+		}
+		if len(message.GetData()) == 0 {
+			return errors.New("empty data message")
+		}
+	}
+	return stream.SendAndClose(&agentv1.RestoreVolumesResponse{RestoredSources: int32(len(header.GetTargets()))})
+}
+
 type stubBuildServer struct {
 	agentv1.UnimplementedBuildServiceServer
 }
@@ -630,5 +675,127 @@ func TestTerminalMessagesProtoRoundtrip(t *testing.T) {
 	}
 	if !proto.Equal(response, &gotResponse) {
 		t.Fatalf("response roundtrip mismatch: want %v, got %v", response, &gotResponse)
+	}
+}
+
+func TestVolumeArchiveMessagesProtoRoundtrip(t *testing.T) {
+	t.Parallel()
+
+	sources := []*agentv1.ArchiveSource{
+		{Name: "data", Source: &agentv1.ArchiveSource_Volume{Volume: "gotham-app-1-data"}},
+		{Name: "uploads", Source: &agentv1.ArchiveSource_Path{Path: "/srv/uploads"}},
+	}
+	requests := map[string]*agentv1.ArchiveVolumesRequest{
+		"archive": {Sources: sources},
+	}
+	for name, want := range requests {
+		raw, err := proto.Marshal(want)
+		if err != nil {
+			t.Fatalf("%s marshal: %v", name, err)
+		}
+		var got agentv1.ArchiveVolumesRequest
+		if err := proto.Unmarshal(raw, &got); err != nil {
+			t.Fatalf("%s unmarshal: %v", name, err)
+		}
+		if !proto.Equal(want, &got) {
+			t.Fatalf("%s roundtrip mismatch: want %v, got %v", name, want, &got)
+		}
+	}
+
+	chunk := &agentv1.ArchiveChunk{Part: &agentv1.ArchiveChunk_Result{Result: &agentv1.ArchiveResult{
+		Ok: true, ExitCode: 0, StderrTail: "warning",
+	}}}
+	raw, err := proto.Marshal(chunk)
+	if err != nil {
+		t.Fatalf("chunk marshal: %v", err)
+	}
+	var gotChunk agentv1.ArchiveChunk
+	if err := proto.Unmarshal(raw, &gotChunk); err != nil {
+		t.Fatalf("chunk unmarshal: %v", err)
+	}
+	if !proto.Equal(chunk, &gotChunk) {
+		t.Fatalf("chunk roundtrip mismatch")
+	}
+
+	restore := &agentv1.RestoreVolumesRequest{Part: &agentv1.RestoreVolumesRequest_Header{
+		Header: &agentv1.RestoreVolumesHeader{
+			Targets: sources,
+			Mode:    agentv1.RestoreMode_RESTORE_MODE_REPLACE,
+		},
+	}}
+	raw, err = proto.Marshal(restore)
+	if err != nil {
+		t.Fatalf("restore marshal: %v", err)
+	}
+	var gotRestore agentv1.RestoreVolumesRequest
+	if err := proto.Unmarshal(raw, &gotRestore); err != nil {
+		t.Fatalf("restore unmarshal: %v", err)
+	}
+	if !proto.Equal(restore, &gotRestore) {
+		t.Fatalf("restore roundtrip mismatch")
+	}
+}
+
+func TestDockerServiceVolumeArchiveContract(t *testing.T) {
+	t.Parallel()
+
+	client := agentv1.NewDockerServiceClient(startTestServer(t))
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+
+	capabilities, err := client.VolumeArchiveCapabilities(ctx, &agentv1.VolumeArchiveCapabilitiesRequest{})
+	if err != nil {
+		t.Fatalf("capabilities: %v", err)
+	}
+	if !slices.Contains(capabilities.GetCapabilities(), "volume_archive.v1") {
+		t.Fatalf("capabilities = %v", capabilities.GetCapabilities())
+	}
+
+	stream, err := client.ArchiveVolumes(ctx, &agentv1.ArchiveVolumesRequest{
+		Sources: []*agentv1.ArchiveSource{{Name: "data", Source: &agentv1.ArchiveSource_Path{Path: "/srv/data"}}},
+	})
+	if err != nil {
+		t.Fatalf("archive: %v", err)
+	}
+	var data []byte
+	var result *agentv1.ArchiveResult
+	for {
+		chunk, err := stream.Recv()
+		if errors.Is(err, io.EOF) {
+			break
+		}
+		if err != nil {
+			t.Fatalf("recv: %v", err)
+		}
+		data = append(data, chunk.GetData()...)
+		if final := chunk.GetResult(); final != nil {
+			result = final
+		}
+	}
+	if string(data) != "tar-gz" || result == nil || !result.GetOk() {
+		t.Fatalf("data = %q, result = %v", data, result)
+	}
+
+	restore, err := client.RestoreVolumes(ctx)
+	if err != nil {
+		t.Fatalf("restore: %v", err)
+	}
+	if err := restore.Send(&agentv1.RestoreVolumesRequest{Part: &agentv1.RestoreVolumesRequest_Header{
+		Header: &agentv1.RestoreVolumesHeader{
+			Targets: []*agentv1.ArchiveSource{{Name: "data", Source: &agentv1.ArchiveSource_Path{Path: "/srv/data"}}},
+			Mode:    agentv1.RestoreMode_RESTORE_MODE_OVERLAY,
+		},
+	}}); err != nil {
+		t.Fatalf("send header: %v", err)
+	}
+	if err := restore.Send(&agentv1.RestoreVolumesRequest{Part: &agentv1.RestoreVolumesRequest_Data{Data: []byte("tar-gz")}}); err != nil {
+		t.Fatalf("send data: %v", err)
+	}
+	response, err := restore.CloseAndRecv()
+	if err != nil {
+		t.Fatalf("close and recv: %v", err)
+	}
+	if response.GetRestoredSources() != 1 {
+		t.Fatalf("restored_sources = %d", response.GetRestoredSources())
 	}
 }

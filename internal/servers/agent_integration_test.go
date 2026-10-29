@@ -7,6 +7,7 @@ import (
 	"crypto/x509"
 	"encoding/pem"
 	"errors"
+	"io"
 	"log/slog"
 	"os"
 	"path/filepath"
@@ -315,4 +316,8 @@ func (f *e2eDockerClient) Logs(context.Context, string, bool, int64) (<-chan age
 	chunks := make(chan agent.LogMessage)
 	close(chunks)
 	return chunks, nil
+}
+func (f *e2eDockerClient) VolumeExists(context.Context, string) error { return nil }
+func (f *e2eDockerClient) ImportArchive(context.Context, string, string, io.Reader) error {
+	return nil
 }

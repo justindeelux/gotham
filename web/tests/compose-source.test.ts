@@ -20,7 +20,7 @@ import { useCreateAppWizard } from "@/features/applications/composables/useCreat
 import { provideCreateWizard } from "@/features/applications/composables/useCreateAppWizard";
 import { useComposeEditor } from "@/features/applications/composables/useComposeEditor";
 import { useApplicationsStore } from "@/features/applications/stores/applications";
-import { extractComposeServiceNames } from "@/features/applications/utils/compose";
+import { extractComposeServiceNames } from "@/shared/utils/compose";
 import CodeEditor from "@/features/files/components/CodeEditor.vue";
 import {
   registerDiscoveredCatalogs,

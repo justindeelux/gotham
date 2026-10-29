@@ -24,7 +24,7 @@ import {
   bumpDomainsRefresh,
   useDomainsRefresh,
 } from "@/features/applications/composables/domainRefresh";
-import { extractComposeServicePorts } from "@/features/applications/utils/compose";
+import { extractComposeServicePorts } from "@/shared/utils/compose";
 import { describeProxyError, useProxyStore } from "@/features/domains";
 import { isApiError } from "@/features/servers";
 import { activeLocale, i18n, onLocaleChange } from "@/shared/i18n";

@@ -54,12 +54,39 @@ const service = {
   project_id: "proj-1",
   project_name: "shop",
   compose_project: "gotham-svc-1",
-  compose_yaml: "services:\n  web:\n    image: nginx:1.27-alpine\n",
+  compose_yaml:
+    "services:\n  web:\n    image: nginx:1.27-alpine\n    ports:\n      - \"8080:8080\"\n",
   env: { MYSQL_PASSWORD: "s3cret" },
   domains: [{ service: "web", domain: "blog.example.com", port: 80 }],
+  pending_changes: [],
   created_at: "2026-09-01T10:00:00Z",
   updated_at: "2026-09-02T10:00:00Z",
 };
+
+const serviceDomains = [
+  {
+    id: "dom-1",
+    service_id: "svc-1",
+    domain: "app.example.com",
+    compose_service: "web",
+    port: 8080,
+    protocol: "http",
+    disabled: false,
+    source: "managed",
+    status: "routed",
+  },
+  {
+    service_id: "svc-1",
+    domain: "legacy.example.com",
+    compose_service: "web",
+    port: 3001,
+    protocol: "http",
+    disabled: false,
+    source: "compose",
+    status: "held",
+    reason: "container port 3001 is not published; add it to the compose service ports",
+  },
+];
 
 const deploys = [
   {
@@ -260,6 +287,9 @@ async function mockApi(
   });
   await page.route("**/api/v1/services/svc-1", async (route) => {
     await route.fulfill({ json: { service } });
+  });
+  await page.route("**/api/v1/services/svc-1/domains", async (route) => {
+    await route.fulfill({ json: { domains: serviceDomains } });
   });
   await page.route("**/api/v1/templates", async (route) => {
     await route.fulfill({ json: { templates } });
@@ -482,13 +512,13 @@ test("service detail renders history at every width, en and vi", async ({ page }
       const tabs =
         locale === "vi"
           ? {
-              labels: ["Tổng quan", "Triển khai", "Compose", "Môi trường", "Container", "Nhật ký", "Cài đặt"],
+              labels: ["Tổng quan", "Triển khai", "Compose", "Môi trường", "Container", "Tên miền", "Nhật ký", "Cài đặt"],
               deployments: "Triển khai",
               logs: "Nhật ký",
               overview: "Tổng quan",
             }
           : {
-              labels: ["Overview", "Deployments", "Compose", "Environment", "Containers", "Logs", "Settings"],
+              labels: ["Overview", "Deployments", "Compose", "Environment", "Containers", "Domains", "Logs", "Settings"],
               deployments: "Deployments",
               logs: "Logs",
               overview: "Overview",
@@ -506,7 +536,7 @@ test("service detail renders history at every width, en and vi", async ({ page }
       await expect(page.locator(".service-detail-page")).toContainText("docker compose logs -f");
       await page.locator(".n-tabs-tab").filter({ hasText: new RegExp(`^${tabs.overview}$`) }).click();
       await expect(page.locator(".service-detail-page")).toContainText("gotham-svc-1");
-      await expect(page.locator(".service-detail-page")).toContainText("blog.example.com:80");
+      await expect(page.locator(".service-detail-page")).toContainText("app.example.com");
       const deploy = page.getByRole("button", {
         name: locale === "vi" ? "Triển khai lại" : "Redeploy",
         exact: true,
@@ -520,6 +550,35 @@ test("service detail renders history at every width, en and vi", async ({ page }
       await page.screenshot({ path: test.info().outputPath(`service-${locale}-${width}.png`) });
       await page.unrouteAll({ behavior: "wait" });
     }
+  }
+});
+
+test("service domains tab opens the add modal without overflow", async ({
+  page,
+}) => {
+  for (const width of [390, 1366]) {
+    await page.setViewportSize({ width, height: 1000 });
+    await mockApi(page);
+    await page.goto(`${baseURL}/projects/proj-1/environments/env-1/services/svc-1`);
+    await expect(page.locator(".service-detail-page h1")).toHaveText("blog-staging");
+    await page
+      .locator(".n-tabs-tab")
+      .filter({ hasText: /^Domains$/ })
+      .click();
+    await expect(page.locator(".domain-table")).toContainText("app.example.com");
+    await expect(page.locator(".domain-table")).toContainText("From compose file");
+    await expect(page.locator(".domain-open-compose")).toBeVisible();
+
+    await page.locator(".domain-add").click();
+    const modal = page.locator(".domain-form-modal");
+    await expect(modal).toBeVisible();
+    await expect(modal.locator(".domain-target")).toContainText("web");
+    await expect(modal.locator(".domain-port input")).toHaveValue("8080");
+    await expectNoOverflow(page, width);
+    await page.screenshot({
+      path: test.info().outputPath(`service-domains-${width}.png`),
+    });
+    await page.unrouteAll({ behavior: "wait" });
   }
 });
 

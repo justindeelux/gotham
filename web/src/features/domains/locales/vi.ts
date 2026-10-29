@@ -242,6 +242,19 @@ const vi = {
     pausedToast: "Đã tạm dừng quy tắc chuyển hướng.",
     deleted: "Đã xóa quy tắc chuyển hướng.",
   },
+  form: {
+    host: "Tên miền",
+    hostAria: "Tên miền",
+    protocol: "Giao thức",
+    protocolAria: "Giao thức",
+    enabled: "Bật",
+    enabledAria: "Bật tên miền",
+    addTitle: "Thêm tên miền",
+    editTitle: "Sửa tên miền",
+    add: "Thêm tên miền",
+    save: "Lưu tên miền",
+    cancel: "Hủy",
+  },
   errors: {
     sessionExpired: "Phiên đăng nhập đã hết hạn. Vui lòng đăng nhập lại.",
     adminScope:

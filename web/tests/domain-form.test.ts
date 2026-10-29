@@ -6,7 +6,7 @@ import {
   domainServiceSchema,
   hostDomainSchema,
 } from "@/features/applications/schemas/applications";
-import { extractComposeServicePorts } from "@/features/applications/utils/compose";
+import { extractComposeServicePorts } from "@/shared/utils/compose";
 
 describe("domain routing schemas", () => {
   it("accepts 1-65535 target ports, or an empty (auto) port", () => {

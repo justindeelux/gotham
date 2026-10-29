@@ -79,3 +79,7 @@ func (s *Store) UpdateServiceDeploy(ctx context.Context, params sqlc.UpdateServi
 func (s *Store) ListServiceDeploys(ctx context.Context, params sqlc.ListServiceDeploysParams) ([]sqlc.ServiceDeploy, error) {
 	return s.queries.ListServiceDeploys(ctx, params)
 }
+
+func (s *Store) ListServiceDeploysByState(ctx context.Context, state string) ([]sqlc.ServiceDeploy, error) {
+	return s.queries.ListServiceDeploysByState(ctx, state)
+}

@@ -341,6 +341,21 @@ func TestRepositoryRoundTrip(t *testing.T) {
 		t.Errorf("finished_at = zero, want the recorded time")
 	}
 
+	pending, err := repo.CreateServiceDeploy(ctx, Deploy{
+		ID: uuid.New(), ServiceID: created.ID, State: DeployDeploying, ComposeYAML: "services: {}\n# pending\n",
+		CreatedAt: now.Add(2 * time.Second), UpdatedAt: now.Add(2 * time.Second),
+	})
+	if err != nil {
+		t.Fatalf("CreateServiceDeploy (pending): %v", err)
+	}
+	pendingRows, err := repo.ListServiceDeploysByState(ctx, DeployDeploying)
+	if err != nil {
+		t.Fatalf("ListServiceDeploysByState: %v", err)
+	}
+	if !containsDeploy(pendingRows, pending.ID) {
+		t.Fatalf("pending deploys = %+v, want %s", pendingRows, pending.ID)
+	}
+
 	deleted, err := repo.SoftDeleteService(ctx, created.ID)
 	if err != nil {
 		t.Fatalf("SoftDeleteService: %v", err)
@@ -353,6 +368,13 @@ func TestRepositoryRoundTrip(t *testing.T) {
 	}
 	if _, err := repo.SoftDeleteService(ctx, created.ID); !errors.Is(err, ErrNotFound) {
 		t.Errorf("second SoftDeleteService = %v, want ErrNotFound", err)
+	}
+	pendingRows, err = repo.ListServiceDeploysByState(ctx, DeployDeploying)
+	if err != nil {
+		t.Fatalf("ListServiceDeploysByState after delete: %v", err)
+	}
+	if containsDeploy(pendingRows, pending.ID) {
+		t.Errorf("pending deploys of a deleted service = %+v, want none", pendingRows)
 	}
 	recreated := created
 	recreated.ID = uuid.New()
@@ -382,4 +404,13 @@ func TestRepositoryRoundTrip(t *testing.T) {
 	if exists, err := repo.ServerExists(ctx, uuid.Nil); err != nil || exists {
 		t.Errorf("ServerExists(nil) = %v, %v, want false", exists, err)
 	}
+}
+
+func containsDeploy(deploys []Deploy, id uuid.UUID) bool {
+	for _, deploy := range deploys {
+		if deploy.ID == id {
+			return true
+		}
+	}
+	return false
 }

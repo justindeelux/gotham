@@ -25,7 +25,8 @@ type fakeRouteService struct {
 	chunks    [][]byte
 	streamErr error
 
-	err error
+	deployCalls int
+	err         error
 }
 
 func (f *fakeRouteService) Create(context.Context, uuid.UUID, CreateRequest) (Service, error) {
@@ -59,6 +60,7 @@ func (f *fakeRouteService) Update(context.Context, uuid.UUID, uuid.UUID, UpdateR
 func (f *fakeRouteService) Delete(context.Context, uuid.UUID, uuid.UUID) error { return f.err }
 
 func (f *fakeRouteService) Deploy(context.Context, uuid.UUID, uuid.UUID) (Service, Deploy, error) {
+	f.deployCalls++
 	if f.err != nil {
 		return Service{}, Deploy{}, f.err
 	}
@@ -186,6 +188,33 @@ func TestRoutesCreateAndRead(t *testing.T) {
 	}
 }
 
+func TestRoutesCreateWithDeployStartsTheDeploy(t *testing.T) {
+	service := sampleService()
+	fake := &fakeRouteService{service: service}
+	router := routeTestServer(t, fake, service.UserID)
+	body := `{"name":"wordpress","environment_id":"` + service.EnvironmentID.String() + `","server_id":"` + service.ServerID.String() + `","compose_yaml":"services:\n  web:\n    image: nginx\n","deploy":true}`
+	recorder := httptest.NewRecorder()
+	router.ServeHTTP(recorder, httptest.NewRequest(http.MethodPost, "/v1/services", strings.NewReader(body)))
+	if recorder.Code != http.StatusCreated {
+		t.Fatalf("POST /v1/services = %d: %s", recorder.Code, recorder.Body)
+	}
+	if fake.deployCalls != 1 {
+		t.Fatalf("deploy calls = %d, want 1", fake.deployCalls)
+	}
+
+	fake = &fakeRouteService{service: service}
+	router = routeTestServer(t, fake, service.UserID)
+	body = `{"name":"wordpress","environment_id":"` + service.EnvironmentID.String() + `","server_id":"` + service.ServerID.String() + `","compose_yaml":"services:\n  web:\n    image: nginx\n"}`
+	recorder = httptest.NewRecorder()
+	router.ServeHTTP(recorder, httptest.NewRequest(http.MethodPost, "/v1/services", strings.NewReader(body)))
+	if recorder.Code != http.StatusCreated {
+		t.Fatalf("POST /v1/services = %d: %s", recorder.Code, recorder.Body)
+	}
+	if fake.deployCalls != 0 {
+		t.Fatalf("deploy calls = %d, want none without deploy: true", fake.deployCalls)
+	}
+}
+
 func TestRoutesCreateRejections(t *testing.T) {
 	service := sampleService()
 	newRouter := func() (http.Handler, *fakeRouteService) {
@@ -241,7 +270,7 @@ func TestRoutesLifecycleAndLists(t *testing.T) {
 		path   string
 		want   int
 	}{
-		{http.MethodPost, "/v1/services/" + service.ID.String() + "/deploy", http.StatusOK},
+		{http.MethodPost, "/v1/services/" + service.ID.String() + "/deploy", http.StatusAccepted},
 		{http.MethodPost, "/v1/services/" + service.ID.String() + "/stop", http.StatusOK},
 		{http.MethodPost, "/v1/services/" + service.ID.String() + "/restart", http.StatusOK},
 		{http.MethodGet, "/v1/services/" + service.ID.String() + "/deploys", http.StatusOK},

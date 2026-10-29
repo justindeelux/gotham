@@ -1,5 +1,5 @@
 import { useMessage } from "naive-ui";
-import { computed, inject, onMounted, ref, watch } from "vue";
+import { computed, inject, onMounted, onUnmounted, ref, watch } from "vue";
 import type { ComputedRef, InjectionKey, Ref } from "vue";
 import { useRoute, useRouter } from "vue-router";
 
@@ -48,6 +48,8 @@ export interface ServiceDetailContext {
   containersLoaded: Ref<boolean>;
   deploys: ComputedRef<ServiceDeploy[]>;
   latestDeploy: ComputedRef<ServiceDeploy | null>;
+  isDeploying: ComputedRef<boolean>;
+  failedDeploy: ComputedRef<ServiceDeploy | null>;
   historyLoaded: ComputedRef<boolean>;
   historyUnavailable: ComputedRef<string | null>;
   historyLoading: ComputedRef<boolean>;
@@ -137,6 +139,15 @@ export function useServiceDetail(): ServiceDetailContext {
     servicesStore.deploysOf(serviceId.value),
   );
   const latestDeploy = computed<ServiceDeploy | null>(() => deploys.value[0] ?? null);
+  const isDeploying = computed<boolean>(
+    () =>
+      service.value?.status === "creating" ||
+      latestDeploy.value?.state === "deploying",
+  );
+  const failedDeploy = computed<ServiceDeploy | null>(() => {
+    const latest = latestDeploy.value;
+    return latest?.state === "failed" ? latest : null;
+  });
 
   const loadedServiceId = ref<string>("");
 
@@ -341,7 +352,7 @@ export function useServiceDetail(): ServiceDetailContext {
     actionFailure.value = null;
     try {
       const outcome = await servicesStore.deploy(serviceId.value);
-      message.success(String(i18n.global.t("services.toast.deployState", { state: deployStateLabel(outcome.deploy.state) })));
+      message.success(String(i18n.global.t("services.toast.deployStarted", { state: deployStateLabel(outcome.deploy.state) })));
     } catch (err) {
       actionFailure.value = err;
     } finally {
@@ -414,6 +425,9 @@ export function useServiceDetail(): ServiceDetailContext {
 
   const controlHint = computed<string | null>(() => {
     void activeLocale.value;
+    if (isDeploying.value) {
+      return String(i18n.global.t("services.header.controlDeployInProgress"));
+    }
     if (!canWrite.value) {
       return String(i18n.global.t("services.header.controlReadOnly"));
     }
@@ -507,7 +521,47 @@ export function useServiceDetail(): ServiceDetailContext {
     void load();
   });
 
+  const deployPollIntervalMs = 5_000;
+  let deployPollTimer: ReturnType<typeof setInterval> | null = null;
+
+  function stopDeployPolling(): void {
+    if (deployPollTimer !== null) {
+      clearInterval(deployPollTimer);
+      deployPollTimer = null;
+    }
+  }
+
+  async function refreshDeployState(): Promise<void> {
+    const id = serviceId.value;
+    if (id === "") {
+      return;
+    }
+    await servicesStore.fetchService(id).catch(() => undefined);
+    await servicesStore.fetchDeploys(id).catch(() => undefined);
+  }
+
+  // Follow a background deploy until its row is terminal; the server holds the
+  // lifecycle lock for that whole time, so nothing else polls the service.
+  watch(
+    isDeploying,
+    (deploying) => {
+      if (!deploying) {
+        stopDeployPolling();
+        return;
+      }
+      if (deployPollTimer === null) {
+        deployPollTimer = setInterval(() => {
+          void refreshDeployState();
+        }, deployPollIntervalMs);
+      }
+    },
+    { immediate: true },
+  );
+
+  onUnmounted(stopDeployPolling);
+
   watch([serviceId, () => String(route.params.environmentId ?? "")], () => {
+    stopDeployPolling();
     void load();
   });
 
@@ -536,6 +590,8 @@ export function useServiceDetail(): ServiceDetailContext {
     containersLoaded,
     deploys,
     latestDeploy,
+    isDeploying,
+    failedDeploy,
     historyLoaded,
     historyUnavailable,
     historyLoading,

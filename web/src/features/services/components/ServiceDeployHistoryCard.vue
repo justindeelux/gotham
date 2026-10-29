@@ -20,6 +20,7 @@ function t(key: string, params?: Record<string, string | number>): string {
 const {
   deploys,
   latestDeploy,
+  failedDeploy,
   historyLoaded,
   historyUnavailable,
   historyLoading,
@@ -125,6 +126,16 @@ function deployRowKey(row: ServiceDeploy): string {
         </NButton>
       </div>
     </NAlert>
+    <NAlert
+      v-if="failedDeploy"
+      type="error"
+      :show-icon="true"
+      :title="t('services.detail.deployFailedTitle')"
+      class="deploy-failure"
+      data-testid="history-deploy-failed"
+    >
+      {{ failedDeploy.error }}
+    </NAlert>
     <NDataTable
       v-if="deploys.length > 0"
       :data="deploys"
@@ -179,6 +190,10 @@ function deployRowKey(row: ServiceDeploy): string {
 </template>
 
 <style scoped>
+.deploy-failure {
+  margin-bottom: var(--space-3);
+}
+
 .history-error {
   display: flex;
   align-items: center;

@@ -26,6 +26,10 @@ func Enabled() bool {
 
 const defaultDeployTimeout = 15 * time.Minute
 
+const deployCleanupTimeout = 10 * time.Second
+
+const interruptedDeployMessage = "the deploy was interrupted: the control plane restarted before it finished"
+
 var namePattern = regexp.MustCompile(`^[a-zA-Z0-9][a-zA-Z0-9_.-]{0,62}$`)
 
 var envKeyPattern = regexp.MustCompile(`^[A-Za-z_][A-Za-z0-9_]*$`)
@@ -99,6 +103,12 @@ type service struct {
 	logger        *slog.Logger
 	deployTimeout time.Duration
 	locks         keyedLocks
+
+	deployCtx    context.Context
+	deployCancel context.CancelFunc
+	deployWG     sync.WaitGroup
+	deployMu     sync.Mutex
+	deployJobs   map[uuid.UUID]struct{}
 }
 
 var _ ServiceService = (*service)(nil)
@@ -112,6 +122,7 @@ func NewService(cfg Config) ServiceService {
 	if timeout <= 0 {
 		timeout = defaultDeployTimeout
 	}
+	deployCtx, deployCancel := context.WithCancel(context.Background())
 	return &service{
 		guardDomains:  cfg.GuardDomains,
 		repo:          cfg.repository(),
@@ -119,6 +130,9 @@ func NewService(cfg Config) ServiceService {
 		proxy:         cfg.Proxy,
 		logger:        logger,
 		deployTimeout: timeout,
+		deployCtx:     deployCtx,
+		deployCancel:  deployCancel,
+		deployJobs:    make(map[uuid.UUID]struct{}),
 	}
 }
 
@@ -164,7 +178,63 @@ func NewDefaultService(cfg Config) ServiceService {
 	if !Enabled() {
 		return nil
 	}
-	return NewService(cfg)
+	svc := NewService(cfg).(*service)
+	go svc.recoverInterruptedDeploys()
+	return svc
+}
+
+// Close cancels in-flight deploys and waits for them to record their terminal
+// state, so no goroutine outlives the process with a row left deploying.
+func (s *service) Close() error {
+	if s == nil {
+		return nil
+	}
+	s.deployCancel()
+	s.deployWG.Wait()
+	return nil
+}
+
+// recoverInterruptedDeploys marks deploys a previous control-plane process left
+// in deploying, so neither the deploy nor the service stays pending forever.
+func (s *service) recoverInterruptedDeploys() {
+	if s == nil || s.repo == nil {
+		return
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), deployCleanupTimeout)
+	defer cancel()
+	deploys, err := s.repo.ListServiceDeploysByState(ctx, DeployDeploying)
+	if err != nil {
+		s.logger.Warn("services: startup recovery could not list deploying deploys", "error", err)
+		return
+	}
+	for _, deploy := range deploys {
+		s.deployMu.Lock()
+		_, owned := s.deployJobs[deploy.ServiceID]
+		s.deployMu.Unlock()
+		if owned {
+			continue
+		}
+		deploy.State = DeployFailed
+		deploy.Error = interruptedDeployMessage
+		deploy.FinishedAt = time.Now().UTC()
+		if _, err := s.repo.UpdateServiceDeploy(ctx, deploy); err != nil {
+			s.logger.Warn("services: could not mark an interrupted deploy as failed",
+				"deploy_id", deploy.ID.String(), "error", err)
+			continue
+		}
+		service, err := s.repo.GetService(ctx, deploy.ServiceID)
+		if err != nil {
+			continue
+		}
+		if service.Status == StatusCreating {
+			if _, err := s.repo.UpdateServiceStatus(ctx, service.ID, StatusError); err != nil {
+				s.logger.Warn("services: could not correct an interrupted service status",
+					"service_id", service.ID.String(), "error", err)
+			}
+		}
+		s.logger.Warn("services: marked an interrupted deploy as failed",
+			"service_id", deploy.ServiceID.String())
+	}
 }
 
 func (s *service) Create(ctx context.Context, userID uuid.UUID, req CreateRequest) (Service, error) {
@@ -336,6 +406,9 @@ func (s *service) Update(ctx context.Context, userID, serviceID uuid.UUID, req U
 }
 
 func (s *service) Delete(ctx context.Context, userID, serviceID uuid.UUID) error {
+	if err := s.refuseDuringDeploy(ctx, serviceID); err != nil {
+		return err
+	}
 	service, release, err := s.lifecycle(ctx, userID, serviceID)
 	if err != nil {
 		return err
@@ -389,22 +462,19 @@ func (s *service) Deploy(ctx context.Context, userID, serviceID uuid.UUID) (Serv
 	if !Enabled() {
 		return Service{}, Deploy{}, ErrDisabled
 	}
+	if err := s.refuseDuringDeploy(ctx, serviceID); err != nil {
+		return Service{}, Deploy{}, err
+	}
 	service, release, err := s.lifecycle(ctx, userID, serviceID)
 	if err != nil {
 		return Service{}, Deploy{}, err
 	}
-	defer release()
 
 	rendered, err := Render(service.ComposeYAML, service.Env)
 	if err != nil {
+		release()
 		return Service{}, Deploy{}, RedactError(err, service.Env)
 	}
-	agent, err := s.dialAgent(ctx, service.ServerID)
-	if err != nil {
-		return Service{}, Deploy{}, err
-	}
-	defer func() { _ = agent.Close() }()
-	project := ProjectName(service.ID)
 	now := time.Now().UTC()
 	deploy, err := s.repo.CreateServiceDeploy(ctx, Deploy{
 		ID:          uuid.New(),
@@ -415,32 +485,98 @@ func (s *service) Deploy(ctx context.Context, userID, serviceID uuid.UUID) (Serv
 		UpdatedAt:   now,
 	})
 	if err != nil {
+		release()
 		return Service{}, Deploy{}, err
 	}
 
-	deployCtx, cancel := context.WithTimeout(ctx, s.deployTimeout)
-	defer cancel()
-	composeYAML := []byte(rendered.ComposeYAML)
-	if _, err := agent.Validate(deployCtx, project, composeYAML); err != nil {
-		return s.failDeploy(ctx, service, deploy, "", err)
-	}
-	if err := agent.Up(deployCtx, project, composeYAML, false); err != nil {
-		return s.failDeploy(ctx, service, deploy, StatusError, err)
-	}
-	deploy.State = DeployRunning
-	deploy.FinishedAt = time.Now().UTC()
-	if deploy, err = s.repo.UpdateServiceDeploy(ctx, deploy); err != nil {
-		return Service{}, Deploy{}, err
-	}
-	if service, err = s.setStatus(ctx, service, StatusRunning); err != nil {
-		return Service{}, Deploy{}, err
-	}
-	s.logger.Info("services: deployed", "service_id", service.ID.String(), "project", project)
-	s.syncProxy(ctx, service.ServerID)
+	s.deployMu.Lock()
+	s.deployJobs[service.ID] = struct{}{}
+	s.deployMu.Unlock()
+	s.deployWG.Add(1)
+	go func() {
+		defer s.deployWG.Done()
+		defer func() {
+			s.deployMu.Lock()
+			delete(s.deployJobs, service.ID)
+			s.deployMu.Unlock()
+		}()
+		defer release()
+		s.runDeploy(service, deploy, rendered.ComposeYAML)
+	}()
 	return service, deploy, nil
 }
 
+func (s *service) runDeploy(service Service, deploy Deploy, composeYAML string) {
+	project := ProjectName(service.ID)
+	ctx, cancel := context.WithTimeout(s.deployCtx, s.deployTimeout)
+	defer cancel()
+	fail := func(cause error) {
+		writeCtx, writeCancel := s.deployWriteContext()
+		defer writeCancel()
+		s.failDeploy(writeCtx, service, deploy, StatusError, cause)
+	}
+
+	agent, err := s.dialAgent(ctx, service.ServerID)
+	if err != nil {
+		fail(err)
+		return
+	}
+	defer func() { _ = agent.Close() }()
+	document := []byte(composeYAML)
+	if _, err := agent.Validate(ctx, project, document); err != nil {
+		fail(err)
+		return
+	}
+	if err := agent.Up(ctx, project, document, false); err != nil {
+		fail(err)
+		return
+	}
+	// The row must reach a terminal state even when the deploy context expired.
+	writeCtx, writeCancel := s.deployWriteContext()
+	defer writeCancel()
+	deploy.State = DeployRunning
+	deploy.FinishedAt = time.Now().UTC()
+	if _, err := s.repo.UpdateServiceDeploy(writeCtx, deploy); err != nil {
+		s.logger.Error("services: could not record a running deploy",
+			"service_id", service.ID.String(), "error", err)
+		return
+	}
+	if _, err := s.setStatus(writeCtx, service, StatusRunning); err != nil {
+		s.logger.Error("services: could not mark a deployed service running",
+			"service_id", service.ID.String(), "error", err)
+		return
+	}
+	s.logger.Info("services: deployed", "service_id", service.ID.String(), "project", project)
+	s.syncProxy(writeCtx, service.ServerID)
+}
+
+func (s *service) deployWriteContext() (context.Context, context.CancelFunc) {
+	return context.WithTimeout(context.WithoutCancel(s.deployCtx), deployCleanupTimeout)
+}
+
+// refuseDuringDeploy rejects lifecycle actions while a deploy row is active so
+// the caller gets a clear conflict instead of waiting on the lifecycle lock.
+func (s *service) refuseDuringDeploy(ctx context.Context, serviceID uuid.UUID) error {
+	if serviceID == uuid.Nil {
+		return nil
+	}
+	if err := s.ready(); err != nil {
+		return err
+	}
+	active, err := s.repo.HasActiveDeploy(ctx, serviceID)
+	if err != nil {
+		return err
+	}
+	if active {
+		return ErrDeployInFlight
+	}
+	return nil
+}
+
 func (s *service) Stop(ctx context.Context, userID, serviceID uuid.UUID) (Service, error) {
+	if err := s.refuseDuringDeploy(ctx, serviceID); err != nil {
+		return Service{}, err
+	}
 	service, release, err := s.lifecycle(ctx, userID, serviceID)
 	if err != nil {
 		return Service{}, err
@@ -463,6 +599,9 @@ func (s *service) Stop(ctx context.Context, userID, serviceID uuid.UUID) (Servic
 }
 
 func (s *service) Restart(ctx context.Context, userID, serviceID uuid.UUID) (Service, error) {
+	if err := s.refuseDuringDeploy(ctx, serviceID); err != nil {
+		return Service{}, err
+	}
 	service, release, err := s.lifecycle(ctx, userID, serviceID)
 	if err != nil {
 		return Service{}, err
@@ -629,23 +768,22 @@ func (s *service) syncProxy(ctx context.Context, serverID uuid.UUID) {
 	}
 }
 
-func (s *service) failDeploy(ctx context.Context, service Service, deploy Deploy, status Status, cause error) (Service, Deploy, error) {
+func (s *service) failDeploy(ctx context.Context, service Service, deploy Deploy, status Status, cause error) {
 	err := RedactError(cause, service.Env)
 	deploy.State = DeployFailed
 	deploy.Error = err.Error()
 	deploy.FinishedAt = time.Now().UTC()
-	updated, updateErr := s.repo.UpdateServiceDeploy(ctx, deploy)
-	if updateErr != nil {
+	if _, updateErr := s.repo.UpdateServiceDeploy(ctx, deploy); updateErr != nil {
 		s.logger.Error("services: could not record a failed deploy",
 			"service_id", service.ID.String(), "error", updateErr)
-		return Service{}, Deploy{}, err
+		return
 	}
 	if status != "" {
-		if service, updateErr = s.setStatus(ctx, service, status); updateErr != nil {
-			return Service{}, Deploy{}, err
+		if _, updateErr := s.setStatus(ctx, service, status); updateErr != nil {
+			s.logger.Error("services: could not mark a failed service",
+				"service_id", service.ID.String(), "error", updateErr)
 		}
 	}
-	return service, updated, err
 }
 
 func (s *service) ready() error {

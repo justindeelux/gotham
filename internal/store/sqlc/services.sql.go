@@ -253,6 +253,44 @@ func (q *Queries) ListServiceDeploys(ctx context.Context, arg ListServiceDeploys
 	return items, nil
 }
 
+const listServiceDeploysByState = `-- name: ListServiceDeploysByState :many
+SELECT d.id, d.service_id, d.state, d.compose_yaml, d.error, d.created_at, d.updated_at, d.finished_at FROM service_deploys d
+JOIN services s ON s.id = d.service_id
+WHERE d.state = $1 AND s.deleted_at IS NULL
+ORDER BY d.created_at ASC, d.id ASC
+`
+
+// Startup recovery lists deploys a previous process left non-terminal; the
+// join skips rows whose service was deleted meanwhile.
+func (q *Queries) ListServiceDeploysByState(ctx context.Context, state string) ([]ServiceDeploy, error) {
+	rows, err := q.db.Query(ctx, listServiceDeploysByState, state)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	items := []ServiceDeploy{}
+	for rows.Next() {
+		var i ServiceDeploy
+		if err := rows.Scan(
+			&i.ID,
+			&i.ServiceID,
+			&i.State,
+			&i.ComposeYaml,
+			&i.Error,
+			&i.CreatedAt,
+			&i.UpdatedAt,
+			&i.FinishedAt,
+		); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
 const listServicesByEnvironment = `-- name: ListServicesByEnvironment :many
 SELECT id, user_id, server_id, name, status, compose_yaml, env, created_at, updated_at, deleted_at, environment_id FROM services
 WHERE environment_id = $1 AND deleted_at IS NULL

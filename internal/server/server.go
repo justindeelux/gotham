@@ -85,6 +85,7 @@ type Server struct {
 	proxy             proxy.ProxyService
 	backups           databases.BackupService
 	databaseSvc       databases.DatabaseService
+	composeSvc        services.ServiceService
 	toolchain         toolchain.ToolchainService
 	jobLeases         *databases.JobLeases
 	notify            notifications.NotificationService
@@ -179,6 +180,9 @@ func New(cfg *config.Config, logger *slog.Logger, authService AuthService, oauth
 			_ = s.backups.Close()
 		}
 		if closer, ok := s.databaseSvc.(interface{ Close() error }); ok {
+			_ = closer.Close()
+		}
+		if closer, ok := s.composeSvc.(interface{ Close() error }); ok {
 			_ = closer.Close()
 		}
 		if s.metrics != nil {
@@ -493,6 +497,7 @@ func (s *Server) routes() (http.Handler, error) {
 		backupwatch.Mount(api, s.resourceAuth(), s.backupwatch)
 
 		composeSvc := s.composeService()
+		s.composeSvc = composeSvc
 		services.Mount(api, s.resourceAuth(), UserIDFromContext, composeSvc)
 
 		s.mountProjectMembers(api)

@@ -137,3 +137,11 @@ SELECT * FROM service_deploys
 WHERE service_id = $1
 ORDER BY created_at DESC, id DESC
 LIMIT $2;
+
+-- name: ListServiceDeploysByState :many
+-- Startup recovery lists deploys a previous process left non-terminal; the
+-- join skips rows whose service was deleted meanwhile.
+SELECT d.* FROM service_deploys d
+JOIN services s ON s.id = d.service_id
+WHERE d.state = $1 AND s.deleted_at IS NULL
+ORDER BY d.created_at ASC, d.id ASC;

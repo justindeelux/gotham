@@ -130,6 +130,7 @@ const en = {
     start: "Start",
     controlReadOnly: "Only the owner can control this service.",
     controlInProgress: "An action is already running. Wait for it to finish.",
+    controlDeployInProgress: "A deploy is running. Wait for it to finish before using these actions.",
     controlNodeOffline: "The node is offline. Reconnect it before using these actions.",
     delete: "Delete",
     deleteConfirm: "Delete the service {name}? The project goes down; its named volumes stay on the node.",
@@ -181,13 +182,16 @@ const en = {
       "Deleting tears down the compose project on its node and removes the service configuration. Named volumes stay on the node.",
     serverPinnedReason:
       "This service already deployed, so its node is pinned and cannot be changed. Moving it to another environment stays possible.",
+    deployFailedTitle: "Deploy failed",
+    deployingBanner:
+      "The deploy is running in the background. This page follows it and stops when it finishes.",
   },
   toast: {
     created: "Service {name} created.",
     composeSaved: "Compose document saved. Deploy to apply it on the node.",
     envSaved: "Environment saved. It applies to the next deploy.",
     locationSaved: "Location saved",
-    deployState: "Deploy {state}.",
+    deployStarted: "Deploy started ({state}).",
     stopped: "Service stopped. Named volumes were kept.",
     restartSent: "Restart sent to the node agent.",
     started: "Start sent to the node agent.",

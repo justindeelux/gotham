@@ -7,6 +7,7 @@ import ResourceDetailFrame from "@/features/projects/components/ResourceDetailFr
 import ResourceSettingsTab from "@/features/projects/components/ResourceSettingsTab.vue";
 import ServiceComposeCard from "@/features/services/components/ServiceComposeCard.vue";
 import ServiceContainersCard from "@/features/services/components/ServiceContainersCard.vue";
+import ServiceDeployBanner from "@/features/services/components/ServiceDeployBanner.vue";
 import ServiceDeployHistoryCard from "@/features/services/components/ServiceDeployHistoryCard.vue";
 import ServiceDetailHeader from "@/features/services/components/ServiceDetailHeader.vue";
 import ServiceEnvCard from "@/features/services/components/ServiceEnvCard.vue";
@@ -37,6 +38,7 @@ const {
   handleDelete,
   busy,
   deploys,
+  isDeploying,
 } = page;
 
 const activeTab = ref("overview");
@@ -66,6 +68,7 @@ const activeTab = ref("overview");
       <NAlert v-if="actionError" type="error" :show-icon="true" class="detail-banner">
         {{ actionError }}
       </NAlert>
+      <ServiceDeployBanner :is-deploying="isDeploying" class="detail-banner" />
     </template>
 
     <template #header>
@@ -125,7 +128,7 @@ const activeTab = ref("overview");
           :danger-label="t('services.header.delete')"
           :danger-confirm="t('services.header.deleteConfirm', { name: service.name })"
           :danger-busy="busy === 'delete'"
-          :danger-disabled="busy !== null"
+          :danger-disabled="busy !== null || isDeploying"
           @save="handleMove"
           @delete="() => void handleDelete()"
         />

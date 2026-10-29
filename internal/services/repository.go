@@ -33,6 +33,7 @@ type Repository interface {
 	CreateServiceDeploy(ctx context.Context, deploy Deploy) (Deploy, error)
 	UpdateServiceDeploy(ctx context.Context, deploy Deploy) (Deploy, error)
 	ListServiceDeploys(ctx context.Context, serviceID uuid.UUID, limit int32) ([]Deploy, error)
+	ListServiceDeploysByState(ctx context.Context, state DeployState) ([]Deploy, error)
 	ServerExists(ctx context.Context, serverID uuid.UUID) (bool, error)
 }
 
@@ -344,6 +345,18 @@ func (r *storeRepository) ListServiceDeploys(ctx context.Context, serviceID uuid
 	})
 	if err != nil {
 		return nil, fmt.Errorf("services: list deploys: %w", err)
+	}
+	deploys := make([]Deploy, 0, len(rows))
+	for _, row := range rows {
+		deploys = append(deploys, deployFromRow(row))
+	}
+	return deploys, nil
+}
+
+func (r *storeRepository) ListServiceDeploysByState(ctx context.Context, state DeployState) ([]Deploy, error) {
+	rows, err := r.store.ListServiceDeploysByState(ctx, string(state))
+	if err != nil {
+		return nil, fmt.Errorf("services: list deploys by state: %w", err)
 	}
 	deploys := make([]Deploy, 0, len(rows))
 	for _, row := range rows {

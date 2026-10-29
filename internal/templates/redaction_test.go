@@ -11,6 +11,7 @@ import (
 	"net/http/httptest"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/go-chi/chi/v5"
 	"github.com/google/uuid"
@@ -73,6 +74,10 @@ func (f *fakeRepository) UpdateServiceDeploy(_ context.Context, deploy services.
 }
 
 func (f *fakeRepository) ListServiceDeploys(_ context.Context, _ uuid.UUID, _ int32) ([]services.Deploy, error) {
+	return f.deploys, nil
+}
+
+func (f *fakeRepository) ListServiceDeploysByState(_ context.Context, _ services.DeployState) ([]services.Deploy, error) {
 	return f.deploys, nil
 }
 
@@ -194,23 +199,26 @@ func TestRenderDeployRedactionBoundary(t *testing.T) {
 		t.Fatalf("created Env = %v, want both secrets", created.Env)
 	}
 
-	_, _, deployErr := svc.Deploy(ctx, userID, created.ID)
-	if deployErr == nil {
-		t.Fatal("Deploy succeeded, want the agent failure")
-	}
-	if !errors.Is(deployErr, services.ErrDeployFailed) {
-		t.Errorf("Deploy error = %v, want ErrDeployFailed in the chain", deployErr)
-	}
-	if strings.Contains(deployErr.Error(), secret) || strings.Contains(deployErr.Error(), escapedSecret) {
-		t.Fatalf("the returned error leaked the secret: %v", deployErr)
-	}
-	if !strings.Contains(deployErr.Error(), "<redacted>") {
-		t.Fatalf("the returned error is not redacted: %v", deployErr)
-	}
+	t.Cleanup(func() {
+		if closer, ok := svc.(interface{ Close() error }); ok {
+			_ = closer.Close()
+		}
+	})
 
-	deploys, err := svc.Deploys(ctx, userID, created.ID)
-	if err != nil {
-		t.Fatalf("Deploys: %v", err)
+	if _, _, deployErr := svc.Deploy(ctx, userID, created.ID); deployErr != nil {
+		t.Fatalf("Deploy must accept the attempt and fail in the background: %v", deployErr)
+	}
+	var deploys []services.Deploy
+	deadline := time.Now().Add(10 * time.Second)
+	for time.Now().Before(deadline) {
+		deploys, err = svc.Deploys(ctx, userID, created.ID)
+		if err != nil {
+			t.Fatalf("Deploys: %v", err)
+		}
+		if len(deploys) > 0 && deploys[0].State != services.DeployDeploying {
+			break
+		}
+		time.Sleep(10 * time.Millisecond)
 	}
 	if len(deploys) != 1 || deploys[0].State != services.DeployFailed {
 		t.Fatalf("deploys = %+v", deploys)
@@ -229,21 +237,23 @@ func TestRenderDeployRedactionBoundary(t *testing.T) {
 	recorder := httptest.NewRecorder()
 	router.ServeHTTP(recorder, httptest.NewRequest(http.MethodPost,
 		"/v1/services/"+created.ID.String()+"/deploy", nil))
-	if recorder.Code != http.StatusBadGateway {
-		t.Fatalf("deploy status = %d, want 502: %s", recorder.Code, recorder.Body)
-	}
-	body := recorder.Body.String()
-	if strings.Contains(body, secret) || strings.Contains(body, escapedSecret) {
-		t.Fatalf("the HTTP response leaked the secret: %s", body)
+	if recorder.Code != http.StatusAccepted {
+		t.Fatalf("deploy status = %d, want 202: %s", recorder.Code, recorder.Body)
 	}
 	var payload struct {
-		Message string `json:"message"`
+		Deploy struct {
+			State string `json:"state"`
+			Error string `json:"error"`
+		} `json:"deploy"`
 	}
 	if err := json.Unmarshal(recorder.Body.Bytes(), &payload); err != nil {
-		t.Fatalf("decode the error body: %v", err)
+		t.Fatalf("decode the deploy response: %v", err)
 	}
-	if !strings.Contains(payload.Message, "<redacted>") {
-		t.Fatalf("the HTTP response is not redacted: %q", payload.Message)
+	if payload.Deploy.State != string(services.DeployDeploying) || payload.Deploy.Error != "" {
+		t.Fatalf("deploy payload = %+v, want a pending deploy without an error", payload.Deploy)
+	}
+	if strings.Contains(payload.Deploy.Error, secret) || strings.Contains(payload.Deploy.Error, escapedSecret) {
+		t.Fatalf("the deploy error leaked the secret: %q", payload.Deploy.Error)
 	}
 
 	if strings.Contains(logged.String(), secret) || strings.Contains(logged.String(), escapedSecret) {

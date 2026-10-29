@@ -19,6 +19,7 @@ const {
   busy,
   controlHint,
   latestDeploy,
+  isDeploying,
   handleDeploy,
   handleRestart,
   handleStop,
@@ -47,7 +48,7 @@ const deployLabel = computed<string>(() =>
           icon="refresh"
           :label="deployLabel"
           :loading="busy === 'deploy'"
-          :disabled="busy !== null"
+          :disabled="busy !== null || isDeploying"
           :disabled-reason="controlHint"
           @click="handleDeploy"
         />
@@ -56,7 +57,7 @@ const deployLabel = computed<string>(() =>
           icon="refresh"
           :label="t('services.header.restart')"
           :loading="busy === 'restart'"
-          :disabled="busy !== null"
+          :disabled="busy !== null || isDeploying"
           :disabled-reason="controlHint"
           @click="handleRestart"
         />
@@ -65,7 +66,7 @@ const deployLabel = computed<string>(() =>
           icon="stop"
           :label="t('services.header.stop')"
           :loading="busy === 'stop'"
-          :disabled="busy !== null || service.status === 'stopped'"
+          :disabled="busy !== null || isDeploying || service.status === 'stopped'"
           :disabled-reason="controlHint"
           @click="handleStop"
         />
@@ -74,7 +75,7 @@ const deployLabel = computed<string>(() =>
           icon="play"
           :label="t('services.header.start')"
           :loading="busy === 'start'"
-          :disabled="busy !== null || service.status !== 'stopped'"
+          :disabled="busy !== null || isDeploying || service.status !== 'stopped'"
           :disabled-reason="controlHint"
           @click="handleStart"
         />

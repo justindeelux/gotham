@@ -64,9 +64,6 @@ const emit = defineEmits<{
   <NAlert v-if="createError" type="error" :show-icon="true">
     {{ createError }}
   </NAlert>
-  <p class="wizard__desc">
-    {{ t("templates.target.description", { endpoint: "POST /api/v1/services" }) }}
-  </p>
 </template>
 
 <style scoped>
@@ -74,16 +71,6 @@ const emit = defineEmits<{
   display: grid;
   grid-template-columns: repeat(2, minmax(0, 1fr));
   gap: 0 var(--space-4);
-}
-
-.wizard__desc {
-  margin: 0;
-  font-size: var(--text-xs);
-  color: var(--muted);
-}
-
-.mono {
-  font-family: var(--font-mono);
 }
 
 @media (max-width: 720px) {

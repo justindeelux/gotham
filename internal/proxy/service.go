@@ -737,10 +737,11 @@ func serviceRoutesForServer(proxied []ProxiedService, serverID uuid.UUID, backen
 				continue
 			}
 			routes = append(routes, Route{
-				Name:   serviceRouteName(service.ID, index),
-				AppID:  service.ID,
-				Domain: host,
-				Target: fmt.Sprintf("http://%s:%d", backendHost, hostPort),
+				Name:     serviceRouteName(service.ID, index),
+				AppID:    service.ID,
+				Domain:   host,
+				Protocol: NormalizeProtocol(domain.Protocol),
+				Target:   fmt.Sprintf("http://%s:%d", backendHost, hostPort),
 			})
 		}
 	}

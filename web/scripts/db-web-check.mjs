@@ -53,14 +53,16 @@ function isoOffset(deltaSeconds) {
 
 async function main() {
   const format = await loadModule("../src/shared/utils/format.ts");
-  const targetBody = await loadModule("../src/features/databases/utils/backupTarget.ts");
+  const targetBody = await loadModule("../src/features/backups/utils/providerBody.ts");
   const storeMerge = await loadModule("../src/features/databases/utils/storeMerge.ts");
-  const restoreOutcomes = await loadModule("../src/features/databases/utils/restoreOutcomes.ts");
+  const backupMerge = await loadModule("../src/features/backups/utils/backupMerge.ts");
+  const restoreOutcomes = await loadModule("../src/features/backups/utils/restoreOutcomes.ts");
 
   try {
     const { relativeTime } = format.module;
-    const { toTargetBody } = targetBody.module;
-    const { mergeBackupsById, mergeDatabasesById } = storeMerge.module;
+    const { toProviderBody } = targetBody.module;
+    const { mergeDatabasesById } = storeMerge.module;
+    const { mergeBackupsById } = backupMerge.module;
     const { advanceRestoreStatuses } = restoreOutcomes.module;
 
     await check("D3-3: a past timestamp still reads as 'ago'", () => {
@@ -82,14 +84,14 @@ async function main() {
     });
 
     await check("D3-5: an empty region/prefix is sent as an explicit clear", () => {
-      const body = toTargetBody({ name: "t", region: "", prefix: "" });
+      const body = toProviderBody({ name: "t", region: "", prefix: "" });
       assert(body.region === "", "empty region must be sent");
       assert(body.prefix === "", "empty prefix must be sent");
       assert(body.name === "t", "non-empty name is kept");
     });
 
     await check("D3-5: blank credentials and required fields are omitted", () => {
-      const body = toTargetBody({
+      const body = toProviderBody({
         name: "t",
         endpoint: "",
         bucket: "",
@@ -103,7 +105,7 @@ async function main() {
     });
 
     await check("D3-5: an omitted optional field stays omitted", () => {
-      const body = toTargetBody({ name: "t" });
+      const body = toProviderBody({ name: "t" });
       assert(!("region" in body) && !("prefix" in body), "absent stays absent");
     });
 
@@ -163,6 +165,7 @@ async function main() {
     await format.cleanup();
     await targetBody.cleanup();
     await storeMerge.cleanup();
+    await backupMerge.cleanup();
     await restoreOutcomes.cleanup();
   }
 

@@ -1,9 +1,10 @@
 <script setup lang="ts">
 import { NAlert, NCard, NEmpty, NSpace, NSpin, NTag, NText } from "naive-ui";
-import { inject } from "vue";
 
-import type { BackupProtectionStatus } from "@/features/backups/api/backups";
-import { resourceBackupsKey } from "@/features/backups/composables/useResourceBackups";
+import type {
+  BackupProtectionStatus,
+  BackupProtectionSummary,
+} from "@/features/backups/api/backups";
 import { relativeTime } from "@/shared/utils/format";
 
 import { i18n } from "@/shared/i18n";
@@ -12,7 +13,19 @@ function t(key: string, params?: Record<string, string | number>): string {
   return String(i18n.global.t(key, params ?? {}));
 }
 
-const backups = inject(resourceBackupsKey)!;
+interface Props {
+  summary: BackupProtectionSummary | null;
+  loading?: boolean;
+  error?: string | null;
+  targetLabel: (_targetId?: string) => string;
+  targetHref?: (_targetId: string) => string;
+  runHref?: (_backupId?: string) => string;
+}
+
+const props = withDefaults(defineProps<Props>(), {
+  loading: false,
+  error: null,
+});
 
 function statusType(
   status: BackupProtectionStatus,
@@ -53,17 +66,6 @@ function maxRunLabel(seconds: number): string {
     minutes: Math.round(seconds / 60),
   });
 }
-
-// A run older than the loaded page has no element to scroll to; fall back to
-// the runs card instead of leaving a dead anchor.
-function runHref(backupId?: string): string {
-  if (!backupId) {
-    return "#backup-runs";
-  }
-  return backups.backups.value.some((item) => item.id === backupId)
-    ? `#backup-run-${backupId}`
-    : "#backup-runs";
-}
 </script>
 
 <template>
@@ -72,18 +74,17 @@ function runHref(backupId?: string): string {
       <NText depth="3">{{ t("databases.backups.protection.subtitle") }}</NText>
     </template>
     <NAlert
-      v-if="backups.backupsStore.protectionError"
+      v-if="props.error"
       type="error"
       :show-icon="true"
       style="margin-bottom: 12px"
     >
-      {{ backups.backupsStore.protectionError }}
+      {{ props.error }}
     </NAlert>
-    <NSpin :show="backups.backupsStore.protectionLoading">
+    <NSpin :show="props.loading">
       <NAlert
         v-if="
-          !backups.backupsStore.protectionError &&
-          (backups.protection.value?.status ?? 'not_configured') === 'not_configured'
+          !props.error && (props.summary?.status ?? 'not_configured') === 'not_configured'
         "
         type="info"
         :show-icon="false"
@@ -91,12 +92,12 @@ function runHref(backupId?: string): string {
         {{ t("databases.backups.protection.notConfigured") }}
       </NAlert>
       <NEmpty
-        v-else-if="backups.protection.value && backups.protection.value.schedules.length === 0"
+        v-else-if="props.summary && props.summary.schedules.length === 0"
         :description="t('databases.backups.protection.notConfigured')"
       />
-      <NSpace v-else-if="backups.protection.value" vertical :size="12" style="width: 100%">
+      <NSpace v-else-if="props.summary" vertical :size="12" style="width: 100%">
         <div
-          v-for="item in backups.protection.value.schedules"
+          v-for="item in props.summary.schedules"
           :key="item.schedule_id"
           class="backup-row"
         >
@@ -108,20 +109,30 @@ function runHref(backupId?: string): string {
                 }}
               </NTag>
               <NText class="mono" strong>{{ item.cron }}</NText>
-              <NTag size="small" :bordered="false">
-                {{ backups.providerLabel(item.target_id) }}
+              <a
+                v-if="item.target_id && props.targetHref"
+                class="protection-link"
+                :href="props.targetHref(item.target_id)"
+              >
+                {{ props.targetLabel(item.target_id) }}
+              </a>
+              <NTag v-else size="small" :bordered="false">
+                {{ props.targetLabel(item.target_id) }}
               </NTag>
             </NSpace>
             <NText depth="3">
               {{ t("databases.backups.protection.lastSuccess") }}
               <a
-                v-if="item.last_success_at"
+                v-if="item.last_success_at && props.runHref"
                 class="protection-link"
-                :href="runHref(item.last_backup_id)"
+                :href="props.runHref(item.last_backup_id)"
                 :title="item.last_success_at"
               >
                 {{ relativeTime(item.last_success_at) }}
               </a>
+              <span v-else-if="item.last_success_at" :title="item.last_success_at">
+                {{ relativeTime(item.last_success_at) }}
+              </span>
               <span v-else>{{ t("databases.backups.protection.never") }}</span>
               <span v-if="item.expected_slot_at">
                 · {{ t("databases.backups.protection.expectedSlot") }}
@@ -143,9 +154,9 @@ function runHref(backupId?: string): string {
                 time: relativeTime(item.running_since),
               }) }}
               <a
-                v-if="item.running_since"
+                v-if="props.runHref"
                 class="protection-link"
-                :href="runHref(item.running_backup_id)"
+                :href="props.runHref(item.running_backup_id)"
               >
                 {{ t("databases.backups.runs.title") }}
               </a>

@@ -22,9 +22,11 @@ type fakeRouteService struct {
 	deploy    Deploy
 	deploys   []Deploy
 	items     []ComposeContainer
+	domains   []DomainView
 	chunks    [][]byte
 	streamErr error
 	created   CreateRequest
+	domainIn  DomainInput
 
 	deployCalls int
 	err         error
@@ -109,7 +111,133 @@ func (f *fakeRouteService) Deploys(context.Context, uuid.UUID, uuid.UUID) ([]Dep
 	return f.deploys, nil
 }
 
+func (f *fakeRouteService) ListDomains(context.Context, uuid.UUID, uuid.UUID) ([]DomainView, error) {
+	if f.err != nil {
+		return nil, f.err
+	}
+	return f.domains, nil
+}
+
+func (f *fakeRouteService) AddDomain(_ context.Context, _, serviceID uuid.UUID, in DomainInput) (ServiceDomain, error) {
+	if f.err != nil {
+		return ServiceDomain{}, f.err
+	}
+	f.domainIn = in
+	return ServiceDomain{
+		ID:             uuid.New(),
+		ServiceID:      serviceID,
+		ComposeService: in.ComposeService,
+		Port:           in.Port,
+		Domain:         in.Domain,
+		Protocol:       in.Protocol,
+	}, nil
+}
+
+func (f *fakeRouteService) UpdateDomain(_ context.Context, _, serviceID, domainID uuid.UUID, in DomainInput) (ServiceDomain, error) {
+	if f.err != nil {
+		return ServiceDomain{}, f.err
+	}
+	f.domainIn = in
+	return ServiceDomain{
+		ID:             domainID,
+		ServiceID:      serviceID,
+		ComposeService: in.ComposeService,
+		Port:           in.Port,
+		Domain:         in.Domain,
+		Protocol:       in.Protocol,
+	}, nil
+}
+
+func (f *fakeRouteService) RemoveDomain(context.Context, uuid.UUID, uuid.UUID, uuid.UUID) error {
+	return f.err
+}
+
 var _ ServiceService = (*fakeRouteService)(nil)
+
+func TestRoutesServiceDomains(t *testing.T) {
+	service := sampleService()
+	fake := &fakeRouteService{
+		service: service,
+		domains: []DomainView{{
+			ServiceDomain: ServiceDomain{
+				ID: uuid.New(), ServiceID: service.ID, Domain: "app.example.com",
+				ComposeService: "web", Port: 80, Protocol: "https",
+			},
+			Source: SourceManaged, Status: DomainStatusRouted,
+		}},
+	}
+	router := routeTestServer(t, fake, service.UserID)
+	base := "/v1/services/" + service.ID.String() + "/domains"
+
+	recorder := httptest.NewRecorder()
+	router.ServeHTTP(recorder, httptest.NewRequest(http.MethodGet, base, nil))
+	if recorder.Code != http.StatusOK {
+		t.Fatalf("GET domains = %d: %s", recorder.Code, recorder.Body)
+	}
+	var list domainListEnvelope
+	if err := json.Unmarshal(recorder.Body.Bytes(), &list); err != nil {
+		t.Fatalf("decode list: %v", err)
+	}
+	if len(list.Domains) != 1 || list.Domains[0].Source != SourceManaged || list.Domains[0].Status != DomainStatusRouted {
+		t.Fatalf("list = %+v", list.Domains)
+	}
+
+	body := `{"domain":"new.example.com","compose_service":"web","port":8080,"protocol":"https"}`
+	recorder = httptest.NewRecorder()
+	router.ServeHTTP(recorder, httptest.NewRequest(http.MethodPost, base, strings.NewReader(body)))
+	if recorder.Code != http.StatusCreated {
+		t.Fatalf("POST domains = %d: %s", recorder.Code, recorder.Body)
+	}
+	if fake.domainIn.ComposeService != "web" || fake.domainIn.Port != 8080 {
+		t.Fatalf("domain input = %+v", fake.domainIn)
+	}
+
+	domainID := uuid.New()
+	recorder = httptest.NewRecorder()
+	router.ServeHTTP(recorder, httptest.NewRequest(http.MethodPut, base+"/"+domainID.String(), strings.NewReader(body)))
+	if recorder.Code != http.StatusOK {
+		t.Fatalf("PUT domain = %d: %s", recorder.Code, recorder.Body)
+	}
+	recorder = httptest.NewRecorder()
+	router.ServeHTTP(recorder, httptest.NewRequest(http.MethodDelete, base+"/"+domainID.String(), nil))
+	if recorder.Code != http.StatusNoContent {
+		t.Fatalf("DELETE domain = %d: %s", recorder.Code, recorder.Body)
+	}
+}
+
+func TestRoutesServiceDomainErrors(t *testing.T) {
+	service := sampleService()
+	base := "/v1/services/" + service.ID.String() + "/domains"
+	body := `{"domain":"app.example.com","compose_service":"web","port":80}`
+
+	for _, tc := range []struct {
+		err     error
+		code    int
+		message string
+	}{
+		{ErrDomainConflict, http.StatusConflict, "domain already in use"},
+		{fmt.Errorf("%w: domain already in use by another application", ErrDomainConflict), http.StatusConflict, "domain already in use by another application"},
+		{ErrValidation, http.StatusBadRequest, ""},
+		{ErrNotFound, http.StatusNotFound, "not found"},
+	} {
+		fake := &fakeRouteService{service: service, err: tc.err}
+		router := routeTestServer(t, fake, service.UserID)
+		recorder := httptest.NewRecorder()
+		router.ServeHTTP(recorder, httptest.NewRequest(http.MethodPost, base, strings.NewReader(body)))
+		if recorder.Code != tc.code {
+			t.Errorf("%v = %d, want %d: %s", tc.err, recorder.Code, tc.code, recorder.Body)
+		}
+		if tc.message != "" {
+			var payload errorBody
+			if err := json.Unmarshal(recorder.Body.Bytes(), &payload); err != nil {
+				t.Fatalf("decode error body: %v", err)
+			}
+			if payload.Message != tc.message {
+				t.Errorf("%v message = %q, want %q", tc.err, payload.Message, tc.message)
+			}
+		}
+	}
+}
 
 func routeTestServer(t *testing.T, svc ServiceService, userID uuid.UUID) http.Handler {
 	t.Helper()

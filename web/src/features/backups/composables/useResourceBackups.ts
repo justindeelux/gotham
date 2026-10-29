@@ -104,13 +104,16 @@ export function useResourceBackups(
     );
   }
 
-  const protection = computed(() =>
-    resourceType.value === "database"
-      ? backupsStore.protectionOf(resourceId.value)
-      : null,
-  );
+  const protection = computed(() => backupsStore.protectionOf(resource.value));
 
-  const showProtection = computed(() => resourceType.value === "database");
+  function runHref(backupId?: string): string {
+    if (!backupId) {
+      return "#backup-runs";
+    }
+    return backups.value.some((item) => item.id === backupId)
+      ? `#backup-run-${backupId}`
+      : "#backup-runs";
+  }
 
   async function fetchBackupTab(): Promise<void> {
     if (!resourceId.value) {
@@ -121,9 +124,7 @@ export function useResourceBackups(
       backupsStore.fetchBackups(ref),
       backupsStore.fetchRestores(ref),
       backupsStore.fetchSchedules(ref),
-      resourceType.value === "database"
-        ? backupsStore.fetchProtection(resourceId.value)
-        : Promise.resolve(),
+      backupsStore.fetchProtection(ref),
       authStore.isOwner ? backupsStore.fetchProviders() : Promise.resolve(),
     ]);
     notifyRestoreOutcomes();
@@ -177,9 +178,7 @@ export function useResourceBackups(
     await Promise.allSettled([
       backupsStore.refreshBackups(ref),
       backupsStore.fetchRestores(ref),
-      resourceType.value === "database"
-        ? backupsStore.fetchProtection(resourceId.value)
-        : Promise.resolve(),
+      backupsStore.fetchProtection(ref),
     ]);
     if (epoch !== restorePollEpoch) {
       return;
@@ -303,9 +302,7 @@ export function useResourceBackups(
         message.success(t("databases.backups.schedules.saved", { cron }));
       }
       resetScheduleForm();
-      if (resourceType.value === "database") {
-        await backupsStore.fetchProtection(resourceId.value);
-      }
+      await backupsStore.fetchProtection(resource.value);
     } catch (error) {
       message.error(describeBackupError(error));
     }
@@ -408,7 +405,7 @@ export function useResourceBackups(
     scheduleProviderOptions,
     providerLabel,
     protection,
-    showProtection,
+    runHref,
     fetchBackupTab,
     stopBackupPolling,
     syncBackupPolling,

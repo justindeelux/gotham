@@ -242,6 +242,19 @@ const en = {
     pausedToast: "Redirect rule paused.",
     deleted: "Redirect rule deleted.",
   },
+  form: {
+    host: "Host",
+    hostAria: "Domain hostname",
+    protocol: "Protocol",
+    protocolAria: "Protocol",
+    enabled: "Enabled",
+    enabledAria: "Domain enabled",
+    addTitle: "Add a domain",
+    editTitle: "Edit domain",
+    add: "Add domain",
+    save: "Save domain",
+    cancel: "Cancel",
+  },
   errors: {
     sessionExpired: "Your session expired. Please sign in again.",
     adminScope:

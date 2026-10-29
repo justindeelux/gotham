@@ -66,7 +66,7 @@ const en = {
     oom: "The application ran out of memory.",
     health: "The application is not passing its health check.",
     website: "The application domain is not answering as expected.",
-    backup: "A scheduled database backup is overdue or stuck.",
+    backup: "A scheduled backup is overdue or stuck.",
     unknown: "Gotham detected a problem with this resource.",
   },
   started: "Started {time}",

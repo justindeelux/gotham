@@ -196,7 +196,7 @@ const en = {
       title: "Backup protection",
       subtitle: "Schedule deadlines, from persisted results",
       notConfigured:
-        "Backup not configured. Add an enabled schedule to protect this database.",
+        "Backup not configured. Add an enabled schedule to protect this resource.",
       lastSuccess: "Last success",
       never: "never",
       expectedSlot: "expected slot",

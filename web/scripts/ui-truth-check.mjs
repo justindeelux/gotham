@@ -259,6 +259,8 @@ async function loadAuthHarness() {
     ].join("\n"),
     "@/features/databases": [
       "export const useDatabasesStore = () => globalThis.__userStores.databases;",
+    ].join("\n"),
+    "@/features/backups/stores/backups": [
       "export const useBackupsStore = () => globalThis.__userStores.backups;",
     ].join("\n"),
     "@/features/notifications": [
@@ -419,6 +421,10 @@ async function main() {
     assert(
       stripErrorPrefix("databases: connection refused") === "connection refused",
       "databases prefix stripped",
+    );
+    assert(
+      stripErrorPrefix("backups: target unreachable") === "target unreachable",
+      "backups prefix stripped",
     );
     assert(
       stripErrorPrefix("host:port unreachable") === "host:port unreachable",
@@ -721,14 +727,14 @@ async function main() {
 
   console.log("every describe path strips backend prefixes (fix round 1)");
   await check("database, proxy, service and generic paths strip", async () => {
-    const backups = await loadModule("../src/features/databases/api/backups.ts");
+    const backups = await loadModule("../src/features/backups/api/backups.ts");
     const databasesI18n = await loadApiWithCatalogs(
       "@/features/databases/api/databases",
       "databases",
       "@/features/databases/locales/en",
     );
     const backupsI18n = await loadApiWithCatalogs(
-      "@/features/databases/api/backups",
+      "@/features/backups/api/backups",
       "databases",
       "@/features/databases/locales/en",
     );

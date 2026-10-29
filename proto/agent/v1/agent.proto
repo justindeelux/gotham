@@ -56,6 +56,22 @@ service DockerService {
   // StreamLogs tails container logs; chunks stream until follow ends or the
   // client cancels.
   rpc StreamLogs(StreamLogsRequest) returns (stream LogChunk);
+  // VolumeArchiveCapabilities reports whether this node can archive volume
+  // data for backups. A node that predates the volume-archive transport answers
+  // codes.Unimplemented; the control plane must treat that as "update the node
+  // agent" and never fall back to a local archive.
+  rpc VolumeArchiveCapabilities(VolumeArchiveCapabilitiesRequest) returns (VolumeArchiveCapabilitiesResponse);
+  // ArchiveVolumes streams a tar.gz of the requested sources to the control
+  // plane. Sources are named Docker volumes or absolute bind paths declared by
+  // the control plane; the agent confines bind paths with a deny list and
+  // rejects any source that fails validation before starting a container. The
+  // caller cancels the stream to stop the archive.
+  rpc ArchiveVolumes(ArchiveVolumesRequest) returns (stream ArchiveChunk);
+  // RestoreVolumes streams a tar.gz produced by ArchiveVolumes into the target
+  // sources. The file is validated (manifest, member names, entry types) before
+  // the agent touches a target. The caller cancels the stream to stop the
+  // restore.
+  rpc RestoreVolumes(stream RestoreVolumesRequest) returns (RestoreVolumesResponse);
 }
 
 // BuildService runs on the node agent. The control plane dials it to build
@@ -1297,6 +1313,93 @@ message VolumeActionRequest {
 
 message VolumeActionResponse {}
 
+// VolumeArchiveCapabilitiesRequest is empty: the capability is node-local.
+message VolumeArchiveCapabilitiesRequest {}
+
+// VolumeArchiveCapabilitiesResponse reports the volume-archive transport.
+message VolumeArchiveCapabilitiesResponse {
+  // available is true when this node implements ArchiveVolumes and
+  // RestoreVolumes.
+  bool available = 1;
+  // capabilities lists the feature identifiers this node supports. A caller
+  // must check for "volume_archive.v1" and refuse the node otherwise.
+  repeated string capabilities = 2;
+}
+
+// ArchiveSource names one directory the archive helper mounts.
+message ArchiveSource {
+  // name is the manifest key and the directory name inside the archive. It is
+  // not a host path: the agent maps it to a mount inside the helper.
+  string name = 1;
+  oneof source {
+    // volume is a named Docker volume.
+    string volume = 2;
+    // path is an absolute bind path on the node.
+    string path = 3;
+  }
+}
+
+// ArchiveVolumesRequest selects the sources of one archive.
+message ArchiveVolumesRequest {
+  repeated ArchiveSource sources = 1;
+}
+
+// ArchiveChunk is one message of an ArchiveVolumes stream.
+message ArchiveChunk {
+  oneof part {
+    // data is a slice of the tar.gz. The first tar entry is the manifest.
+    bytes data = 1;
+    // result is the final message. It is sent once, after the last data
+    // message, and reports the helper's exit status and stderr tail.
+    ArchiveResult result = 2;
+  }
+}
+
+// ArchiveResult is the final ArchiveVolumes message.
+message ArchiveResult {
+  bool ok = 1;
+  int32 exit_code = 2;
+  // stderr_tail is the last few KiB of the helper's stderr, bounded by the
+  // agent. It never contains archive data.
+  string stderr_tail = 3;
+  // error is set when the agent could not produce an archive; ok is false.
+  string error = 4;
+  // bytes is the verified archive size the agent streamed. It equals the
+  // helper's produced size; a mismatch fails the call.
+  uint64 bytes = 5;
+  // sha256 is the helper's SHA-256 of the produced archive, lowercase hex.
+  string sha256 = 6;
+}
+
+// RestoreMode selects how a restore treats files already in the target.
+enum RestoreMode {
+  RESTORE_MODE_UNSPECIFIED = 0;
+  // RESTORE_MODE_REPLACE clears each target before extracting.
+  RESTORE_MODE_REPLACE = 1;
+  // RESTORE_MODE_OVERLAY keeps files that the archive does not contain.
+  RESTORE_MODE_OVERLAY = 2;
+}
+
+// RestoreVolumesHeader binds a restore stream to its targets. It must be the
+// first message of the stream.
+message RestoreVolumesHeader {
+  repeated ArchiveSource targets = 1;
+  RestoreMode mode = 2;
+}
+
+// RestoreVolumesRequest is one message of a RestoreVolumes stream.
+message RestoreVolumesRequest {
+  oneof part {
+    RestoreVolumesHeader header = 1;
+    bytes data = 2;
+  }
+}
+
+// RestoreVolumesResponse reports a completed restore.
+message RestoreVolumesResponse {
+  int32 restored_sources = 1;
+}
+
 // PullImageRequest pulls an image from a registry. username/password carry
 // one private-registry credential for this pull only: the agent builds the
 // Docker X-Registry-Auth header from them and never persists them. Empty
@@ -1343,6 +1446,16 @@ message CreateContainerRequest {
   int64 pids_limit = 12;
   int64 memory_bytes = 13;
   int64 nano_cpus = 14;
+  // log_config overrides the node daemon's log driver for this container. The
+  // volume-archive helper bounds its own diagnostics with a tiny json-file
+  // rotation; its archive bytes travel through a file, never through logs.
+  ContainerLogConfig log_config = 15;
+}
+
+// ContainerLogConfig is a container's native Docker log configuration.
+message ContainerLogConfig {
+  string driver = 1;
+  map<string, string> options = 2;
 }
 
 // ContainerHealthcheck is a container's native Docker healthcheck. test is the

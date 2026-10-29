@@ -26,11 +26,13 @@ owner DELETE /api/v1/servers/{id}/files/history/{version}
 owner DELETE /api/v1/servers/{id}/host-key
 owner DELETE /api/v1/servers/{id}/terminal/sessions/{sessionID}
 project DELETE /api/v1/services/{id}
+project DELETE /api/v1/services/{id}/domains/{domainId}
 personal DELETE /api/v1/tokens/{id}
 owner DELETE /api/v1/users/{id}
 personal DELETE /mcp
 project GET /api/v1/applications
 project GET /api/v1/applications/{id}
+project GET /api/v1/applications/{id}/backup-protection
 owner GET /api/v1/applications/{id}/deploy-key
 project GET /api/v1/applications/{id}/deployments
 project GET /api/v1/applications/{id}/deployments/{deployment_id}
@@ -127,9 +129,11 @@ owner GET /api/v1/servers/{id}/toolchain/jobs/{jobID}
 owner GET /api/v1/servers/{id}/tools
 project GET /api/v1/services
 project GET /api/v1/services/{id}
+project GET /api/v1/services/{id}/backup-protection
 project GET /api/v1/services/{id}/containers
 project GET /api/v1/services/{id}/deploys
 project GET /api/v1/services/{id}/logs
+project GET /api/v1/services/{id}/domains
 personal GET /api/v1/templates
 personal GET /api/v1/templates/{slug}
 owner GET /api/v1/terminal/targets
@@ -246,6 +250,7 @@ owner POST /api/v1/servers/{id}/toolchain/jobs
 owner POST /api/v1/servers/{id}/toolchain/jobs/{jobID}/cancel
 owner POST /api/v1/servers/{id}/validate
 project POST /api/v1/services
+project POST /api/v1/services/{id}/domains
 project POST /api/v1/services/{id}/deploy
 project POST /api/v1/services/{id}/restart
 project POST /api/v1/services/{id}/stop
@@ -269,6 +274,7 @@ owner PUT /api/v1/instance/settings/system
 owner PUT /api/v1/monitoring/settings
 owner PUT /api/v1/projects/{id}/members
 project PUT /api/v1/projects/{id}/variables
+project PUT /api/v1/services/{id}/domains/{domainId}
 owner PUT /api/v1/servers/{id}/files/content
 owner PUT /api/v1/updates/schedule
 owner PUT /api/v1/users/{id}/projects

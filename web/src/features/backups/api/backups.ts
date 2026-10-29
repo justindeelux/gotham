@@ -1,6 +1,7 @@
 import { http } from "@/shared/api/http";
 import { isApiError, stripErrorPrefix } from "@/features/servers";
 import { i18n } from "@/shared/i18n";
+import { toProviderBody } from "@/features/backups/utils/providerBody";
 
 export type ResourceType = "application" | "database" | "service";
 
@@ -142,7 +143,9 @@ export interface BackupProtectionSchedule {
 }
 
 export interface BackupProtectionSummary {
-  database_id: string;
+  resource_type: "application" | "database" | "service";
+  resource_id: string;
+  database_id?: string;
   status: BackupProtectionStatus;
   schedules: BackupProtectionSchedule[];
 }
@@ -338,31 +341,22 @@ export async function testProvider(
   return response.data.check;
 }
 
-// The protection observer still reports per database; GOTHAM-130 opens it to
-// every resource type. Until then the card renders for databases only.
-export async function getBackupProtection(
-  databaseId: string,
+export type BackupProtectionResource = "applications" | "databases" | "services";
+
+export async function getResourceBackupProtection(
+  resource: BackupProtectionResource,
+  resourceId: string,
 ): Promise<BackupProtectionSummary> {
   const response = await http.get<BackupProtectionEnvelope>(
-    `/databases/${databaseId}/backup-protection`,
+    `/${resource}/${resourceId}/backup-protection`,
   );
   return response.data.protection;
 }
 
-export function toProviderBody(
-  input: CreateProviderInput | UpdateProviderInput,
-): Record<string, unknown> {
-  const body: Record<string, unknown> = {};
-  for (const [key, value] of Object.entries(input)) {
-    if (typeof value === "string") {
-      if (value.trim() !== "" || key === "region" || key === "prefix") {
-        body[key] = value;
-      }
-    } else if (value !== undefined) {
-      body[key] = value;
-    }
-  }
-  return body;
+export async function getBackupProtection(
+  databaseId: string,
+): Promise<BackupProtectionSummary> {
+  return getResourceBackupProtection("databases", databaseId);
 }
 
 export function describeBackupError(error: unknown): string {

@@ -41,7 +41,13 @@ function t(key: string): string {
 
 <template>
   <NSpace vertical :size="16" style="margin-top: 16px">
-    <BackupProtectionCard v-if="backups.showProtection.value" />
+    <BackupProtectionCard
+      :summary="backups.protection.value"
+      :loading="backups.backupsStore.protectionLoading"
+      :error="backups.backupsStore.protectionError"
+      :target-label="backups.providerLabel"
+      :run-href="backups.runHref"
+    />
     <BackupRunsCard />
     <RestoreHistoryCard v-if="backups.restores.value.length > 0" />
     <BackupSchedulesCard />

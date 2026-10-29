@@ -7,12 +7,17 @@ const vi: typeof en = {
     compose: "Compose",
     env: "Môi trường",
     containers: "Container",
+    domains: "Tên miền",
     logs: "Nhật ký",
     settings: "Cài đặt",
   },
   validation: {
     nameRequired: "Nhập tên dịch vụ.",
     nodeRequired: "Chọn một node.",
+    domainHost:
+      "Nhập tên miền thuần như app.example.com (chữ, số, dấu gạch nối và dấu chấm; không dùng wildcard).",
+    domainPort: "Nhập cổng container từ 1 đến 65535.",
+    domainTarget: "Chọn một compose service.",
   },
   status: {
     creating: "đang tạo",
@@ -78,6 +83,7 @@ const vi: typeof en = {
     empty: "Môi trường đang trống. Lưu môi trường trống sẽ xóa sạch nó.",
     add: "Thêm biến",
     save: "Lưu môi trường",
+    reservedKey: "{key} được suy ra từ tên miền của dịch vụ và không thể đặt tại đây.",
     unavailable: "Không có môi trường.",
     loading: "Đang tải môi trường…",
   },
@@ -147,7 +153,46 @@ const vi: typeof en = {
     updated: "Đã cập nhật",
     domains: "Tên miền",
     unknownNode: "node không rõ",
-    noDomains: "Chưa có tên miền được định tuyến. Một compose service được định tuyến bằng nhãn {label}.",
+    noDomains: "Chưa gắn tên miền nào.",
+    open: "Mở",
+  },
+  domains: {
+    title: "Tên miền",
+    hint: "Mỗi tên miền định tuyến tới một compose service và cổng container. HTTPS kết thúc TLS tại proxy rồi chuyển tiếp HTTP thường tới container.",
+    add: "Thêm tên miền",
+    host: "Tên miền",
+    target: "Đích",
+    port: "Cổng",
+    protocol: "Giao thức",
+    protocolHttp: "HTTP",
+    protocolHttps: "HTTPS",
+    enabled: "Bật",
+    enabledOn: "đang bật",
+    disabled: "đã tắt",
+    notEnabled: "—",
+    toggleAria: "Bật tên miền {domain}",
+    edit: "Sửa",
+    editAria: "Sửa tên miền {domain}",
+    remove: "Gỡ",
+    removeAria: "Gỡ {domain}",
+    removeConfirm:
+      "Gỡ {domain} khỏi dịch vụ này? Chỉ các tuyến biến mất; container không khởi động lại.",
+    openCompose: "Mở compose",
+    actions: "Thao tác",
+    fromCompose: "Từ tệp compose",
+    portHint:
+      "Dùng cổng container đang lắng nghe. Cổng phải được công bố trong tài liệu compose (ports hoặc expose).",
+    portPlaceholder: "3001",
+    portAria: "Cổng container đích",
+    targetPlaceholder: "Chọn một compose service",
+    targetAria: "Compose service cần định tuyến",
+    empty: "Chưa gắn tên miền nào. Thêm một tên miền để truy cập dịch vụ qua hostname.",
+    status: {
+      routed: "Đã định tuyến",
+      held: "Bị giữ lại",
+      shadowed: "Bị che",
+      unknown: "Không rõ",
+    },
   },
   logs: {
     title: "Nhật ký dịch vụ",
@@ -187,6 +232,9 @@ const vi: typeof en = {
     deployFailedTitle: "Triển khai thất bại",
     deployingBanner:
       "Quá trình triển khai đang chạy nền. Trang này theo dõi và dừng khi hoàn tất.",
+    domainsPendingTitle: "Triển khai lại để áp dụng thay đổi tên miền",
+    domainsPendingBody:
+      "Bộ tên miền mới đã được lưu. Container đang chạy sẽ nhận từ lần triển khai tiếp theo.",
   },
   toast: {
     created: "Đã tạo dịch vụ {name}.",
@@ -198,6 +246,9 @@ const vi: typeof en = {
     restartSent: "Đã gửi lệnh khởi động lại tới node agent.",
     started: "Đã gửi lệnh khởi động tới node agent.",
     deleted: "Đã xóa dịch vụ. Các volume có tên vẫn giữ trên node.",
+    domainAdded: "Đã thêm tên miền.",
+    domainSaved: "Đã lưu tên miền.",
+    domainRemoved: "Đã gỡ tên miền.",
   },
 };
 

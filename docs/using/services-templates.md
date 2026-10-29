@@ -61,7 +61,17 @@ into the YAML are your own content and are not redacted.
 
 ### Domains
 
-A compose service is routed by labels, not by a separate domain page:
+A service can be routed in two ways.
+
+**Managed domains** are added after the service exists, from the Domains tab on
+the service detail page (API: `GET`/`POST /api/v1/services/{id}/domains` and
+`PUT`/`DELETE /api/v1/services/{id}/domains/{domainId}`). Each row picks the
+compose service, the container port and HTTP or HTTPS. Several domains may point
+at the same service, and every row can be disabled. Adding, changing or
+removing a domain resyncs the proxy, so the route appears without a redeploy.
+
+**Declared in compose** labels keep working for imported documents and existing
+services:
 
 ```yaml
 services:
@@ -74,8 +84,23 @@ services:
 
 `gotham.domain` is validated with the same rules as application domains, and
 `gotham.domain.port` defaults to 80. The domain label may itself be a `${VAR}`
-reference. See [Domains and previews](/using/domains-previews) for DNS and
-certificates, and [Proxy and DNS](/operating/proxy-dns) for the operator side.
+reference. Label routes are listed read-only with source `compose`; a label and
+a managed row for the same host are both held back with a diagnostic instead of
+silently picking one.
+
+When the control plane renders the document for deploy, validation and proxy, it
+injects `GOTHAM_DOMAIN` (the first enabled host) and `GOTHAM_DOMAINS` (the
+comma-separated host list). They are empty strings when the service has no
+domain. Templates can reference them; the two names are reserved and rejected in
+the service environment. A domain change marks the service `pending_changes:
+["domains"]` until the next successful deploy picks up the variables.
+
+HTTPS rows serve through the default ACME resolver and redirect HTTP to HTTPS,
+exactly like application domains. A host is claimed platform-wide: a domain
+already used by an application, a redirect source, another service or a compose
+label is rejected at write time with `409`. See
+[Domains and previews](/using/domains-previews) for DNS and certificates, and
+[Proxy and DNS](/operating/proxy-dns) for the operator side.
 
 ## Create a service
 

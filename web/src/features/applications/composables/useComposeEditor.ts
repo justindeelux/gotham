@@ -7,7 +7,7 @@ import {
   composeServiceSchema,
 } from "@/features/applications/schemas/applications";
 import { useApplicationsStore } from "@/features/applications/stores/applications";
-import { extractComposeServiceNames } from "@/features/applications/utils/compose";
+import { extractComposeServiceNames } from "@/shared/utils/compose";
 
 export function useComposeEditor(source: Ref<Application | null> | Application | null) {
   const appsStore = useApplicationsStore();

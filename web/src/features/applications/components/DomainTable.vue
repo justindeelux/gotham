@@ -17,6 +17,7 @@ import {
   certificateStatusTagType,
   type Certificate,
 } from "@/features/domains";
+import DomainHostCell from "@/features/domains/components/DomainHostCell.vue";
 
 interface Props {
   rows: ApplicationDomain[];
@@ -50,12 +51,7 @@ const columns = computed<DataTableColumns<ApplicationDomain>>(() => [
     minWidth: 220,
     render: (row) => {
       const diagnostic = props.diagnosticOf(row.domain);
-      return h("div", { class: "domain-host-cell" }, [
-        h("span", { class: "mono domain-name" }, row.domain),
-        diagnostic
-          ? h("span", { class: "domain-diagnostic" }, diagnostic)
-          : null,
-      ]);
+      return h(DomainHostCell, { host: row.domain, reason: diagnostic });
     },
   },
   {
@@ -222,22 +218,6 @@ function rowProps(): Record<string, unknown> {
 
 .domain-table :deep(.domain-row) {
   vertical-align: middle;
-}
-
-.domain-table :deep(.domain-name) {
-  overflow-wrap: anywhere;
-}
-
-.domain-table :deep(.domain-host-cell) {
-  display: flex;
-  flex-direction: column;
-  gap: 2px;
-}
-
-.domain-table :deep(.domain-diagnostic) {
-  font-size: var(--text-xs);
-  color: var(--warn);
-  overflow-wrap: anywhere;
 }
 
 .domain-table :deep(.n-data-table-th) {

@@ -2,7 +2,9 @@ package e2e
 
 import (
 	"context"
+	"io"
 	"net"
+	"strings"
 	"testing"
 
 	"github.com/google/uuid"
@@ -53,6 +55,15 @@ func (fakeBindDocker) Logs(context.Context, string, bool, int64) (<-chan agent.L
 	ch := make(chan agent.LogMessage)
 	close(ch)
 	return ch, nil
+}
+func (fakeBindDocker) VolumeMountpoint(context.Context, string) (string, error) {
+	return "/var/lib/docker/volumes/test/_data", nil
+}
+func (fakeBindDocker) ExportArchive(context.Context, string, string) (io.ReadCloser, error) {
+	return io.NopCloser(strings.NewReader("")), nil
+}
+func (fakeBindDocker) ImportArchive(context.Context, string, string, io.Reader) error {
+	return nil
 }
 
 func TestAgentAcceptsTraefikProxyVolumes(t *testing.T) {

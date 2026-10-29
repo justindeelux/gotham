@@ -9,13 +9,15 @@ const {
   listRestores,
   listSchedules,
   listProviders,
-  getBackupProtection,
+  getResourceBackupProtection,
 } = vi.hoisted(() => ({
   listBackups: vi.fn(async () => []),
   listRestores: vi.fn(async () => []),
   listSchedules: vi.fn(async () => []),
   listProviders: vi.fn(async () => []),
-  getBackupProtection: vi.fn(async () => ({
+  getResourceBackupProtection: vi.fn(async () => ({
+    resource_type: "database",
+    resource_id: "db-1",
     database_id: "db-1",
     status: "not_configured",
     schedules: [],
@@ -31,7 +33,7 @@ vi.mock("@/features/backups/api/backups", async (importOriginal) => {
     listRestores,
     listSchedules,
     listProviders,
-    getBackupProtection,
+    getResourceBackupProtection,
   };
 });
 
@@ -79,7 +81,7 @@ beforeEach(() => {
   listRestores.mockClear();
   listSchedules.mockClear();
   listProviders.mockClear();
-  getBackupProtection.mockClear();
+  getResourceBackupProtection.mockClear();
 });
 
 describe("resource backups tab mount", () => {
@@ -121,7 +123,7 @@ describe("resource backups tab mount", () => {
       expect(listRestores).toHaveBeenCalledTimes(1);
       expect(listSchedules).toHaveBeenCalledTimes(1);
       expect(listProviders).toHaveBeenCalledTimes(1);
-      expect(getBackupProtection).toHaveBeenCalledTimes(1);
+      expect(getResourceBackupProtection).toHaveBeenCalledTimes(1);
       expect(listBackups).toHaveBeenCalledWith({
         resource: { resource_type: "database", resource_id: "db-1" },
       });

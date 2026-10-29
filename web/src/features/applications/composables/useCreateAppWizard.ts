@@ -53,7 +53,7 @@ import {
   type SourceType,
 } from "@/features/applications/schemas/applications";
 import type { BuildArgRow } from "@/features/applications/utils/buildArgs";
-import { extractComposeServiceNames } from "@/features/applications/utils/compose";
+import { extractComposeServiceNames } from "@/shared/utils/compose";
 
 export interface WizardForm {
   sourceType: SourceType;

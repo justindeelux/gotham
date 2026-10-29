@@ -13,10 +13,10 @@ import (
 )
 
 type fakeSource struct {
-	schedules []ScheduleEvidence
-	active    []string
-	database  DatabaseInfo
-	dbErr     error
+	schedules   []ScheduleEvidence
+	active      []string
+	resource    ResourceInfo
+	resourceErr error
 }
 
 func (f *fakeSource) ProtectionSchedules(context.Context) ([]ScheduleEvidence, error) {
@@ -27,11 +27,11 @@ func (f *fakeSource) ActiveProtectionIncidents(context.Context) ([]string, error
 	return f.active, nil
 }
 
-func (f *fakeSource) Database(context.Context, uuid.UUID) (DatabaseInfo, error) {
-	if f.dbErr != nil {
-		return DatabaseInfo{}, f.dbErr
+func (f *fakeSource) Resource(context.Context, string, uuid.UUID) (ResourceInfo, error) {
+	if f.resourceErr != nil {
+		return ResourceInfo{}, f.resourceErr
 	}
-	return f.database, nil
+	return f.resource, nil
 }
 
 type fakeLeases struct {
@@ -77,7 +77,7 @@ func TestObserverFollowsOverdueStuckAndLateSuccess(t *testing.T) {
 	now := slot.Add(OverdueGrace + time.Minute)
 	databaseID := uuid.New()
 	schedule := ScheduleEvidence{
-		ScheduleID: uuid.New(), DatabaseID: databaseID, DatabaseName: "orders",
+		ScheduleID: uuid.New(), ResourceType: ResourceDatabase, ResourceID: databaseID, ResourceName: "orders",
 		ProjectID: uuid.New(), TargetName: "offsite", Enabled: true,
 		NextRunAt: slot, MaxRunSeconds: 7200,
 	}
@@ -138,7 +138,7 @@ func TestObserverStuckThresholdAppliesToLiveLease(t *testing.T) {
 	databaseID, runID := uuid.New(), uuid.New()
 	running := slot.Add(time.Minute)
 	schedule := ScheduleEvidence{
-		ScheduleID: uuid.New(), DatabaseID: databaseID, Enabled: true,
+		ScheduleID: uuid.New(), ResourceType: ResourceDatabase, ResourceID: databaseID, Enabled: true,
 		NextRunAt: slot, RunningSince: &running, RunningID: runID,
 		MaxRunSeconds: int(15 * time.Minute / time.Second),
 	}
@@ -180,7 +180,7 @@ func TestObserverTargetChangeDoesNotAlertForTheOldSlot(t *testing.T) {
 	slot := time.Date(2026, 10, 27, 2, 0, 0, 0, time.UTC)
 	changed := slot.Add(10 * time.Minute)
 	schedule := ScheduleEvidence{
-		ScheduleID: uuid.New(), DatabaseID: uuid.New(), Enabled: true,
+		ScheduleID: uuid.New(), ResourceType: ResourceDatabase, ResourceID: uuid.New(), Enabled: true,
 		NextRunAt: slot, LastSlotAt: slot, TargetChangedAt: changed,
 		MaxRunSeconds: 7200,
 	}
@@ -209,7 +209,7 @@ func TestObserverTargetChangeDoesNotAlertForTheOldSlot(t *testing.T) {
 	now = slot.Add(2 * time.Hour)
 	source.schedules[0].NextRunAt = slot
 	source.schedules[0].LastSlotAt = slot
-	source.active = []string{Identity(schedule.ScheduleID)}
+	source.active = []string{Identity(ResourceDatabase, schedule.ScheduleID)}
 	service.tick(context.Background())
 	last = reporter.reports[len(reporter.reports)-1]
 	if !last.Valid || !last.Unhealthy {
@@ -222,7 +222,7 @@ func TestObserverWithoutLeaseEvidenceUsesMaxRun(t *testing.T) {
 	running := slot.Add(time.Minute)
 	now := slot.Add(90 * time.Minute)
 	schedule := ScheduleEvidence{
-		ScheduleID: uuid.New(), DatabaseID: uuid.New(), Enabled: true,
+		ScheduleID: uuid.New(), ResourceType: ResourceDatabase, ResourceID: uuid.New(), Enabled: true,
 		NextRunAt: slot, RunningSince: &running, MaxRunSeconds: 7200,
 	}
 	source := &fakeSource{schedules: []ScheduleEvidence{schedule}}
@@ -243,10 +243,10 @@ func TestObserverWithoutLeaseEvidenceUsesMaxRun(t *testing.T) {
 
 func TestObserverClosesDisabledAndRemovedSchedules(t *testing.T) {
 	now := time.Now().UTC()
-	schedule := ScheduleEvidence{ScheduleID: uuid.New(), DatabaseID: uuid.New(), Enabled: false}
+	schedule := ScheduleEvidence{ScheduleID: uuid.New(), ResourceType: ResourceDatabase, ResourceID: uuid.New(), Enabled: false}
 	source := &fakeSource{
 		schedules: []ScheduleEvidence{schedule},
-		active:    []string{Identity(schedule.ScheduleID)},
+		active:    []string{Identity(ResourceDatabase, schedule.ScheduleID)},
 	}
 	reporter := &fakeIncidents{}
 	service := newTestService(source, reporter, nil, &now)
@@ -256,7 +256,7 @@ func TestObserverClosesDisabledAndRemovedSchedules(t *testing.T) {
 		t.Fatalf("disabled closes = %+v", reporter.closed)
 	}
 
-	removedIdentity := Identity(uuid.New())
+	removedIdentity := Identity(ResourceDatabase, uuid.New())
 	source.schedules = nil
 	source.active = []string{removedIdentity}
 	reporter.closed = nil
@@ -272,7 +272,7 @@ func TestObserverClosesDisabledAndRemovedSchedules(t *testing.T) {
 func TestObserverSkipsDisabledScheduleWithoutActiveIncident(t *testing.T) {
 	now := time.Now().UTC()
 	source := &fakeSource{schedules: []ScheduleEvidence{{
-		ScheduleID: uuid.New(), DatabaseID: uuid.New(), Enabled: false,
+		ScheduleID: uuid.New(), ResourceType: ResourceDatabase, ResourceID: uuid.New(), Enabled: false,
 	}}}
 	reporter := &fakeIncidents{}
 	newTestService(source, reporter, nil, &now).tick(context.Background())
@@ -284,15 +284,79 @@ func TestObserverSkipsDisabledScheduleWithoutActiveIncident(t *testing.T) {
 func TestSummaryNotConfiguredWithoutEnabledSchedule(t *testing.T) {
 	databaseID := uuid.New()
 	source := &fakeSource{
-		database: DatabaseInfo{ID: databaseID, Name: "orders"},
+		resource: ResourceInfo{Type: ResourceDatabase, ID: databaseID, Name: "orders"},
 		schedules: []ScheduleEvidence{{
-			ScheduleID: uuid.New(), DatabaseID: databaseID, Enabled: false,
+			ScheduleID: uuid.New(), ResourceType: ResourceDatabase, ResourceID: databaseID, Enabled: false,
 		}},
 	}
 	service := NewService(Config{Store: source, Incidents: &fakeIncidents{}})
-	summary, err := service.Summary(context.Background(), databaseID)
+	summary, err := service.Summary(context.Background(), ResourceDatabase, databaseID)
 	if err != nil {
 		t.Fatal(err)
+	}
+	if summary.Status != StatusNotConfigured {
+		t.Fatalf("status = %q, want not_configured", summary.Status)
+	}
+}
+
+func TestObserverReportsEachResourceTypeWithItsOwnIncident(t *testing.T) {
+	slot := time.Date(2026, 10, 27, 2, 0, 0, 0, time.UTC)
+	now := slot.Add(OverdueGrace + time.Minute)
+	applicationID, serviceID := uuid.New(), uuid.New()
+	applicationSchedule := ScheduleEvidence{
+		ScheduleID: uuid.New(), ResourceType: ResourceApplication, ResourceID: applicationID,
+		ResourceName: "shop", Enabled: true, NextRunAt: slot, MaxRunSeconds: 7200,
+	}
+	serviceSchedule := ScheduleEvidence{
+		ScheduleID: uuid.New(), ResourceType: ResourceService, ResourceID: serviceID,
+		ResourceName: "watchtower", Enabled: true, NextRunAt: slot, MaxRunSeconds: 7200,
+	}
+	source := &fakeSource{schedules: []ScheduleEvidence{applicationSchedule, serviceSchedule}}
+	reporter := &fakeIncidents{}
+	service := newTestService(source, reporter, nil, &now)
+
+	service.tick(context.Background())
+	if len(reporter.reports) != 2 {
+		t.Fatalf("reports = %d, want 2", len(reporter.reports))
+	}
+	for _, report := range reporter.reports {
+		switch report.ResourceType {
+		case ResourceApplication:
+			if report.ResourceID != applicationID || report.ResourceName != "shop" {
+				t.Fatalf("application report = %+v", report)
+			}
+		case ResourceService:
+			if report.ResourceID != serviceID || report.ResourceName != "watchtower" {
+				t.Fatalf("service report = %+v", report)
+			}
+		default:
+			t.Fatalf("unexpected resource type %q", report.ResourceType)
+		}
+	}
+	if reporter.reports[0].Identity == reporter.reports[1].Identity {
+		t.Fatal("application and service schedules share an incident identity")
+	}
+}
+
+func TestSummaryForAResourceThatIsNotADatabase(t *testing.T) {
+	applicationID := uuid.New()
+	source := &fakeSource{
+		resource: ResourceInfo{Type: ResourceApplication, ID: applicationID, Name: "shop"},
+		schedules: []ScheduleEvidence{{
+			ScheduleID: uuid.New(), ResourceType: ResourceApplication, ResourceID: applicationID,
+			ResourceName: "shop", Enabled: false,
+		}},
+	}
+	service := NewService(Config{Store: source, Incidents: &fakeIncidents{}})
+	summary, err := service.Summary(context.Background(), ResourceApplication, applicationID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if summary.ResourceType != ResourceApplication || summary.ResourceID != applicationID.String() {
+		t.Fatalf("summary = %+v", summary)
+	}
+	if summary.DatabaseID != "" {
+		t.Fatalf("application summary exposed database_id %q", summary.DatabaseID)
 	}
 	if summary.Status != StatusNotConfigured {
 		t.Fatalf("status = %q, want not_configured", summary.Status)

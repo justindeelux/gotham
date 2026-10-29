@@ -9,7 +9,7 @@ import {
   deleteProvider,
   deleteSchedule,
   describeBackupError,
-  getBackupProtection,
+  getResourceBackupProtection,
   listBackups,
   listProviders,
   listRestores,
@@ -34,6 +34,7 @@ import type {
   UpdateProviderInput,
   UpdateScheduleInput,
 } from "@/features/backups/api/backups";
+import { mergeBackupsById } from "@/features/backups/utils/backupMerge";
 
 export function resourceKey(ref: ResourceRef): string {
   return `${ref.resource_type}:${ref.resource_id}`;
@@ -43,7 +44,7 @@ export const useBackupsStore = defineStore("backups", () => {
   const backupsByResource = ref<Record<string, BackupRun[]>>({});
   const restoresByResource = ref<Record<string, BackupRestore[]>>({});
   const schedulesByResource = ref<Record<string, BackupSchedule[]>>({});
-  const protectionByDatabase = ref<Record<string, BackupProtectionSummary>>({});
+  const protectionByResource = ref<Record<string, BackupProtectionSummary>>({});
 
   const allBackups = ref<BackupRun[]>([]);
   const allSchedules = ref<BackupSchedule[]>([]);
@@ -88,8 +89,8 @@ export const useBackupsStore = defineStore("backups", () => {
     return schedulesByResource.value[resourceKey(ref)] ?? [];
   }
 
-  function protectionOf(databaseId: string): BackupProtectionSummary | null {
-    return protectionByDatabase.value[databaseId] ?? null;
+  function protectionOf(ref: ResourceRef): BackupProtectionSummary | null {
+    return protectionByResource.value[resourceKey(ref)] ?? null;
   }
 
   function providerOf(providerId: string | undefined): StorageProvider | null {
@@ -103,9 +104,10 @@ export const useBackupsStore = defineStore("backups", () => {
     backupsLoading.value = true;
     backupsErrorRaw.value = null;
     try {
-      backupsByResource.value[resourceKey(ref)] = await listBackups({
-        resource: ref,
-      });
+      backupsByResource.value[resourceKey(ref)] = mergeBackupsById(
+        backupsByResource.value[resourceKey(ref)] ?? [],
+        await listBackups({ resource: ref }),
+      );
     } catch (err) {
       backupsErrorRaw.value = err;
       throw err;
@@ -116,9 +118,10 @@ export const useBackupsStore = defineStore("backups", () => {
 
   async function refreshBackups(ref: ResourceRef): Promise<void> {
     try {
-      backupsByResource.value[resourceKey(ref)] = await listBackups({
-        resource: ref,
-      });
+      backupsByResource.value[resourceKey(ref)] = mergeBackupsById(
+        backupsByResource.value[resourceKey(ref)] ?? [],
+        await listBackups({ resource: ref }),
+      );
       backupsErrorRaw.value = null;
     } catch (err) {
       backupsErrorRaw.value = err;
@@ -129,7 +132,10 @@ export const useBackupsStore = defineStore("backups", () => {
     allLoading.value = true;
     backupsErrorRaw.value = null;
     try {
-      allBackups.value = await listBackups({ status, limit: 200 });
+      allBackups.value = mergeBackupsById(
+        allBackups.value,
+        await listBackups({ status, limit: 200 }),
+      );
     } catch (err) {
       backupsErrorRaw.value = err;
       throw err;
@@ -177,12 +183,18 @@ export const useBackupsStore = defineStore("backups", () => {
     }
   }
 
-  async function fetchProtection(databaseId: string): Promise<void> {
+  async function fetchProtection(ref: ResourceRef): Promise<void> {
     protectionLoading.value = true;
     protectionErrorRaw.value = null;
     try {
-      protectionByDatabase.value[databaseId] =
-        await getBackupProtection(databaseId);
+      protectionByResource.value[resourceKey(ref)] =
+        await getResourceBackupProtection(
+          `${ref.resource_type}s` as
+            | "applications"
+            | "databases"
+            | "services",
+          ref.resource_id,
+        );
     } catch (err) {
       protectionErrorRaw.value = err;
       throw err;
@@ -398,7 +410,7 @@ export const useBackupsStore = defineStore("backups", () => {
     backupsByResource.value = {};
     restoresByResource.value = {};
     schedulesByResource.value = {};
-    protectionByDatabase.value = {};
+    protectionByResource.value = {};
     allBackups.value = [];
     allSchedules.value = [];
     backupsLoading.value = false;
@@ -422,7 +434,7 @@ export const useBackupsStore = defineStore("backups", () => {
     backupsByResource,
     restoresByResource,
     schedulesByResource,
-    protectionByDatabase,
+    protectionByResource,
     allBackups,
     allSchedules,
     backupsLoading,

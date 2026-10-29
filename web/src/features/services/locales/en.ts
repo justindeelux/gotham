@@ -5,12 +5,17 @@ const en = {
     compose: "Compose",
     env: "Environment",
     containers: "Containers",
+    domains: "Domains",
     logs: "Logs",
     settings: "Settings",
   },
   validation: {
     nameRequired: "Enter a service name.",
     nodeRequired: "Select a node.",
+    domainHost:
+      "Enter a plain hostname such as app.example.com (letters, digits, hyphens and dots; no wildcard).",
+    domainPort: "Enter a container port between 1 and 65535.",
+    domainTarget: "Select a compose service.",
   },
   status: {
     creating: "creating",
@@ -76,6 +81,7 @@ const en = {
     empty: "The environment is empty. Saving an empty environment clears it.",
     add: "Add variable",
     save: "Save environment",
+    reservedKey: "{key} is derived from the service domains and cannot be set here.",
     unavailable: "The environment is unavailable.",
     loading: "Loading the environment…",
   },
@@ -145,7 +151,46 @@ const en = {
     updated: "Updated",
     domains: "Domains",
     unknownNode: "unknown node",
-    noDomains: "No routed domain. A compose service is routed by the {label} label.",
+    noDomains: "No domain attached yet.",
+    open: "Open",
+  },
+  domains: {
+    title: "Domains",
+    hint: "Each hostname routes to one compose service and container port. HTTPS terminates TLS at the proxy and forwards plain HTTP to the container.",
+    add: "Add domain",
+    host: "Host",
+    target: "Target",
+    port: "Port",
+    protocol: "Protocol",
+    protocolHttp: "HTTP",
+    protocolHttps: "HTTPS",
+    enabled: "Enabled",
+    enabledOn: "enabled",
+    disabled: "disabled",
+    notEnabled: "—",
+    toggleAria: "Enable domain {domain}",
+    edit: "Edit",
+    editAria: "Edit domain {domain}",
+    remove: "Remove",
+    removeAria: "Remove {domain}",
+    removeConfirm:
+      "Detach {domain} from this service? Only its routes disappear; the containers are not restarted.",
+    openCompose: "Open compose",
+    actions: "Actions",
+    fromCompose: "From compose file",
+    portHint:
+      "Use the port the container listens on. It must be published in the compose document (ports or expose).",
+    portPlaceholder: "3001",
+    portAria: "Target container port",
+    targetPlaceholder: "Select a compose service",
+    targetAria: "Compose service to route to",
+    empty: "No domain attached yet. Add one to reach the service from a hostname.",
+    status: {
+      routed: "Routed",
+      held: "Held back",
+      shadowed: "Shadowed",
+      unknown: "Unknown",
+    },
   },
   logs: {
     title: "Service logs",
@@ -185,6 +230,9 @@ const en = {
     deployFailedTitle: "Deploy failed",
     deployingBanner:
       "The deploy is running in the background. This page follows it and stops when it finishes.",
+    domainsPendingTitle: "Redeploy to apply the domain change",
+    domainsPendingBody:
+      "The new domain set is stored. The running containers pick it up on the next deploy.",
   },
   toast: {
     created: "Service {name} created.",
@@ -196,6 +244,9 @@ const en = {
     restartSent: "Restart sent to the node agent.",
     started: "Start sent to the node agent.",
     deleted: "Service deleted. Named volumes were kept on the node.",
+    domainAdded: "Domain added.",
+    domainSaved: "Domain saved.",
+    domainRemoved: "Domain removed.",
   },
 };
 

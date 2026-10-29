@@ -131,6 +131,10 @@ async function openResource(logs = false): Promise<void> {
     return;
   }
   const id = props.incident.resource_id ?? "";
+  const backups =
+    props.incident.detector === "backup_protection"
+      ? { tab: "backups" }
+      : undefined;
   pending.value = true;
   try {
     if (link.value.kind === "application") {
@@ -142,7 +146,7 @@ async function openResource(logs = false): Promise<void> {
           environmentId: application.environment_id,
           id: application.id,
         },
-        query: logs ? { tab: "logs" } : undefined,
+        query: logs ? { tab: "logs" } : backups,
       });
     } else if (link.value.kind === "database") {
       const database = await getDatabase(id);
@@ -153,10 +157,7 @@ async function openResource(logs = false): Promise<void> {
           environmentId: database.environment_id,
           id: database.id,
         },
-        query:
-          props.incident.detector === "backup_protection"
-            ? { tab: "backups" }
-            : undefined,
+        query: backups,
       });
     } else {
       const service = await getService(id);
@@ -167,6 +168,7 @@ async function openResource(logs = false): Promise<void> {
           environmentId: service.environment_id,
           id: service.id,
         },
+        query: backups,
       });
     }
   } catch {

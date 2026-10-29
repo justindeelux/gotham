@@ -168,8 +168,71 @@ func TestProtectionSchedulesMatchDatabaseAndTarget(t *testing.T) {
 		t.Fatalf("target change not persisted: %+v", rows)
 	}
 
+	// Applications and services use the same schedule and run tables. Their
+	// evidence is scoped to their own resource columns, so an application's
+	// success must not satisfy a service schedule.
+	applicationID, serviceID := uuid.New(), uuid.New()
+	if _, err := st.DB.Exec(ctx, `INSERT INTO applications (id, user_id, server_id, environment_id, name)
+		VALUES ($1, $2, $3, $4, 'storefront')`, applicationID, user.ID, server.ID, environment.ID); err != nil {
+		t.Fatalf("insert application: %v", err)
+	}
+	if _, err := st.DB.Exec(ctx, `INSERT INTO services (id, user_id, server_id, environment_id, name, compose_yaml)
+		VALUES ($1, $2, $3, $4, 'watchtower', 'services: {}')`, serviceID, user.ID, server.ID, environment.ID); err != nil {
+		t.Fatalf("insert service: %v", err)
+	}
+	for _, resource := range []struct {
+		column string
+		id     uuid.UUID
+	}{{"application_id", applicationID}, {"service_id", serviceID}} {
+		if _, err := st.DB.Exec(ctx, `INSERT INTO backup_schedules
+			(id, `+resource.column+`, cron, target_id, enabled, next_run_at, last_slot_at, max_run_seconds)
+			VALUES ($1, $2, '0 2 * * *', $3, true, $4, $5, 7200)`,
+			uuid.New(), resource.id, targetA, slot.Add(24*time.Hour), slot); err != nil {
+			t.Fatalf("insert %s schedule: %v", resource.column, err)
+		}
+	}
+	if _, err := st.DB.Exec(ctx, `INSERT INTO backups
+		(id, application_id, type, status, target_id, created_at, finished_at)
+		VALUES ($1, $2, 'manual', 'completed', $3, $4, $4)`,
+		uuid.New(), applicationID, targetA, slot.Add(15*time.Minute)); err != nil {
+		t.Fatalf("insert application backup: %v", err)
+	}
+	rows, err = source.ProtectionSchedules(ctx)
+	if err != nil {
+		t.Fatalf("ProtectionSchedules for every resource: %v", err)
+	}
+	if len(rows) != 3 {
+		t.Fatalf("rows = %d, want one per resource", len(rows))
+	}
+	byType := make(map[string]ScheduleEvidence, len(rows))
+	for _, row := range rows {
+		byType[row.ResourceType] = row
+	}
+	applicationRow, ok := byType[ResourceApplication]
+	if !ok || applicationRow.ResourceID != applicationID || applicationRow.ResourceName != "storefront" {
+		t.Fatalf("application row = %+v", applicationRow)
+	}
+	if applicationRow.LastSuccessAt == nil || !applicationRow.LastSuccessAt.Equal(slot.Add(15*time.Minute)) {
+		t.Fatalf("application last success = %v", applicationRow.LastSuccessAt)
+	}
+	if applicationRow.ProjectID != uuid.UUID(project.ID.Bytes) {
+		t.Fatalf("application project = %s", applicationRow.ProjectID)
+	}
+	serviceRow, ok := byType[ResourceService]
+	if !ok || serviceRow.ResourceID != serviceID || serviceRow.ResourceName != "watchtower" {
+		t.Fatalf("service row = %+v", serviceRow)
+	}
+	if serviceRow.LastSuccessAt != nil {
+		t.Fatalf("application backup satisfied the service schedule: %v", serviceRow.LastSuccessAt)
+	}
+	databaseRow, ok := byType[ResourceDatabase]
+	if !ok || databaseRow.ResourceID != databaseID || databaseRow.ResourceName != "orders" {
+		t.Fatalf("database row = %+v", databaseRow)
+	}
+
 	// A deleted database is not evidence: its schedule disappears and the
 	// observer closes the incident as a resource removal instead of recovering.
+	// The application and service schedules stay.
 	if _, err := st.DB.Exec(ctx, `UPDATE databases SET deleted_at = now() WHERE id = $1`, databaseID); err != nil {
 		t.Fatalf("soft delete database: %v", err)
 	}
@@ -177,7 +240,12 @@ func TestProtectionSchedulesMatchDatabaseAndTarget(t *testing.T) {
 	if err != nil {
 		t.Fatalf("ProtectionSchedules after delete: %v", err)
 	}
-	if len(rows) != 0 {
-		t.Fatalf("deleted database schedules = %d", len(rows))
+	if len(rows) != 2 {
+		t.Fatalf("schedules after deleting the database = %d", len(rows))
+	}
+	for _, row := range rows {
+		if row.ResourceType == ResourceDatabase {
+			t.Fatalf("deleted database schedule survived: %+v", row)
+		}
 	}
 }

@@ -32,6 +32,7 @@ owner DELETE /api/v1/users/{id}
 personal DELETE /mcp
 project GET /api/v1/applications
 project GET /api/v1/applications/{id}
+project GET /api/v1/applications/{id}/backup-protection
 owner GET /api/v1/applications/{id}/deploy-key
 project GET /api/v1/applications/{id}/deployments
 project GET /api/v1/applications/{id}/deployments/{deployment_id}
@@ -128,6 +129,7 @@ owner GET /api/v1/servers/{id}/toolchain/jobs/{jobID}
 owner GET /api/v1/servers/{id}/tools
 project GET /api/v1/services
 project GET /api/v1/services/{id}
+project GET /api/v1/services/{id}/backup-protection
 project GET /api/v1/services/{id}/containers
 project GET /api/v1/services/{id}/deploys
 project GET /api/v1/services/{id}/logs

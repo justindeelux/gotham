@@ -1,7 +1,5 @@
 import { mount } from "@vue/test-utils";
-import { createPinia, setActivePinia } from "pinia";
 import { beforeEach, describe, expect, it } from "vitest";
-import { ref } from "vue";
 
 import type {
   BackupProtectionSchedule,
@@ -9,18 +7,12 @@ import type {
 } from "@/features/databases/api/backups";
 import BackupProtectionCard from "@/features/databases/components/BackupProtectionCard.vue";
 import {
-  databaseBackupsKey,
-  type DatabaseBackups,
-} from "@/features/databases/composables/useDatabaseBackups";
-import {
   registerDiscoveredCatalogs,
   resetLocaleState,
   syncComposerLocale,
 } from "@/shared/i18n";
 
 registerDiscoveredCatalogs();
-
-const databaseId = ref("db-1");
 
 function schedule(
   overrides: Partial<BackupProtectionSchedule> = {},
@@ -44,21 +36,18 @@ function mountCard(
   summary: BackupProtectionSummary | null,
   loadedBackupIds: string[] = ["backup-1"],
 ) {
-  const backups = {
-    dbId: databaseId,
-    backups: {
-      value: loadedBackupIds.map((id) => ({ id })),
-    },
-    backupsStore: {
-      protectionLoading: false,
-      protectionError: null,
-      protectionOf: () => summary,
-    },
-    targetLabel: (targetId?: string) => (targetId ? "offsite" : "local disk"),
-  } as unknown as DatabaseBackups;
   return mount(BackupProtectionCard, {
-    global: {
-      provide: { [databaseBackupsKey as symbol]: backups },
+    props: {
+      summary,
+      targetLabel: (targetId?: string) =>
+        targetId ? "offsite" : "local disk",
+      targetHref: (targetId: string) => `#backup-target-${targetId}`,
+      runHref: (backupId?: string) =>
+        !backupId
+          ? "#backup-runs"
+          : loadedBackupIds.includes(backupId)
+            ? `#backup-run-${backupId}`
+            : "#backup-runs",
     },
   });
 }
@@ -66,12 +55,13 @@ function mountCard(
 beforeEach(() => {
   resetLocaleState();
   syncComposerLocale("en");
-  setActivePinia(createPinia());
 });
 
 describe("backup protection card", () => {
   it("shows a healthy schedule and links its success and target", () => {
     const wrapper = mountCard({
+      resource_type: "database",
+      resource_id: "db-1",
       database_id: "db-1",
       status: "protected",
       schedules: [schedule()],
@@ -90,6 +80,8 @@ describe("backup protection card", () => {
   it("falls back to the runs list when the success is outside the page", () => {
     const wrapper = mountCard(
       {
+        resource_type: "database",
+        resource_id: "db-1",
         database_id: "db-1",
         status: "protected",
         schedules: [schedule()],
@@ -108,6 +100,8 @@ describe("backup protection card", () => {
 
   it("shows overdue elapsed time", () => {
     const wrapper = mountCard({
+      resource_type: "database",
+      resource_id: "db-1",
       database_id: "db-1",
       status: "overdue",
       schedules: [
@@ -130,6 +124,8 @@ describe("backup protection card", () => {
   it("shows a stuck run and links the running backup", () => {
     const wrapper = mountCard(
       {
+        resource_type: "database",
+        resource_id: "db-1",
         database_id: "db-1",
         status: "stuck",
         schedules: [
@@ -153,8 +149,29 @@ describe("backup protection card", () => {
     }
   });
 
+  it("renders an application or service summary like a database", () => {
+    for (const [resourceType, resourceId] of [
+      ["application", "app-1"],
+      ["service", "svc-1"],
+    ] as const) {
+      const wrapper = mountCard({
+        resource_type: resourceType,
+        resource_id: resourceId,
+        status: "protected",
+        schedules: [schedule()],
+      });
+      try {
+        expect(wrapper.text()).toContain("Protected");
+      } finally {
+        wrapper.unmount();
+      }
+    }
+  });
+
   it("shows not configured without a schedule", () => {
     const wrapper = mountCard({
+      resource_type: "database",
+      resource_id: "db-1",
       database_id: "db-1",
       status: "not_configured",
       schedules: [],

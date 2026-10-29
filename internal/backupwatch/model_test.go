@@ -5,13 +5,15 @@ import (
 	"time"
 
 	"github.com/google/uuid"
+
+	"github.com/justindeelux/gotham/internal/incidents"
 )
 
 func TestEvaluateDeadlinesDailyWeeklyAndDST(t *testing.T) {
 	slot := time.Date(2026, 10, 27, 2, 0, 0, 0, time.UTC)
 	base := ScheduleEvidence{
-		ScheduleID:    uuid.New(),
-		DatabaseID:    uuid.New(),
+		ScheduleID:   uuid.New(),
+		ResourceType: ResourceDatabase, ResourceID: uuid.New(),
 		TargetName:    "offsite",
 		Enabled:       true,
 		NextRunAt:     slot,
@@ -61,7 +63,7 @@ func TestEvaluateDeadlineAtDSTBoundary(t *testing.T) {
 	// the slot. The deadline is an absolute +30m, not a wall-clock guess.
 	slot := time.Date(2025, 11, 2, 5, 30, 0, 0, time.UTC)
 	ev := ScheduleEvidence{
-		ScheduleID: uuid.New(), DatabaseID: uuid.New(), Enabled: true,
+		ScheduleID: uuid.New(), ResourceType: ResourceDatabase, ResourceID: uuid.New(), Enabled: true,
 		NextRunAt: slot.In(loc), MaxRunSeconds: int(MaxRunDefault / time.Second),
 	}
 	got := Evaluate(slot.Add(OverdueGrace), ev, LeaseUnknown)
@@ -81,7 +83,7 @@ func TestEvaluateDeadlineAtDSTBoundary(t *testing.T) {
 func TestEvaluateSuccessMustCoverTheSlot(t *testing.T) {
 	slot := time.Date(2026, 10, 27, 2, 0, 0, 0, time.UTC)
 	ev := ScheduleEvidence{
-		ScheduleID: uuid.New(), DatabaseID: uuid.New(), Enabled: true,
+		ScheduleID: uuid.New(), ResourceType: ResourceDatabase, ResourceID: uuid.New(), Enabled: true,
 		NextRunAt: slot, MaxRunSeconds: int(MaxRunDefault / time.Second),
 	}
 	before := slot.Add(-time.Minute)
@@ -100,7 +102,7 @@ func TestEvaluateRunningLeaseStates(t *testing.T) {
 	slot := time.Date(2026, 10, 27, 2, 0, 0, 0, time.UTC)
 	running := slot.Add(time.Minute)
 	ev := ScheduleEvidence{
-		ScheduleID: uuid.New(), DatabaseID: uuid.New(), Enabled: true,
+		ScheduleID: uuid.New(), ResourceType: ResourceDatabase, ResourceID: uuid.New(), Enabled: true,
 		NextRunAt: slot, RunningSince: &running,
 		MaxRunSeconds: int(15 * time.Minute / time.Second),
 	}
@@ -141,7 +143,7 @@ func TestEvaluateTargetChangeDoesNotReuseTheOldSlot(t *testing.T) {
 	slot := time.Date(2026, 10, 27, 2, 0, 0, 0, time.UTC)
 	changed := slot.Add(10 * time.Minute)
 	ev := ScheduleEvidence{
-		ScheduleID: uuid.New(), DatabaseID: uuid.New(), Enabled: true,
+		ScheduleID: uuid.New(), ResourceType: ResourceDatabase, ResourceID: uuid.New(), Enabled: true,
 		NextRunAt: slot, LastSlotAt: slot, TargetChangedAt: changed,
 		MaxRunSeconds: int(MaxRunDefault / time.Second),
 	}
@@ -166,12 +168,12 @@ func TestSummarizeDoesNotHideAMissedSchedule(t *testing.T) {
 	databaseID := uuid.New()
 	successAt := now.Add(-time.Minute)
 	protected := ScheduleEvidence{
-		ScheduleID: uuid.New(), DatabaseID: databaseID, Enabled: true,
+		ScheduleID: uuid.New(), ResourceType: ResourceDatabase, ResourceID: databaseID, Enabled: true,
 		NextRunAt: now.Add(-time.Hour), LastSuccessAt: &successAt,
 		MaxRunSeconds: int(MaxRunDefault / time.Second),
 	}
 	missed := ScheduleEvidence{
-		ScheduleID: uuid.New(), DatabaseID: databaseID, Enabled: true,
+		ScheduleID: uuid.New(), ResourceType: ResourceDatabase, ResourceID: databaseID, Enabled: true,
 		NextRunAt:     now.Add(-3 * time.Hour),
 		MaxRunSeconds: int(MaxRunDefault / time.Second),
 	}
@@ -192,5 +194,33 @@ func TestSummarizeNotConfigured(t *testing.T) {
 	}
 	if got := Summarize(nil, now, nil, nil); got.Status != StatusNotConfigured {
 		t.Fatalf("empty status = %q, want not_configured", got.Status)
+	}
+}
+
+func TestEvaluateWorksForEveryResourceType(t *testing.T) {
+	slot := time.Date(2026, 10, 27, 2, 0, 0, 0, time.UTC)
+	for _, resourceType := range []string{ResourceApplication, ResourceDatabase, ResourceService} {
+		t.Run(resourceType, func(t *testing.T) {
+			ev := ScheduleEvidence{
+				ScheduleID: uuid.New(), ResourceType: resourceType, ResourceID: uuid.New(), Enabled: true,
+				NextRunAt: slot, MaxRunSeconds: int(MaxRunDefault / time.Second),
+			}
+			if got := Evaluate(slot.Add(OverdueGrace), ev, LeaseUnknown); got.Status != StatusOverdue {
+				t.Fatalf("status = %q, want overdue", got.Status)
+			}
+		})
+	}
+}
+
+func TestIdentityIsStableForDatabasesAndDistinctPerResourceType(t *testing.T) {
+	scheduleID := uuid.New()
+	database := Identity(ResourceDatabase, scheduleID)
+	if want := incidents.Identity(Detector, ResourceDatabase, scheduleID); database != want {
+		t.Fatalf("database identity = %q, want the existing fingerprint %q", database, want)
+	}
+	application := Identity(ResourceApplication, scheduleID)
+	service := Identity(ResourceService, scheduleID)
+	if application == database || service == database || application == service {
+		t.Fatalf("identities collide: %q %q %q", database, application, service)
 	}
 }

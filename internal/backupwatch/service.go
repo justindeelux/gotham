@@ -27,7 +27,7 @@ type IncidentReporter interface {
 // exact backup run. A live lease never bypasses the MaxRun ceiling, and a
 // different run cannot shadow an orphaned row.
 type LeaseReader interface {
-	BackupRunActive(databaseID, backupID uuid.UUID) bool
+	BackupRunActive(resourceID, backupID uuid.UUID) bool
 }
 
 type Config struct {
@@ -116,7 +116,7 @@ func (s *Service) tick(ctx context.Context) {
 	known := make(map[string]bool, len(schedules))
 	now := s.now().UTC()
 	for _, schedule := range schedules {
-		identity := Identity(schedule.ScheduleID)
+		identity := Identity(schedule.ResourceType, schedule.ScheduleID)
 		known[identity] = true
 		if !schedule.Enabled {
 			if activeSet[identity] {
@@ -124,7 +124,7 @@ func (s *Service) tick(ctx context.Context) {
 			}
 			continue
 		}
-		state := s.leaseState(schedule.DatabaseID, schedule.RunningID)
+		state := s.leaseState(schedule.ResourceID, schedule.RunningID)
 		evaluated := Evaluate(now, schedule, state)
 		if activeSet[identity] {
 			evaluated = EvaluateOpen(now, schedule, state)
@@ -155,19 +155,19 @@ func (s *Service) observe(ctx context.Context, schedule ScheduleEvidence, evalua
 }
 
 func (s *Service) report(ctx context.Context, schedule ScheduleEvidence, evaluated Evaluation, now time.Time, valid, unhealthy bool, severity incidents.Severity) {
-	scopeKind, scopeID := incidents.ScopeGlobal, schedule.DatabaseID
+	scopeKind, scopeID := incidents.ScopeGlobal, schedule.ResourceID
 	if schedule.ProjectID != uuid.Nil {
 		scopeKind, scopeID = incidents.ScopeProject, schedule.ProjectID
 	}
 	observation := incidents.Observation{
-		Identity:     Identity(schedule.ScheduleID),
+		Identity:     Identity(schedule.ResourceType, schedule.ScheduleID),
 		Detector:     Detector,
 		ScopeKind:    scopeKind,
 		ScopeID:      scopeID,
 		ProjectID:    schedule.ProjectID,
-		ResourceType: ResourceDatabase,
-		ResourceID:   schedule.DatabaseID,
-		ResourceName: schedule.DatabaseName,
+		ResourceType: schedule.ResourceType,
+		ResourceID:   schedule.ResourceID,
+		ResourceName: schedule.ResourceName,
 		At:           now,
 		Valid:        valid,
 		Unhealthy:    unhealthy,
@@ -190,21 +190,21 @@ func (s *Service) close(ctx context.Context, identity, reason string) {
 	}
 }
 
-func (s *Service) leaseState(databaseID, backupID uuid.UUID) LeaseState {
+func (s *Service) leaseState(resourceID, backupID uuid.UUID) LeaseState {
 	if s.leases == nil {
 		return LeaseUnknown
 	}
-	if s.leases.BackupRunActive(databaseID, backupID) {
+	if s.leases.BackupRunActive(resourceID, backupID) {
 		return LeaseLive
 	}
 	return LeaseExpired
-} // Summary returns the API view for one database. It reads the same evidence as
-// the observer and never mutates a schedule or a job.
-func (s *Service) Summary(ctx context.Context, databaseID uuid.UUID) (Summary, error) {
+} // Summary returns the API view for one resource. It reads the same evidence
+// as the observer and never mutates a schedule or a job.
+func (s *Service) Summary(ctx context.Context, resourceType string, resourceID uuid.UUID) (Summary, error) {
 	if s == nil || s.source == nil {
 		return Summary{}, errors.New("backupwatch: source is not configured")
 	}
-	db, err := s.source.Database(ctx, databaseID)
+	resource, err := s.source.Resource(ctx, resourceType, resourceID)
 	if err != nil {
 		return Summary{}, err
 	}
@@ -219,7 +219,7 @@ func (s *Service) Summary(ctx context.Context, databaseID uuid.UUID) (Summary, e
 	openIDs := make(map[uuid.UUID]bool, len(active))
 	byIdentity := make(map[string]uuid.UUID, len(schedules))
 	for _, schedule := range schedules {
-		byIdentity[Identity(schedule.ScheduleID)] = schedule.ScheduleID
+		byIdentity[Identity(schedule.ResourceType, schedule.ScheduleID)] = schedule.ScheduleID
 	}
 	for _, identity := range active {
 		if scheduleID, ok := byIdentity[identity]; ok {
@@ -228,13 +228,17 @@ func (s *Service) Summary(ctx context.Context, databaseID uuid.UUID) (Summary, e
 	}
 	rows := make([]ScheduleEvidence, 0, len(schedules))
 	for _, schedule := range schedules {
-		if schedule.DatabaseID == databaseID {
+		if schedule.ResourceType == resourceType && schedule.ResourceID == resourceID {
 			rows = append(rows, schedule)
 		}
 	}
 	summary := Summarize(rows, s.now().UTC(), s.leaseState, func(id uuid.UUID) bool {
 		return openIDs[id]
 	})
-	summary.DatabaseID = db.ID.String()
+	summary.ResourceType = resource.Type
+	summary.ResourceID = resource.ID.String()
+	if resource.Type == ResourceDatabase {
+		summary.DatabaseID = resource.ID.String()
+	}
 	return summary, nil
 }

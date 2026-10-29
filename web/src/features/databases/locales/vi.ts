@@ -199,7 +199,7 @@ const vi: typeof en = {
       title: "Bảo vệ sao lưu",
       subtitle: "Hạn của lịch, dựa trên kết quả đã lưu",
       notConfigured:
-        "Chưa cấu hình sao lưu. Thêm một lịch đang bật để bảo vệ cơ sở dữ liệu này.",
+        "Chưa cấu hình sao lưu. Thêm một lịch đang bật để bảo vệ tài nguyên này.",
       lastSuccess: "Lần thành công gần nhất",
       never: "chưa có",
       expectedSlot: "kỳ dự kiến",

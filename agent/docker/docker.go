@@ -373,25 +373,50 @@ func (c *DockerClient) RemoveVolume(ctx context.Context, name string) error {
 	return nil
 }
 
-func (c *DockerClient) VolumeExists(ctx context.Context, name string) error {
+func (c *DockerClient) VolumeMountpoint(ctx context.Context, name string) (string, error) {
 	if strings.TrimSpace(name) == "" {
-		return errors.New("docker: volume name is required")
+		return "", errors.New("docker: volume name is required")
 	}
 	path := "/volumes/" + url.PathEscape(name)
 	response, err := c.doRaw(ctx, http.MethodGet, path, nil, "")
 	if err != nil {
-		return err
+		return "", err
 	}
+	defer func() { _ = response.Body.Close() }()
 	if response.StatusCode == http.StatusNotFound {
 		_, _ = io.Copy(io.Discard, response.Body)
-		_ = response.Body.Close()
-		return fmt.Errorf("%w: %s", ErrDockerVolumeNotFound, name)
+		return "", fmt.Errorf("%w: %s", ErrDockerVolumeNotFound, name)
 	}
 	if !dockerOK(response.StatusCode) {
-		return statusError(http.MethodGet, path, response)
+		return "", statusError(http.MethodGet, path, response)
 	}
-	_, _ = io.Copy(io.Discard, response.Body)
-	return response.Body.Close()
+	var out struct {
+		Mountpoint string `json:"Mountpoint"`
+	}
+	if err := json.NewDecoder(response.Body).Decode(&out); err != nil {
+		return "", fmt.Errorf("docker: decode volume: %w", err)
+	}
+	if strings.TrimSpace(out.Mountpoint) == "" {
+		return "", fmt.Errorf("%w: %s has no mountpoint", ErrDockerVolumeNotFound, name)
+	}
+	return out.Mountpoint, nil
+}
+
+// ExportArchive returns a tar stream of source inside the container, including
+// any volumes mounted below it. Unlike Logs, it does not pass through the log
+// driver, so log rotation cannot truncate the data. The caller closes it.
+func (c *DockerClient) ExportArchive(ctx context.Context, containerID, source string) (io.ReadCloser, error) {
+	if strings.TrimSpace(containerID) == "" {
+		return nil, errors.New("docker: container id is required")
+	}
+	query := url.Values{}
+	query.Set("path", source)
+	path := "/containers/" + url.PathEscape(containerID) + "/archive?" + query.Encode()
+	response, err := c.do(ctx, http.MethodGet, path, nil)
+	if err != nil {
+		return nil, err
+	}
+	return response.Body, nil
 }
 
 // ImportArchive extracts an uncompressed tar stream into destination inside the
@@ -1720,6 +1745,12 @@ type dockerHostConfig struct {
 	PidsLimit     int64                   `json:"PidsLimit,omitempty"`
 	Memory        int64                   `json:"Memory,omitempty"`
 	NanoCpus      int64                   `json:"NanoCpus,omitempty"`
+	LogConfig     *dockerLogConfig        `json:"LogConfig,omitempty"`
+}
+
+type dockerLogConfig struct {
+	Type   string            `json:"Type"`
+	Config map[string]string `json:"Config,omitempty"`
 }
 
 type dockerPort struct {
@@ -1769,8 +1800,14 @@ func buildCreateBody(req *agentv1.CreateContainerRequest) (*dockerCreateBody, er
 	host.PidsLimit = req.GetPidsLimit()
 	host.Memory = req.GetMemoryBytes()
 	host.NanoCpus = req.GetNanoCpus()
+	if logConfig := req.GetLogConfig(); logConfig != nil && strings.TrimSpace(logConfig.GetDriver()) != "" {
+		host.LogConfig = &dockerLogConfig{
+			Type:   strings.TrimSpace(logConfig.GetDriver()),
+			Config: logConfig.GetOptions(),
+		}
+	}
 	if len(host.Binds) > 0 || len(host.PortBindings) > 0 || host.RestartPolicy != nil ||
-		host.PidsLimit > 0 || host.Memory > 0 || host.NanoCpus > 0 {
+		host.PidsLimit > 0 || host.Memory > 0 || host.NanoCpus > 0 || host.LogConfig != nil {
 		body.HostConfig = host
 	}
 

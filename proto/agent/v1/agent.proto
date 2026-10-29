@@ -1364,6 +1364,11 @@ message ArchiveResult {
   string stderr_tail = 3;
   // error is set when the agent could not produce an archive; ok is false.
   string error = 4;
+  // bytes is the verified archive size the agent streamed. It equals the
+  // helper's produced size; a mismatch fails the call.
+  uint64 bytes = 5;
+  // sha256 is the helper's SHA-256 of the produced archive, lowercase hex.
+  string sha256 = 6;
 }
 
 // RestoreMode selects how a restore treats files already in the target.
@@ -1441,6 +1446,16 @@ message CreateContainerRequest {
   int64 pids_limit = 12;
   int64 memory_bytes = 13;
   int64 nano_cpus = 14;
+  // log_config overrides the node daemon's log driver for this container. The
+  // volume-archive helper bounds its own diagnostics with a tiny json-file
+  // rotation; its archive bytes travel through a file, never through logs.
+  ContainerLogConfig log_config = 15;
+}
+
+// ContainerLogConfig is a container's native Docker log configuration.
+message ContainerLogConfig {
+  string driver = 1;
+  map<string, string> options = 2;
 }
 
 // ContainerHealthcheck is a container's native Docker healthcheck. test is the

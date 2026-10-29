@@ -1,11 +1,14 @@
 package docker
 
 import (
+	"archive/tar"
+	"bytes"
 	"context"
 	"errors"
 	"fmt"
 	"io"
 	"net"
+	"path"
 	"testing"
 
 	agentv1 "github.com/justindeelux/gotham/proto/agent/v1"
@@ -36,6 +39,10 @@ type fakeDockerClient struct {
 	creates            int
 	lastCreate         *agentv1.CreateContainerRequest
 	details            ContainerDetails
+	mountpoint         string
+	mountpointErr      error
+	exports            map[string][]byte
+	exportErr          error
 }
 
 func (f *fakeDockerClient) Version(context.Context) (string, error) {
@@ -160,8 +167,17 @@ func (f *fakeDockerClient) Logs(context.Context, string, bool, int64) (<-chan Lo
 	return chunks, nil
 }
 
-func (f *fakeDockerClient) VolumeExists(context.Context, string) error {
-	return f.err
+func (f *fakeDockerClient) VolumeMountpoint(_ context.Context, name string) (string, error) {
+	if f.err != nil {
+		return "", f.err
+	}
+	if f.mountpointErr != nil {
+		return "", f.mountpointErr
+	}
+	if f.mountpoint != "" {
+		return f.mountpoint, nil
+	}
+	return "/var/lib/docker/volumes/" + name + "/_data", nil
 }
 
 func (f *fakeDockerClient) ImportArchive(_ context.Context, containerID, destination string, body io.Reader) error {
@@ -171,6 +187,29 @@ func (f *fakeDockerClient) ImportArchive(_ context.Context, containerID, destina
 	f.imports = append(f.imports, containerID+" "+destination)
 	_, err := io.Copy(io.Discard, body)
 	return err
+}
+
+func (f *fakeDockerClient) ExportArchive(_ context.Context, _ string, source string) (io.ReadCloser, error) {
+	if f.err != nil {
+		return nil, f.err
+	}
+	if f.exportErr != nil {
+		return nil, f.exportErr
+	}
+	data, ok := f.exports[source]
+	if !ok {
+		return nil, fmt.Errorf("no export for %s", source)
+	}
+	return io.NopCloser(bytes.NewReader(wrapArchiveFile(path.Base(source), data))), nil
+}
+
+func wrapArchiveFile(name string, data []byte) []byte {
+	var buffer bytes.Buffer
+	writer := tar.NewWriter(&buffer)
+	_ = writer.WriteHeader(&tar.Header{Name: name, Mode: 0o600, Size: int64(len(data)), Typeflag: tar.TypeReg})
+	_, _ = writer.Write(data)
+	_ = writer.Close()
+	return buffer.Bytes()
 }
 
 func newDockerServiceClient(t *testing.T, fake *fakeDockerClient) agentv1.DockerServiceClient {

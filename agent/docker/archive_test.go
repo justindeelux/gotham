@@ -5,7 +5,10 @@ import (
 	"bytes"
 	"compress/gzip"
 	"context"
+	"crypto/sha256"
+	"encoding/hex"
 	"errors"
+	"fmt"
 	"io"
 	"net"
 	"os"
@@ -56,8 +59,17 @@ func TestVolumeArchiveCapabilities(t *testing.T) {
 	}
 }
 
-func TestArchiveVolumesStreamsStdoutAndIgnoresStderr(t *testing.T) {
-	fake := &fakeDockerClient{logs: []byte("tar-bytes"), logsStderr: []byte("tar: warning")}
+func TestArchiveVolumesStreamsArchiveFileWithIntegrity(t *testing.T) {
+	payload := []byte("tar-bytes")
+	sum := sha256.Sum256(payload)
+	trailer := fmt.Sprintf(`{"bytes":%d,"sha256":"%s"}`, len(payload), hex.EncodeToString(sum[:]))
+	fake := &fakeDockerClient{
+		logsStderr: []byte("tar: warning"),
+		exports: map[string][]byte{
+			volumeArchiveOutDir + "/archive.tar.gz": payload,
+			volumeArchiveOutDir + "/trailer.json":   []byte(trailer),
+		},
+	}
 	client := newArchiveServiceClient(t, fake)
 
 	stream, err := client.ArchiveVolumes(context.Background(), &agentv1.ArchiveVolumesRequest{
@@ -83,11 +95,17 @@ func TestArchiveVolumesStreamsStdoutAndIgnoresStderr(t *testing.T) {
 			result = final
 		}
 	}
-	if data.String() != "tar-bytes" {
-		t.Fatalf("data = %q; stderr must not leak into the archive", data.String())
+	if !bytes.Equal(data.Bytes(), payload) {
+		t.Fatalf("data = %q; want the archive file contents", data.Bytes())
 	}
 	if result == nil || !result.GetOk() {
 		t.Fatalf("result = %v", result)
+	}
+	if result.GetBytes() != uint64(len(payload)) {
+		t.Fatalf("bytes = %d; want %d", result.GetBytes(), len(payload))
+	}
+	if result.GetSha256() != hex.EncodeToString(sum[:]) {
+		t.Fatalf("sha256 = %q", result.GetSha256())
 	}
 	if result.GetStderrTail() != "tar: warning" {
 		t.Fatalf("stderr_tail = %q", result.GetStderrTail())
@@ -97,6 +115,97 @@ func TestArchiveVolumesStreamsStdoutAndIgnoresStderr(t *testing.T) {
 	}
 	if len(fake.lastCreate.GetVolumes()) != 1 {
 		t.Fatalf("mounts = %v; only the declared source may be mounted", fake.lastCreate.GetVolumes())
+	}
+	if logConfig := fake.lastCreate.GetLogConfig(); logConfig.GetDriver() != "json-file" || logConfig.GetOptions()["max-size"] != "64k" {
+		t.Fatalf("log config = %v; want a tiny rotation that never carries data", logConfig)
+	}
+}
+
+func TestArchiveVolumesReportsHelperFailure(t *testing.T) {
+	fake := &fakeDockerClient{
+		details:    ContainerDetails{State: "exited", ExitCode: 2},
+		logsStderr: []byte("tar: boom"),
+	}
+	client := newArchiveServiceClient(t, fake)
+	stream, err := client.ArchiveVolumes(context.Background(), &agentv1.ArchiveVolumesRequest{
+		Sources: []*agentv1.ArchiveSource{bindPathSource(t.TempDir())},
+	})
+	if err != nil {
+		t.Fatalf("ArchiveVolumes: %v", err)
+	}
+	var result *agentv1.ArchiveResult
+	for {
+		chunk, err := stream.Recv()
+		if errors.Is(err, io.EOF) {
+			break
+		}
+		if err != nil {
+			t.Fatalf("recv: %v", err)
+		}
+		if final := chunk.GetResult(); final != nil {
+			result = final
+		}
+	}
+	if result == nil || result.GetOk() {
+		t.Fatalf("result = %v; want a failure", result)
+	}
+	if result.GetExitCode() != 2 || !strings.Contains(result.GetError(), "code 2") {
+		t.Fatalf("result = %v; want the helper exit code", result)
+	}
+	if result.GetStderrTail() != "tar: boom" {
+		t.Fatalf("stderr_tail = %q", result.GetStderrTail())
+	}
+}
+
+func TestArchiveVolumesFailsOnIntegrityMismatch(t *testing.T) {
+	payload := []byte("tar-bytes")
+	trailer := `{"bytes":3,"sha256":"e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"}`
+	fake := &fakeDockerClient{exports: map[string][]byte{
+		volumeArchiveOutDir + "/archive.tar.gz": payload,
+		volumeArchiveOutDir + "/trailer.json":   []byte(trailer),
+	}}
+	client := newArchiveServiceClient(t, fake)
+	stream, err := client.ArchiveVolumes(context.Background(), &agentv1.ArchiveVolumesRequest{
+		Sources: []*agentv1.ArchiveSource{bindPathSource(t.TempDir())},
+	})
+	if err != nil {
+		t.Fatalf("ArchiveVolumes: %v", err)
+	}
+	var result *agentv1.ArchiveResult
+	for {
+		chunk, err := stream.Recv()
+		if errors.Is(err, io.EOF) {
+			break
+		}
+		if err != nil {
+			t.Fatalf("recv: %v", err)
+		}
+		if final := chunk.GetResult(); final != nil {
+			result = final
+		}
+	}
+	if result == nil || result.GetOk() {
+		t.Fatalf("result = %v; a truncated or mismatched archive must never succeed", result)
+	}
+	if !strings.Contains(result.GetError(), "integrity mismatch") {
+		t.Fatalf("error = %q; want an integrity mismatch", result.GetError())
+	}
+}
+
+func TestArchiveVolumesFailsWhenArchiveFileIsMissing(t *testing.T) {
+	sum := sha256.Sum256(nil)
+	fake := &fakeDockerClient{exports: map[string][]byte{
+		volumeArchiveOutDir + "/trailer.json": []byte(fmt.Sprintf(`{"bytes":1,"sha256":"%s"}`, hex.EncodeToString(sum[:]))),
+	}}
+	client := newArchiveServiceClient(t, fake)
+	stream, err := client.ArchiveVolumes(context.Background(), &agentv1.ArchiveVolumesRequest{
+		Sources: []*agentv1.ArchiveSource{bindPathSource(t.TempDir())},
+	})
+	if err == nil {
+		_, err = stream.Recv()
+	}
+	if err == nil {
+		t.Fatal("expected a missing archive file to fail the call")
 	}
 }
 
@@ -310,6 +419,121 @@ func TestLimitedTailKeepsTheEnd(t *testing.T) {
 	tail.Write(bytes.Repeat([]byte("b"), archiveStderrLimit))
 	if len(tail.data) != archiveStderrLimit || tail.data[len(tail.data)-1] != 'b' {
 		t.Fatalf("tail = %d bytes; want the last %d", len(tail.data), archiveStderrLimit)
+	}
+}
+
+func TestArchiveVolumesRejectsDeniedPathsAndTheirAncestors(t *testing.T) {
+	root := t.TempDir()
+	denied := filepath.Join(root, "var", "lib", "gotham-agent")
+	if err := os.MkdirAll(denied, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.MkdirAll(filepath.Join(denied, "certs"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	link := filepath.Join(root, "link")
+	if err := os.Symlink(filepath.Join(root, "var", "lib"), link); err != nil {
+		t.Fatal(err)
+	}
+	cases := map[string]string{
+		"root":                 root,
+		"var":                  filepath.Join(root, "var"),
+		"var/lib":              filepath.Join(root, "var", "lib"),
+		"state dir":            denied,
+		"state dir child":      filepath.Join(denied, "certs"),
+		"symlink to var/lib":   link,
+		"symlink to state dir": filepath.Join(root, "state-link"),
+	}
+	if err := os.Symlink(denied, cases["symlink to state dir"]); err != nil {
+		t.Fatal(err)
+	}
+	for name, source := range cases {
+		t.Run(name, func(t *testing.T) {
+			fake := &fakeDockerClient{}
+			client := newArchiveServiceClient(t, fake, WithArchiveDeniedPaths(denied))
+			stream, err := client.ArchiveVolumes(context.Background(), &agentv1.ArchiveVolumesRequest{
+				Sources: []*agentv1.ArchiveSource{bindPathSource(source)},
+			})
+			if err == nil {
+				_, err = stream.Recv()
+			}
+			if status.Code(err) != codes.PermissionDenied {
+				t.Fatalf("err = %v; want PermissionDenied", err)
+			}
+			if fake.creates != 0 {
+				t.Fatalf("created %d helper containers; want none", fake.creates)
+			}
+		})
+	}
+}
+
+func TestArchiveVolumesRejectsProductionAncestors(t *testing.T) {
+	// deploy/gotham-agent.service keeps the agent state under
+	// /var/lib/gotham-agent, so /var and /var/lib must be refused too.
+	denied := "/var/lib/gotham-agent"
+	for _, source := range []string{"/", "/var", "/var/lib", "/var/run", "/run", "/var/lib/gotham-agent"} {
+		name := strings.ReplaceAll(source, "/", "_")
+		if name == "" {
+			name = "root"
+		}
+		t.Run(name, func(t *testing.T) {
+			if _, err := os.Stat(source); err != nil {
+				t.Skipf("%s does not exist on this host", source)
+			}
+			fake := &fakeDockerClient{}
+			client := newArchiveServiceClient(t, fake, WithArchiveDeniedPaths(denied))
+			stream, err := client.ArchiveVolumes(context.Background(), &agentv1.ArchiveVolumesRequest{
+				Sources: []*agentv1.ArchiveSource{bindPathSource(source)},
+			})
+			if err == nil {
+				_, err = stream.Recv()
+			}
+			if status.Code(err) != codes.PermissionDenied {
+				t.Fatalf("%s: err = %v; want PermissionDenied", source, err)
+			}
+			if fake.creates != 0 {
+				t.Fatalf("created %d helper containers; want none", fake.creates)
+			}
+		})
+	}
+}
+
+func TestArchiveVolumesRejectsVolumeMountpointInsideDeniedPath(t *testing.T) {
+	state := t.TempDir()
+	mountpoint := filepath.Join(state, "volume-data")
+	if err := os.MkdirAll(mountpoint, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	fake := &fakeDockerClient{mountpoint: mountpoint}
+	client := newArchiveServiceClient(t, fake, WithArchiveDeniedPaths(state))
+	stream, err := client.ArchiveVolumes(context.Background(), &agentv1.ArchiveVolumesRequest{
+		Sources: []*agentv1.ArchiveSource{namedVolumeSource("data")},
+	})
+	if err == nil {
+		_, err = stream.Recv()
+	}
+	if status.Code(err) != codes.PermissionDenied {
+		t.Fatalf("err = %v; want PermissionDenied for a volume mounted in the agent state", err)
+	}
+	if fake.creates != 0 {
+		t.Fatalf("created %d helper containers; want none", fake.creates)
+	}
+}
+
+func TestArchiveVolumesRejectsMissingVolume(t *testing.T) {
+	fake := &fakeDockerClient{mountpointErr: ErrDockerVolumeNotFound}
+	client := newArchiveServiceClient(t, fake)
+	stream, err := client.ArchiveVolumes(context.Background(), &agentv1.ArchiveVolumesRequest{
+		Sources: []*agentv1.ArchiveSource{namedVolumeSource("data")},
+	})
+	if err == nil {
+		_, err = stream.Recv()
+	}
+	if status.Code(err) != codes.NotFound {
+		t.Fatalf("err = %v; want NotFound", err)
+	}
+	if fake.creates != 0 {
+		t.Fatalf("created %d helper containers; want none", fake.creates)
 	}
 }
 

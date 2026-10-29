@@ -62,6 +62,7 @@ func TestCreateContainerRequestProtoRoundtrip(t *testing.T) {
 		Ports:      []string{"80:3000"},
 		Volumes:    []string{"/srv/data:/data"},
 		Networks:   []string{"gotham-public"},
+		LogConfig:  &agentv1.ContainerLogConfig{Driver: "json-file", Options: map[string]string{"max-size": "64k"}},
 	}
 
 	raw, err := proto.Marshal(want)
@@ -703,7 +704,8 @@ func TestVolumeArchiveMessagesProtoRoundtrip(t *testing.T) {
 	}
 
 	chunk := &agentv1.ArchiveChunk{Part: &agentv1.ArchiveChunk_Result{Result: &agentv1.ArchiveResult{
-		Ok: true, ExitCode: 0, StderrTail: "warning",
+		Ok: true, ExitCode: 0, StderrTail: "warning", Bytes: 2048,
+		Sha256: "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
 	}}}
 	raw, err := proto.Marshal(chunk)
 	if err != nil {

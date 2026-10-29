@@ -11,6 +11,7 @@ import (
 	"log/slog"
 	"os"
 	"path/filepath"
+	"strings"
 	"sync"
 	"testing"
 	"time"
@@ -317,7 +318,12 @@ func (f *e2eDockerClient) Logs(context.Context, string, bool, int64) (<-chan age
 	close(chunks)
 	return chunks, nil
 }
-func (f *e2eDockerClient) VolumeExists(context.Context, string) error { return nil }
+func (f *e2eDockerClient) VolumeMountpoint(context.Context, string) (string, error) {
+	return "/var/lib/docker/volumes/test/_data", nil
+}
+func (f *e2eDockerClient) ExportArchive(context.Context, string, string) (io.ReadCloser, error) {
+	return io.NopCloser(strings.NewReader("")), nil
+}
 func (f *e2eDockerClient) ImportArchive(context.Context, string, string, io.Reader) error {
 	return nil
 }

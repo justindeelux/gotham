@@ -33,8 +33,9 @@ type Client interface {
 	CreateContainer(ctx context.Context, req *agentv1.CreateContainerRequest) (string, error)
 	RunImage(ctx context.Context, req *agentv1.CreateContainerRequest) (string, error)
 	Logs(ctx context.Context, id string, follow bool, tail int64) (<-chan LogMessage, error)
-	VolumeExists(ctx context.Context, name string) error
+	VolumeMountpoint(ctx context.Context, name string) (string, error)
 	ImportArchive(ctx context.Context, containerID, destination string, body io.Reader) error
+	ExportArchive(ctx context.Context, containerID, source string) (io.ReadCloser, error)
 }
 
 type DockerServer struct {
@@ -93,11 +94,8 @@ func archiveDeniedPath(raw string) string {
 	if !filepath.IsAbs(cleaned) {
 		return ""
 	}
-	// Compare resolved paths: a denied root reached through a symlink must
-	// still be denied.
-	if resolved, err := filepath.EvalSymlinks(cleaned); err == nil {
-		return resolved
-	}
+	// Keep the lexical form: the comparison also checks both, so a symlinked
+	// system path (/var/run -> /private/var/run) cannot hide an ancestor.
 	return cleaned
 }
 

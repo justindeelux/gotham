@@ -17,6 +17,9 @@ import (
 	"testing"
 	"time"
 
+	"crypto/sha256"
+	"encoding/hex"
+
 	"github.com/google/uuid"
 
 	agentv1 "github.com/justindeelux/gotham/proto/agent/v1"
@@ -115,7 +118,7 @@ touch -t 202001020304.05 /data/sub/a.txt
 		megabytes = parsed
 	}
 	e2eVolume(t, client, []string{sourceVolume + ":/data"}, fmt.Sprintf(
-		"dd if=/dev/zero of=/data/big bs=1M count=%d status=none", megabytes))
+		"dd if=/dev/urandom of=/data/big bs=1M count=%d status=none", megabytes))
 	if err := os.WriteFile(filepath.Join(bindSource, "bind.txt"), []byte("hello bind"), 0o600); err != nil {
 		t.Fatal(err)
 	}
@@ -157,7 +160,12 @@ touch -t 202001020304.05 /data/sub/a.txt
 		}
 	}()
 
-	var archive bytes.Buffer
+	archive, err := os.CreateTemp(t.TempDir(), "archive-*.tar.gz")
+	if err != nil {
+		t.Fatalf("create archive file: %v", err)
+	}
+	archiveHasher := sha256.New()
+	var streamed int64
 	var result *agentv1.ArchiveResult
 	for {
 		chunk, err := stream.Recv()
@@ -168,7 +176,15 @@ touch -t 202001020304.05 /data/sub/a.txt
 			close(done)
 			t.Fatalf("recv: %v", err)
 		}
-		archive.Write(chunk.GetData())
+		if data := chunk.GetData(); len(data) > 0 {
+			n, writeErr := archive.Write(data)
+			streamed += int64(n)
+			archiveHasher.Write(data[:n])
+			if writeErr != nil {
+				close(done)
+				t.Fatalf("write archive: %v", writeErr)
+			}
+		}
 		if final := chunk.GetResult(); final != nil {
 			result = final
 		}
@@ -177,13 +193,30 @@ touch -t 202001020304.05 /data/sub/a.txt
 	if result == nil || !result.GetOk() {
 		t.Fatalf("result = %v (stderr %q)", result, result.GetStderrTail())
 	}
+	info, err := archive.Stat()
+	if err != nil {
+		t.Fatalf("stat archive: %v", err)
+	}
+	digest := hex.EncodeToString(archiveHasher.Sum(nil))
 	growth := int64(maxHeap.Load()) - int64(base.HeapAlloc)
-	t.Logf("archive size %d bytes; agent heap growth %d bytes", archive.Len(), growth)
+	t.Logf("archive size %d bytes (streamed %d, reported %d, sha256 %s); agent heap growth %d bytes",
+		info.Size(), streamed, result.GetBytes(), digest, growth)
+	if info.Size() != streamed || uint64(streamed) != result.GetBytes() {
+		t.Fatalf("streamed %d bytes, file %d, reported %d", streamed, info.Size(), result.GetBytes())
+	}
+	if digest != result.GetSha256() {
+		t.Fatalf("streamed sha256 %s; helper reported %s", digest, result.GetSha256())
+	}
+	// The helper runs with json-file max-size=64k: if archive bytes still went
+	// through the log driver, this incompressible archive could not survive.
 	if growth > 64<<20 {
 		t.Fatalf("agent heap grew by %d bytes; want bounded memory", growth)
 	}
 
-	entries := readArchive(t, archive.Bytes())
+	if _, err := archive.Seek(0, io.SeekStart); err != nil {
+		t.Fatalf("rewind archive: %v", err)
+	}
+	entries := readArchive(t, archive)
 	if len(entries) == 0 || entries[0].name != "manifest.json" {
 		t.Fatalf("first archive entry = %q; want the manifest", entries[0].name)
 	}
@@ -212,9 +245,22 @@ touch -t 202001020304.05 /data/sub/a.txt
 	}}); err != nil {
 		t.Fatalf("send header: %v", err)
 	}
-	for _, chunk := range splitBytes(archive.Bytes(), archiveChunkSize) {
-		if err := restore.Send(&agentv1.RestoreVolumesRequest{Part: &agentv1.RestoreVolumesRequest_Data{Data: chunk}}); err != nil {
-			t.Fatalf("send data: %v", err)
+	if _, err := archive.Seek(0, io.SeekStart); err != nil {
+		t.Fatalf("rewind archive: %v", err)
+	}
+	buffer := make([]byte, archiveChunkSize)
+	for {
+		n, readErr := archive.Read(buffer)
+		if n > 0 {
+			if err := restore.Send(&agentv1.RestoreVolumesRequest{Part: &agentv1.RestoreVolumesRequest_Data{Data: buffer[:n]}}); err != nil {
+				t.Fatalf("send data: %v", err)
+			}
+		}
+		if errors.Is(readErr, io.EOF) {
+			break
+		}
+		if readErr != nil {
+			t.Fatalf("read archive: %v", readErr)
 		}
 	}
 	if _, err := restore.CloseAndRecv(); err != nil {
@@ -366,9 +412,9 @@ type archiveEntry struct {
 	size int64
 }
 
-func readArchive(t *testing.T, data []byte) []archiveEntry {
+func readArchive(t *testing.T, data io.Reader) []archiveEntry {
 	t.Helper()
-	compressed, err := gzip.NewReader(bytes.NewReader(data))
+	compressed, err := gzip.NewReader(data)
 	if err != nil {
 		t.Fatalf("open archive: %v", err)
 	}
@@ -395,17 +441,4 @@ func readArchive(t *testing.T, data []byte) []archiveEntry {
 		}
 		entries = append(entries, entry)
 	}
-}
-
-func splitBytes(data []byte, size int) [][]byte {
-	var chunks [][]byte
-	for len(data) > 0 {
-		part := size
-		if len(data) < part {
-			part = len(data)
-		}
-		chunks = append(chunks, data[:part])
-		data = data[part:]
-	}
-	return chunks
 }

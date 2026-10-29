@@ -4,6 +4,7 @@ import (
 	"context"
 	"io"
 	"log/slog"
+	"strings"
 	"sync"
 
 	"github.com/justindeelux/gotham/agent/docker"
@@ -191,10 +192,22 @@ func (f *fakeDockerClient) Logs(context.Context, string, bool, int64) (<-chan Lo
 	return chunks, nil
 }
 
-func (f *fakeDockerClient) VolumeExists(context.Context, string) error {
+func (f *fakeDockerClient) VolumeMountpoint(context.Context, string) (string, error) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
-	return f.err
+	if f.err != nil {
+		return "", f.err
+	}
+	return "/var/lib/docker/volumes/test/_data", nil
+}
+
+func (f *fakeDockerClient) ExportArchive(context.Context, string, string) (io.ReadCloser, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	if f.err != nil {
+		return nil, f.err
+	}
+	return io.NopCloser(strings.NewReader("")), nil
 }
 
 func (f *fakeDockerClient) ImportArchive(_ context.Context, _ string, _ string, body io.Reader) error {

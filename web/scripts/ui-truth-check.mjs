@@ -421,6 +421,10 @@ async function main() {
       "databases prefix stripped",
     );
     assert(
+      stripErrorPrefix("backups: target unreachable") === "target unreachable",
+      "backups prefix stripped",
+    );
+    assert(
       stripErrorPrefix("host:port unreachable") === "host:port unreachable",
       "unknown prefixes are not package names",
     );

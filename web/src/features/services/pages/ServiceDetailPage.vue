@@ -3,6 +3,7 @@ import { NAlert, NButton, NEmpty, NSpace, NTabPane, NTabs } from "naive-ui";
 import { computed, provide, ref } from "vue";
 import { RouterLink } from "vue-router";
 
+import ResourceBackupsTab from "@/features/backups/components/ResourceBackupsTab.vue";
 import ResourceDetailFrame from "@/features/projects/components/ResourceDetailFrame.vue";
 import ResourceSettingsTab from "@/features/projects/components/ResourceSettingsTab.vue";
 import ServiceComposeCard from "@/features/services/components/ServiceComposeCard.vue";
@@ -152,6 +153,15 @@ function openDomainCreate(): void {
         />
       </NTabPane>
 
+      <NTabPane v-if="service" name="backups" :tab="t('services.tabs.backups')">
+        <ResourceBackupsTab
+          v-if="service"
+          resource-type="service"
+          :resource-id="serviceId"
+          :resource-label="service.name"
+          :active="activeTab === 'backups'"
+        />
+      </NTabPane>
       <NTabPane name="logs" :tab="t('services.tabs.logs')">
         <ServiceLogs
           :service-id="serviceId"

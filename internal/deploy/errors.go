@@ -20,4 +20,5 @@ var (
 	ErrNoRunningDeployment  = errors.New("deploy: application has no running deployment")
 	ErrContainerNotFound    = errors.New("deploy: container is not part of the running deployment")
 	ErrContainerNotRunning  = errors.New("deploy: container is not running")
+	ErrBackupInFlight       = errors.New("deploy: a backup or restore is in progress")
 )

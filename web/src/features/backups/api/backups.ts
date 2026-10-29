@@ -32,6 +32,7 @@ export interface BackupRun {
   cleanup_pending?: boolean;
   cleanup_error?: string;
   container_id?: string;
+  pause_during_backup: boolean;
   created_at: string;
   finished_at?: string;
 }
@@ -47,6 +48,7 @@ export interface BackupSchedule {
   last_run_at?: string;
   last_slot_at?: string;
   max_run_seconds: number;
+  pause_during_backup: boolean;
   keep_last?: number | null;
   created_at: string;
   updated_at: string;
@@ -115,6 +117,7 @@ export interface CreateScheduleInput {
   provider_id?: string;
   enabled?: boolean;
   max_run_seconds?: number;
+  pause_during_backup?: boolean;
   keep_last?: number;
 }
 
@@ -123,7 +126,14 @@ export interface UpdateScheduleInput {
   provider_id?: string;
   enabled?: boolean;
   max_run_seconds?: number;
+  pause_during_backup?: boolean;
   keep_last?: number;
+}
+
+export interface BackupContent {
+  name: string;
+  kind: "volume" | "bind" | "dump";
+  target?: string;
 }
 
 export type BackupProtectionStatus =
@@ -233,10 +243,14 @@ export async function listBackups(filter: {
 export async function createBackup(
   resource: ResourceRef,
   providerId?: string,
+  pauseDuringBackup?: boolean,
 ): Promise<BackupRun> {
   const body: Record<string, unknown> = { ...resource };
   if (providerId && providerId.trim() !== "") {
     body.provider_id = providerId;
+  }
+  if (pauseDuringBackup !== undefined) {
+    body.pause_during_backup = pauseDuringBackup;
   }
   const response = await http.post<BackupEnvelope>("/backups", body);
   return response.data.backup;
@@ -291,6 +305,9 @@ function scheduleBody(input: UpdateScheduleInput): Record<string, unknown> {
   if (input.max_run_seconds !== undefined) {
     body.max_run_seconds = input.max_run_seconds;
   }
+  if (input.pause_during_backup !== undefined) {
+    body.pause_during_backup = input.pause_during_backup;
+  }
   if (input.keep_last !== undefined) {
     body.keep_last = input.keep_last;
   }
@@ -316,6 +333,17 @@ export async function updateSchedule(
     scheduleBody(input),
   );
   return response.data.schedule;
+}
+
+export async function getBackupContents(
+  resourceType: ResourceType,
+  resourceId: string,
+): Promise<BackupContent[]> {
+  const resource = `${resourceType}s`;
+  const response = await http.get<{ contents: BackupContent[] }>(
+    `/${resource}/${resourceId}/backup-contents`,
+  );
+  return response.data.contents ?? [];
 }
 
 export async function deleteSchedule(scheduleId: string): Promise<void> {

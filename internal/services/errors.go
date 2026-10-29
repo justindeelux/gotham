@@ -13,5 +13,6 @@ var (
 	ErrDomainConflict   = errors.New("services: domain already in use")
 	ErrAgentUnavailable = errors.New("services: agent unavailable")
 	ErrDeployFailed     = errors.New("services: deploy failed")
+	ErrBackupInFlight   = errors.New("services: a backup or restore is in progress")
 	ErrDisabled         = errors.New("services: feature disabled")
 )

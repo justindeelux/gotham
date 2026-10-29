@@ -3,6 +3,8 @@ package containers
 import (
 	"bytes"
 	"context"
+	"crypto/sha256"
+	"encoding/hex"
 	"errors"
 	"io"
 	"strings"
@@ -21,10 +23,18 @@ func archiveService(t *testing.T, mock *mockDockerClient) (*Service, *fakeRegist
 	return fixture(registry, mock, newFakeCache()), registry
 }
 
+func archiveDigest(data []byte) string {
+	sum := sha256.Sum256(data)
+	return hex.EncodeToString(sum[:])
+}
+
 func TestArchiveVolumesStreamsDataAndResult(t *testing.T) {
+	body := []byte("tar-gz")
 	mock := &mockDockerClient{archiveChunks: []*agentv1.ArchiveChunk{
-		{Part: &agentv1.ArchiveChunk_Data{Data: []byte("tar-gz")}},
-		{Part: &agentv1.ArchiveChunk_Result{Result: &agentv1.ArchiveResult{Ok: true}}},
+		{Part: &agentv1.ArchiveChunk_Data{Data: body}},
+		{Part: &agentv1.ArchiveChunk_Result{Result: &agentv1.ArchiveResult{
+			Ok: true, Bytes: uint64(len(body)), Sha256: archiveDigest(body),
+		}}},
 	}}
 	svc, registry := archiveService(t, mock)
 
@@ -35,6 +45,28 @@ func TestArchiveVolumesStreamsDataAndResult(t *testing.T) {
 	}
 	if written != int64(len("tar-gz")) || out.String() != "tar-gz" {
 		t.Fatalf("written = %d, body = %q", written, out.String())
+	}
+}
+
+func TestArchiveVolumesRejectsIntegrityMismatch(t *testing.T) {
+	body := []byte("tar-gz")
+	for name, result := range map[string]*agentv1.ArchiveResult{
+		"size":      {Ok: true, Bytes: uint64(len(body) + 1), Sha256: archiveDigest(body)},
+		"checksum":  {Ok: true, Bytes: uint64(len(body)), Sha256: archiveDigest([]byte("other"))},
+		"no digest": {Ok: true, Bytes: uint64(len(body))},
+	} {
+		t.Run(name, func(t *testing.T) {
+			mock := &mockDockerClient{archiveChunks: []*agentv1.ArchiveChunk{
+				{Part: &agentv1.ArchiveChunk_Data{Data: body}},
+				{Part: &agentv1.ArchiveChunk_Result{Result: result}},
+			}}
+			svc, registry := archiveService(t, mock)
+			_, err := svc.ArchiveVolumes(context.Background(), registry.seed().ID,
+				[]ArchiveSource{{Name: "data", Volume: "vol"}}, io.Discard)
+			if err == nil || !strings.Contains(err.Error(), "mismatch") && !strings.Contains(err.Error(), "checksum") {
+				t.Fatalf("err = %v; want an integrity failure", err)
+			}
+		})
 	}
 }
 

@@ -6,6 +6,7 @@ const en = {
     env: "Environment",
     storage: "Storage",
     domains: "Domains",
+    backups: "Backups",
     previews: "Previews ({count})",
     previewsPlain: "Previews",
     settings: "Settings",

@@ -29,16 +29,17 @@ Bên dưới, **Lịch chạy** liệt kê mọi lần sao lưu tự động b�
 tài nguyên và nơi lưu trữ, lần chạy trước và kế tiếp, cùng nút bật/tắt. **Lịch
 mới** chọn tài nguyên, nơi lưu trữ và một trong các mẫu có sẵn.
 
-Bản phát hành này chỉ có sao lưu cơ sở dữ liệu. Dữ liệu ứng dụng và volume của
-dịch vụ dùng chung trang và danh sách này ngay khi driver của chúng hoàn tất;
-dòng của chúng liên kết tới trang tài nguyên tương ứng.
+Ứng dụng, dịch vụ và cơ sở dữ liệu dùng chung trang và danh sách lần chạy này.
+Mỗi lần chạy thuộc về tài nguyên mà nó đã ghi và liên kết tới trang của tài
+nguyên đó.
 
 ### Thời gian gián đoạn
 
 Sao lưu cơ sở dữ liệu dừng cơ sở dữ liệu trong lúc dump, rồi khởi động lại nếu
-trước đó đang chạy. Cam kết tương tự áp dụng cho lưu trữ volume khi tính năng
-đó hoàn tất. Hộp thoại **Sao lưu ngay** nói rõ điều này trước khi xếp lịch. Với
-cơ sở dữ liệu bận rộn, hãy chọn khung giờ yên tĩnh.
+trước đó đang chạy. Lưu trữ volume cũng làm vậy với ứng dụng hoặc dịch vụ. Lịch
+trình có thể chọn **Không dừng tài nguyên**: không có thời gian chết, nhưng tệp
+được ghi trong lúc lưu có thể không nhất quán và lịch sử sẽ ghi rõ. Với tài
+nguyên bận rộn, hãy chọn khung giờ yên tĩnh.
 
 ### Khôi phục
 

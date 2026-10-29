@@ -378,7 +378,14 @@ func (s *backupScheduler) fire(ctx context.Context, schedule BackupSchedule, now
 			"schedule_id", schedule.ID.String(), "error", err)
 		return 0
 	}
-	if _, err := s.manager.startRun(ctx, source, resource, target, BackupScheduled, schedule.ID); err != nil {
+	if validator, ok := source.(Validator); ok {
+		if err := validator.Validate(ctx, resource); err != nil {
+			s.logger.Warn("backups: skipping backup schedule, the resource has no data to capture",
+				"schedule_id", schedule.ID.String(), "resource", schedule.ResourceRef.String(), "error", err)
+			return 0
+		}
+	}
+	if _, err := s.manager.startRun(ctx, source, resource, target, BackupScheduled, schedule.ID, schedule.PauseDuringBackup); err != nil {
 		if err != ErrBackupInFlight {
 			s.logger.Error("backups: could not queue the scheduled backup",
 				"schedule_id", schedule.ID.String(), "resource", resource.Ref().String(), "error", err)

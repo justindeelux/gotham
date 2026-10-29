@@ -1,9 +1,10 @@
 -- name: CreateBackup :one
 INSERT INTO backups (
     id, database_id, application_id, service_id, schedule_id, type, status,
-    size, location, target_id, container_id, error, finished_at
+    size, location, target_id, container_id, error, finished_at,
+    pause_during_backup
 )
-VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13)
+VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14)
 RETURNING *;
 
 -- name: GetBackup :one
@@ -148,9 +149,9 @@ RETURNING *;
 -- name: CreateBackupSchedule :one
 INSERT INTO backup_schedules (
     id, database_id, application_id, service_id, cron, target_id, enabled,
-    next_run_at, max_run_seconds, keep_last
+    next_run_at, max_run_seconds, pause_during_backup, keep_last
 )
-VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)
+VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11)
 RETURNING *;
 
 -- name: GetBackupSchedule :one
@@ -186,7 +187,8 @@ SET cron = $2,
     last_slot_at = $6,
     target_changed_at = $7,
     max_run_seconds = $8,
-    keep_last = $9,
+    pause_during_backup = $9,
+    keep_last = $10,
     updated_at = now()
 WHERE id = $1
 RETURNING *;

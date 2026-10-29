@@ -14,6 +14,7 @@ import (
 	"github.com/google/uuid"
 
 	"github.com/justindeelux/gotham/internal/builds"
+	"github.com/justindeelux/gotham/internal/jobguard"
 	"github.com/justindeelux/gotham/internal/proxy"
 	"github.com/justindeelux/gotham/internal/requestreplay"
 	"github.com/justindeelux/gotham/internal/runtimewatch"
@@ -100,16 +101,19 @@ type Config struct {
 	Tasks                *taskevents.Tracker
 	Logger               *slog.Logger
 	Workers              int
-	QueueSize            int
-	MaxAttempts          int
-	StepTimeout          time.Duration
-	BuildTimeout         time.Duration
-	HealthTimeout        time.Duration
-	HealthPoll           time.Duration
-	ControlTimeout       time.Duration
-	ToolStatus           ToolStatus
-	RuntimeMonitor       RuntimeMonitor
-	RuntimeHealth        *runtimewatch.Reader
+	// BackupActive reports a backup or restore holding the application;
+	// deploy, rollback and stop/start are refused while it runs.
+	BackupActive   jobguard.Active
+	QueueSize      int
+	MaxAttempts    int
+	StepTimeout    time.Duration
+	BuildTimeout   time.Duration
+	HealthTimeout  time.Duration
+	HealthPoll     time.Duration
+	ControlTimeout time.Duration
+	ToolStatus     ToolStatus
+	RuntimeMonitor RuntimeMonitor
+	RuntimeHealth  *runtimewatch.Reader
 }
 
 func (c Config) repository() Repository {
@@ -133,6 +137,7 @@ type Service struct {
 	controlTimeout time.Duration
 	runtimeMonitor RuntimeMonitor
 	runtimeHealth  *runtimewatch.Reader
+	backupActive   jobguard.Active
 	locks          appLocks
 	probeMu        sync.Mutex
 	probeLast      map[probeThrottleKey]time.Time
@@ -182,6 +187,7 @@ func NewService(cfg Config) *Service {
 		controlTimeout: controlTimeout,
 		runtimeMonitor: cfg.RuntimeMonitor,
 		runtimeHealth:  cfg.RuntimeHealth,
+		backupActive:   cfg.BackupActive,
 	}
 }
 
@@ -232,6 +238,9 @@ func (s *Service) Close() error {
 }
 
 func (s *Service) Deploy(ctx context.Context, userID, appID uuid.UUID) (Deployment, error) {
+	if s.refuseDuringBackup(ctx, appID) {
+		return Deployment{}, ErrBackupInFlight
+	}
 	app, err := s.application(ctx, userID, appID, true)
 	if err != nil {
 		return Deployment{}, err
@@ -263,6 +272,9 @@ func (s *Service) DeploySystem(ctx context.Context, appID uuid.UUID) (Deployment
 	}
 	if appID == uuid.Nil {
 		return Deployment{}, fmt.Errorf("%w: invalid application id", ErrValidation)
+	}
+	if s.refuseDuringBackup(ctx, appID) {
+		return Deployment{}, ErrBackupInFlight
 	}
 	app, err := s.repo.GetApplication(ctx, appID)
 	if err != nil {
@@ -332,6 +344,9 @@ func (s *Service) checkStoredTarget(ctx context.Context, app Application) error 
 func (s *Service) Rollback(ctx context.Context, userID, appID, deploymentID uuid.UUID) (Deployment, error) {
 	if !Enabled() {
 		return Deployment{}, ErrDisabled
+	}
+	if s.refuseDuringBackup(ctx, appID) {
+		return Deployment{}, ErrBackupInFlight
 	}
 	app, err := s.application(ctx, userID, appID, true)
 	if err != nil {

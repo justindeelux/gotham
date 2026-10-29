@@ -14,6 +14,7 @@ import (
 
 	"github.com/google/uuid"
 
+	"github.com/justindeelux/gotham/internal/jobguard"
 	"github.com/justindeelux/gotham/internal/proxy"
 	"github.com/justindeelux/gotham/internal/store"
 )
@@ -90,6 +91,9 @@ type Config struct {
 	TemplateExists func(slug string) bool
 	Logger         *slog.Logger
 	DeployTimeout  time.Duration
+	// BackupActive reports a backup or restore holding the service; lifecycle
+	// requests are refused while it runs.
+	BackupActive jobguard.Active
 }
 
 func (c Config) repository() Repository {
@@ -110,6 +114,7 @@ type service struct {
 	templateExists func(slug string) bool
 	logger         *slog.Logger
 	deployTimeout  time.Duration
+	backupActive   jobguard.Active
 	locks          keyedLocks
 
 	deployCtx    context.Context
@@ -139,6 +144,7 @@ func NewService(cfg Config) ServiceService {
 		templateExists: cfg.TemplateExists,
 		logger:         logger,
 		deployTimeout:  timeout,
+		backupActive:   cfg.BackupActive,
 		deployCtx:      deployCtx,
 		deployCancel:   deployCancel,
 		deployJobs:     make(map[uuid.UUID]struct{}),
@@ -530,6 +536,9 @@ func (s *service) Deploy(ctx context.Context, userID, serviceID uuid.UUID) (Serv
 	if !Enabled() {
 		return Service{}, Deploy{}, ErrDisabled
 	}
+	if s.refuseDuringBackup(ctx, serviceID) {
+		return Service{}, Deploy{}, ErrBackupInFlight
+	}
 	if err := s.refuseDuringDeploy(ctx, serviceID); err != nil {
 		return Service{}, Deploy{}, err
 	}
@@ -625,6 +634,12 @@ func (s *service) deployWriteContext() (context.Context, context.CancelFunc) {
 
 // refuseDuringDeploy rejects lifecycle actions while a deploy row is active so
 // the caller gets a clear conflict instead of waiting on the lifecycle lock.
+// refuseDuringBackup keeps a lifecycle request out of a run that is reading
+// the same volumes. The job's own stop/start carries an internal context.
+func (s *service) refuseDuringBackup(ctx context.Context, serviceID uuid.UUID) bool {
+	return jobguard.Busy(ctx, s.backupActive, serviceID)
+}
+
 func (s *service) refuseDuringDeploy(ctx context.Context, serviceID uuid.UUID) error {
 	if serviceID == uuid.Nil {
 		return nil
@@ -642,7 +657,19 @@ func (s *service) refuseDuringDeploy(ctx context.Context, serviceID uuid.UUID) e
 	return nil
 }
 
+// HasActiveDeploy exposes the deploy gate to the backup core, which refuses a
+// run instead of archiving a service that is being replaced.
+func (s *service) HasActiveDeploy(ctx context.Context, serviceID uuid.UUID) (bool, error) {
+	if err := s.ready(); err != nil {
+		return false, err
+	}
+	return s.repo.HasActiveDeploy(ctx, serviceID)
+}
+
 func (s *service) Stop(ctx context.Context, userID, serviceID uuid.UUID) (Service, error) {
+	if s.refuseDuringBackup(ctx, serviceID) {
+		return Service{}, ErrBackupInFlight
+	}
 	if err := s.refuseDuringDeploy(ctx, serviceID); err != nil {
 		return Service{}, err
 	}
@@ -668,6 +695,9 @@ func (s *service) Stop(ctx context.Context, userID, serviceID uuid.UUID) (Servic
 }
 
 func (s *service) Restart(ctx context.Context, userID, serviceID uuid.UUID) (Service, error) {
+	if s.refuseDuringBackup(ctx, serviceID) {
+		return Service{}, ErrBackupInFlight
+	}
 	if err := s.refuseDuringDeploy(ctx, serviceID); err != nil {
 		return Service{}, err
 	}

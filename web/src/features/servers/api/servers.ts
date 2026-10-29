@@ -239,6 +239,7 @@ const errorPrefixPackages = new Set([
   "terminal",
   "toolchain",
   "updates",
+  "volumes",
   "webhooks",
   "ws",
 ]);

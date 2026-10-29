@@ -130,6 +130,23 @@ const en = {
   resourceTab: {
     storageHint: "Storage providers are managed in one place.",
     openStorage: "Open Backups → Storage",
+    contentsTitle: "What is included",
+    contentsEmptyApplication:
+      "This application has no persistent storage to back up. Add a storage mapping first.",
+    contentsEmptyService:
+      "This service has no named volumes or bind mounts to back up.",
+    contentsKind: {
+      volume: "Volume",
+      bind: "Bind mount",
+      dump: "Database dump",
+    },
+    pauseDuringBackup: "Stop the resource while the archive is taken",
+    pauseHelper:
+      "The backup is consistent, but the resource is unavailable until it finishes.",
+    noPause: "Do not stop the resource",
+    noPauseHelper:
+      "No downtime, but files written during the backup may be inconsistent.",
+    noPauseTag: "Did not stop",
   },
 };
 

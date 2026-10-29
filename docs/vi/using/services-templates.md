@@ -152,6 +152,26 @@ triển khai mới nhất là `running` hoặc `failed`. `POST /api/v1/services`
 chọn `"deploy": true` (wizard template dùng nó) để tạo và bắt đầu trong một lần
 gọi; API trả `201 Created` kèm dịch vụ trong khi triển khai tiếp tục ở nền.
 
+## Bản sao lưu
+
+Tab **Bản sao lưu** ghi lại các volume có tên và ổ gắn kết của dịch vụ. Ổ chỉ đọc
+và Docker socket bị loại trừ; tài liệu compose và biến môi trường không được
+xuất: dịch vụ được dựng lại từ compose nên chỉ dữ liệu của nó nằm trong phạm vi.
+
+Tab liệt kê nội dung được sao lưu. Dịch vụ mà tài liệu compose không khai báo
+volume ghi được thì không có gì để ghi và API sẽ từ chối với lỗi xác thực rõ
+ràng.
+
+Bản sao lưu dừng dự án compose trong khi tạo kho lưu, rồi khởi động lại nếu dự
+án đang chạy. Lịch trình có thể chọn **Không dừng tài nguyên**: không có thời
+gian chết, nhưng tệp được ghi trong lúc lưu có thể không nhất quán. Bản sao lưu
+bị từ chối khi dịch vụ đang triển khai, khởi động lại hoặc khôi phục, và yêu cầu
+triển khai trong lúc sao lưu cũng bị từ chối tương tự.
+
+Khôi phục sẽ dừng dự án, thay nội dung các volume bằng kho lưu rồi khởi động lại
+dự án. Nếu việc nhập thất bại, dịch vụ vẫn dừng và lịch sử khôi phục hiển thị
+lỗi. Các volume có tên không bị xóa trong quy trình này.
+
 ## Container và nhật ký
 
 Thẻ **Container** liệt kê các container của dự án theo báo cáo của agent trên node:

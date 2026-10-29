@@ -24,6 +24,7 @@ type fakeBackupService struct {
 	restore   RestoreResult
 	restores  []Restore
 	check     TargetCheck
+	contents  []Content
 
 	err             error
 	calls           []string
@@ -59,6 +60,14 @@ func (f *fakeBackupService) ListBackups(_ context.Context, _ uuid.UUID, filter B
 		return nil, f.err
 	}
 	return f.backups, nil
+}
+
+func (f *fakeBackupService) Contents(context.Context, uuid.UUID, ResourceRef) ([]Content, error) {
+	f.record("contents")
+	if f.err != nil {
+		return nil, f.err
+	}
+	return f.contents, nil
 }
 
 func (f *fakeBackupService) GetBackup(context.Context, uuid.UUID, uuid.UUID) (Backup, error) {
@@ -605,5 +614,35 @@ func TestLegacyRestoreRejectsAnotherDatabase(t *testing.T) {
 		`{"backup_id":"`+backupID.String()+`"}`)
 	if rec.Code != http.StatusNotFound {
 		t.Fatalf("status = %d, want 404", rec.Code)
+	}
+}
+
+func TestContentsRouteListsWhatTheRunCaptures(t *testing.T) {
+	svc := &fakeBackupService{contents: []Content{{Name: "uploads", Kind: "bind", Target: "/data"}}}
+	handler := newBackupRouter(t, svc, uuid.New(), true)
+	rec := backupRequest(t, handler, http.MethodGet,
+		"/v1/applications/"+uuid.NewString()+"/backup-contents", "")
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status = %d, want 200 (%s)", rec.Code, rec.Body.String())
+	}
+	if !strings.Contains(rec.Body.String(), `"name":"uploads"`) ||
+		!strings.Contains(rec.Body.String(), `"target":"/data"`) {
+		t.Fatalf("body = %s", rec.Body.String())
+	}
+}
+
+func TestScheduleBodiesCarryThePauseChoice(t *testing.T) {
+	svc := &fakeBackupService{schedule: BackupSchedule{ID: uuid.New(), PauseDuringBackup: false}}
+	handler := newBackupRouter(t, svc, uuid.New(), true)
+	rec := backupRequest(t, handler, http.MethodPost, "/v1/backups/schedules",
+		`{"resource_type":"service","resource_id":"`+uuid.NewString()+`","cron":"0 2 * * *","pause_during_backup":false}`)
+	if rec.Code != http.StatusCreated {
+		t.Fatalf("status = %d (%s)", rec.Code, rec.Body.String())
+	}
+	if svc.createSchedule.PauseDuringBackup == nil || *svc.createSchedule.PauseDuringBackup {
+		t.Fatalf("pause = %v, want false", svc.createSchedule.PauseDuringBackup)
+	}
+	if !strings.Contains(rec.Body.String(), `"pause_during_backup":false`) {
+		t.Fatalf("body = %s", rec.Body.String())
 	}
 }

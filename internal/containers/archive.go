@@ -2,8 +2,11 @@ package containers
 
 import (
 	"context"
+	"crypto/sha256"
+	"encoding/hex"
 	"errors"
 	"fmt"
+	"hash"
 	"io"
 	"strings"
 
@@ -99,6 +102,7 @@ func (s *Service) ArchiveVolumes(ctx context.Context, serverID uuid.UUID, source
 	if err != nil {
 		return 0, archiveError(err)
 	}
+	hasher := sha256.New()
 	var written int64
 	var result *agentv1.ArchiveResult
 	for {
@@ -118,6 +122,7 @@ func (s *Service) ArchiveVolumes(ctx context.Context, serverID uuid.UUID, source
 			if n != len(data) {
 				return written, fmt.Errorf("containers: write archive: %w", io.ErrShortWrite)
 			}
+			_, _ = hasher.Write(data)
 		}
 		if final := chunk.GetResult(); final != nil {
 			result = final
@@ -133,7 +138,28 @@ func (s *Service) ArchiveVolumes(ctx context.Context, serverID uuid.UUID, source
 		}
 		return written, fmt.Errorf("containers: volume archive failed (exit %d): %s", result.GetExitCode(), tail)
 	}
+	if err := verifyArchiveResult(result, written, hasher); err != nil {
+		return written, err
+	}
 	return written, nil
+}
+
+// verifyArchiveResult checks the helper's own byte count and SHA-256 against
+// what the control plane actually received. A truncated or reordered stream
+// must fail the backup instead of storing an artifact that cannot be trusted.
+func verifyArchiveResult(result *agentv1.ArchiveResult, written int64, hasher hash.Hash) error {
+	digest := strings.ToLower(strings.TrimSpace(result.GetSha256()))
+	if result.GetBytes() == 0 || digest == "" {
+		return errors.New("containers: the agent did not report an archive checksum")
+	}
+	if written != int64(result.GetBytes()) {
+		return fmt.Errorf("containers: archive size mismatch: agent reported %d bytes, received %d",
+			result.GetBytes(), written)
+	}
+	if received := hex.EncodeToString(hasher.Sum(nil)); received != digest {
+		return fmt.Errorf("containers: archive checksum mismatch: agent reported %s, received %s", digest, received)
+	}
+	return nil
 }
 
 // RestoreVolumes streams a tar.gz from src into the node's target sources.

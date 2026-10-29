@@ -89,7 +89,11 @@ type Backup struct {
 	ProviderRemoved bool
 	ContainerID     string
 	WasRunning      bool
-	Error           string
+	// PauseDuringBackup is the choice the run was started with. False on a
+	// running resource means the archive was taken live and may be
+	// inconsistent; history keeps the label even if the schedule changed.
+	PauseDuringBackup bool
+	Error             string
 	// CleanupPending means the row is kept only until its artifact is gone.
 	CleanupPending       bool
 	CleanupError         string
@@ -118,16 +122,17 @@ type Restore struct {
 }
 
 type BackupSchedule struct {
-	ID              uuid.UUID
-	ResourceRef     ResourceRef
-	Cron            string
-	TargetID        uuid.UUID
-	Enabled         bool
-	LastRunAt       time.Time
-	NextRunAt       time.Time
-	LastSlotAt      time.Time
-	TargetChangedAt time.Time
-	MaxRunSeconds   int
+	ID                uuid.UUID
+	ResourceRef       ResourceRef
+	Cron              string
+	TargetID          uuid.UUID
+	Enabled           bool
+	LastRunAt         time.Time
+	NextRunAt         time.Time
+	LastSlotAt        time.Time
+	TargetChangedAt   time.Time
+	MaxRunSeconds     int
+	PauseDuringBackup bool
 	// KeepLast is the number of completed scheduled runs to keep. Nil means
 	// unlimited; schedules created before GOTHAM-131 stay nil so an upgrade
 	// never deletes a backup the owner did not agree to lose.
@@ -189,6 +194,14 @@ type ArtifactCleanup struct {
 	NextAttemptAt time.Time
 	LastError     string
 	CreatedAt     time.Time
+}
+
+// Content is one item a resource's backup captures. The resource tab lists it
+// so a run never looks like it captures more than it does.
+type Content struct {
+	Name   string `json:"name"`
+	Kind   string `json:"kind"`
+	Target string `json:"target,omitempty"`
 }
 
 type TargetSecret struct {

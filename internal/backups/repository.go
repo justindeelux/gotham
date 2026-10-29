@@ -340,16 +340,17 @@ func (r *storeBackupRepository) CreateBackupSchedule(ctx context.Context, schedu
 	}
 	db, app, svc := resourceColumns(schedule.ResourceRef)
 	row, err := r.store.CreateBackupSchedule(ctx, sqlc.CreateBackupScheduleParams{
-		ID:            pgUUID(schedule.ID),
-		DatabaseID:    db,
-		ApplicationID: app,
-		ServiceID:     svc,
-		Cron:          schedule.Cron,
-		TargetID:      pgUUID(schedule.TargetID),
-		Enabled:       schedule.Enabled,
-		NextRunAt:     timeToPG(schedule.NextRunAt),
-		MaxRunSeconds: int32(maxRunSeconds),
-		KeepLast:      keepLastParam(schedule.KeepLast),
+		ID:                pgUUID(schedule.ID),
+		DatabaseID:        db,
+		ApplicationID:     app,
+		ServiceID:         svc,
+		Cron:              schedule.Cron,
+		TargetID:          pgUUID(schedule.TargetID),
+		Enabled:           schedule.Enabled,
+		NextRunAt:         timeToPG(schedule.NextRunAt),
+		MaxRunSeconds:     int32(maxRunSeconds),
+		PauseDuringBackup: schedule.PauseDuringBackup,
+		KeepLast:          keepLastParam(schedule.KeepLast),
 	})
 	if err != nil {
 		return BackupSchedule{}, fmt.Errorf("backups: create backup schedule: %w", err)
@@ -403,15 +404,16 @@ func (r *storeBackupRepository) UpdateBackupSchedule(ctx context.Context, schedu
 		maxRunSeconds = DefaultMaxBackupRunSeconds
 	}
 	row, err := r.store.UpdateBackupSchedule(ctx, sqlc.UpdateBackupScheduleParams{
-		ID:              pgUUID(schedule.ID),
-		Cron:            schedule.Cron,
-		TargetID:        pgUUID(schedule.TargetID),
-		Enabled:         schedule.Enabled,
-		NextRunAt:       timeToPG(schedule.NextRunAt),
-		LastSlotAt:      timeToPG(schedule.LastSlotAt),
-		TargetChangedAt: timeToPG(schedule.TargetChangedAt),
-		MaxRunSeconds:   int32(maxRunSeconds),
-		KeepLast:        keepLastParam(schedule.KeepLast),
+		ID:                pgUUID(schedule.ID),
+		Cron:              schedule.Cron,
+		TargetID:          pgUUID(schedule.TargetID),
+		Enabled:           schedule.Enabled,
+		NextRunAt:         timeToPG(schedule.NextRunAt),
+		LastSlotAt:        timeToPG(schedule.LastSlotAt),
+		TargetChangedAt:   timeToPG(schedule.TargetChangedAt),
+		MaxRunSeconds:     int32(maxRunSeconds),
+		PauseDuringBackup: schedule.PauseDuringBackup,
+		KeepLast:          keepLastParam(schedule.KeepLast),
 	})
 	if err != nil {
 		if errors.Is(err, pgx.ErrNoRows) {
@@ -719,19 +721,20 @@ func (r *storeBackupRepository) ListTargetSecrets(ctx context.Context, targetID 
 func createBackupParams(backup Backup) sqlc.CreateBackupParams {
 	db, app, svc := resourceColumns(backup.ResourceRef)
 	return sqlc.CreateBackupParams{
-		ID:            pgUUID(backup.ID),
-		DatabaseID:    db,
-		ApplicationID: app,
-		ServiceID:     svc,
-		ScheduleID:    pgUUID(backup.ScheduleID),
-		Type:          string(backup.Type),
-		Status:        string(backup.Status),
-		Size:          backup.Size,
-		Location:      backup.Location,
-		TargetID:      pgUUID(backup.TargetID),
-		ContainerID:   backup.ContainerID,
-		Error:         backup.Error,
-		FinishedAt:    timeToPG(backup.FinishedAt),
+		ID:                pgUUID(backup.ID),
+		DatabaseID:        db,
+		ApplicationID:     app,
+		ServiceID:         svc,
+		ScheduleID:        pgUUID(backup.ScheduleID),
+		Type:              string(backup.Type),
+		Status:            string(backup.Status),
+		Size:              backup.Size,
+		Location:          backup.Location,
+		TargetID:          pgUUID(backup.TargetID),
+		ContainerID:       backup.ContainerID,
+		Error:             backup.Error,
+		FinishedAt:        timeToPG(backup.FinishedAt),
+		PauseDuringBackup: backup.PauseDuringBackup,
 	}
 }
 
@@ -800,6 +803,7 @@ func backupFromRow(row sqlc.Backup) Backup {
 		TargetID:             uuidFromPG(row.TargetID),
 		ContainerID:          row.ContainerID,
 		WasRunning:           row.WasRunning,
+		PauseDuringBackup:    row.PauseDuringBackup,
 		Error:                row.Error,
 		ProviderRemoved:      row.ProviderRemoved,
 		CleanupPending:       row.CleanupPending,
@@ -845,19 +849,20 @@ func restoreFromRow(row sqlc.Restore) Restore {
 
 func scheduleFromRow(row sqlc.BackupSchedule) BackupSchedule {
 	return BackupSchedule{
-		ID:              uuidFromPG(row.ID),
-		ResourceRef:     resourceRef(row.DatabaseID, row.ApplicationID, row.ServiceID),
-		Cron:            row.Cron,
-		TargetID:        uuidFromPG(row.TargetID),
-		Enabled:         row.Enabled,
-		LastRunAt:       timeFromPG(row.LastRunAt),
-		NextRunAt:       timeFromPG(row.NextRunAt),
-		LastSlotAt:      timeFromPG(row.LastSlotAt),
-		TargetChangedAt: timeFromPG(row.TargetChangedAt),
-		MaxRunSeconds:   int(row.MaxRunSeconds),
-		KeepLast:        intPtrFromPG(row.KeepLast),
-		CreatedAt:       timeFromPG(row.CreatedAt),
-		UpdatedAt:       timeFromPG(row.UpdatedAt),
+		ID:                uuidFromPG(row.ID),
+		ResourceRef:       resourceRef(row.DatabaseID, row.ApplicationID, row.ServiceID),
+		Cron:              row.Cron,
+		TargetID:          uuidFromPG(row.TargetID),
+		Enabled:           row.Enabled,
+		LastRunAt:         timeFromPG(row.LastRunAt),
+		NextRunAt:         timeFromPG(row.NextRunAt),
+		LastSlotAt:        timeFromPG(row.LastSlotAt),
+		TargetChangedAt:   timeFromPG(row.TargetChangedAt),
+		MaxRunSeconds:     int(row.MaxRunSeconds),
+		PauseDuringBackup: row.PauseDuringBackup,
+		KeepLast:          intPtrFromPG(row.KeepLast),
+		CreatedAt:         timeFromPG(row.CreatedAt),
+		UpdatedAt:         timeFromPG(row.UpdatedAt),
 	}
 }
 

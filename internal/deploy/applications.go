@@ -13,6 +13,7 @@ import (
 	"github.com/google/uuid"
 
 	"github.com/justindeelux/gotham/internal/builds"
+	"github.com/justindeelux/gotham/internal/jobguard"
 	"github.com/justindeelux/gotham/internal/providers"
 	"github.com/justindeelux/gotham/internal/requestreplay"
 	"github.com/justindeelux/gotham/internal/runtimewatch"
@@ -687,6 +688,9 @@ func (s *Service) controlContainer(ctx context.Context, userID, appID uuid.UUID,
 	if !Enabled() {
 		return Deployment{}, ErrDisabled
 	}
+	if s.refuseDuringBackup(ctx, appID) {
+		return Deployment{}, ErrBackupInFlight
+	}
 	app, err := s.application(ctx, userID, appID, true)
 	if err != nil {
 		return Deployment{}, err
@@ -747,6 +751,12 @@ func (s *Service) controlTarget(ctx context.Context, app Application) (Deploymen
 		}
 	}
 	return Deployment{}, fmt.Errorf("%w: application has no running container", ErrNotFound)
+}
+
+// refuseDuringBackup keeps a lifecycle request out of a run that is reading
+// the same storage. The job's own stop/start carries an internal context.
+func (s *Service) refuseDuringBackup(ctx context.Context, appID uuid.UUID) bool {
+	return jobguard.Busy(ctx, s.backupActive, appID)
 }
 
 func (s *Service) rejectInFlight(ctx context.Context, appID uuid.UUID) error {

@@ -294,3 +294,6 @@ project POST /api/v1/backups
 project POST /api/v1/backups/{id}/cleanup
 project POST /api/v1/backups/{id}/restore
 project POST /api/v1/backups/schedules
+project GET /api/v1/applications/{id}/backup-contents
+project GET /api/v1/databases/{id}/backup-contents
+project GET /api/v1/services/{id}/backup-contents

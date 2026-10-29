@@ -589,6 +589,8 @@ func (h *handler) writeServiceError(w http.ResponseWriter, err error) {
 		writeJSON(w, http.StatusConflict, errorBody{Message: "a service with that name already exists"})
 	case errors.Is(err, ErrDeployInFlight):
 		writeJSON(w, http.StatusConflict, errorBody{Message: "a deploy is in progress"})
+	case errors.Is(err, ErrBackupInFlight):
+		writeJSON(w, http.StatusConflict, errorBody{Message: "a backup or restore is in progress"})
 	case errors.Is(err, ErrServerPinned):
 		writeJSON(w, http.StatusConflict, errorBody{Message: "a deployed service cannot change server"})
 	case errors.Is(err, ErrNameConflict):

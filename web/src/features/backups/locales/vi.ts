@@ -132,6 +132,23 @@ const vi = {
   resourceTab: {
     storageHint: "Nơi lưu trữ được quản lý tại một chỗ.",
     openStorage: "Mở Bản sao lưu → Lưu trữ",
+    contentsTitle: "Nội dung được sao lưu",
+    contentsEmptyApplication:
+      "Ứng dụng này không có vùng lưu trữ lâu dài để sao lưu. Hãy thêm ánh xạ lưu trữ trước.",
+    contentsEmptyService:
+      "Dịch vụ này không có volume có tên hoặc ổ gắn kết để sao lưu.",
+    contentsKind: {
+      volume: "Volume",
+      bind: "Ổ gắn kết",
+      dump: "Bản kết xuất cơ sở dữ liệu",
+    },
+    pauseDuringBackup: "Dừng tài nguyên trong khi tạo bản lưu",
+    pauseHelper:
+      "Bản lưu nhất quán, nhưng tài nguyên không khả dụng cho đến khi hoàn tất.",
+    noPause: "Không dừng tài nguyên",
+    noPauseHelper:
+      "Không gián đoạn, nhưng tệp được ghi trong lúc sao lưu có thể không nhất quán.",
+    noPauseTag: "Không dừng",
   },
 };
 

@@ -4,8 +4,8 @@ import { beforeEach, describe, expect, it } from "vitest";
 import type {
   BackupProtectionSchedule,
   BackupProtectionSummary,
-} from "@/features/databases/api/backups";
-import BackupProtectionCard from "@/features/databases/components/BackupProtectionCard.vue";
+} from "@/features/backups/api/backups";
+import BackupProtectionCard from "@/features/backups/components/BackupProtectionCard.vue";
 import {
   registerDiscoveredCatalogs,
   resetLocaleState,

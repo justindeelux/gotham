@@ -4,7 +4,7 @@ import { NAlert, NCard, NEmpty, NSpace, NSpin, NTag, NText } from "naive-ui";
 import type {
   BackupProtectionStatus,
   BackupProtectionSummary,
-} from "@/features/databases/api/backups";
+} from "@/features/backups/api/backups";
 import { relativeTime } from "@/shared/utils/format";
 
 import { i18n } from "@/shared/i18n";

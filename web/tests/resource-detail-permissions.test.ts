@@ -140,12 +140,6 @@ vi.mock("@/features/databases/composables/useDatabaseDetail", async () => {
   };
 });
 
-vi.mock("@/features/databases/composables/useDatabaseBackups", () => ({
-  CRON_PRESETS: [],
-  databaseBackupsKey: Symbol("database-backups"),
-  useDatabaseBackups: () => ({}),
-}));
-
 vi.mock("@/features/services/composables/useServiceDetail", async () => {
   const { computed, ref } = await import("vue");
   return {
@@ -267,9 +261,9 @@ const pages: PageCase[] = [
     stubs: {
       DatabaseDetailHeader: true,
       DatabaseOverviewPanel: true,
-      DatabaseBackupsTab: true,
+      ResourceBackupsTab: true,
       RenameDatabaseDialog: true,
-      RestoreConfirmDialog: true,
+      BackupRestoreDialog: true,
       ResourceHistoryPanel: true,
     },
   },

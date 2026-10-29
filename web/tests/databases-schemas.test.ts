@@ -9,13 +9,15 @@ import {
   syncComposerLocale,
 } from "@/shared/i18n";
 import {
+  backupMessages,
   cronSchema,
-  databaseMessages,
-  databaseNameSchema,
   isCronPresent,
+  validateProviderForm,
+} from "@/features/backups/schemas/backups";
+import {
+  databaseNameSchema,
   isDatabaseNameValid,
   isWizardConfigureValid,
-  validateTargetForm,
 } from "@/features/databases/schemas/databases";
 
 registerDiscoveredCatalogs();
@@ -88,7 +90,7 @@ describe("cronSchema keeps non-empty-only, no grammar check", () => {
   });
 });
 
-describe("validateTargetForm keeps guard order and messages", () => {
+describe("validateProviderForm keeps guard order and messages", () => {
   const base = {
     name: "t",
     kind: "s3" as const,
@@ -100,30 +102,30 @@ describe("validateTargetForm keeps guard order and messages", () => {
   };
   const rows: Array<[string, typeof base, string | null]> = [
     ["ok", base, null],
-    ["empty name", { ...base, name: "  " }, databaseMessages.targetNameRequired],
-    ["blank endpoint", { ...base, endpoint: " " }, databaseMessages.s3LocationRequired],
-    ["blank bucket", { ...base, bucket: "" }, databaseMessages.s3LocationRequired],
-    ["new missing secret", { ...base, secretKey: "" }, databaseMessages.s3KeysRequired],
-    ["new missing access", { ...base, accessKey: "" }, databaseMessages.s3KeysRequired],
+    ["empty name", { ...base, name: "  " }, backupMessages.providerNameRequired],
+    ["blank endpoint", { ...base, endpoint: " " }, backupMessages.s3LocationRequired],
+    ["blank bucket", { ...base, bucket: "" }, backupMessages.s3LocationRequired],
+    ["new missing secret", { ...base, secretKey: "" }, backupMessages.s3KeysRequired],
+    ["new missing access", { ...base, accessKey: "" }, backupMessages.s3KeysRequired],
     ["new blank-space keys still pass (no trim)", { ...base, accessKey: " ", secretKey: " " }, null],
     ["edit keeps stored keys", { ...base, accessKey: "", secretKey: "", isNew: false }, null],
     ["local needs nothing", { ...base, kind: "local" as const, endpoint: "", bucket: "", accessKey: "", secretKey: "" }, null],
-    ["name wins over location", { ...base, name: "", endpoint: "" }, databaseMessages.targetNameRequired],
+    ["name wins over location", { ...base, name: "", endpoint: "" }, backupMessages.providerNameRequired],
   ];
   it("returns the recorded first message per row", () => {
     for (const [label, draft, message] of rows) {
-      expect(validateTargetForm(draft), label).toBe(message);
+      expect(validateProviderForm(draft), label).toBe(message);
     }
   });
   it("resolves the keys to the recorded English display text", () => {
     const resolved = new Map([
-      [databaseMessages.targetNameRequired, "Target name is required."],
+      [backupMessages.providerNameRequired, "Target name is required."],
       [
-        databaseMessages.s3LocationRequired,
+        backupMessages.s3LocationRequired,
         "Endpoint and bucket are required for an S3 target.",
       ],
       [
-        databaseMessages.s3KeysRequired,
+        backupMessages.s3KeysRequired,
         "Access key and secret key are required for a new S3 target.",
       ],
     ]);
@@ -131,12 +133,12 @@ describe("validateTargetForm keeps guard order and messages", () => {
       if (message === null) {
         continue;
       }
-      expect(validateTargetForm(draft)).toBe(message);
+      expect(validateProviderForm(draft)).toBe(message);
       expect(resolveValidationMessage(message)).toBe(resolved.get(message));
     }
     setLocale("vi", null);
     expect(
-      resolveValidationMessage(databaseMessages.targetNameRequired),
+      resolveValidationMessage(backupMessages.providerNameRequired),
     ).toBe("Tên đích lưu trữ là bắt buộc.");
   });
 });

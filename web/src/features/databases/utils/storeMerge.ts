@@ -1,20 +1,4 @@
-import type { DatabaseBackup } from "@/features/databases/api/backups";
 import type { Database } from "@/features/databases/api/databases";
-
-export function mergeBackupsById(
-  existing: DatabaseBackup[],
-  incoming: DatabaseBackup[],
-): DatabaseBackup[] {
-  const byId = new Map(incoming.map((item) => [item.id, item]));
-  for (const item of existing) {
-    if (item.status === "running" && !byId.has(item.id)) {
-      byId.set(item.id, item);
-    }
-  }
-  return [...byId.values()].sort((a, b) =>
-    b.created_at.localeCompare(a.created_at),
-  );
-}
 
 export function mergeDatabasesById(
   server: Database[],

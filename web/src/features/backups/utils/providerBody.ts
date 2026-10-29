@@ -1,10 +1,10 @@
 import type {
-  CreateBackupTargetInput,
-  UpdateBackupTargetInput,
-} from "@/features/databases/api/backups";
+  CreateProviderInput,
+  UpdateProviderInput,
+} from "@/features/backups/api/backups";
 
-export function toTargetBody(
-  input: CreateBackupTargetInput | UpdateBackupTargetInput,
+export function toProviderBody(
+  input: CreateProviderInput | UpdateProviderInput,
 ): Record<string, unknown> {
   const body: Record<string, unknown> = {};
   for (const [key, value] of Object.entries(input)) {

@@ -143,6 +143,12 @@ const routes: RouteRecordRaw[] = [
         meta: { titleKey: "titles.domains", requiresAuth: true, requiresOwner: true },
       },
       {
+        path: "backups",
+        name: "backups",
+        component: () => import("@/features/backups/pages/BackupsPage.vue"),
+        meta: { titleKey: "titles.backups", requiresAuth: true },
+      },
+      {
         path: "projects/:projectId/environments/:environmentId/services/:id",
         name: "service-detail",
         component: () => import("@/features/services/pages/ServiceDetailPage.vue"),

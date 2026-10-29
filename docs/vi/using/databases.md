@@ -88,8 +88,9 @@ Chuỗi kết nối phụ thuộc vào cách cơ sở dữ liệu được phơi
 
 ## Sao lưu
 
-Mở tab **Sao lưu** của một cơ sở dữ liệu để quản lý các lần chạy, lịch và nhà cung
-cấp lưu trữ. Một bản sao lưu là một lần kết xuất dữ liệu (dump) của engine do một
+Mở tab **Sao lưu** của một cơ sở dữ liệu để quản lý các lần chạy và lịch. Nhà
+cung cấp lưu trữ được quản lý một lần cho toàn sản phẩm trong
+**Bản sao lưu → Lưu trữ**; xem [Bản sao lưu](/vi/using/backups). Một bản sao lưu là một lần kết xuất dữ liệu (dump) của engine do một
 container tạm thời thực hiện trên cùng node; artifact được nén và lưu vào đích đã
 chọn. Các lần chạy được liệt kê kèm loại (`manual` hoặc `scheduled`), trạng thái,
 kích thước, đích đến và dấu thời gian. Một lần chạy thất bại vẫn giữ dòng và văn

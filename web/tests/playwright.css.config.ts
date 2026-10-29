@@ -6,6 +6,7 @@ export default defineConfig({
     "create-app-polish.spec.ts",
     "add-resource-picker.spec.ts",
     "application-terminal.spec.ts",
+    "backups-layout.spec.ts",
     "environment-layout.spec.ts",
     "files-context-menu.spec.ts",
     "files-editor-layout.spec.ts",

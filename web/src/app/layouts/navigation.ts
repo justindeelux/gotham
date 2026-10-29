@@ -27,6 +27,7 @@ export const navSections: NavSection[] = [
       { key: "toolchain", label: "App Store", labelKey: "nav.items.toolchain", icon: "box", to: "toolchain" },
       { key: "servers", label: "Servers", labelKey: "nav.items.servers", icon: "server", to: "servers", ownerOnly: true },
       { key: "domains", label: "Domains & SSL", labelKey: "nav.items.domains", icon: "globe", to: "domains", ownerOnly: true },
+      { key: "backups", label: "Backups", labelKey: "nav.items.backups", icon: "history", to: "backups" },
     ],
   },
   {

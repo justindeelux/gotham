@@ -1,11 +1,11 @@
 import { mount } from "@vue/test-utils";
 import { NMessageProvider } from "naive-ui";
 import { beforeEach, describe, expect, it, vi } from "vitest";
-import { defineComponent, h, nextTick, ref } from "vue";
+import { defineComponent, h, nextTick } from "vue";
 import { createPinia, setActivePinia } from "pinia";
 
-import { useBackupsStore } from "@/features/databases/stores/backups";
-import { useDatabaseBackups } from "@/features/databases/composables/useDatabaseBackups";
+import { useBackupsStore } from "@/features/backups/stores/backups";
+import { useProviderCatalog } from "@/features/backups/composables/useProviderCatalog";
 import {
   registerDiscoveredCatalogs,
   resetLocaleState,
@@ -14,14 +14,14 @@ import {
 } from "@/shared/i18n";
 
 declare global {
-  var __targetTestPosts: number | undefined;
+  var __providerTestPosts: number | undefined;
   var __backupsFailure: unknown;
   var __backupsCalls: number | undefined;
 }
 
-vi.mock("@/features/databases/api/backups", async (importOriginal) => {
+vi.mock("@/features/backups/api/backups", async (importOriginal) => {
   const mod =
-    await importOriginal<typeof import("@/features/databases/api/backups")>();
+    await importOriginal<typeof import("@/features/backups/api/backups")>();
   return {
     ...mod,
     listBackups: async () => {
@@ -30,8 +30,9 @@ vi.mock("@/features/databases/api/backups", async (importOriginal) => {
         globalThis.__backupsFailure ?? { status: 401, message: "auth: expired" }
       );
     },
-    testTarget: async () => {
-      globalThis.__targetTestPosts = (globalThis.__targetTestPosts ?? 0) + 1;
+    testProvider: async () => {
+      globalThis.__providerTestPosts =
+        (globalThis.__providerTestPosts ?? 0) + 1;
       throw { status: 502, message: "agent: unreachable" };
     },
   };
@@ -48,7 +49,9 @@ beforeEach(() => {
 describe("retained backup banners refresh on switch", () => {
   it("re-derives the stored failure in the new locale without refetch", async () => {
     const store = useBackupsStore();
-    await expect(store.fetchBackups("db-1")).rejects.toEqual({
+    await expect(
+      store.fetchBackups({ resource_type: "database", resource_id: "db-1" }),
+    ).rejects.toEqual({
       status: 401,
       message: "auth: expired",
     });
@@ -70,9 +73,9 @@ describe("retained 409 refusal refreshes en-vi-en with zero refetch", () => {
     globalThis.__backupsCalls = 0;
     try {
       const store = useBackupsStore();
-      await expect(store.fetchBackups("db-1")).rejects.toEqual(
-        globalThis.__backupsFailure,
-      );
+      await expect(
+        store.fetchBackups({ resource_type: "database", resource_id: "db-1" }),
+      ).rejects.toEqual(globalThis.__backupsFailure);
       expect(globalThis.__backupsCalls).toBe(1);
       expect(store.backupsError).toBe(
         "Request refused (backup already running)",
@@ -94,35 +97,36 @@ describe("retained 409 refusal refreshes en-vi-en with zero refetch", () => {
   });
 });
 
-describe("retained target-test failure refreshes on switch", () => {
+describe("retained provider-test failure refreshes on switch", () => {
   it("derives the mocked 502 from raw cause once, with no resend", async () => {
-    globalThis.__targetTestPosts = 0;
-    let backups: ReturnType<typeof useDatabaseBackups> | null = null;
+    globalThis.__providerTestPosts = 0;
+    let catalog: ReturnType<typeof useProviderCatalog> | null = null;
     const Harness = defineComponent({
-      name: "TargetTestHarness",
+      name: "ProviderTestHarness",
       setup() {
-        backups = useDatabaseBackups(ref("db-1"), ref("backups"));
+        catalog = useProviderCatalog();
         return () => h("div");
       },
     });
     const wrapper = mount(
       defineComponent({
-        name: "TargetTestRoot",
-        setup: () => () => h(NMessageProvider, null, { default: () => h(Harness) }),
+        name: "ProviderTestRoot",
+        setup: () =>
+          () => h(NMessageProvider, null, { default: () => h(Harness) }),
       }),
     );
     try {
-      await backups!.handleTestTarget("target-1");
-      expect(globalThis.__targetTestPosts).toBe(1);
-      expect(backups!.targetTestMessage("target-1")).toBe(
+      await catalog!.test("provider-1");
+      expect(globalThis.__providerTestPosts).toBe(1);
+      expect(catalog!.checkMessage("provider-1")).toBe(
         "The node agent is unreachable or the job failed on the node. Check the node status and retry. (agent: unreachable)",
       );
       setLocale("vi", null);
       await nextTick();
-      expect(backups!.targetTestMessage("target-1")).toBe(
+      expect(catalog!.checkMessage("provider-1")).toBe(
         "Không kết nối được node agent hoặc tác vụ thất bại trên node. Kiểm tra trạng thái node rồi thử lại. (agent: unreachable)",
       );
-      expect(globalThis.__targetTestPosts).toBe(1);
+      expect(globalThis.__providerTestPosts).toBe(1);
     } finally {
       wrapper.unmount();
     }

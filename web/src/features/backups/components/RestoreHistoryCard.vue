@@ -1,16 +1,9 @@
 <script setup lang="ts">
-import {
-  NAlert,
-  NCard,
-  NSpace,
-  NSpin,
-  NTag,
-  NText,
-} from "naive-ui";
+import { NAlert, NCard, NSpace, NSpin, NTag, NText } from "naive-ui";
 import { inject } from "vue";
 
-import { databaseBackupsKey } from "@/features/databases/composables/useDatabaseBackups";
-import { runDisplay, statusTagType } from "@/features/databases/utils/backupStatus";
+import { resourceBackupsKey } from "@/features/backups/composables/useResourceBackups";
+import { runDisplay, statusTagType } from "@/features/backups/utils/backupStatus";
 import { relativeTime } from "@/shared/utils/format";
 
 import { i18n } from "@/shared/i18n";
@@ -19,7 +12,7 @@ function t(key: string, params?: Record<string, string | number>): string {
   return String(i18n.global.t(key, params ?? {}));
 }
 
-const backups = inject(databaseBackupsKey)!;
+const backups = inject(resourceBackupsKey)!;
 </script>
 
 <template>

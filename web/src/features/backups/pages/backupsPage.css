@@ -1,0 +1,161 @@
+.backups-page {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-4);
+}
+
+.tabs {
+  margin-top: var(--space-2);
+}
+
+.filters {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  flex-wrap: wrap;
+  margin-bottom: var(--space-3);
+}
+
+.schedules-card {
+  margin-top: var(--space-4);
+}
+
+.resource-cell {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  min-width: 0;
+}
+
+.resource-cell a {
+  color: var(--link);
+  text-decoration: none;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.resource-cell a:hover {
+  text-decoration: underline;
+}
+
+.mono {
+  font-family: var(--font-mono);
+}
+
+.empty-hint {
+  color: var(--muted);
+  font-size: var(--text-sm);
+  margin: 0 0 var(--space-3);
+  max-width: 62ch;
+}
+
+.backups-table {
+  width: 100%;
+  border-collapse: collapse;
+  text-align: left;
+}
+
+.backups-table th {
+  color: var(--muted);
+  font-size: var(--text-sm);
+  font-weight: 500;
+  padding: var(--space-2) var(--space-3);
+  border-bottom: 1px solid var(--border);
+  white-space: nowrap;
+}
+
+.backups-table td {
+  padding: var(--space-3);
+  border-bottom: 1px solid var(--border);
+  vertical-align: middle;
+}
+
+.backups-table tbody tr:last-child td {
+  border-bottom: none;
+}
+
+.actions-cell {
+  text-align: right;
+}
+
+.visually-hidden {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  padding: 0;
+  margin: -1px;
+  overflow: hidden;
+  clip: rect(0, 0, 0, 0);
+  white-space: nowrap;
+  border: 0;
+}
+
+@media (max-width: 760px) {
+  .filters {
+    flex-direction: column;
+    align-items: stretch;
+  }
+
+  .filters :deep(.n-select),
+  .filters :deep(.n-button) {
+    width: 100%;
+  }
+
+  .backups-table,
+  .backups-table tbody,
+  .backups-table tr,
+  .backups-table td {
+    display: block;
+    width: 100%;
+  }
+
+  .backups-table thead {
+    display: none;
+  }
+
+  .backups-table tr {
+    border: 1px solid var(--border);
+    border-radius: var(--radius-md, 8px);
+    margin-bottom: var(--space-3);
+    padding: var(--space-2) var(--space-3);
+  }
+
+  .backups-table tbody tr:last-child {
+    margin-bottom: 0;
+  }
+
+  .backups-table td {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: var(--space-3);
+    padding: var(--space-2) 0;
+    border-bottom: 1px dashed var(--border);
+  }
+
+  .backups-table tbody tr:last-child td:last-child,
+  .backups-table td:last-child {
+    border-bottom: none;
+  }
+
+  .backups-table td::before {
+    content: attr(data-label);
+    color: var(--muted);
+    font-size: var(--text-sm);
+    flex-shrink: 0;
+  }
+
+  .backups-table .actions-cell {
+    justify-content: flex-start;
+  }
+
+  .backups-table .actions-cell::before {
+    align-self: center;
+  }
+
+  .resource-cell {
+    justify-content: flex-end;
+    flex-wrap: wrap;
+  }
+}

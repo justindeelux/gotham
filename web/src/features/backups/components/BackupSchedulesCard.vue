@@ -16,11 +16,8 @@ import {
 } from "naive-ui";
 import { inject } from "vue";
 
-import {
-  CRON_PRESETS,
-  databaseBackupsKey,
-} from "@/features/databases/composables/useDatabaseBackups";
-import { isCronPresent } from "@/features/databases/schemas/databases";
+import { RESOURCE_BACKUP_CRON_PRESETS, resourceBackupsKey } from "@/features/backups/composables/useResourceBackups";
+import { isCronPresent } from "@/features/backups/schemas/backups";
 import { relativeTime } from "@/shared/utils/format";
 
 import { i18n } from "@/shared/i18n";
@@ -29,7 +26,7 @@ function t(key: string, params?: Record<string, string | number>): string {
   return String(i18n.global.t(key, params ?? {}));
 }
 
-const backups = inject(databaseBackupsKey)!;
+const backups = inject(resourceBackupsKey)!;
 </script>
 
 <template>
@@ -47,13 +44,13 @@ const backups = inject(databaseBackupsKey)!;
     </NAlert>
     <NSpin :show="backups.backupsStore.schedulesLoading">
       <NSpace
-        v-if="backups.backupsStore.schedulesOf(backups.dbId.value).length > 0"
+        v-if="backups.backupsStore.schedulesOf(backups.resource.value).length > 0"
         vertical
         :size="12"
         style="width: 100%"
       >
         <div
-          v-for="schedule in backups.backupsStore.schedulesOf(backups.dbId.value)"
+          v-for="schedule in backups.backupsStore.schedulesOf(backups.resource.value)"
           :key="schedule.id"
           class="backup-row"
         >
@@ -63,7 +60,7 @@ const backups = inject(databaseBackupsKey)!;
                 {{ schedule.cron }}
               </NText>
               <NTag size="small" :bordered="false">
-                {{ backups.targetLabel(schedule.target_id) }}
+                {{ backups.providerLabel(schedule.provider_id) }}
               </NTag>
             </NSpace>
             <NText depth="3">
@@ -140,7 +137,7 @@ const backups = inject(databaseBackupsKey)!;
       </NText>
       <NSpace align="center" :size="8">
         <NButton
-          v-for="preset in CRON_PRESETS"
+          v-for="preset in RESOURCE_BACKUP_CRON_PRESETS"
           :key="preset"
           size="small"
           secondary
@@ -172,8 +169,8 @@ const backups = inject(databaseBackupsKey)!;
           </template>
         </NInputNumber>
         <NSelect
-          v-model:value="backups.scheduleTargetId.value"
-          :options="backups.scheduleTargetOptions.value"
+          v-model:value="backups.scheduleProviderId.value"
+          :options="backups.scheduleProviderOptions.value"
           :placeholder="t('databases.backups.runs.destination')"
           :aria-label="t('databases.backups.schedules.destinationAria')"
           style="width: 220px"

@@ -1,4 +1,4 @@
-import type { DatabaseRestore } from "@/features/databases/api/backups";
+import type { BackupRestore } from "@/features/backups/api/backups";
 
 export interface RestoreOutcome {
   id: string;
@@ -6,7 +6,7 @@ export interface RestoreOutcome {
   error?: string;
 }
 
-export type RestoreStatusRow = Pick<DatabaseRestore, "id" | "status" | "error">;
+export type RestoreStatusRow = Pick<BackupRestore, "id" | "status" | "error">;
 
 export function advanceRestoreStatuses(
   seen: Map<string, string>,

@@ -19,7 +19,7 @@ import {
   matchesFilter,
   matchesSearch,
 } from "../src/features/databases/utils/databaseFilters";
-import { statusTagType } from "../src/features/databases/utils/backupStatus";
+import { statusTagType } from "../src/features/backups/utils/backupStatus";
 
 function row(overrides = {}) {
   return {

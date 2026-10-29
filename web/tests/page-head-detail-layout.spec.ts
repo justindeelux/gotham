@@ -144,7 +144,7 @@ const resourceRoutes: ResourceRoute[] = [
     path: "/projects/proj-1/environments/env-1/databases/db-1",
     meta: true,
     title: longName,
-    tabs: ["Overview", "Metrics", "Backups", "Settings"],
+    tabs: ["Overview", "Metrics", "Backups", "Logs", "Settings"],
   },
   {
     name: "service",

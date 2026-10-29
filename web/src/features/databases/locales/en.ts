@@ -39,12 +39,19 @@ const en = {
     tabs: {
       overview: "Overview",
       backups: "Backups",
+      logs: "Logs",
       settings: "Settings",
     },
     noSelection: "No database selected.",
     controlReadOnly: "Only the owner can control this database.",
     controlInProgress: "An action is already running. Wait for it to finish.",
     controlNodeOffline: "The node is offline. Reconnect it before using these actions.",
+    logs: {
+      title: "Database logs",
+      empty:
+        "No logs yet. Logs appear once the database container exists and has started.",
+      stopped: "The container is stopped. These are the last lines received from it.",
+    },
     serverPinnedReason:
       "A database cannot change server once created; only moving it to another environment is possible.",
     actions: {

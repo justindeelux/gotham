@@ -5,6 +5,7 @@ import { useRoute } from "vue-router";
 
 import DatabaseBackupsTab from "@/features/databases/components/DatabaseBackupsTab.vue";
 import DatabaseDetailHeader from "@/features/databases/components/DatabaseDetailHeader.vue";
+import DatabaseLogsTab from "@/features/databases/components/DatabaseLogsTab.vue";
 import DatabaseOverviewPanel from "@/features/databases/components/DatabaseOverviewPanel.vue";
 import ResourceHistoryPanel from "@/features/monitoring/components/ResourceHistoryPanel.vue";
 import RenameDatabaseDialog from "@/features/databases/components/RenameDatabaseDialog.vue";
@@ -84,6 +85,17 @@ watch(detail.dbId, () => {
 
       <NTabPane name="backups" :tab="t('databases.detail.tabs.backups')">
         <DatabaseBackupsTab />
+      </NTabPane>
+
+      <NTabPane
+        v-if="detail.database.value"
+        name="logs"
+        :tab="t('databases.detail.tabs.logs')"
+      >
+        <DatabaseLogsTab
+          :database="detail.database.value"
+          :active="activeTab === 'logs'"
+        />
       </NTabPane>
 
       <NTabPane v-if="detail.canWrite.value" name="settings" :tab="t('databases.detail.tabs.settings')">

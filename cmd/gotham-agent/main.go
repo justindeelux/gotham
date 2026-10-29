@@ -7,6 +7,7 @@ import (
 	"log/slog"
 	"os"
 	"os/signal"
+	"path/filepath"
 	"sync"
 	"syscall"
 	"time"
@@ -77,6 +78,11 @@ func runServe() int {
 		slog.String("cp_addr", cfg.CPAddr),
 		slog.String("listen_addr", cfg.ListenAddr),
 	)
+	if dir, err := defaultDockerConfig(cfg.CertDir); err != nil {
+		log.Warn("docker CLI config directory unavailable; compose deployments may fail", "error", err)
+	} else if dir != "" {
+		log.Info("docker CLI config directory", "dir", dir)
+	}
 
 	health, err := agent.StartHealthServer(cfg.HealthAddr, log)
 	if err != nil {
@@ -242,6 +248,30 @@ func runServe() int {
 
 	log.Info("agent stopped")
 	return exitOK
+}
+
+// defaultDockerConfig points the docker CLI at the service-owned config
+// directory when the systemd sandbox hides ~/.docker (ProtectHome). Without a
+// readable config dir the CLI skips its compose plugin, so `docker compose -f`
+// is parsed as `docker -f`. Fresh installs get DOCKER_CONFIG from the unit;
+// this covers existing nodes whose only update is the binary swap.
+func defaultDockerConfig(stateDir string) (string, error) {
+	if os.Getenv("DOCKER_CONFIG") != "" {
+		return "", nil
+	}
+	if home, err := os.UserHomeDir(); err == nil {
+		if _, err := os.ReadDir(filepath.Join(home, ".docker")); err == nil {
+			return "", nil
+		}
+	}
+	dir, err := filepath.Abs(filepath.Join(stateDir, ".docker"))
+	if err != nil {
+		return "", err
+	}
+	if err := os.MkdirAll(dir, 0o700); err != nil {
+		return "", err
+	}
+	return dir, os.Setenv("DOCKER_CONFIG", dir)
 }
 
 func usage(w io.Writer) {

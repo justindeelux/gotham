@@ -1,16 +1,25 @@
 <script setup lang="ts">
 import {
+  NButton,
   NForm,
   NFormItem,
   NInput,
+  NInputGroup,
   NInputNumber,
   NSelect,
   NSwitch,
+  useMessage,
 } from "naive-ui";
-import { computed } from "vue";
+import { computed, nextTick } from "vue";
 
 import type { TemplateField, TemplateValues } from "@/features/templates/api/templates";
 import { templateOverlayFieldHelp } from "@/features/templates/api/templates";
+import { activeLocale, i18n } from "@/shared/i18n";
+import { generateSecret } from "@/shared/utils/generateSecret";
+
+interface SecretInput {
+  passwordVisible: boolean;
+}
 
 interface Props {
   fields: TemplateField[];
@@ -29,6 +38,14 @@ const props = withDefaults(defineProps<Props>(), {
 const emit = defineEmits<{
   "update:modelValue": [value: TemplateValues];
 }>();
+
+const message = useMessage();
+const secretInputs = new Map<string, SecretInput>();
+
+function t(key: string, params?: Record<string, string | number>): string {
+  void activeLocale.value;
+  return String(i18n.global.t(key, params ?? {}));
+}
 
 const selectOptions = computed<Record<string, Array<{ label: string; value: string }>>>(
   () => {
@@ -74,6 +91,33 @@ function validationStatus(field: TemplateField): "error" | undefined {
 function setValue(key: string, value: string): void {
   emit("update:modelValue", { ...props.modelValue, [key]: value });
 }
+
+function setSecretInput(key: string, input: unknown): void {
+  if (input && typeof input === "object" && "passwordVisible" in input) {
+    secretInputs.set(key, input as SecretInput);
+  } else {
+    secretInputs.delete(key);
+  }
+}
+
+function fillGenerated(field: TemplateField): void {
+  setValue(field.key, generateSecret());
+  void nextTick(() => {
+    const input = secretInputs.get(field.key);
+    if (input) {
+      input.passwordVisible = true;
+    }
+  });
+}
+
+async function copyValue(field: TemplateField): Promise<void> {
+  try {
+    await navigator.clipboard.writeText(fieldValue(field));
+    message.success(t("templates.secret.copied", { label: field.label }));
+  } catch {
+    message.warning(t("templates.secret.copyFailed", { label: field.label }));
+  }
+}
 </script>
 
 <template>
@@ -98,17 +142,52 @@ function setValue(key: string, value: string): void {
         @update:value="(value: string) => setValue(field.key, value)"
       />
 
-      <NInput
-        v-else-if="field.type === 'secret'"
-        type="password"
-        show-password-on="click"
-        :input-props="{ autocomplete: 'new-password' }"
-        :value="fieldValue(field)"
-        :placeholder="field.placeholder ?? ''"
-        :disabled="disabled"
-        :aria-label="field.label"
-        @update:value="(value: string) => setValue(field.key, value)"
-      />
+      <template v-else-if="field.type === 'secret'">
+        <NInputGroup v-if="field.generate">
+          <NInput
+            :ref="(input) => setSecretInput(field.key, input)"
+            type="password"
+            show-password-on="click"
+            :input-props="{ autocomplete: 'new-password' }"
+            :value="fieldValue(field)"
+            :placeholder="field.placeholder ?? ''"
+            :disabled="disabled"
+            :aria-label="field.label"
+            @update:value="(value: string) => setValue(field.key, value)"
+          />
+          <NButton
+            size="small"
+            secondary
+            :disabled="disabled"
+            :aria-label="t('templates.secret.generateLabel', { label: field.label })"
+            @click="fillGenerated(field)"
+          >
+            {{ t("templates.secret.generate") }}
+          </NButton>
+          <NButton
+            v-if="fieldValue(field) !== ''"
+            size="small"
+            secondary
+            :disabled="disabled"
+            :aria-label="t('templates.secret.copyLabel', { label: field.label })"
+            @click="copyValue(field)"
+          >
+            {{ t("templates.secret.copy") }}
+          </NButton>
+        </NInputGroup>
+
+        <NInput
+          v-else
+          type="password"
+          show-password-on="click"
+          :input-props="{ autocomplete: 'new-password' }"
+          :value="fieldValue(field)"
+          :placeholder="field.placeholder ?? ''"
+          :disabled="disabled"
+          :aria-label="field.label"
+          @update:value="(value: string) => setValue(field.key, value)"
+        />
+      </template>
 
       <NInputNumber
         v-else-if="field.type === 'number'"

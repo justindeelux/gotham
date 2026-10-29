@@ -17,6 +17,33 @@ export interface ServiceDomainRoute {
   port: number;
 }
 
+export type ServiceDomainStatus = "routed" | "held" | "shadowed" | "unknown";
+export type ServiceDomainProtocol = "http" | "https";
+export type ServiceDomainSource = "managed" | "compose";
+
+export interface ServiceDomain {
+  id?: string;
+  service_id: string;
+  domain: string;
+  compose_service: string;
+  port: number;
+  protocol: ServiceDomainProtocol;
+  disabled: boolean;
+  source: ServiceDomainSource;
+  status: ServiceDomainStatus;
+  reason?: string;
+  created_at?: string;
+  updated_at?: string;
+}
+
+export interface ServiceDomainInput {
+  domain: string;
+  compose_service: string;
+  port: number;
+  protocol: ServiceDomainProtocol;
+  disabled?: boolean;
+}
+
 export interface Service {
   id: string;
   name: string;
@@ -32,6 +59,7 @@ export interface Service {
   compose_yaml?: string;
   env: Record<string, string>;
   domains: ServiceDomainRoute[];
+  pending_changes?: string[];
   created_at: string;
   updated_at: string;
 }
@@ -99,6 +127,14 @@ interface DeployListEnvelope {
 
 interface ContainerListEnvelope {
   containers: ComposeServiceContainer[];
+}
+
+interface DomainListEnvelope {
+  domains: ServiceDomain[];
+}
+
+interface DomainEnvelope {
+  domain: ServiceDomain;
 }
 
 const lifecycleTimeoutMs = 15 * 60_000;
@@ -179,6 +215,41 @@ export async function listServiceContainers(
     `/services/${id}/containers`,
   );
   return response.data.containers ?? [];
+}
+
+export async function listServiceDomains(id: string): Promise<ServiceDomain[]> {
+  const response = await http.get<DomainListEnvelope>(`/services/${id}/domains`);
+  return response.data.domains ?? [];
+}
+
+export async function addServiceDomain(
+  id: string,
+  input: ServiceDomainInput,
+): Promise<ServiceDomain> {
+  const response = await http.post<DomainEnvelope>(
+    `/services/${id}/domains`,
+    input,
+  );
+  return response.data.domain;
+}
+
+export async function updateServiceDomain(
+  id: string,
+  domainId: string,
+  input: ServiceDomainInput,
+): Promise<ServiceDomain> {
+  const response = await http.put<DomainEnvelope>(
+    `/services/${id}/domains/${domainId}`,
+    input,
+  );
+  return response.data.domain;
+}
+
+export async function removeServiceDomain(
+  id: string,
+  domainId: string,
+): Promise<void> {
+  await http.delete(`/services/${id}/domains/${domainId}`);
 }
 
 export interface ServiceLogsOptions {

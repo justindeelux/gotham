@@ -1,5 +1,15 @@
 <script setup lang="ts">
-import { NAlert, NButton, NCard, NEmpty, NSpace, NText } from "naive-ui";
+import {
+  NAlert,
+  NButton,
+  NCard,
+  NEmpty,
+  NFormItem,
+  NInputNumber,
+  NSelect,
+  NSpace,
+  NText,
+} from "naive-ui";
 import { computed, ref, toRef } from "vue";
 import { useI18n } from "vue-i18n";
 
@@ -9,11 +19,11 @@ import type {
   DomainProtocol,
 } from "@/features/applications/api/applications";
 import CertificatePanel from "@/features/applications/components/CertificatePanel.vue";
-import DomainFormModal from "@/features/applications/components/DomainFormModal.vue";
 import DomainTable from "@/features/applications/components/DomainTable.vue";
 import WebsiteChecksCard from "@/features/applications/components/WebsiteChecksCard.vue";
 import { useApplicationDomains } from "@/features/applications/composables/useApplicationDomains";
 import { useProxyStore, type Certificate } from "@/features/domains";
+import DomainFormModal from "@/features/domains/components/DomainFormModal.vue";
 
 interface Props {
   application: Application;
@@ -60,6 +70,10 @@ const renameCertificateHost = computed<string>(() => {
 
 const certificateOpen = ref(false);
 const certificateDomain = ref("");
+
+const showRenameWarning = computed<boolean>(
+  () => renameCertificateHost.value !== "",
+);
 
 function openCertificate(row: ApplicationDomain): void {
   certificateDomain.value = row.domain;
@@ -113,24 +127,66 @@ function openCertificate(row: ApplicationDomain): void {
 
     <DomainFormModal
       v-model:show="domains.formOpen.value"
-      :editing="domains.editingId.value !== null"
-      :domain="domains.draft.domain"
-      :port="domains.draft.port"
-      :service="domains.draft.service"
+      :title="
+        domains.editingId.value !== null
+          ? t('domains.form.editTitle')
+          : t('domains.form.addTitle')
+      "
+      :submit-label="
+        domains.editingId.value !== null
+          ? t('domains.form.save')
+          : t('domains.form.add')
+      "
+      :host="domains.draft.domain"
       :protocol="domains.draft.protocol"
+      :protocol-options="protocolOptions"
       :saving="domains.saving.value"
       :error="domains.formError.value"
-      :is-compose="domains.isCompose.value"
-      :service-options="domains.serviceOptions.value"
-      :protocol-options="protocolOptions"
-      :rename-certificate-host="renameCertificateHost"
-      @update:domain="domains.draft.domain = $event"
-      @update:port="domains.draft.port = $event"
+      :hint="t('applications.domain.portHint')"
+      @update:host="domains.draft.domain = $event"
       @update:protocol="domains.draft.protocol = $event"
-      @service-change="domains.handleServiceChange"
       @save="domains.handleSave"
       @cancel="domains.closeForm"
-    />
+    >
+      <template #warning>
+        <NAlert v-if="showRenameWarning" type="warning" :show-icon="true">
+          {{ t("applications.domain.renameCertWarning", { domain: renameCertificateHost }) }}
+        </NAlert>
+      </template>
+      <template #routing>
+        <NFormItem :label="t('applications.domain.port')" class="domain-routing-field">
+          <NInputNumber
+            :value="domains.draft.port"
+            class="domain-port"
+            :min="1"
+            :max="65535"
+            :placeholder="t('applications.domain.portPlaceholder')"
+            :input-props="{ 'aria-label': t('applications.domain.portAria') }"
+            @update:value="(value: number | null) => (domains.draft.port = value)"
+          />
+        </NFormItem>
+      </template>
+      <template v-if="domains.isCompose.value" #extra>
+        <NFormItem :label="t('applications.domain.service')">
+          <NSelect
+            :value="domains.draft.service"
+            class="domain-service"
+            filterable
+            tag
+            clearable
+            :options="domains.serviceOptions.value"
+            :placeholder="t('applications.domain.servicePlaceholder')"
+            :aria-label="t('applications.domain.serviceAria')"
+            @update:value="(value: string | null) => domains.handleServiceChange(value)"
+          />
+        </NFormItem>
+      </template>
+      <template v-if="domains.isCompose.value" #hint>
+        <NText depth="3" class="small">
+          {{ t("applications.domain.serviceHint") }}
+        </NText>
+      </template>
+    </DomainFormModal>
 
     <CertificatePanel
       v-model:show="certificateOpen"
@@ -143,5 +199,18 @@ function openCertificate(row: ApplicationDomain): void {
 <style scoped>
 .small {
   font-size: var(--text-xs);
+}
+
+.domain-port {
+  width: 100%;
+}
+
+.domain-service {
+  width: 100%;
+}
+
+.domain-routing-field {
+  flex: 1;
+  min-width: 0;
 }
 </style>

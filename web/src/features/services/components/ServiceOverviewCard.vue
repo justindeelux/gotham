@@ -1,7 +1,9 @@
 <script setup lang="ts">
-import { NAlert, NCard, NDescriptions, NDescriptionsItem, NText } from "naive-ui";
+import { NAlert, NButton, NCard, NDescriptions, NDescriptionsItem, NText } from "naive-ui";
+import { computed, ref, watch } from "vue";
 
-import { serviceStatusLabel } from "@/features/services/api/services";
+import { listServiceDomains, serviceStatusLabel } from "@/features/services/api/services";
+import type { ServiceDomain } from "@/features/services/api/services";
 import { useServiceDetailContext } from "@/features/services/composables/useServiceDetail";
 import { activeLocale, i18n } from "@/shared/i18n";
 import { relativeTime } from "@/shared/utils/format";
@@ -11,7 +13,37 @@ function t(key: string, params?: Record<string, string | number>): string {
   return String(i18n.global.t(key, params ?? {}));
 }
 
-const { service, serverName, failedDeploy } = useServiceDetailContext();
+const { service, serverName, failedDeploy, canWrite } = useServiceDetailContext();
+
+const emit = defineEmits<{
+  "open-domains": [];
+  "add-domain": [];
+}>();
+
+const listed = ref<ServiceDomain[]>([]);
+
+watch(
+  () => service.value?.id,
+  async (id) => {
+    if (!id) {
+      return;
+    }
+    try {
+      listed.value = await listServiceDomains(id);
+    } catch {
+      // The rendered routes on the service still name the compose hosts.
+      listed.value = [];
+    }
+  },
+  { immediate: true },
+);
+
+const domains = computed<string[]>(() => {
+  if (listed.value.length > 0) {
+    return listed.value.map((row) => row.domain);
+  }
+  return (service.value?.domains ?? []).map((route) => route.domain);
+});
 </script>
 
 <template>
@@ -44,18 +76,32 @@ const { service, serverName, failedDeploy } = useServiceDetailContext();
         {{ relativeTime(service?.updated_at ?? "") }}
       </NDescriptionsItem>
       <NDescriptionsItem :label="t('services.overview.domains')" :span="2">
-        <template v-if="(service?.domains.length ?? 0) > 0">
-          <span
-            v-for="route in service?.domains ?? []"
-            :key="route.domain"
-            class="mono domain-chip"
+        <div v-if="domains.length > 0" class="domain-links">
+          <div v-for="host in domains" :key="host" class="domain-link">
+            <span class="mono domain-chip">{{ host }}</span>
+            <NButton
+              text
+              size="tiny"
+              class="domain-open"
+              @click="emit('open-domains')"
+            >
+              {{ t("services.overview.open") }}
+            </NButton>
+          </div>
+        </div>
+        <div v-else class="domain-empty">
+          <NText depth="3">{{ t("services.overview.noDomains") }}</NText>
+          <NButton
+            v-if="canWrite"
+            text
+            type="primary"
+            size="small"
+            class="domain-add-overview"
+            @click="emit('add-domain')"
           >
-            {{ route.service }} → {{ route.domain }}:{{ route.port }}
-          </span>
-        </template>
-        <NText v-else depth="3">
-          {{ t("services.overview.noDomains", { label: "gotham.domain" }) }}
-        </NText>
+            {{ t("services.domains.add") }}
+          </NButton>
+        </div>
       </NDescriptionsItem>
     </NDescriptions>
   </NCard>
@@ -66,9 +112,23 @@ const { service, serverName, failedDeploy } = useServiceDetailContext();
   margin-bottom: var(--space-3);
 }
 
-.domain-chip {
-  display: inline-block;
-  margin-right: var(--space-3);
+.domain-links {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-1);
+}
+
+.domain-link {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+}
+
+.domain-empty {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  flex-wrap: wrap;
 }
 
 .mono {

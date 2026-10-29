@@ -1,6 +1,6 @@
 <script setup lang="ts">
-import { NAlert, NButton, NEmpty, NTabPane, NTabs } from "naive-ui";
-import { provide, ref } from "vue";
+import { NAlert, NButton, NEmpty, NSpace, NTabPane, NTabs } from "naive-ui";
+import { computed, provide, ref } from "vue";
 import { RouterLink } from "vue-router";
 
 import ResourceDetailFrame from "@/features/projects/components/ResourceDetailFrame.vue";
@@ -10,6 +10,7 @@ import ServiceContainersCard from "@/features/services/components/ServiceContain
 import ServiceDeployBanner from "@/features/services/components/ServiceDeployBanner.vue";
 import ServiceDeployHistoryCard from "@/features/services/components/ServiceDeployHistoryCard.vue";
 import ServiceDetailHeader from "@/features/services/components/ServiceDetailHeader.vue";
+import ServiceDomainsTab from "@/features/services/components/ServiceDomainsTab.vue";
 import ServiceEnvCard from "@/features/services/components/ServiceEnvCard.vue";
 import ServiceLogs from "@/features/services/components/ServiceLogs.vue";
 import ServiceOverviewCard from "@/features/services/components/ServiceOverviewCard.vue";
@@ -36,12 +37,23 @@ const {
   moveError,
   handleMove,
   handleDelete,
+  handleDeploy,
   busy,
   deploys,
   isDeploying,
 } = page;
 
 const activeTab = ref("overview");
+const domainCreateTicket = ref(0);
+
+const domainsPending = computed<boolean>(
+  () => service.value?.pending_changes?.includes("domains") ?? false,
+);
+
+function openDomainCreate(): void {
+  activeTab.value = "domains";
+  domainCreateTicket.value += 1;
+}
 </script>
 
 <template>
@@ -69,6 +81,29 @@ const activeTab = ref("overview");
         {{ actionError }}
       </NAlert>
       <ServiceDeployBanner :is-deploying="isDeploying" />
+      <NAlert
+        v-if="domainsPending"
+        type="info"
+        :show-icon="true"
+        data-testid="domains-pending-banner"
+      >
+        <template #header>
+          {{ t("services.detail.domainsPendingTitle") }}
+        </template>
+        <NSpace align="center" justify="space-between" :size="12">
+          <span>{{ t("services.detail.domainsPendingBody") }}</span>
+          <NButton
+            v-if="canWrite"
+            size="small"
+            type="primary"
+            :loading="busy === 'deploy'"
+            :disabled="busy !== null || isDeploying"
+            @click="handleDeploy"
+          >
+            {{ t("services.header.redeploy") }}
+          </NButton>
+        </NSpace>
+      </NAlert>
     </template>
 
     <template #header>
@@ -87,7 +122,10 @@ const activeTab = ref("overview");
 
     <NTabs v-if="service" v-model:value="activeTab" type="line" animated>
       <NTabPane name="overview" :tab="t('services.tabs.overview')">
-        <ServiceOverviewCard />
+        <ServiceOverviewCard
+          @open-domains="activeTab = 'domains'"
+          @add-domain="openDomainCreate"
+        />
       </NTabPane>
 
       <NTabPane name="deployments" :tab="t('services.tabs.deployments')">
@@ -104,6 +142,14 @@ const activeTab = ref("overview");
 
       <NTabPane name="containers" :tab="t('services.tabs.containers')">
         <ServiceContainersCard />
+      </NTabPane>
+
+      <NTabPane name="domains" :tab="t('services.tabs.domains')">
+        <ServiceDomainsTab
+          :create-ticket="domainCreateTicket"
+          @create-consumed="domainCreateTicket = 0"
+          @open-compose="activeTab = 'compose'"
+        />
       </NTabPane>
 
       <NTabPane name="logs" :tab="t('services.tabs.logs')">

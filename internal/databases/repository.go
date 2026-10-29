@@ -27,7 +27,8 @@ type Repository interface {
 	ResolveEnvironment(ctx context.Context, environmentID uuid.UUID) (EnvironmentRef, error)
 	ResolveProject(ctx context.Context, projectID uuid.UUID) (uuid.UUID, error)
 	UpdateDatabaseContainer(ctx context.Context, databaseID uuid.UUID, containerID string) (Database, error)
-	UpdateDatabaseStatus(ctx context.Context, databaseID uuid.UUID, status Status) (Database, error)
+	UpdateDatabaseStatus(ctx context.Context, databaseID uuid.UUID, status Status, message string) (Database, error)
+	ListDatabasesByStatus(ctx context.Context, status Status) ([]Database, error)
 	PublicPortInUse(ctx context.Context, serverID uuid.UUID, publicPort int32) (bool, error)
 	SoftDeleteDatabase(ctx context.Context, databaseID uuid.UUID) (Database, error)
 	ListExpiredDatabases(ctx context.Context, cutoff time.Time) ([]Database, error)
@@ -112,6 +113,14 @@ func (r *storeRepository) ListDatabasesByProject(ctx context.Context, projectID 
 	rows, err := r.store.ListDatabasesByProject(ctx, pgUUID(projectID))
 	if err != nil {
 		return nil, fmt.Errorf("databases: list databases by project: %w", err)
+	}
+	return r.enrich(ctx, rows)
+}
+
+func (r *storeRepository) ListDatabasesByStatus(ctx context.Context, status Status) ([]Database, error) {
+	rows, err := r.store.ListDatabasesByStatus(ctx, string(status))
+	if err != nil {
+		return nil, fmt.Errorf("databases: list databases by status: %w", err)
 	}
 	return r.enrich(ctx, rows)
 }
@@ -246,10 +255,11 @@ func (r *storeRepository) UpdateDatabaseContainer(ctx context.Context, databaseI
 	return enriched[0], nil
 }
 
-func (r *storeRepository) UpdateDatabaseStatus(ctx context.Context, databaseID uuid.UUID, status Status) (Database, error) {
+func (r *storeRepository) UpdateDatabaseStatus(ctx context.Context, databaseID uuid.UUID, status Status, message string) (Database, error) {
 	row, err := r.store.UpdateDatabaseStatus(ctx, sqlc.UpdateDatabaseStatusParams{
-		ID:     pgUUID(databaseID),
-		Status: string(status),
+		ID:            pgUUID(databaseID),
+		Status:        string(status),
+		StatusMessage: pgOptionalText(message),
 	})
 	if err != nil {
 		return Database{}, updateDatabaseError("status", err)
@@ -373,6 +383,7 @@ func databaseFromRow(row sqlc.Database) Database {
 		Engine:        row.Engine,
 		Version:       row.Version,
 		Status:        Status(row.Status),
+		StatusMessage: optionalText(row.StatusMessage),
 		ContainerID:   row.ContainerID,
 		PublicPort:    row.PublicPort,
 		StoragePath:   row.StoragePath,
@@ -407,6 +418,20 @@ func pgUUID(id uuid.UUID) pgtype.UUID {
 		return pgtype.UUID{}
 	}
 	return pgtype.UUID{Bytes: id, Valid: true}
+}
+
+func pgOptionalText(value string) *string {
+	if value == "" {
+		return nil
+	}
+	return &value
+}
+
+func optionalText(value *string) string {
+	if value == nil {
+		return ""
+	}
+	return *value
 }
 
 func pgTimestamp(t time.Time) pgtype.Timestamptz {

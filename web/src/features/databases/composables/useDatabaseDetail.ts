@@ -101,6 +101,16 @@ export function useDatabaseDetail() {
     () => database.value?.status === "running" || database.value?.status === "stopped",
   );
 
+  const isCreating = computed<boolean>(
+    () => database.value?.status === "creating",
+  );
+
+  const provisioningError = computed<string>(() =>
+    database.value?.status === "error"
+      ? (database.value.status_message ?? "")
+      : "",
+  );
+
   const canWrite = computed<boolean>(() => projectsStore.canWrite);
 
   const nodeOffline = computed<boolean>(() => {
@@ -114,6 +124,9 @@ export function useDatabaseDetail() {
   });
 
   const controlHint = computed<string | null>(() => {
+    if (isCreating.value) {
+      return t("databases.detail.creating.actionsDisabled");
+    }
     if (!canWrite.value) {
       return t("databases.detail.controlReadOnly");
     }
@@ -380,9 +393,21 @@ export function useDatabaseDetail() {
     void fetchAll();
   });
 
+  // Poll only while provisioning; the status leaves creating exactly once.
+  watch(
+    isCreating,
+    (creating) => {
+      if (creating) {
+        databasesStore.pollDatabases();
+      } else {
+        databasesStore.stopPolling();
+      }
+    },
+    { immediate: true },
+  );
+
   onMounted(() => {
     void fetchAll();
-    databasesStore.pollDatabases();
   });
 
   onUnmounted(() => {
@@ -403,6 +428,8 @@ export function useDatabaseDetail() {
     canStart,
     canStop,
     canRestart,
+    isCreating,
+    provisioningError,
     controlHint,
     credentials,
     revealed,

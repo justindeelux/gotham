@@ -285,7 +285,7 @@ func TestRepositoryRoundTrip(t *testing.T) {
 		t.Errorf("another environment may reuse a name: %v", err)
 	}
 
-	if _, err := repo.UpdateDatabaseStatus(ctx, renamed.ID, "not-a-status"); err == nil {
+	if _, err := repo.UpdateDatabaseStatus(ctx, renamed.ID, "not-a-status", ""); err == nil {
 		t.Error("an unknown status must be rejected by the CHECK constraint")
 	}
 
@@ -296,7 +296,7 @@ func TestRepositoryRoundTrip(t *testing.T) {
 	if tagged.ContainerID != "container-42" || tagged.Name != "billing" || tagged.Status != StatusCreating {
 		t.Errorf("container write changed more than container_id: %+v", tagged)
 	}
-	stopped, err := repo.UpdateDatabaseStatus(ctx, second.ID, StatusStopped)
+	stopped, err := repo.UpdateDatabaseStatus(ctx, second.ID, StatusStopped, "")
 	if err != nil {
 		t.Fatalf("UpdateDatabaseStatus: %v", err)
 	}
@@ -379,7 +379,7 @@ func TestRepositoryRoundTrip(t *testing.T) {
 	if _, err := repo.UpdateDatabaseContainer(ctx, renamed.ID, "zombie-container"); !errors.Is(err, ErrNotFound) {
 		t.Errorf("UpdateDatabaseContainer after delete = %v, want ErrNotFound", err)
 	}
-	if _, err := repo.UpdateDatabaseStatus(ctx, renamed.ID, StatusRunning); !errors.Is(err, ErrNotFound) {
+	if _, err := repo.UpdateDatabaseStatus(ctx, renamed.ID, StatusRunning, ""); !errors.Is(err, ErrNotFound) {
 		t.Errorf("UpdateDatabaseStatus after delete = %v, want ErrNotFound", err)
 	}
 	if _, err := repo.GetDatabase(ctx, renamed.ID); !errors.Is(err, ErrNotFound) {

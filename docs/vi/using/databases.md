@@ -46,8 +46,16 @@ lại.
 
 Thông tin đăng nhập (người dùng, mật khẩu, tên cơ sở dữ liệu) được tạo phía máy
 chủ; bạn không chọn chúng. MySQL và MariaDB còn có thêm một mật khẩu root riêng.
-Màn hình thành công hiển thị chúng, và chúng vẫn có sẵn dưới mục
-**Thông tin đăng nhập** trên trang cơ sở dữ liệu.
+Chúng hiển thị dưới mục **Thông tin đăng nhập** trên trang cơ sở dữ liệu.
+
+Quá trình tạo trả về ngay khi dòng cơ sở dữ liệu và thông tin đăng nhập đã có;
+wizard đóng lại và mở trang cơ sở dữ liệu, nơi hiển thị trạng thái **Đang tạo**
+trong lúc image được tải về và container trở nên khỏe mạnh. Trên một node chưa có
+image, việc này có thể mất vài phút. Trang tự polling API và chuyển sang **Đang
+chạy** khi healthcheck đạt, hoặc sang **Lỗi** kèm lý do ngắn nếu cấp phát thất
+bại. Hợp đồng API là `POST /api/v1/databases`, trả `202 Accepted` với cơ sở dữ
+liệu ở trạng thái `creating` kèm thông tin đăng nhập; hãy polling
+`GET /api/v1/databases/{id}` cho đến khi `status` là `running` hoặc `error`.
 
 Mỗi cơ sở dữ liệu nhận một volume có tên (`gotham-db-<id>`) được gắn tại thư mục dữ
 liệu của engine. Volume độc lập với container: gỡ container không gỡ dữ liệu.

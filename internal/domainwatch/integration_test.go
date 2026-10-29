@@ -107,19 +107,36 @@ func newIntegrationFixture(t *testing.T) integrationFixture {
 	if err != nil {
 		t.Fatalf("CreateApplication: %v", err)
 	}
+	now := time.Date(2026, 10, 28, 12, 0, 0, 0, time.UTC)
+	domainCreatedAt := now.Add(-time.Hour)
 	domainID := uuid.New()
+	// created_at and updated_at must carry the fixture clock: graceUntil
+	// derives the configuration grace from them, so a database default would
+	// put the grace window on wall-clock time instead of the injected Now.
 	_, err = st.DB.Exec(ctx, `INSERT INTO application_domains
-		(id, application_id, domain, is_primary, disabled, port, protocol)
-		VALUES ($1, $2, $3, true, false, 80, 'https')`, domainID, appRow.ID, "app-"+domainID.String()[:8]+".example.com")
+		(id, application_id, domain, is_primary, disabled, port, protocol, created_at, updated_at)
+		VALUES ($1, $2, $3, true, false, 80, 'https', $4, $4)`, domainID, appRow.ID, "app-"+domainID.String()[:8]+".example.com", domainCreatedAt)
 	if err != nil {
 		t.Fatalf("insert domain: %v", err)
+	}
+	var storedCreatedAt, storedUpdatedAt time.Time
+	if err := st.DB.QueryRow(ctx,
+		`SELECT created_at, updated_at FROM application_domains WHERE id = $1`, domainID,
+	).Scan(&storedCreatedAt, &storedUpdatedAt); err != nil {
+		t.Fatalf("read domain timestamps: %v", err)
+	}
+	// Regression guard: a database-defaulted timestamp here silently shifts
+	// the grace window off the fixture clock and the tests stop covering it.
+	if !storedCreatedAt.Equal(domainCreatedAt) || !storedUpdatedAt.Equal(domainCreatedAt) {
+		t.Fatalf("domain timestamps not on the fixture clock: created_at=%v updated_at=%v want=%v",
+			storedCreatedAt, storedUpdatedAt, domainCreatedAt)
 	}
 	return integrationFixture{
 		store:    st,
 		appID:    uuid.UUID(appRow.ID.Bytes),
 		domainID: domainID,
 		project:  uuid.UUID(project.ID.Bytes),
-		now:      time.Date(2026, 10, 28, 12, 0, 0, 0, time.UTC),
+		now:      now,
 	}
 }
 

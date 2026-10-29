@@ -48,13 +48,6 @@ const { service, serverName } = useServiceDetailContext();
         </NText>
       </NDescriptionsItem>
     </NDescriptions>
-
-    <div class="stub">
-      <h4>{{ t("services.overview.stubTitle") }}</h4>
-      <p>
-        {{ t("services.overview.stubBody") }}
-      </p>
-    </div>
   </NCard>
 </template>
 
@@ -62,27 +55,6 @@ const { service, serverName } = useServiceDetailContext();
 .domain-chip {
   display: inline-block;
   margin-right: var(--space-3);
-}
-
-.stub {
-  margin-top: var(--space-4);
-  border-left: 4px solid var(--warn);
-  background: var(--surface);
-  border-radius: var(--radius-sm);
-  padding: var(--space-2) var(--space-3);
-}
-
-.stub h4 {
-  margin: 0;
-  font-size: var(--text-xs);
-  color: var(--fg-2);
-}
-
-.stub p {
-  margin: var(--space-1) 0 0;
-  font-size: var(--text-xs);
-  color: var(--muted);
-  max-width: 80ch;
 }
 
 .mono {

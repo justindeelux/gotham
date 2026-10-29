@@ -34,10 +34,6 @@ const en = {
     create: "Create service",
     deploy: "Deploy now",
   },
-  configure: {
-    description:
-      "Fields come from the template schema ({endpoint}); adding a template does not require a UI change. Secret values stay in this form until they are sent as the service environment.",
-  },
   preview: {
     servicesOne: "{count} service",
     servicesOther: "{count} services",
@@ -52,18 +48,11 @@ const en = {
   target: {
     nameLabel: "Service name",
     scopeError: "Select a project and environment.",
-    description:
-      "Creating stores the rendered document and its environment ({endpoint}); a service runs on exactly one node. Deploy sends the project to that node's agent and shows what the agent reports back.",
   },
   created: {
     title: "{name} created",
-    description:
-      "The service row exists; nothing runs yet. Deploy renders the document again on the node and records one deploy row.",
     open: "Open service detail",
     deployed: "deployed",
-    stubTitle: "Deploy step timeline — backend pending",
-    stubBody:
-      "The API records one row per deploy (state, error, timestamps) and exposes no per-step progress, so no step timeline is shown here. The detail page lists the history instead.",
   },
   toast: {
     created: "Service {name} created.",

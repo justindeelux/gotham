@@ -122,25 +122,44 @@ const service = {
   updated_at: "2026-01-02T00:00:00Z",
 };
 
-const resourceRoutes = [
+interface ResourceRoute {
+  name: string;
+  path: string;
+  meta: boolean;
+  title: string;
+  tabs?: string[];
+}
+
+const resourceRoutes: ResourceRoute[] = [
   { name: "server", path: "/servers/srv-1", meta: true, title: longName },
   {
     name: "application",
     path: "/projects/proj-1/environments/env-1/applications/app-1",
     meta: true,
     title: longName,
+    tabs: ["Overview", "Logs", "Environment", "Settings"],
   },
   {
     name: "database",
     path: "/projects/proj-1/environments/env-1/databases/db-1",
     meta: true,
     title: longName,
+    tabs: ["Overview", "Metrics", "Backups", "Settings"],
   },
   {
     name: "service",
     path: "/projects/proj-1/environments/env-1/services/svc-1",
-    meta: false,
+    meta: true,
     title: longName,
+    tabs: [
+      "Overview",
+      "Deployments",
+      "Compose",
+      "Environment",
+      "Containers",
+      "Logs",
+      "Settings",
+    ],
   },
   {
     name: "containers",
@@ -361,6 +380,30 @@ for (const route of resourceRoutes) {
       Math.abs(right - (desktop.headBox.x + desktop.headBox.width)),
       `${route.name} action row ends at the header right edge`,
     ).toBeLessThanOrEqual(1);
+
+    for (const tab of route.tabs ?? []) {
+      await expect(
+        page.locator(".n-tabs-tab").filter({ hasText: new RegExp(`^${tab}$`) }).first(),
+        `${route.name} shows the ${tab} tab`,
+      ).toBeVisible();
+    }
+    if (route.name === "service") {
+      await expect(
+        page.locator(".page-head__breadcrumb"),
+        "service header has no duplicate back link",
+      ).toHaveCount(0);
+    }
+    await expect(
+      page.locator(".page-actions button").filter({ hasText: /^Delete$/ }),
+      `${route.name} header has no delete action`,
+    ).toHaveCount(0);
+    if (route.tabs?.includes("Settings")) {
+      await page.locator(".n-tabs-tab").filter({ hasText: /^Settings$/ }).click();
+      await expect(
+        page.locator(".n-tab-pane button").filter({ hasText: /Delete/ }).first(),
+        `${route.name} delete action lives in Settings`,
+      ).toBeVisible();
+    }
 
     await page.setViewportSize({ width: 390, height: 844 });
     const mobile = await measure(page);

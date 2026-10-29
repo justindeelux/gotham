@@ -1,12 +1,5 @@
 <script setup lang="ts">
-import {
-  NAlert,
-  NSpace,
-  NSpin,
-  NTabPane,
-  NTabs,
-  NTooltip,
-} from "naive-ui";
+import { NButton, NCard, NSpace, NTabPane, NTabs, NTooltip } from "naive-ui";
 import { provide, ref, watch } from "vue";
 import { useRoute } from "vue-router";
 
@@ -17,8 +10,8 @@ import DatabaseOverviewPanel from "@/features/databases/components/DatabaseOverv
 import ResourceHistoryPanel from "@/features/monitoring/components/ResourceHistoryPanel.vue";
 import RenameDatabaseDialog from "@/features/databases/components/RenameDatabaseDialog.vue";
 import RestoreConfirmDialog from "@/features/databases/components/RestoreConfirmDialog.vue";
-import ProjectBreadcrumb from "@/features/projects/components/ProjectBreadcrumb.vue";
-import ResourceMoveCard from "@/features/projects/components/ResourceMoveCard.vue";
+import ResourceDetailFrame from "@/features/projects/components/ResourceDetailFrame.vue";
+import ResourceSettingsTab from "@/features/projects/components/ResourceSettingsTab.vue";
 import {
   databaseDetailKey,
   useDatabaseDetail,
@@ -51,112 +44,98 @@ watch(detail.dbId, () => {
 </script>
 
 <template>
-  <NSpace vertical :size="16">
-    <ProjectBreadcrumb
-      v-if="detail.database.value"
-      :project-name="detail.database.value.project_name"
-      :project-id="detail.database.value.project_id"
-      :environment-name="detail.database.value.environment_name"
-      :environment-id="detail.database.value.environment_id"
-      :resource-name="detail.database.value.name"
-    />
-    <nav v-else class="breadcrumb" :aria-label="t('databases.detail.breadcrumb')">
-      <span class="muted mono">{{ detail.shortId.value }}</span>
-    </nav>
-
-    <NSpin :show="detail.pageLoading.value">
-      <NAlert
-        v-if="detail.pageError.value"
-        type="error"
-        :show-icon="true"
-        style="margin-bottom: 12px"
-      >
-        {{ detail.pageError.value }}
-      </NAlert>
-      <NAlert
-        v-else-if="!detail.pageLoading.value && !detail.database.value"
-        type="warning"
-        :show-icon="true"
-        style="margin-bottom: 12px"
-      >
-        {{ t("databases.errors.databaseNotFound") }}
-      </NAlert>
-
-      <DatabaseDetailHeader />
-
+  <ResourceDetailFrame
+    :loading="detail.pageLoading.value"
+    :error="detail.pageError.value"
+    :not-found="!detail.pageLoading.value && !detail.database.value && detail.pageError.value === null"
+    :not-found-text="t('databases.errors.databaseNotFound')"
+    :breadcrumb-label="t('databases.detail.breadcrumb')"
+    :fallback-id="detail.shortId.value"
+    :breadcrumbs="
+      detail.database.value
+        ? {
+            projectName: detail.database.value.project_name,
+            projectId: detail.database.value.project_id,
+            environmentName: detail.database.value.environment_name,
+            environmentId: detail.database.value.environment_id,
+            resourceName: detail.database.value.name,
+          }
+        : null
+    "
+  >
+    <template #banner>
       <DatabaseProvisioningBanner
         v-if="detail.database.value"
         :status="detail.database.value.status"
         :status-message="detail.database.value.status_message"
-        style="margin-top: 12px"
       />
+    </template>
 
-      <NTabs v-model:value="activeTab" type="line" animated>
-        <NTabPane name="overview" :tab="t('databases.detail.tabs.overview')">
-          <DatabaseOverviewPanel />
-        </NTabPane>
+    <template #header>
+      <DatabaseDetailHeader />
+    </template>
 
-        <NTabPane
+    <NTabs v-model:value="activeTab" type="line" animated>
+      <NTabPane name="overview" :tab="t('databases.detail.tabs.overview')">
+        <DatabaseOverviewPanel />
+      </NTabPane>
+
+      <NTabPane
+        v-if="detail.database.value"
+        name="metrics"
+        :tab="t('monitoring.resourceHistory.tab')"
+      >
+        <ResourceHistoryPanel
+          resource-type="database"
+          :resource-id="detail.database.value.id"
+        />
+      </NTabPane>
+
+      <NTabPane name="backups" :disabled="detail.isCreating.value">
+        <template #tab>
+          <NTooltip :disabled="!detail.isCreating.value">
+            <template #trigger>
+              <span>{{ t("databases.detail.tabs.backups") }}</span>
+            </template>
+            {{ t("databases.detail.creating.backupsDisabled") }}
+          </NTooltip>
+        </template>
+        <DatabaseBackupsTab />
+      </NTabPane>
+
+      <NTabPane v-if="detail.canWrite.value" name="settings" :tab="t('databases.detail.tabs.settings')">
+        <ResourceSettingsTab
           v-if="detail.database.value"
-          name="metrics"
-          :tab="t('monitoring.resourceHistory.tab')"
+          :project-id="detail.database.value.project_id"
+          :environment-id="detail.database.value.environment_id"
+          :server-id="detail.database.value.server_id"
+          :saving="detail.moveSaving.value"
+          :error="detail.moveError.value"
+          server-pinned
+          :server-pinned-reason="t('databases.detail.serverPinnedReason')"
+          :danger-title="t('databases.detail.deleteTitle')"
+          :danger-hint="t('databases.detail.deleteHint')"
+          :danger-label="t('common.actions.delete')"
+          :danger-confirm="t('databases.detail.deleteConfirm', { volume: detail.database.value.volume })"
+          :danger-busy="detail.databasesStore.acting"
+          @save="detail.handleMove"
+          @delete="() => void detail.handleDelete()"
         >
-          <ResourceHistoryPanel
-            resource-type="database"
-            :resource-id="detail.database.value.id"
-          />
-        </NTabPane>
+          <NCard :title="t('databases.detail.rename.title')">
+            <NSpace vertical :size="12">
+              <span>{{ t("databases.detail.rename.hint") }}</span>
+              <NSpace>
+                <NButton @click="detail.openRename">
+                  {{ t("databases.detail.actions.rename") }}
+                </NButton>
+              </NSpace>
+            </NSpace>
+          </NCard>
+        </ResourceSettingsTab>
+      </NTabPane>
+    </NTabs>
+  </ResourceDetailFrame>
 
-        <NTabPane name="backups" :disabled="detail.isCreating.value">
-          <template #tab>
-            <NTooltip :disabled="!detail.isCreating.value">
-              <template #trigger>
-                <span>{{ t("databases.detail.tabs.backups") }}</span>
-              </template>
-              {{ t("databases.detail.creating.backupsDisabled") }}
-            </NTooltip>
-          </template>
-          <DatabaseBackupsTab />
-        </NTabPane>
-
-        <NTabPane v-if="detail.canWrite.value" name="settings" :tab="t('databases.detail.tabs.settings')">
-          <ResourceMoveCard
-            v-if="detail.database.value"
-            :project-id="detail.database.value.project_id"
-            :environment-id="detail.database.value.environment_id"
-            :server-id="detail.database.value.server_id"
-            :saving="detail.moveSaving.value"
-            :error="detail.moveError.value"
-            server-pinned
-            :server-pinned-reason="t('databases.detail.serverPinnedReason')"
-            @save="detail.handleMove"
-          />
-        </NTabPane>
-      </NTabs>
-    </NSpin>
-
-    <RenameDatabaseDialog />
-    <RestoreConfirmDialog />
-  </NSpace>
+  <RenameDatabaseDialog />
+  <RestoreConfirmDialog />
 </template>
-
-<style scoped>
-.breadcrumb {
-  display: flex;
-  align-items: center;
-  gap: var(--space-2);
-  font-size: var(--text-xs);
-}
-
-.breadcrumb__sep {
-  color: var(--meta);
-}
-
-.muted {
-  color: var(--muted);
-}
-
-.mono {
-  font-family: var(--font-mono);
-}
-</style>

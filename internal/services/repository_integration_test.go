@@ -464,3 +464,123 @@ func TestRepositoryTemplateSlug(t *testing.T) {
 		t.Errorf("compose import stores template_slug = %q, want NULL", *stored)
 	}
 }
+
+func TestServiceDomainUniquenessAndCascade(t *testing.T) {
+	repo, st := integrationEnv(t)
+	ctx := context.Background()
+	ownerID, serverID := seedUserAndServer(t, st)
+	_, envID := seedProjectEnvironment(t, st)
+
+	service, err := repo.CreateService(ctx, Service{
+		ID: uuid.New(), UserID: ownerID, ServerID: serverID, EnvironmentID: envID,
+		Name: "domains", Status: StatusRunning,
+		ComposeYAML: "services:\n  web:\n    image: nginx:1.27\n", Env: map[string]string{},
+	})
+	if err != nil {
+		t.Fatalf("CreateService: %v", err)
+	}
+	other, err := repo.CreateService(ctx, Service{
+		ID: uuid.New(), UserID: ownerID, ServerID: serverID, EnvironmentID: envID,
+		Name: "other", Status: StatusRunning,
+		ComposeYAML: "services:\n  web:\n    image: nginx:1.27\n", Env: map[string]string{},
+	})
+	if err != nil {
+		t.Fatalf("CreateService(other): %v", err)
+	}
+
+	created, err := repo.CreateServiceDomain(ctx, ServiceDomain{
+		ID: uuid.New(), ServiceID: service.ID, ComposeService: "web", Port: 80,
+		Domain: "app.example.com", Protocol: "https",
+	})
+	if err != nil {
+		t.Fatalf("CreateServiceDomain: %v", err)
+	}
+	if _, err := repo.CreateServiceDomain(ctx, ServiceDomain{
+		ID: uuid.New(), ServiceID: other.ID, ComposeService: "web", Port: 80,
+		Domain: "APP.example.com", Protocol: "http",
+	}); !errors.Is(err, ErrDomainConflict) {
+		t.Fatalf("cross-service duplicate err = %v, want ErrDomainConflict", err)
+	}
+	disabled, err := repo.CreateServiceDomain(ctx, ServiceDomain{
+		ID: uuid.New(), ServiceID: other.ID, ComposeService: "web", Port: 80,
+		Domain: "APP.example.com", Protocol: "http", Disabled: true,
+	})
+	if err != nil {
+		t.Fatalf("a disabled duplicate must be allowed: %v", err)
+	}
+
+	listed, err := repo.ListServiceDomains(ctx, service.ID)
+	if err != nil || len(listed) != 1 || listed[0].ID != created.ID {
+		t.Fatalf("ListServiceDomains = %+v err=%v", listed, err)
+	}
+	if _, err := repo.ServiceDomainClaim(ctx, "APP.EXAMPLE.COM"); err != nil {
+		t.Fatalf("ServiceDomainClaim: %v", err)
+	}
+
+	if _, err := st.DB.Exec(ctx, "DELETE FROM services WHERE id = $1", service.ID); err != nil {
+		t.Fatalf("hard delete service: %v", err)
+	}
+	var remaining int
+	if err := st.DB.QueryRow(ctx, "SELECT count(*) FROM service_domains WHERE service_id = $1", service.ID).Scan(&remaining); err != nil {
+		t.Fatalf("count domains: %v", err)
+	}
+	if remaining != 0 {
+		t.Fatalf("cascade left %d domains", remaining)
+	}
+	if err := repo.DeleteServiceDomains(ctx, other.ID); err != nil {
+		t.Fatalf("DeleteServiceDomains: %v", err)
+	}
+	if domains, err := repo.ListServiceDomains(ctx, other.ID); err != nil || len(domains) != 0 {
+		t.Fatalf("DeleteServiceDomains left %+v err=%v", domains, err)
+	}
+	_ = disabled
+}
+
+func TestProxySourceMergesManagedDomainsWithProtocol(t *testing.T) {
+	repo, st := integrationEnv(t)
+	ctx := context.Background()
+	ownerID, serverID := seedUserAndServer(t, st)
+	_, envID := seedProjectEnvironment(t, st)
+
+	service, err := repo.CreateService(ctx, Service{
+		ID: uuid.New(), UserID: ownerID, ServerID: serverID, EnvironmentID: envID,
+		Name: "managed", Status: StatusRunning,
+		ComposeYAML: "services:\n  web:\n    image: nginx:1.27\n", Env: map[string]string{},
+	})
+	if err != nil {
+		t.Fatalf("CreateService: %v", err)
+	}
+	for _, domain := range []ServiceDomain{
+		{ID: uuid.New(), ServiceID: service.ID, ComposeService: "web", Port: 80, Domain: "plain.example.com", Protocol: "http"},
+		{ID: uuid.New(), ServiceID: service.ID, ComposeService: "web", Port: 80, Domain: "secure.example.com", Protocol: "https"},
+		{ID: uuid.New(), ServiceID: service.ID, ComposeService: "web", Port: 80, Domain: "off.example.com", Protocol: "http", Disabled: true},
+	} {
+		if _, err := repo.CreateServiceDomain(ctx, domain); err != nil {
+			t.Fatalf("CreateServiceDomain(%s): %v", domain.Domain, err)
+		}
+	}
+
+	proxied, err := NewProxySource(st).ListProxiedServices(ctx)
+	if err != nil {
+		t.Fatalf("ListProxiedServices: %v", err)
+	}
+	var entry proxy.ProxiedService
+	for _, candidate := range proxied {
+		if candidate.ID == service.ID {
+			entry = candidate
+		}
+	}
+	if entry.ID == uuid.Nil {
+		t.Fatalf("managed service missing from %+v", proxied)
+	}
+	if len(entry.Domains) != 2 {
+		t.Fatalf("domains = %+v, want the two enabled rows", entry.Domains)
+	}
+	protocols := map[string]string{}
+	for _, domain := range entry.Domains {
+		protocols[domain.Host] = domain.Protocol
+	}
+	if protocols["secure.example.com"] != "https" || protocols["plain.example.com"] != "http" {
+		t.Fatalf("protocols = %+v", protocols)
+	}
+}

@@ -148,6 +148,44 @@ func (f *fakeRepository) HasDeploys(_ context.Context, _ uuid.UUID) (bool, error
 	return len(f.deploys) > 0, nil
 }
 
+func (f *fakeRepository) ListRoutableServices(_ context.Context) ([]services.Service, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	return []services.Service{f.service}, nil
+}
+
+func (f *fakeRepository) ListServiceDomains(_ context.Context, _ uuid.UUID) ([]services.ServiceDomain, error) {
+	return nil, nil
+}
+
+func (f *fakeRepository) CreateServiceDomain(_ context.Context, domain services.ServiceDomain) (services.ServiceDomain, error) {
+	return domain, nil
+}
+
+func (f *fakeRepository) UpdateServiceDomain(_ context.Context, domain services.ServiceDomain) (services.ServiceDomain, error) {
+	return domain, nil
+}
+
+func (f *fakeRepository) DeleteServiceDomain(_ context.Context, _, _ uuid.UUID) error {
+	return nil
+}
+
+func (f *fakeRepository) DeleteServiceDomains(_ context.Context, _ uuid.UUID) error {
+	return nil
+}
+
+func (f *fakeRepository) ServiceDomainClaim(_ context.Context, _ string) (services.ServiceDomain, error) {
+	return services.ServiceDomain{}, services.ErrNotFound
+}
+
+func (f *fakeRepository) ApplicationDomainClaim(_ context.Context, _ string) (bool, error) {
+	return false, nil
+}
+
+func (f *fakeRepository) ListRedirectSources(_ context.Context) ([]string, error) {
+	return nil, nil
+}
+
 type failingAgent struct {
 	message string
 }

@@ -807,6 +807,19 @@ type ServiceDeploy struct {
 	CreatedAt   pgtype.Timestamptz `json:"created_at"`
 	UpdatedAt   pgtype.Timestamptz `json:"updated_at"`
 	FinishedAt  pgtype.Timestamptz `json:"finished_at"`
+	Domains     []string           `json:"domains"`
+}
+
+type ServiceDomain struct {
+	ID             pgtype.UUID        `json:"id"`
+	ServiceID      pgtype.UUID        `json:"service_id"`
+	ComposeService string             `json:"compose_service"`
+	Port           int32              `json:"port"`
+	Domain         string             `json:"domain"`
+	Protocol       string             `json:"protocol"`
+	Disabled       bool               `json:"disabled"`
+	CreatedAt      pgtype.Timestamptz `json:"created_at"`
+	UpdatedAt      pgtype.Timestamptz `json:"updated_at"`
 }
 
 type Session struct {

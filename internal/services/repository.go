@@ -35,6 +35,15 @@ type Repository interface {
 	ListServiceDeploys(ctx context.Context, serviceID uuid.UUID, limit int32) ([]Deploy, error)
 	ListServiceDeploysByState(ctx context.Context, state DeployState) ([]Deploy, error)
 	ServerExists(ctx context.Context, serverID uuid.UUID) (bool, error)
+	ListRoutableServices(ctx context.Context) ([]Service, error)
+	ListServiceDomains(ctx context.Context, serviceID uuid.UUID) ([]ServiceDomain, error)
+	CreateServiceDomain(ctx context.Context, domain ServiceDomain) (ServiceDomain, error)
+	UpdateServiceDomain(ctx context.Context, domain ServiceDomain) (ServiceDomain, error)
+	DeleteServiceDomain(ctx context.Context, serviceID, domainID uuid.UUID) error
+	DeleteServiceDomains(ctx context.Context, serviceID uuid.UUID) error
+	ServiceDomainClaim(ctx context.Context, domain string) (ServiceDomain, error)
+	ApplicationDomainClaim(ctx context.Context, domain string) (bool, error)
+	ListRedirectSources(ctx context.Context) ([]string, error)
 }
 
 type storeRepository struct {
@@ -313,6 +322,7 @@ func (r *storeRepository) CreateServiceDeploy(ctx context.Context, deploy Deploy
 		ServiceID:   pgUUID(deploy.ServiceID),
 		State:       string(deploy.State),
 		ComposeYaml: deploy.ComposeYAML,
+		Domains:     normalizeHosts(deploy.Domains),
 	})
 	if err != nil {
 		return Deploy{}, fmt.Errorf("services: create deploy: %w", err)
@@ -379,6 +389,143 @@ func (r *storeRepository) ServerExists(ctx context.Context, serverID uuid.UUID) 
 	return true, nil
 }
 
+func (r *storeRepository) ListRoutableServices(ctx context.Context) ([]Service, error) {
+	rows, err := r.store.ListRoutableServices(ctx)
+	if err != nil {
+		return nil, fmt.Errorf("services: list routable services: %w", err)
+	}
+	services := make([]Service, 0, len(rows))
+	for _, row := range rows {
+		service, err := serviceFromRow(row)
+		if err != nil {
+			return nil, err
+		}
+		services = append(services, service)
+	}
+	return services, nil
+}
+
+func (r *storeRepository) ListServiceDomains(ctx context.Context, serviceID uuid.UUID) ([]ServiceDomain, error) {
+	rows, err := r.store.ListServiceDomainsByService(ctx, pgUUID(serviceID))
+	if err != nil {
+		return nil, fmt.Errorf("services: list service domains: %w", err)
+	}
+	domains := make([]ServiceDomain, 0, len(rows))
+	for _, row := range rows {
+		domains = append(domains, serviceDomainFromRow(row))
+	}
+	return domains, nil
+}
+
+func (r *storeRepository) CreateServiceDomain(ctx context.Context, domain ServiceDomain) (ServiceDomain, error) {
+	row, err := r.store.CreateServiceDomain(ctx, sqlc.CreateServiceDomainParams{
+		ID:             pgUUID(domain.ID),
+		ServiceID:      pgUUID(domain.ServiceID),
+		ComposeService: domain.ComposeService,
+		Port:           domain.Port,
+		Domain:         domain.Domain,
+		Protocol:       domain.Protocol,
+		Disabled:       domain.Disabled,
+	})
+	if err != nil {
+		if isUniqueViolation(err) {
+			return ServiceDomain{}, ErrDomainConflict
+		}
+		if isForeignKeyViolation(err) {
+			return ServiceDomain{}, ErrNotFound
+		}
+		return ServiceDomain{}, fmt.Errorf("services: create service domain: %w", err)
+	}
+	return serviceDomainFromRow(row), nil
+}
+
+func (r *storeRepository) UpdateServiceDomain(ctx context.Context, domain ServiceDomain) (ServiceDomain, error) {
+	row, err := r.store.UpdateServiceDomain(ctx, sqlc.UpdateServiceDomainParams{
+		ID:             pgUUID(domain.ID),
+		ServiceID:      pgUUID(domain.ServiceID),
+		ComposeService: domain.ComposeService,
+		Port:           domain.Port,
+		Domain:         domain.Domain,
+		Protocol:       domain.Protocol,
+		Disabled:       domain.Disabled,
+	})
+	if err != nil {
+		if errors.Is(err, pgx.ErrNoRows) {
+			return ServiceDomain{}, ErrNotFound
+		}
+		if isUniqueViolation(err) {
+			return ServiceDomain{}, ErrDomainConflict
+		}
+		return ServiceDomain{}, fmt.Errorf("services: update service domain: %w", err)
+	}
+	return serviceDomainFromRow(row), nil
+}
+
+func (r *storeRepository) DeleteServiceDomain(ctx context.Context, serviceID, domainID uuid.UUID) error {
+	if err := r.store.DeleteServiceDomain(ctx, sqlc.DeleteServiceDomainParams{
+		ID:        pgUUID(domainID),
+		ServiceID: pgUUID(serviceID),
+	}); err != nil {
+		return fmt.Errorf("services: delete service domain: %w", err)
+	}
+	return nil
+}
+
+func (r *storeRepository) DeleteServiceDomains(ctx context.Context, serviceID uuid.UUID) error {
+	if err := r.store.DeleteServiceDomainsByService(ctx, pgUUID(serviceID)); err != nil {
+		return fmt.Errorf("services: delete service domains: %w", err)
+	}
+	return nil
+}
+
+func (r *storeRepository) ServiceDomainClaim(ctx context.Context, domain string) (ServiceDomain, error) {
+	row, err := r.store.GetServiceDomainByNameAnyService(ctx, domain)
+	if err != nil {
+		if errors.Is(err, pgx.ErrNoRows) {
+			return ServiceDomain{}, ErrNotFound
+		}
+		return ServiceDomain{}, fmt.Errorf("services: resolve domain claim: %w", err)
+	}
+	return serviceDomainFromRow(row), nil
+}
+
+func (r *storeRepository) ApplicationDomainClaim(ctx context.Context, domain string) (bool, error) {
+	_, err := r.store.GetApplicationDomainByNameAnyApp(ctx, domain)
+	if err != nil {
+		if errors.Is(err, pgx.ErrNoRows) {
+			return false, nil
+		}
+		return false, fmt.Errorf("services: resolve application domain claim: %w", err)
+	}
+	return true, nil
+}
+
+func (r *storeRepository) ListRedirectSources(ctx context.Context) ([]string, error) {
+	rows, err := r.store.ListEnabledRedirects(ctx)
+	if err != nil {
+		return nil, fmt.Errorf("services: list redirect sources: %w", err)
+	}
+	sources := make([]string, 0, len(rows))
+	for _, row := range rows {
+		sources = append(sources, row.SourceDomain)
+	}
+	return sources, nil
+}
+
+func serviceDomainFromRow(row sqlc.ServiceDomain) ServiceDomain {
+	return ServiceDomain{
+		ID:             uuidFromPG(row.ID),
+		ServiceID:      uuidFromPG(row.ServiceID),
+		ComposeService: row.ComposeService,
+		Port:           row.Port,
+		Domain:         row.Domain,
+		Protocol:       row.Protocol,
+		Disabled:       row.Disabled,
+		CreatedAt:      timeFromPG(row.CreatedAt),
+		UpdatedAt:      timeFromPG(row.UpdatedAt),
+	}
+}
+
 func serviceFromRow(row sqlc.Service) (Service, error) {
 	env, err := unmarshalEnv(row.Env)
 	if err != nil {
@@ -406,6 +553,7 @@ func deployFromRow(row sqlc.ServiceDeploy) Deploy {
 		ServiceID:   uuidFromPG(row.ServiceID),
 		State:       DeployState(row.State),
 		ComposeYAML: row.ComposeYaml,
+		Domains:     append([]string{}, row.Domains...),
 		Error:       row.Error,
 		CreatedAt:   timeFromPG(row.CreatedAt),
 		UpdatedAt:   timeFromPG(row.UpdatedAt),

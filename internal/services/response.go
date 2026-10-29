@@ -20,6 +20,7 @@ type ServiceResponse struct {
 	ComposeYAML     string            `json:"compose_yaml,omitempty"`
 	Env             map[string]string `json:"env"`
 	Domains         []DomainRoute     `json:"domains"`
+	PendingChanges  []string          `json:"pending_changes"`
 	CreatedAt       time.Time         `json:"created_at"`
 	UpdatedAt       time.Time         `json:"updated_at"`
 }
@@ -39,6 +40,7 @@ func NewServiceResponse(service Service, withCompose bool) ServiceResponse {
 		Template:        service.TemplateSlug,
 		Env:             service.Env,
 		Domains:         []DomainRoute{},
+		PendingChanges:  []string{},
 		CreatedAt:       service.CreatedAt,
 		UpdatedAt:       service.UpdatedAt,
 	}
@@ -48,7 +50,10 @@ func NewServiceResponse(service Service, withCompose bool) ServiceResponse {
 	if response.Env == nil {
 		response.Env = map[string]string{}
 	}
-	rendered, err := Render(service.ComposeYAML, service.Env)
+	if service.PendingChanges != nil {
+		response.PendingChanges = service.PendingChanges
+	}
+	rendered, _, err := RenderService(service.ComposeYAML, service.Env, nil)
 	if err != nil {
 		slog.Default().Warn("services: stored document does not render",
 			"service_id", service.ID.String(), "error", Redact(err.Error(), service.Env))

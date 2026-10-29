@@ -165,6 +165,34 @@ func TestServiceRoutesForServerResolution(t *testing.T) {
 	}
 }
 
+func TestServiceRouteProtocolBuildsHTTPSTLSRouter(t *testing.T) {
+	serverID := uuid.New()
+	serviceID := uuid.New()
+	project := "gotham-" + serviceID.String()
+	routes, diagnostics, _ := serviceRoutesForServer([]ProxiedService{{
+		ID: serviceID, ServerID: serverID, Name: "shop", Project: project,
+		Domains: []ServiceDomain{
+			{Service: "web", Host: "secure.example.com", Port: 80, Protocol: ProtocolHTTPS},
+			{Service: "web", Host: "plain.example.com", Port: 80, Protocol: ProtocolHTTP},
+		},
+	}}, serverID, DefaultBackendHost, []containers.Container{
+		composeContainer(project, "web", "80", "32768"),
+	}, nil)
+	if len(diagnostics) != 0 || len(routes) != 2 {
+		t.Fatalf("routes = %+v diagnostics = %+v", routes, diagnostics)
+	}
+	if NormalizeProtocol(routes[0].Protocol) != ProtocolHTTPS || NormalizeProtocol(routes[1].Protocol) != ProtocolHTTP {
+		t.Fatalf("route protocols = %q, %q", routes[0].Protocol, routes[1].Protocol)
+	}
+	cfg := BuildConfig(routes, nil, nil, "", "")
+	if _, ok := cfg.Routers[routes[0].Name+"-websecure"]; !ok {
+		t.Errorf("https service domain did not get a websecure router")
+	}
+	if _, ok := cfg.Routers[routes[1].Name+"-websecure"]; ok {
+		t.Errorf("http service domain must not get a websecure router")
+	}
+}
+
 func TestServiceRoutesDuplicateHosts(t *testing.T) {
 	serverID := uuid.New()
 	firstID, secondID := uuid.New(), uuid.New()

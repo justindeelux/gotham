@@ -7,6 +7,7 @@ import { createMemoryHistory, createRouter } from "vue-router";
 
 import * as servicesApi from "../src/features/services/api/services";
 import type { Service, ServiceDeploy } from "../src/features/services/api/services";
+import ServiceDeployBanner from "../src/features/services/components/ServiceDeployBanner.vue";
 import { useServiceDetail } from "../src/features/services/composables/useServiceDetail";
 import { useServersStore } from "../src/features/servers/stores/servers";
 
@@ -45,7 +46,12 @@ let wrapper: ReturnType<typeof mount> | null = null;
 const Harness = defineComponent({
   setup() {
     detail = useServiceDetail();
-    return () => h("div");
+    return () =>
+      h("div", [
+        h(ServiceDeployBanner, {
+          isDeploying: detail?.isDeploying.value ?? false,
+        }),
+      ]);
   },
 });
 
@@ -75,6 +81,10 @@ async function setup(
   await flushPromises();
 }
 
+function banner() {
+  return wrapper?.find('[data-testid="service-deploying-banner"]');
+}
+
 beforeEach(() => {
   setActivePinia(createPinia());
   detail = null;
@@ -89,10 +99,24 @@ afterEach(() => {
 });
 
 describe("service detail follows a background deploy", () => {
-  it("polls while deploying and stops once the deploy is terminal", async () => {
+  it("leaves a creating service that was never deployed alone", async () => {
     await setup(baseService, []);
     const getService = vi.mocked(servicesApi.getService);
+    expect(detail?.isDeploying.value).toBe(false);
+    expect(detail?.controlHint.value).toBeNull();
+    expect(banner()?.exists()).toBe(false);
+
+    await vi.advanceTimersByTimeAsync(20_000);
+    await flushPromises();
+    expect(getService).toHaveBeenCalledTimes(1);
+  });
+
+  it("polls while deploying and stops once the deploy is terminal", async () => {
+    await setup(baseService, [deploy("deploying")]);
+    const getService = vi.mocked(servicesApi.getService);
     expect(detail?.isDeploying.value).toBe(true);
+    expect(detail?.controlHint.value).not.toBeNull();
+    expect(banner()?.exists()).toBe(true);
 
     await vi.advanceTimersByTimeAsync(5_000);
     await flushPromises();
@@ -106,6 +130,7 @@ describe("service detail follows a background deploy", () => {
     await flushPromises();
     expect(detail?.isDeploying.value).toBe(false);
     expect(detail?.service.value?.status).toBe("running");
+    expect(banner()?.exists()).toBe(false);
 
     await vi.advanceTimersByTimeAsync(15_000);
     await flushPromises();
@@ -120,5 +145,6 @@ describe("service detail follows a background deploy", () => {
     expect(detail?.failedDeploy.value?.error).toBe(
       "services: validation: <redacted>",
     );
+    expect(banner()?.exists()).toBe(false);
   });
 });

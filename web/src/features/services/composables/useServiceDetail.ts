@@ -139,10 +139,10 @@ export function useServiceDetail(): ServiceDetailContext {
     servicesStore.deploysOf(serviceId.value),
   );
   const latestDeploy = computed<ServiceDeploy | null>(() => deploys.value[0] ?? null);
+  // A service can sit in `creating` forever when it was imported without a
+  // deploy; only an active deploy row makes the transitional state real.
   const isDeploying = computed<boolean>(
-    () =>
-      service.value?.status === "creating" ||
-      latestDeploy.value?.state === "deploying",
+    () => latestDeploy.value?.state === "deploying",
   );
   const failedDeploy = computed<ServiceDeploy | null>(() => {
     const latest = latestDeploy.value;

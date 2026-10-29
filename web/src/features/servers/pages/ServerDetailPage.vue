@@ -167,14 +167,11 @@ onMounted(() => {
     </nav>
 
     <NSpin :show="loading">
-      <NAlert
-        v-if="error"
-        type="error"
-        :show-icon="true"
-        style="margin-bottom: 12px"
-      >
-        {{ error }}
-      </NAlert>
+      <div v-if="error" class="page-banners">
+        <NAlert type="error" :show-icon="true">
+          {{ error }}
+        </NAlert>
+      </div>
 
       <template v-if="server">
         <ServerDetailHeader

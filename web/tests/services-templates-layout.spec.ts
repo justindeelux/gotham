@@ -108,7 +108,6 @@ const n8nDetail = {
       label: "Encryption key",
       type: "secret",
       required: true,
-      help: "Encrypts stored credentials; keep it safe, losing it locks the credentials.",
     },
   ],
 };
@@ -309,6 +308,15 @@ async function openPreviewStep(page: Page): Promise<Locator> {
   return wizard;
 }
 
+async function openCreateStep(page: Page): Promise<Locator> {
+  const wizard = await openPreviewStep(page);
+  const next = page.getByRole("button", { name: "Next", exact: true });
+  await expect(next).toBeEnabled();
+  await next.click();
+  await page.locator('[data-testid="wizard-step-3"]').waitFor();
+  return wizard;
+}
+
 async function previewTokenColors(page: Page): Promise<string[]> {
   return page.locator('[data-testid="compose-preview"] .cm-content').evaluate((root) => {
     const seen = new Set<string>();
@@ -506,6 +514,54 @@ test("unknown failures pair a localized summary with the identical raw detail", 
   }
 });
 
+test("create step top-aligns Service name and Node, then stacks at 390px", async ({
+  page,
+}) => {
+  await page.setViewportSize({ width: 1366, height: 900 });
+  await mockApi(page);
+  const wizard = await openCreateStep(page);
+
+  const nameInput = await boxOf(page, ".wizard__metaform .field-service-name .n-input");
+  const nodeSelect = await boxOf(
+    page,
+    ".wizard__metaform > .n-form-item:nth-child(2) .n-select",
+  );
+  expect(
+    Math.abs(nameInput.y - nodeSelect.y),
+    "Service name and Node inputs share one top edge",
+  ).toBeLessThanOrEqual(1);
+
+  await expect(wizard).not.toContainText("/api/v1");
+  await expect(page.locator(".template-wizard .wizard__desc")).toHaveCount(0);
+  await page.screenshot({ path: test.info().outputPath("create-1366.png") });
+
+  await page.setViewportSize({ width: 390, height: 900 });
+  const stackedName = await boxOf(page, ".wizard__metaform .field-service-name .n-input");
+  const stackedNode = await boxOf(
+    page,
+    ".wizard__metaform > .n-form-item:nth-child(2) .n-select",
+  );
+  expect(
+    stackedNode.y,
+    "stacked fields keep a normal vertical gap",
+  ).toBeGreaterThanOrEqual(stackedName.y + stackedName.height + 11);
+  await expectNoOverflow(page, 390);
+  await page.screenshot({ path: test.info().outputPath("create-390.png") });
+});
+
+test("configure step top-aligns fields where only one has hint text", async ({ page }) => {
+  await page.setViewportSize({ width: 1366, height: 900 });
+  await mockApi(page);
+  await openTemplateWizard(page);
+
+  const domain = await boxOf(page, ".field-domain .n-input");
+  const key = await boxOf(page, ".field-encryption_key .n-input");
+  expect(
+    Math.abs(domain.y - key.y),
+    "inputs on the same dynamic-form row share one top edge",
+  ).toBeLessThanOrEqual(1);
+});
+
 test("compose preview highlights YAML and keeps a gap before the alert", async ({
   page,
 }) => {
@@ -544,4 +600,16 @@ test("compose preview highlights YAML and keeps a gap before the alert", async (
     });
     await page.unrouteAll({ behavior: "wait" });
   }
+});
+
+test("stacked forms elsewhere keep their item gap", async ({ page }) => {
+  await page.setViewportSize({ width: 1366, height: 900 });
+  await mockApi(page);
+  const picker = await openServicePicker(page);
+  await picker.getByRole("link", { name: "Import a compose file" }).click();
+
+  const yamlField = page.locator(".field-import-yaml");
+  await expect(yamlField).toBeVisible();
+  const marginTop = await yamlField.evaluate((element) => getComputedStyle(element).marginTop);
+  expect(marginTop, "stacked form items keep the shared rhythm").toBe("16px");
 });

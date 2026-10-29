@@ -41,7 +41,7 @@ const emit = defineEmits<{
   <NAlert v-if="scopeError" type="error" :show-icon="true">
     {{ scopeError }}
   </NAlert>
-  <NForm label-placement="top" class="wizard__metaform">
+  <NForm label-placement="top" class="wizard__metaform form--grid">
     <NFormItem
       :label="t('templates.target.nameLabel')"
       required
@@ -70,7 +70,8 @@ const emit = defineEmits<{
 .wizard__metaform {
   display: grid;
   grid-template-columns: repeat(2, minmax(0, 1fr));
-  gap: 0 var(--space-4);
+  gap: var(--form-item-gap) var(--space-4);
+  align-items: start;
 }
 
 @media (max-width: 720px) {

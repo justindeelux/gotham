@@ -350,12 +350,18 @@ test("application rows show the source brand avatar", async ({ page }) => {
   ).toBe("rgb(110, 118, 129)");
   await expect(icon.locator(".brand-icon__glyph")).toHaveCount(1);
   await expect(icon).toHaveAttribute("aria-hidden", "true");
-  await expect(
-    page.locator(".resource-table tbody tr", { hasText: "plausible" }).locator(".brand-icon"),
-  ).toHaveCount(0);
-  await expect(
-    page.locator(".resource-table tbody tr", { hasText: "pg-orders" }).locator(".brand-icon"),
-  ).toHaveCount(0);
+  const serviceIcon = page
+    .locator(".resource-table tbody tr", { hasText: "plausible" })
+    .locator(".brand-icon");
+  await expect(serviceIcon).toHaveCount(1);
+  await expect(serviceIcon).toHaveCSS("background-color", "rgb(36, 150, 237)");
+  await expect(serviceIcon.locator(".brand-icon__glyph")).toHaveCount(1);
+  const databaseIcon = page
+    .locator(".resource-table tbody tr", { hasText: "pg-orders" })
+    .locator(".brand-icon");
+  await expect(databaseIcon).toHaveCount(1);
+  await expect(databaseIcon).toHaveCSS("background-color", "rgb(65, 105, 225)");
+  await expect(databaseIcon.locator(".brand-icon__glyph")).toHaveCount(1);
   await page.locator(".preview-switch .n-switch").click();
   await expect(
     page.locator(".resource-table tr.preview-row .brand-icon"),

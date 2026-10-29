@@ -24,14 +24,16 @@ type fakeRouteService struct {
 	items     []ComposeContainer
 	chunks    [][]byte
 	streamErr error
+	created   CreateRequest
 
 	err error
 }
 
-func (f *fakeRouteService) Create(context.Context, uuid.UUID, CreateRequest) (Service, error) {
+func (f *fakeRouteService) Create(_ context.Context, _ uuid.UUID, req CreateRequest) (Service, error) {
 	if f.err != nil {
 		return Service{}, f.err
 	}
+	f.created = req
 	return f.service, nil
 }
 
@@ -133,6 +135,30 @@ func sampleService() Service {
 		Env:           testEnv,
 		CreatedAt:     time.Now().UTC(),
 		UpdatedAt:     time.Now().UTC(),
+	}
+}
+
+func TestRoutesCreatePassesTemplate(t *testing.T) {
+	service := sampleService()
+	service.TemplateSlug = "wordpress"
+	fake := &fakeRouteService{service: service}
+	router := routeTestServer(t, fake, service.UserID)
+
+	body := `{"name":"wordpress","environment_id":"` + service.EnvironmentID.String() + `","server_id":"` + service.ServerID.String() + `","compose_yaml":"services:\n  web:\n    image: nginx\n","template":"wordpress"}`
+	recorder := httptest.NewRecorder()
+	router.ServeHTTP(recorder, httptest.NewRequest(http.MethodPost, "/v1/services", strings.NewReader(body)))
+	if recorder.Code != http.StatusCreated {
+		t.Fatalf("POST /v1/services = %d: %s", recorder.Code, recorder.Body)
+	}
+	if fake.created.TemplateSlug != "wordpress" {
+		t.Errorf("template passed to the service = %q, want wordpress", fake.created.TemplateSlug)
+	}
+	var created serviceEnvelope
+	if err := json.Unmarshal(recorder.Body.Bytes(), &created); err != nil {
+		t.Fatalf("decode create: %v", err)
+	}
+	if created.Service.Template != "wordpress" {
+		t.Errorf("template in the response = %q, want wordpress", created.Service.Template)
 	}
 }
 

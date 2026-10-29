@@ -1,8 +1,8 @@
 -- name: CreateService :one
 INSERT INTO services (
-    id, user_id, server_id, environment_id, name, status, compose_yaml, env
+    id, user_id, server_id, environment_id, name, status, compose_yaml, env, template_slug
 )
-VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
+VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)
 RETURNING *;
 
 -- name: GetService :one

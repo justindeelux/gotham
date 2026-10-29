@@ -1,6 +1,8 @@
 <script setup lang="ts">
 import { NButton, NTag } from "naive-ui";
+import { computed } from "vue";
 
+import { serviceBrand } from "@/features/add-resource";
 import ResourceHeader from "@/features/projects/components/ResourceHeader.vue";
 import { serviceStatusLabel, serviceStatusTagType } from "@/features/services/api/services";
 import { useServiceDetailContext } from "@/features/services/composables/useServiceDetail";
@@ -13,12 +15,15 @@ function t(key: string, params?: Record<string, string | number>): string {
 
 const { service, serviceId, busy, handleDeploy, handleRestart, handleStop } =
   useServiceDetailContext();
+
+const brand = computed(() => (service.value ? serviceBrand(service.value) : null));
 </script>
 
 <template>
   <ResourceHeader
     :title="service?.name ?? serviceId.slice(0, 8)"
     :resource-id="serviceId"
+    :brand="brand"
   >
     <template #badges>
       <NTag v-if="service" size="medium" round :type="serviceStatusTagType(service.status)">

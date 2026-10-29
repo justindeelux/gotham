@@ -1,7 +1,8 @@
 <script setup lang="ts">
 import { NAvatar, NButton } from "naive-ui";
-import { inject } from "vue";
+import { computed, inject } from "vue";
 
+import { databaseBrand } from "@/features/add-resource";
 import DatabaseStatusTag from "@/features/databases/components/DatabaseStatusTag.vue";
 import { databaseDetailKey } from "@/features/databases/composables/useDatabaseDetail";
 import ResourceHeader from "@/features/projects/components/ResourceHeader.vue";
@@ -13,12 +14,18 @@ function t(key: string, params?: Record<string, string | number>): string {
 }
 
 const detail = inject(databaseDetailKey)!;
+
+const brand = computed(() => {
+  const database = detail.database.value;
+  return database ? databaseBrand(database.engine, database.name) : null;
+});
 </script>
 
 <template>
   <ResourceHeader
     :title="detail.database.value?.name ?? detail.shortId.value"
     :resource-id="detail.dbId.value"
+    :brand="brand"
   >
     <template #identity>
       <NAvatar round :size="48">{{ detail.initials.value }}</NAvatar>

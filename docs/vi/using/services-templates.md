@@ -82,6 +82,11 @@ Dùng **Thêm tài nguyên → Dịch vụ**, rồi chọn một template hoặc
 **Nhập tệp compose**. Việc nhập hỏi tên, node và tài liệu; môi trường được sửa sau
 đó trên trang chi tiết.
 
+Một dịch vụ tạo từ template nhớ slug của nó: API trả về nó dưới dạng `template`
+trong JSON của dịch vụ, và `POST /api/v1/services` nhận một slug `template` tùy
+chọn, slug này phải tồn tại trong danh mục (slug không rõ là lỗi `400`). Việc nhập
+compose không gửi `template` và đọc về giá trị rỗng.
+
 Việc lưu kiểm tra tài liệu với môi trường. Một thay đổi chỉ cập nhật tài liệu đã lưu
 — dự án đang chạy vẫn chạy cho đến lần triển khai tiếp theo.
 

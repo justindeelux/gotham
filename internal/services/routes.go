@@ -72,6 +72,7 @@ type createRequest struct {
 	ServerID      string            `json:"server_id"`
 	ComposeYAML   string            `json:"compose_yaml"`
 	Env           map[string]string `json:"env,omitempty"`
+	Template      string            `json:"template,omitempty"`
 }
 
 type updateRequest struct {
@@ -136,6 +137,7 @@ func (h *handler) create(w http.ResponseWriter, r *http.Request) {
 		ServerID:      serverID,
 		ComposeYAML:   req.ComposeYAML,
 		Env:           req.Env,
+		TemplateSlug:  req.Template,
 	})
 	if err != nil {
 		h.writeServiceError(w, err)

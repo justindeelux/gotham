@@ -83,6 +83,11 @@ Use **Add resource → Service**, then either pick a template or **Import a
 compose file**. Importing asks for a name, a node and the document; the
 environment is edited afterwards on the detail page.
 
+A service created from a template remembers its slug: the API returns it as
+`template` in the service JSON, and `POST /api/v1/services` accepts an optional
+`template` slug that must exist in the catalog (an unknown slug is a `400`). A
+compose import sends no `template` and reads back empty.
+
 Saving validates the document against the environment. A change only updates
 the stored document — the running project keeps running until the next deploy.
 

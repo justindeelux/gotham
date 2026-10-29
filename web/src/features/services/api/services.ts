@@ -28,6 +28,7 @@ export interface Service {
   project_id: string;
   project_name: string;
   compose_project: string;
+  template?: string;
   compose_yaml?: string;
   env: Record<string, string>;
   domains: ServiceDomainRoute[];
@@ -62,6 +63,7 @@ export interface CreateServiceInput {
   server_id: string;
   compose_yaml: string;
   env?: Record<string, string>;
+  template?: string;
 }
 
 export interface UpdateServiceInput {

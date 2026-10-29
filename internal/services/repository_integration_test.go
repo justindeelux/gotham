@@ -584,3 +584,70 @@ func TestProxySourceMergesManagedDomainsWithProtocol(t *testing.T) {
 		t.Fatalf("protocols = %+v", protocols)
 	}
 }
+
+func TestProxySourceSkipsLabelShadowedByManagedDomain(t *testing.T) {
+	repo, st := integrationEnv(t)
+	ctx := context.Background()
+	ownerID, serverID := seedUserAndServer(t, st)
+	_, envID := seedProjectEnvironment(t, st)
+
+	service, err := repo.CreateService(ctx, Service{
+		ID: uuid.New(), UserID: ownerID, ServerID: serverID, EnvironmentID: envID,
+		Name: "shadowed", Status: StatusRunning,
+		ComposeYAML: domainDocument, Env: map[string]string{},
+	})
+	if err != nil {
+		t.Fatalf("CreateService: %v", err)
+	}
+	if _, err := repo.CreateServiceDomain(ctx, ServiceDomain{
+		ID: uuid.New(), ServiceID: service.ID, ComposeService: "web", Port: 80,
+		Domain: "a.example.com", Protocol: "https",
+	}); err != nil {
+		t.Fatalf("CreateServiceDomain: %v", err)
+	}
+
+	proxied, err := NewProxySource(st).ListProxiedServices(ctx)
+	if err != nil {
+		t.Fatalf("ListProxiedServices: %v", err)
+	}
+	var entry proxy.ProxiedService
+	for _, candidate := range proxied {
+		if candidate.ID == service.ID {
+			entry = candidate
+		}
+	}
+	if len(entry.Domains) != 1 {
+		t.Fatalf("domains = %+v, want only the managed row", entry.Domains)
+	}
+	if entry.Domains[0].Host != "a.example.com" || entry.Domains[0].Protocol != "https" {
+		t.Fatalf("domain = %+v", entry.Domains[0])
+	}
+}
+
+func TestServiceDomainClaimIgnoresSoftDeletedService(t *testing.T) {
+	repo, st := integrationEnv(t)
+	ctx := context.Background()
+	ownerID, serverID := seedUserAndServer(t, st)
+	_, envID := seedProjectEnvironment(t, st)
+
+	service, err := repo.CreateService(ctx, Service{
+		ID: uuid.New(), UserID: ownerID, ServerID: serverID, EnvironmentID: envID,
+		Name: "deleted-claim", Status: StatusRunning,
+		ComposeYAML: "services:\n  web:\n    image: nginx:1.27\n", Env: map[string]string{},
+	})
+	if err != nil {
+		t.Fatalf("CreateService: %v", err)
+	}
+	if _, err := repo.CreateServiceDomain(ctx, ServiceDomain{
+		ID: uuid.New(), ServiceID: service.ID, ComposeService: "web", Port: 80,
+		Domain: "soft.example.com", Protocol: "http",
+	}); err != nil {
+		t.Fatalf("CreateServiceDomain: %v", err)
+	}
+	if _, err := st.DB.Exec(ctx, "UPDATE services SET deleted_at = now() WHERE id = $1", service.ID); err != nil {
+		t.Fatalf("soft delete service: %v", err)
+	}
+	if _, err := repo.ServiceDomainClaim(ctx, "soft.example.com"); !errors.Is(err, ErrNotFound) {
+		t.Fatalf("claim of a soft-deleted service = %v, want ErrNotFound", err)
+	}
+}

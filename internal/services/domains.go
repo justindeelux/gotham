@@ -40,9 +40,10 @@ type DomainInput struct {
 // compose document declares read-only.
 type DomainView struct {
 	ServiceDomain
-	Source string `json:"source"`
-	Status string `json:"status"`
-	Reason string `json:"reason,omitempty"`
+	Source   string `json:"source"`
+	Status   string `json:"status"`
+	Reason   string `json:"reason,omitempty"`
+	shadowed bool
 }
 
 func IsReservedEnv(key string) bool {
@@ -99,6 +100,18 @@ func cloneEnv(env map[string]string) map[string]string {
 		clone[key] = value
 	}
 	return clone
+}
+
+// enabledManagedHostSet is the set of hosts the managed rows already route.
+// A compose label that renders to one of them is shadowed, not a duplicate.
+func enabledManagedHostSet(managed []ServiceDomain) map[string]bool {
+	hosts := make(map[string]bool, len(managed))
+	for _, domain := range managed {
+		if !domain.Disabled {
+			hosts[proxy.NormalizeDomain(domain.Domain)] = true
+		}
+	}
+	return hosts
 }
 
 func normalizeHosts(hosts []string) []string {
@@ -206,6 +219,7 @@ func (s *service) ListDomains(ctx context.Context, userID, serviceID uuid.UUID) 
 		return nil, err
 	}
 	rendered, _, renderErr := RenderService(service.ComposeYAML, service.Env, managed)
+	managedHosts := enabledManagedHostSet(managed)
 	views := make([]DomainView, 0, len(managed))
 	if renderErr == nil {
 		for _, route := range rendered.Spec.Domains {
@@ -217,7 +231,8 @@ func (s *service) ListDomains(ctx context.Context, userID, serviceID uuid.UUID) 
 					Domain:         route.Domain,
 					Protocol:       proxy.ProtocolHTTP,
 				},
-				Source: SourceCompose,
+				Source:   SourceCompose,
+				shadowed: managedHosts[proxy.NormalizeDomain(route.Domain)],
 			})
 		}
 	}
@@ -297,16 +312,16 @@ func (s *service) UpdateDomain(ctx context.Context, userID, serviceID, domainID 
 	next.CreatedAt = target.CreatedAt
 	if in.Disabled == nil {
 		next.Disabled = target.Disabled
-	}
-	if next.Domain != target.Domain {
-		next.Disabled = false
+		if next.Domain != target.Domain {
+			next.Disabled = false
+		}
 	}
 	releaseDomain, err := s.guardDomains.Acquire(ctx, next.Domain)
 	if err != nil {
 		return ServiceDomain{}, fmt.Errorf("%w: %v", ErrValidation, err)
 	}
 	defer releaseDomain()
-	if next.Domain != target.Domain {
+	if next.Domain != target.Domain || (target.Disabled && !next.Disabled) {
 		if err := s.checkDomainClaim(ctx, service.ID, next.Domain); err != nil {
 			return ServiceDomain{}, err
 		}
@@ -347,7 +362,7 @@ func (s *service) checkDomainClaim(ctx context.Context, serviceID uuid.UUID, hos
 		return err
 	}
 	if claimed {
-		return fmt.Errorf("%w: the domain is already used by an application", ErrDomainConflict)
+		return fmt.Errorf("%w: domain already in use by another application", ErrDomainConflict)
 	}
 	claim, claimErr := s.repo.ServiceDomainClaim(ctx, host)
 	if claimErr != nil && !errors.Is(claimErr, ErrNotFound) {
@@ -357,7 +372,7 @@ func (s *service) checkDomainClaim(ctx context.Context, serviceID uuid.UUID, hos
 		if claim.ServiceID == serviceID {
 			return fmt.Errorf("%w: the domain is already attached to this service", ErrValidation)
 		}
-		return fmt.Errorf("%w: the domain is already used by another service", ErrDomainConflict)
+		return fmt.Errorf("%w: domain already in use by another service", ErrDomainConflict)
 	}
 	sources, err := s.repo.ListRedirectSources(ctx)
 	if err != nil {

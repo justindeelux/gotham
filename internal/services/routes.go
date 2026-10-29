@@ -565,6 +565,14 @@ func serviceFilter(w http.ResponseWriter, r *http.Request) (ServiceFilter, bool)
 	return filter, true
 }
 
+func domainConflictMessage(err error) string {
+	message := err.Error()
+	if trimmed := strings.TrimPrefix(message, ErrDomainConflict.Error()+": "); trimmed != message {
+		return trimmed
+	}
+	return "domain already in use"
+}
+
 func (h *handler) writeServiceError(w http.ResponseWriter, err error) {
 	switch {
 	case errors.Is(err, ErrNotFound), errors.Is(err, ErrServerNotFound):
@@ -580,7 +588,7 @@ func (h *handler) writeServiceError(w http.ResponseWriter, err error) {
 	case errors.Is(err, ErrNameConflict):
 		writeJSON(w, http.StatusConflict, errorBody{Message: err.Error()})
 	case errors.Is(err, ErrDomainConflict):
-		writeJSON(w, http.StatusConflict, errorBody{Message: "domain already in use"})
+		writeJSON(w, http.StatusConflict, errorBody{Message: domainConflictMessage(err)})
 	case errors.Is(err, ErrDisabled):
 		writeJSON(w, http.StatusServiceUnavailable, errorBody{Message: "services are disabled"})
 	case errors.Is(err, ErrAgentUnavailable), errors.Is(err, ErrDeployFailed):

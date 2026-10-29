@@ -78,14 +78,16 @@ func (q *Queries) DeleteServiceDomainsByService(ctx context.Context, serviceID p
 }
 
 const getServiceDomainByNameAnyService = `-- name: GetServiceDomainByNameAnyService :one
-SELECT id, service_id, compose_service, port, domain, protocol, disabled, created_at, updated_at FROM service_domains
-WHERE lower(domain) = lower($1)
-ORDER BY created_at, id
+SELECT d.id, d.service_id, d.compose_service, d.port, d.domain, d.protocol, d.disabled, d.created_at, d.updated_at FROM service_domains d
+JOIN services s ON s.id = d.service_id
+WHERE lower(d.domain) = lower($1) AND s.deleted_at IS NULL
+ORDER BY d.created_at, d.id
 LIMIT 1
 `
 
 // Resolves the platform-wide claim on a host for the uniqueness guard: any
-// service's row, including disabled ones, keeps its claim paused.
+// live service's row, including disabled ones, keeps its claim paused. The
+// join drops rows of a soft-deleted service even if the cleanup lagged.
 func (q *Queries) GetServiceDomainByNameAnyService(ctx context.Context, lower string) (ServiceDomain, error) {
 	row := q.db.QueryRow(ctx, getServiceDomainByNameAnyService, lower)
 	var i ServiceDomain

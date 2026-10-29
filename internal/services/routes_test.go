@@ -211,12 +211,14 @@ func TestRoutesServiceDomainErrors(t *testing.T) {
 	body := `{"domain":"app.example.com","compose_service":"web","port":80}`
 
 	for _, tc := range []struct {
-		err  error
-		code int
+		err     error
+		code    int
+		message string
 	}{
-		{ErrDomainConflict, http.StatusConflict},
-		{ErrValidation, http.StatusBadRequest},
-		{ErrNotFound, http.StatusNotFound},
+		{ErrDomainConflict, http.StatusConflict, "domain already in use"},
+		{fmt.Errorf("%w: domain already in use by another application", ErrDomainConflict), http.StatusConflict, "domain already in use by another application"},
+		{ErrValidation, http.StatusBadRequest, ""},
+		{ErrNotFound, http.StatusNotFound, "not found"},
 	} {
 		fake := &fakeRouteService{service: service, err: tc.err}
 		router := routeTestServer(t, fake, service.UserID)
@@ -224,6 +226,15 @@ func TestRoutesServiceDomainErrors(t *testing.T) {
 		router.ServeHTTP(recorder, httptest.NewRequest(http.MethodPost, base, strings.NewReader(body)))
 		if recorder.Code != tc.code {
 			t.Errorf("%v = %d, want %d: %s", tc.err, recorder.Code, tc.code, recorder.Body)
+		}
+		if tc.message != "" {
+			var payload errorBody
+			if err := json.Unmarshal(recorder.Body.Bytes(), &payload); err != nil {
+				t.Fatalf("decode error body: %v", err)
+			}
+			if payload.Message != tc.message {
+				t.Errorf("%v message = %q, want %q", tc.err, payload.Message, tc.message)
+			}
 		}
 	}
 }

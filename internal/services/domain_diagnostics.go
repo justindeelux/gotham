@@ -5,13 +5,16 @@ import (
 	"strconv"
 	"strings"
 
+	"github.com/google/uuid"
+
 	"github.com/justindeelux/gotham/internal/proxy"
 )
 
 const (
-	DomainStatusRouted  = "routed"
-	DomainStatusHeld    = "held"
-	DomainStatusUnknown = "unknown"
+	DomainStatusRouted   = "routed"
+	DomainStatusHeld     = "held"
+	DomainStatusShadowed = "shadowed"
+	DomainStatusUnknown  = "unknown"
 )
 
 // diagnoseDomains fills Status and Reason for the list. It mirrors the rules
@@ -19,6 +22,9 @@ const (
 func (s *service) diagnoseDomains(ctx context.Context, service Service, views []DomainView) {
 	hostCounts := make(map[string]int, len(views))
 	for _, view := range views {
+		if view.shadowed {
+			continue
+		}
 		hostCounts[proxy.NormalizeDomain(view.Domain)]++
 	}
 	sources, _ := s.repo.ListRedirectSources(ctx)
@@ -26,6 +32,7 @@ func (s *service) diagnoseDomains(ctx context.Context, service Service, views []
 	for _, source := range sources {
 		redirects[proxy.NormalizeDomain(source)] = true
 	}
+	otherLabels := s.otherServiceLabelHosts(ctx, service.ID)
 
 	agent, agentErr := s.dialAgent(ctx, service.ServerID)
 	var containers []ComposeContainer
@@ -41,6 +48,10 @@ func (s *service) diagnoseDomains(ctx context.Context, service Service, views []
 			views[i].Reason = reason
 		}
 		switch {
+		case views[i].shadowed:
+			views[i].Status = DomainStatusShadowed
+			views[i].Reason = "the managed domain of this service wins"
+			continue
 		case views[i].Disabled:
 			held("the domain is disabled")
 			continue
@@ -59,6 +70,10 @@ func (s *service) diagnoseDomains(ctx context.Context, service Service, views []
 			held("domain is already used by another service")
 			continue
 		}
+		if otherLabels[host] {
+			held("domain is already declared by another service")
+			continue
+		}
 		if redirects[host] {
 			held("domain is already used by a redirect rule")
 			continue
@@ -74,6 +89,37 @@ func (s *service) diagnoseDomains(ctx context.Context, service Service, views []
 		}
 		views[i].Status = DomainStatusRouted
 	}
+}
+
+// otherServiceLabelHosts lists the hosts other services declare as compose
+// labels, so the list can explain a hold-back that happened after this
+// service was written.
+func (s *service) otherServiceLabelHosts(ctx context.Context, serviceID uuid.UUID) map[string]bool {
+	hosts := map[string]bool{}
+	services, err := s.repo.ListRoutableServices(ctx)
+	if err != nil {
+		return hosts
+	}
+	for _, other := range services {
+		if other.ID == serviceID {
+			continue
+		}
+		managed, err := s.repo.ListServiceDomains(ctx, other.ID)
+		if err != nil {
+			continue
+		}
+		managedHosts := enabledManagedHostSet(managed)
+		rendered, _, err := RenderService(other.ComposeYAML, other.Env, managed)
+		if err != nil {
+			continue
+		}
+		for _, route := range rendered.Spec.Domains {
+			if !managedHosts[route.Domain] {
+				hosts[route.Domain] = true
+			}
+		}
+	}
+	return hosts
 }
 
 func composePortReason(containers []ComposeContainer, composeService string, port int32) string {

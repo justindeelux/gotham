@@ -7,10 +7,12 @@ ORDER BY created_at, id;
 
 -- name: GetServiceDomainByNameAnyService :one
 -- Resolves the platform-wide claim on a host for the uniqueness guard: any
--- service's row, including disabled ones, keeps its claim paused.
-SELECT * FROM service_domains
-WHERE lower(domain) = lower($1)
-ORDER BY created_at, id
+-- live service's row, including disabled ones, keeps its claim paused. The
+-- join drops rows of a soft-deleted service even if the cleanup lagged.
+SELECT d.* FROM service_domains d
+JOIN services s ON s.id = d.service_id
+WHERE lower(d.domain) = lower($1) AND s.deleted_at IS NULL
+ORDER BY d.created_at, d.id
 LIMIT 1;
 
 -- name: CreateServiceDomain :one

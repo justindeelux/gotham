@@ -65,7 +65,16 @@ func (s *ProxySource) ListProxiedServices(ctx context.Context) ([]proxy.ProxiedS
 			}
 			continue
 		}
+		managedHosts := make(map[string]bool, len(domains))
+		for _, domain := range domains {
+			managedHosts[proxy.NormalizeDomain(domain.Host)] = true
+		}
 		for _, route := range rendered.Spec.Domains {
+			// A label that renders to the injected GOTHAM_DOMAIN shadows the
+			// managed row of this service; the managed row wins.
+			if managedHosts[proxy.NormalizeDomain(route.Domain)] {
+				continue
+			}
 			entry.Domains = append(entry.Domains, proxy.ServiceDomain{
 				Service:  route.Service,
 				Host:     route.Domain,

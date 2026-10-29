@@ -257,6 +257,125 @@ func TestListDomainsReportsComposeAndManagedWithStatus(t *testing.T) {
 	}
 }
 
+func TestListDomainsShadowsInjectedLabel(t *testing.T) {
+	repo := newFakeRepository()
+	agent := &fakeAgent{ps: []ComposeContainer{
+		{Service: "web", State: "running", Ports: []string{"0.0.0.0:8080->80/tcp"}},
+	}}
+	svc := newDomainTestService(t, repo, agent, &fakeRouteSync{})
+	userID := uuid.New()
+	service := createDomainService(t, svc, repo, userID)
+	ctx := context.Background()
+	if _, err := svc.AddDomain(ctx, userID, service.ID, DomainInput{
+		Domain: "a.example.com", ComposeService: "web", Port: 80,
+	}); err != nil {
+		t.Fatalf("AddDomain: %v", err)
+	}
+
+	views, err := svc.ListDomains(ctx, userID, service.ID)
+	if err != nil {
+		t.Fatalf("ListDomains: %v", err)
+	}
+	bySource := map[string]DomainView{}
+	for _, view := range views {
+		bySource[view.Source] = view
+	}
+	if managed := bySource[SourceManaged]; managed.Status != DomainStatusRouted {
+		t.Errorf("managed row = %+v (%s), want routed", managed, managed.Reason)
+	}
+	if compose := bySource[SourceCompose]; compose.Status != DomainStatusShadowed {
+		t.Errorf("compose row = %+v (%s), want shadowed", compose, compose.Reason)
+	}
+}
+
+func TestEnableDisabledDomainRechecksClaim(t *testing.T) {
+	repo := newFakeRepository()
+	svc := newDomainTestService(t, repo, &fakeAgent{}, &fakeRouteSync{})
+	userID := uuid.New()
+	service := createDomainService(t, svc, repo, userID)
+	ctx := context.Background()
+
+	disabled := true
+	created, err := svc.AddDomain(ctx, userID, service.ID, DomainInput{
+		Domain: "app.example.com", ComposeService: "web", Port: 80, Disabled: &disabled,
+	})
+	if err != nil {
+		t.Fatalf("AddDomain: %v", err)
+	}
+	repo.applicationClaims = map[string]bool{"app.example.com": true}
+	enabled := false
+	if _, err := svc.UpdateDomain(ctx, userID, service.ID, created.ID, DomainInput{
+		Domain: "app.example.com", ComposeService: "web", Port: 80, Disabled: &enabled,
+	}); !errors.Is(err, ErrDomainConflict) {
+		t.Fatalf("re-enable conflict err = %v, want ErrDomainConflict", err)
+	}
+}
+
+func TestUpdateHostChangeKeepsExplicitDisabled(t *testing.T) {
+	repo := newFakeRepository()
+	svc := newDomainTestService(t, repo, &fakeAgent{}, &fakeRouteSync{})
+	userID := uuid.New()
+	service := createDomainService(t, svc, repo, userID)
+	ctx := context.Background()
+
+	disabled := true
+	created, err := svc.AddDomain(ctx, userID, service.ID, DomainInput{
+		Domain: "old.example.com", ComposeService: "web", Port: 80, Disabled: &disabled,
+	})
+	if err != nil {
+		t.Fatalf("AddDomain: %v", err)
+	}
+	updated, err := svc.UpdateDomain(ctx, userID, service.ID, created.ID, DomainInput{
+		Domain: "new.example.com", ComposeService: "web", Port: 80, Disabled: &disabled,
+	})
+	if err != nil {
+		t.Fatalf("UpdateDomain: %v", err)
+	}
+	if !updated.Disabled {
+		t.Fatalf("updated = %+v, want the explicit disabled flag kept", updated)
+	}
+}
+
+func TestListDomainsSeesAnotherServiceLabel(t *testing.T) {
+	repo := newFakeRepository()
+	svc := newDomainTestService(t, repo, &fakeAgent{}, &fakeRouteSync{})
+	userID := uuid.New()
+	service := createDomainService(t, svc, repo, userID)
+	other := Service{
+		ID:          uuid.New(),
+		UserID:      userID,
+		Name:        "other",
+		ComposeYAML: "services:\n  web:\n    image: nginx:1.27\n    labels:\n      gotham.domain: taken.example.com\n",
+		Env:         map[string]string{},
+	}
+	if _, err := repo.CreateService(context.Background(), other); err != nil {
+		t.Fatalf("seed other: %v", err)
+	}
+	if _, err := svc.AddDomain(context.Background(), userID, service.ID, DomainInput{
+		Domain: "taken.example.com", ComposeService: "web", Port: 80,
+	}); !errors.Is(err, ErrDomainConflict) {
+		t.Fatalf("write-time claim err = %v, want ErrDomainConflict", err)
+	}
+
+	// The label appears after the managed row (the write guard did not see it),
+	// which is exactly the case the list diagnostic must explain.
+	repo.domains[service.ID] = append(repo.domains[service.ID], ServiceDomain{
+		ID: uuid.New(), ServiceID: service.ID, ComposeService: "web", Port: 80,
+		Domain: "taken.example.com", Protocol: "http",
+	})
+	views, err := svc.ListDomains(context.Background(), userID, service.ID)
+	if err != nil {
+		t.Fatalf("ListDomains: %v", err)
+	}
+	for _, view := range views {
+		if view.Source == SourceManaged && view.Domain == "taken.example.com" {
+			if view.Status != DomainStatusHeld || !strings.Contains(view.Reason, "another service") {
+				t.Fatalf("managed row = %+v (%s), want held by another service", view, view.Reason)
+			}
+		}
+	}
+}
+
 func TestDeployStoresDomainsAndPendingChanges(t *testing.T) {
 	repo := newFakeRepository()
 	agent := &fakeAgent{}

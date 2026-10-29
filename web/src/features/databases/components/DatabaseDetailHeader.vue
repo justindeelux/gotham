@@ -1,10 +1,10 @@
 <script setup lang="ts">
-import { NAvatar, NButton, NPopconfirm } from "naive-ui";
+import { NAvatar, NButton } from "naive-ui";
 import { inject } from "vue";
 
 import DatabaseStatusTag from "@/features/databases/components/DatabaseStatusTag.vue";
 import { databaseDetailKey } from "@/features/databases/composables/useDatabaseDetail";
-import PageHeader from "@/shared/ui/PageHeader.vue";
+import ResourceHeader from "@/features/projects/components/ResourceHeader.vue";
 
 import { i18n } from "@/shared/i18n";
 
@@ -16,12 +16,12 @@ const detail = inject(databaseDetailKey)!;
 </script>
 
 <template>
-  <PageHeader>
+  <ResourceHeader
+    :title="detail.database.value?.name ?? detail.shortId.value"
+    :resource-id="detail.dbId.value"
+  >
     <template #identity>
       <NAvatar round :size="48">{{ detail.initials.value }}</NAvatar>
-    </template>
-    <template #title>
-      {{ detail.database.value?.name ?? detail.shortId.value }}
     </template>
     <template #badges>
       <DatabaseStatusTag
@@ -30,7 +30,6 @@ const detail = inject(databaseDetailKey)!;
         size="medium"
       />
     </template>
-    <template #meta>{{ detail.dbId.value }}</template>
     <template #actions>
       <NButton
         :disabled="!detail.canStart.value"
@@ -53,21 +52,6 @@ const detail = inject(databaseDetailKey)!;
       >
         {{ t("databases.detail.actions.restart") }}
       </NButton>
-      <NButton :disabled="!detail.database.value" @click="detail.openRename">
-        {{ t("databases.detail.actions.rename") }}
-      </NButton>
-      <NPopconfirm @positive-click="() => void detail.handleDelete()">
-        <template #trigger>
-          <NButton type="error" ghost :loading="detail.databasesStore.acting">
-            {{ t("common.actions.delete") }}
-          </NButton>
-        </template>
-        {{
-          t("databases.detail.deleteConfirm", {
-            volume: detail.database.value?.volume ?? "",
-          })
-        }}
-      </NPopconfirm>
     </template>
-  </PageHeader>
+  </ResourceHeader>
 </template>

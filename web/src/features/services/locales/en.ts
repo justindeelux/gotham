@@ -1,4 +1,13 @@
 const en = {
+  tabs: {
+    overview: "Overview",
+    deployments: "Deployments",
+    compose: "Compose",
+    env: "Environment",
+    containers: "Containers",
+    logs: "Logs",
+    settings: "Settings",
+  },
   validation: {
     nameRequired: "Enter a service name.",
     nodeRequired: "Select a node.",
@@ -114,7 +123,6 @@ const en = {
       "The API does not expose a per-deploy log or a step timeline; logs stream from the running project instead.",
   },
   header: {
-    backFallback: "Projects",
     deploy: "Deploy",
     restart: "Restart",
     stop: "Stop",
@@ -132,9 +140,6 @@ const en = {
     domains: "Domains",
     unknownNode: "unknown node",
     noDomains: "No routed domain. A compose service is routed by the {label} label.",
-    stubTitle: "Deploy step timeline — backend pending",
-    stubBody:
-      "The API records one row per deploy (state, error, timestamps) and exposes no per-step progress, so the history below is the whole picture. Service TLS/certificate status is out of scope for this page.",
   },
   logs: {
     title: "Service logs",
@@ -166,8 +171,9 @@ const en = {
   detail: {
     notFound: "This service does not exist (or belongs to another account).",
     backToProjects: "Back to projects",
-    logsTitle: "Logs",
-    logsNote: "docker compose logs -f via the node agent",
+    deleteTitle: "Delete service",
+    deleteHint:
+      "Deleting tears down the compose project on its node and removes the service configuration. Named volumes stay on the node.",
     serverPinnedReason:
       "This service already deployed, so its node is pinned and cannot be changed. Moving it to another environment stays possible.",
   },

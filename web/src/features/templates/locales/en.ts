@@ -53,9 +53,6 @@ const en = {
     title: "{name} created",
     open: "Open service detail",
     deployed: "deployed",
-    stubTitle: "Deploy step timeline — backend pending",
-    stubBody:
-      "The API records one row per deploy (state, error, timestamps) and exposes no per-step progress, so no step timeline is shown here. The detail page lists the history instead.",
   },
   toast: {
     created: "Service {name} created.",

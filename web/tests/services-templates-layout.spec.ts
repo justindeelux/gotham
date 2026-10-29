@@ -424,12 +424,32 @@ test("service detail renders history at every width, en and vi", async ({ page }
       await page.goto(`${baseURL}/projects/proj-1/environments/env-1/services/svc-1`);
       await expect(page.locator(".service-detail-page h1")).toHaveText("blog-staging");
       await switchLocale(page, locale);
+      const tabs =
+        locale === "vi"
+          ? {
+              labels: ["Tổng quan", "Triển khai", "Compose", "Môi trường", "Container", "Nhật ký", "Cài đặt"],
+              deployments: "Triển khai",
+              logs: "Nhật ký",
+              overview: "Tổng quan",
+            }
+          : {
+              labels: ["Overview", "Deployments", "Compose", "Environment", "Containers", "Logs", "Settings"],
+              deployments: "Deployments",
+              logs: "Logs",
+              overview: "Overview",
+            };
+      for (const label of tabs.labels) {
+        await expect(
+          page.locator(".n-tabs-tab").filter({ hasText: new RegExp(`^${label}$`) }).first(),
+        ).toBeVisible();
+      }
+      await page.locator(".n-tabs-tab").filter({ hasText: new RegExp(`^${tabs.deployments}$`) }).click();
       const historyTitle =
         locale === "vi" ? "Lịch sử triển khai" : "Deploy history";
       await expect(page.locator(".service-detail-page")).toContainText(historyTitle);
-      const logsNote =
-        locale === "vi" ? "docker compose logs -f qua node agent" : "docker compose logs -f via the node agent";
-      await expect(page.locator(".service-detail-page")).toContainText(logsNote);
+      await page.locator(".n-tabs-tab").filter({ hasText: new RegExp(`^${tabs.logs}$`) }).click();
+      await expect(page.locator(".service-detail-page")).toContainText("docker compose logs -f");
+      await page.locator(".n-tabs-tab").filter({ hasText: new RegExp(`^${tabs.overview}$`) }).click();
       await expect(page.locator(".service-detail-page")).toContainText("gotham-svc-1");
       await expect(page.locator(".service-detail-page")).toContainText("blog.example.com:80");
       const deploy = page.getByRole("button", {
@@ -483,6 +503,7 @@ test("retained deploy-history failure re-derives in the current locale", async (
   await mockApi(page, { status: 502, message: "services: dial node" });
   await page.goto(`${baseURL}/projects/proj-1/environments/env-1/services/svc-1`);
   await expect(page.locator(".service-detail-page h1")).toHaveText("blog-staging");
+  await page.locator(".n-tabs-tab").filter({ hasText: /^Deployments$/ }).click();
   await expect(page.locator('[data-testid="history-unavailable"]')).toContainText(
     "Deploy history unavailable: Node agent error: dial node",
   );
@@ -507,6 +528,10 @@ test("unknown failures pair a localized summary with the identical raw detail", 
         locale === "vi"
           ? "Không đọc được lịch sử triển khai: Yêu cầu thất bại: boom"
           : "Deploy history unavailable: Request failed: boom";
+      await page
+        .locator(".n-tabs-tab")
+        .filter({ hasText: new RegExp(`^${locale === "vi" ? "Triển khai" : "Deployments"}$`) })
+        .click();
       await expect(page.locator('[data-testid="history-unavailable"]')).toContainText(
         expected,
       );

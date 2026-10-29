@@ -566,8 +566,8 @@ test("a member sees no enabled terminal tab and issues zero requests", async ({
   await mockApi(page, ledger, { role: "member" });
   await seedApp(page, `${detailPath}?tab=terminal`);
 
-  await expect(page.locator(".app-blocked-terminal")).toBeVisible();
-  await expect(page.locator(".app-blocked-terminal")).toContainText(
+  await expect(page.locator(".page-banners .n-alert")).toBeVisible();
+  await expect(page.locator(".page-banners .n-alert")).toContainText(
     "Terminal not available",
   );
   const labels = await page.locator(".n-tabs-tab").allInnerTexts();

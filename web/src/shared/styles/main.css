@@ -316,6 +316,17 @@ a {
   max-width: 400px;
 }
 
+/* Banners above a page header own their gap; the header itself only has a bottom margin. */
+.page-banners {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-3);
+}
+
+.page-banners:has(> *) {
+  margin-bottom: var(--space-4);
+}
+
 .page-head {
   display: flex;
   align-items: flex-start;

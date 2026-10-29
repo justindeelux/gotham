@@ -1,4 +1,6 @@
 import { cardMark } from "@/features/templates/utils/templateMark";
+import { useTemplatesStore } from "@/features/templates/stores/templates";
+import type { Service } from "@/features/services/api/services";
 
 export interface BrandMark {
   logo: string | null;
@@ -76,4 +78,17 @@ export function applicationBrand(
     return brandFor("gitlab_app", name);
   }
   return brandFor("git_public", name);
+}
+
+export function databaseBrand(engine: string, name: string): BrandMark {
+  return brandFor(engine, name);
+}
+
+export function serviceBrand(service: Pick<Service, "name" | "template">): BrandMark {
+  const template = (service.template ?? "").trim();
+  if (template === "") {
+    return brandFor("compose", service.name);
+  }
+  const listed = useTemplatesStore().templates.find((item) => item.slug === template);
+  return templateBrand(listed?.icon ?? template, service.name);
 }

@@ -37,10 +37,10 @@ func (q *Queries) CountServicesByProject(ctx context.Context, projectID pgtype.U
 
 const createService = `-- name: CreateService :one
 INSERT INTO services (
-    id, user_id, server_id, environment_id, name, status, compose_yaml, env
+    id, user_id, server_id, environment_id, name, status, compose_yaml, env, template_slug
 )
-VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
-RETURNING id, user_id, server_id, name, status, compose_yaml, env, created_at, updated_at, deleted_at, environment_id
+VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)
+RETURNING id, user_id, server_id, name, status, compose_yaml, env, created_at, updated_at, deleted_at, environment_id, template_slug
 `
 
 type CreateServiceParams struct {
@@ -52,6 +52,7 @@ type CreateServiceParams struct {
 	Status        string      `json:"status"`
 	ComposeYaml   string      `json:"compose_yaml"`
 	Env           []byte      `json:"env"`
+	TemplateSlug  *string     `json:"template_slug"`
 }
 
 func (q *Queries) CreateService(ctx context.Context, arg CreateServiceParams) (Service, error) {
@@ -64,6 +65,7 @@ func (q *Queries) CreateService(ctx context.Context, arg CreateServiceParams) (S
 		arg.Status,
 		arg.ComposeYaml,
 		arg.Env,
+		arg.TemplateSlug,
 	)
 	var i Service
 	err := row.Scan(
@@ -78,6 +80,7 @@ func (q *Queries) CreateService(ctx context.Context, arg CreateServiceParams) (S
 		&i.UpdatedAt,
 		&i.DeletedAt,
 		&i.EnvironmentID,
+		&i.TemplateSlug,
 	)
 	return i, err
 }
@@ -117,7 +120,7 @@ func (q *Queries) CreateServiceDeploy(ctx context.Context, arg CreateServiceDepl
 }
 
 const getService = `-- name: GetService :one
-SELECT id, user_id, server_id, name, status, compose_yaml, env, created_at, updated_at, deleted_at, environment_id FROM services
+SELECT id, user_id, server_id, name, status, compose_yaml, env, created_at, updated_at, deleted_at, environment_id, template_slug FROM services
 WHERE id = $1 AND deleted_at IS NULL
 `
 
@@ -136,6 +139,7 @@ func (q *Queries) GetService(ctx context.Context, id pgtype.UUID) (Service, erro
 		&i.UpdatedAt,
 		&i.DeletedAt,
 		&i.EnvironmentID,
+		&i.TemplateSlug,
 	)
 	return i, err
 }
@@ -171,7 +175,7 @@ func (q *Queries) HasServiceDeploys(ctx context.Context, serviceID pgtype.UUID) 
 }
 
 const listRoutableServices = `-- name: ListRoutableServices :many
-SELECT id, user_id, server_id, name, status, compose_yaml, env, created_at, updated_at, deleted_at, environment_id FROM services
+SELECT id, user_id, server_id, name, status, compose_yaml, env, created_at, updated_at, deleted_at, environment_id, template_slug FROM services
 WHERE deleted_at IS NULL
 ORDER BY created_at ASC, id ASC
 `
@@ -201,6 +205,7 @@ func (q *Queries) ListRoutableServices(ctx context.Context) ([]Service, error) {
 			&i.UpdatedAt,
 			&i.DeletedAt,
 			&i.EnvironmentID,
+			&i.TemplateSlug,
 		); err != nil {
 			return nil, err
 		}
@@ -292,7 +297,7 @@ func (q *Queries) ListServiceDeploysByState(ctx context.Context, state string) (
 }
 
 const listServicesByEnvironment = `-- name: ListServicesByEnvironment :many
-SELECT id, user_id, server_id, name, status, compose_yaml, env, created_at, updated_at, deleted_at, environment_id FROM services
+SELECT id, user_id, server_id, name, status, compose_yaml, env, created_at, updated_at, deleted_at, environment_id, template_slug FROM services
 WHERE environment_id = $1 AND deleted_at IS NULL
 ORDER BY created_at DESC, id DESC
 `
@@ -318,6 +323,7 @@ func (q *Queries) ListServicesByEnvironment(ctx context.Context, environmentID p
 			&i.UpdatedAt,
 			&i.DeletedAt,
 			&i.EnvironmentID,
+			&i.TemplateSlug,
 		); err != nil {
 			return nil, err
 		}
@@ -330,7 +336,7 @@ func (q *Queries) ListServicesByEnvironment(ctx context.Context, environmentID p
 }
 
 const listServicesByProject = `-- name: ListServicesByProject :many
-SELECT s.id, s.user_id, s.server_id, s.name, s.status, s.compose_yaml, s.env, s.created_at, s.updated_at, s.deleted_at, s.environment_id FROM services s
+SELECT s.id, s.user_id, s.server_id, s.name, s.status, s.compose_yaml, s.env, s.created_at, s.updated_at, s.deleted_at, s.environment_id, s.template_slug FROM services s
 JOIN environments e ON e.id = s.environment_id
 WHERE e.project_id = $1 AND s.deleted_at IS NULL
 ORDER BY s.created_at DESC, s.id DESC
@@ -357,6 +363,7 @@ func (q *Queries) ListServicesByProject(ctx context.Context, projectID pgtype.UU
 			&i.UpdatedAt,
 			&i.DeletedAt,
 			&i.EnvironmentID,
+			&i.TemplateSlug,
 		); err != nil {
 			return nil, err
 		}
@@ -400,7 +407,7 @@ func (q *Queries) ListServicesByServer(ctx context.Context, serverID pgtype.UUID
 }
 
 const listServicesByUser = `-- name: ListServicesByUser :many
-SELECT id, user_id, server_id, name, status, compose_yaml, env, created_at, updated_at, deleted_at, environment_id FROM services
+SELECT id, user_id, server_id, name, status, compose_yaml, env, created_at, updated_at, deleted_at, environment_id, template_slug FROM services
 WHERE can_access_environment($1::uuid, environment_id) AND deleted_at IS NULL
 ORDER BY created_at DESC, id DESC
 `
@@ -426,6 +433,7 @@ func (q *Queries) ListServicesByUser(ctx context.Context, userID pgtype.UUID) ([
 			&i.UpdatedAt,
 			&i.DeletedAt,
 			&i.EnvironmentID,
+			&i.TemplateSlug,
 		); err != nil {
 			return nil, err
 		}
@@ -511,7 +519,7 @@ SET status = 'deleting',
     deleted_at = now(),
     updated_at = now()
 WHERE id = $1 AND deleted_at IS NULL
-RETURNING id, user_id, server_id, name, status, compose_yaml, env, created_at, updated_at, deleted_at, environment_id
+RETURNING id, user_id, server_id, name, status, compose_yaml, env, created_at, updated_at, deleted_at, environment_id, template_slug
 `
 
 func (q *Queries) SoftDeleteService(ctx context.Context, id pgtype.UUID) (Service, error) {
@@ -529,6 +537,7 @@ func (q *Queries) SoftDeleteService(ctx context.Context, id pgtype.UUID) (Servic
 		&i.UpdatedAt,
 		&i.DeletedAt,
 		&i.EnvironmentID,
+		&i.TemplateSlug,
 	)
 	return i, err
 }
@@ -542,7 +551,7 @@ SET name = $2,
     server_id = COALESCE($6, server_id),
     updated_at = now()
 WHERE id = $1 AND deleted_at IS NULL
-RETURNING id, user_id, server_id, name, status, compose_yaml, env, created_at, updated_at, deleted_at, environment_id
+RETURNING id, user_id, server_id, name, status, compose_yaml, env, created_at, updated_at, deleted_at, environment_id, template_slug
 `
 
 type UpdateServiceConfigParams struct {
@@ -580,6 +589,7 @@ func (q *Queries) UpdateServiceConfig(ctx context.Context, arg UpdateServiceConf
 		&i.UpdatedAt,
 		&i.DeletedAt,
 		&i.EnvironmentID,
+		&i.TemplateSlug,
 	)
 	return i, err
 }
@@ -627,7 +637,7 @@ UPDATE services
 SET status = $2,
     updated_at = now()
 WHERE id = $1 AND deleted_at IS NULL
-RETURNING id, user_id, server_id, name, status, compose_yaml, env, created_at, updated_at, deleted_at, environment_id
+RETURNING id, user_id, server_id, name, status, compose_yaml, env, created_at, updated_at, deleted_at, environment_id, template_slug
 `
 
 type UpdateServiceStatusParams struct {
@@ -650,6 +660,7 @@ func (q *Queries) UpdateServiceStatus(ctx context.Context, arg UpdateServiceStat
 		&i.UpdatedAt,
 		&i.DeletedAt,
 		&i.EnvironmentID,
+		&i.TemplateSlug,
 	)
 	return i, err
 }

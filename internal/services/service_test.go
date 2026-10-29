@@ -132,6 +132,10 @@ func TestCreateValidation(t *testing.T) {
 				Env: map[string]string{"bad-key": "x"}},
 			want: ErrValidation,
 		},
+		"unknown template": {
+			req:  CreateRequest{Name: "ok", EnvironmentID: envID, ServerID: serverID, ComposeYAML: testDocument, Env: testEnv, TemplateSlug: "nope"},
+			want: ErrValidation,
+		},
 	}
 	for name, tc := range cases {
 		t.Run(name, func(t *testing.T) {
@@ -150,6 +154,42 @@ func TestCreateValidation(t *testing.T) {
 		Name: "wordpress", EnvironmentID: created.EnvironmentID, ServerID: created.ServerID, ComposeYAML: testDocument, Env: testEnv,
 	}); !errors.Is(err, ErrConflict) {
 		t.Fatalf("duplicate Create = %v, want ErrConflict", err)
+	}
+}
+
+func TestCreateStoresTemplateSlug(t *testing.T) {
+	repo := newFakeRepository()
+	svc := NewService(Config{
+		Repository: repo,
+		Logger:     discardLogger(),
+		TemplateExists: func(slug string) bool {
+			return slug == "wordpress"
+		},
+	})
+	userID := uuid.New()
+	serverID := repo.seedServer()
+	envID, _ := repo.seedEnvironment()
+
+	created, err := svc.Create(context.Background(), userID, CreateRequest{
+		Name: "wordpress", EnvironmentID: envID, ServerID: serverID,
+		ComposeYAML: testDocument, Env: testEnv, TemplateSlug: "wordpress",
+	})
+	if err != nil {
+		t.Fatalf("Create(template): %v", err)
+	}
+	if created.TemplateSlug != "wordpress" {
+		t.Errorf("template = %q, want wordpress", created.TemplateSlug)
+	}
+	if NewServiceResponse(created, false).Template != "wordpress" {
+		t.Errorf("response template = %q", NewServiceResponse(created, false).Template)
+	}
+
+	imported := createService(t, svc, repo, userID)
+	if imported.TemplateSlug != "" {
+		t.Errorf("compose import template = %q, want empty", imported.TemplateSlug)
+	}
+	if NewServiceResponse(imported, false).Template != "" {
+		t.Errorf("compose import must not report a template")
 	}
 }
 

@@ -183,6 +183,7 @@ describe("create and deploy", () => {
       compose_yaml: "services:\n  redis: {}",
       env: { REDIS_PASSWORD: "secret" },
       deploy: true,
+      template: "redis",
     });
     expect(deployService).not.toHaveBeenCalled();
     expect(closed).toBe(1);

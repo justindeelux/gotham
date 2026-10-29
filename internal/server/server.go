@@ -496,7 +496,8 @@ func (s *Server) routes() (http.Handler, error) {
 		s.backupwatch = s.backupwatchService()
 		backupwatch.Mount(api, s.resourceAuth(), s.backupwatch)
 
-		composeSvc := s.composeService()
+		templateSvc := templates.NewDefaultService(s.logger)
+		composeSvc := s.composeService(templateSvc)
 		s.composeSvc = composeSvc
 		services.Mount(api, s.resourceAuth(), UserIDFromContext, composeSvc)
 
@@ -504,7 +505,7 @@ func (s *Server) routes() (http.Handler, error) {
 		s.mountMemberRoutes(api)
 		projects.Mount(api, s.resourceAuth(), UserIDFromContext, s.projectService(s.deploy, composeSvc, databaseSvc))
 
-		templates.Mount(api, s.resourceScopeAuth, templates.NewDefaultService(s.logger))
+		templates.Mount(api, s.resourceScopeAuth, templateSvc)
 	})
 
 	spa, err := newSPAHandler()
@@ -971,7 +972,7 @@ type composeDialer interface {
 	DialComposeClient(ctx context.Context, id uuid.UUID, opts ...servers.DockerDialOption) (*servers.ComposeClient, error)
 }
 
-func (s *Server) composeService() services.ServiceService {
+func (s *Server) composeService(templateSvc templates.Service) services.ServiceService {
 	if s.persistence == nil {
 		return nil
 	}
@@ -979,6 +980,12 @@ func (s *Server) composeService() services.ServiceService {
 		GuardDomains: s.guardDomains,
 		Store:        s.persistence,
 		Logger:       s.logger,
+	}
+	if templateSvc != nil {
+		cfg.TemplateExists = func(slug string) bool {
+			_, ok := templateSvc.Get(slug)
+			return ok
+		}
 	}
 	if dialer, ok := s.servers.(composeDialer); ok {
 		cfg.Dial = func(ctx context.Context, serverID uuid.UUID) (services.ComposeAgent, error) {

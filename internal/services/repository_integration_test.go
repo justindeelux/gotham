@@ -414,3 +414,53 @@ func containsDeploy(deploys []Deploy, id uuid.UUID) bool {
 	}
 	return false
 }
+
+func TestRepositoryTemplateSlug(t *testing.T) {
+	repo, st := integrationEnv(t)
+	ctx := context.Background()
+	ownerID, serverID := seedUserAndServer(t, st)
+	_, envID := seedProjectEnvironment(t, st)
+
+	base := Service{
+		UserID: ownerID, ServerID: serverID, EnvironmentID: envID,
+		Status: StatusCreating, ComposeYAML: "services:\n  web:\n    image: nginx:1.23\n",
+		Env: map[string]string{},
+	}
+
+	fromTemplate := base
+	fromTemplate.ID = uuid.New()
+	fromTemplate.Name = "from-template"
+	fromTemplate.TemplateSlug = "wordpress"
+	created, err := repo.CreateService(ctx, fromTemplate)
+	if err != nil {
+		t.Fatalf("CreateService(template): %v", err)
+	}
+	if created.TemplateSlug != "wordpress" {
+		t.Errorf("template = %q, want wordpress", created.TemplateSlug)
+	}
+	fetched, err := repo.GetService(ctx, created.ID)
+	if err != nil {
+		t.Fatalf("GetService(template): %v", err)
+	}
+	if fetched.TemplateSlug != "wordpress" {
+		t.Errorf("fetched template = %q, want wordpress", fetched.TemplateSlug)
+	}
+
+	imported := base
+	imported.ID = uuid.New()
+	imported.Name = "imported-compose"
+	importedService, err := repo.CreateService(ctx, imported)
+	if err != nil {
+		t.Fatalf("CreateService(import): %v", err)
+	}
+	if importedService.TemplateSlug != "" {
+		t.Errorf("compose import template = %q, want empty", importedService.TemplateSlug)
+	}
+	var stored *string
+	if err := st.DB.QueryRow(ctx, "SELECT template_slug FROM services WHERE id = $1", imported.ID).Scan(&stored); err != nil {
+		t.Fatalf("read template_slug: %v", err)
+	}
+	if stored != nil {
+		t.Errorf("compose import stores template_slug = %q, want NULL", *stored)
+	}
+}

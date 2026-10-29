@@ -6,7 +6,7 @@ import type { DeploymentState } from "@/features/applications/api/applications";
 import {
   latestDeploymentStates,
 } from "@/features/applications/api/applications";
-import { applicationBrand } from "@/features/add-resource";
+import { applicationBrand, databaseBrand, serviceBrand } from "@/features/add-resource";
 import type { BrandMark } from "@/features/add-resource";
 import {
   describeProjectError,
@@ -167,7 +167,7 @@ export function buildEnvironmentRows(
       id: service.id,
       name: service.name,
       subtitle: serviceSubtitle(service),
-      brand: null,
+      brand: serviceBrand(service),
       serverName: service.server_name,
       statusText: service.status,
       statusTag: serviceStatusTagType(service.status),
@@ -182,7 +182,7 @@ export function buildEnvironmentRows(
       id: database.id,
       name: database.name,
       subtitle: databaseSubtitle(database),
-      brand: null,
+      brand: databaseBrand(database.engine, database.name),
       serverName: database.server_name,
       statusText: view.text,
       statusTag: view.tag,

@@ -2,6 +2,7 @@
 import { NTag } from "naive-ui";
 import { computed } from "vue";
 
+import { serviceBrand } from "@/features/add-resource";
 import ResourceActionButton from "@/features/projects/components/ResourceActionButton.vue";
 import ResourceHeader from "@/features/projects/components/ResourceHeader.vue";
 import { serviceStatusLabel, serviceStatusTagType } from "@/features/services/api/services";
@@ -29,12 +30,15 @@ const {
 const deployLabel = computed<string>(() =>
   latestDeploy.value ? t("services.header.redeploy") : t("services.header.deploy"),
 );
+
+const brand = computed(() => (service.value ? serviceBrand(service.value) : null));
 </script>
 
 <template>
   <ResourceHeader
     :title="service?.name ?? serviceId.slice(0, 8)"
     :resource-id="serviceId"
+    :brand="brand"
   >
     <template #badges>
       <NTag v-if="service" size="medium" round :type="serviceStatusTagType(service.status)">

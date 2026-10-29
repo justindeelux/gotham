@@ -249,6 +249,7 @@ export function useTemplateWizard(
         compose_yaml: rendered.compose_yaml,
         env: rendered.env,
         deploy: true,
+        template: detail.value?.slug,
       });
       message.success(
         String(i18n.global.t("templates.toast.deploying", { name: service.name })),

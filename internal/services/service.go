@@ -40,6 +40,7 @@ type CreateRequest struct {
 	ServerID      uuid.UUID
 	ComposeYAML   string
 	Env           map[string]string
+	TemplateSlug  string
 }
 
 type UpdateRequest struct {
@@ -76,13 +77,14 @@ type RouteSync interface {
 type DialFunc func(ctx context.Context, serverID uuid.UUID) (ComposeAgent, error)
 
 type Config struct {
-	GuardDomains  proxy.DomainGuard
-	Store         *store.Store
-	Repository    Repository
-	Dial          DialFunc
-	Proxy         RouteSync
-	Logger        *slog.Logger
-	DeployTimeout time.Duration
+	GuardDomains   proxy.DomainGuard
+	Store          *store.Store
+	Repository     Repository
+	Dial           DialFunc
+	Proxy          RouteSync
+	TemplateExists func(slug string) bool
+	Logger         *slog.Logger
+	DeployTimeout  time.Duration
 }
 
 func (c Config) repository() Repository {
@@ -96,13 +98,14 @@ func (c Config) repository() Repository {
 }
 
 type service struct {
-	guardDomains  proxy.DomainGuard
-	repo          Repository
-	dial          DialFunc
-	proxy         RouteSync
-	logger        *slog.Logger
-	deployTimeout time.Duration
-	locks         keyedLocks
+	guardDomains   proxy.DomainGuard
+	repo           Repository
+	dial           DialFunc
+	proxy          RouteSync
+	templateExists func(slug string) bool
+	logger         *slog.Logger
+	deployTimeout  time.Duration
+	locks          keyedLocks
 
 	deployCtx    context.Context
 	deployCancel context.CancelFunc
@@ -124,15 +127,16 @@ func NewService(cfg Config) ServiceService {
 	}
 	deployCtx, deployCancel := context.WithCancel(context.Background())
 	return &service{
-		guardDomains:  cfg.GuardDomains,
-		repo:          cfg.repository(),
-		dial:          cfg.Dial,
-		proxy:         cfg.Proxy,
-		logger:        logger,
-		deployTimeout: timeout,
-		deployCtx:     deployCtx,
-		deployCancel:  deployCancel,
-		deployJobs:    make(map[uuid.UUID]struct{}),
+		guardDomains:   cfg.GuardDomains,
+		repo:           cfg.repository(),
+		dial:           cfg.Dial,
+		proxy:          cfg.Proxy,
+		templateExists: cfg.TemplateExists,
+		logger:         logger,
+		deployTimeout:  timeout,
+		deployCtx:      deployCtx,
+		deployCancel:   deployCancel,
+		deployJobs:     make(map[uuid.UUID]struct{}),
 	}
 }
 
@@ -261,6 +265,10 @@ func (s *service) Create(ctx context.Context, userID uuid.UUID, req CreateReques
 	if err := validateEnv(req.Env); err != nil {
 		return Service{}, err
 	}
+	templateSlug := strings.TrimSpace(req.TemplateSlug)
+	if templateSlug != "" && (s.templateExists == nil || !s.templateExists(templateSlug)) {
+		return Service{}, fmt.Errorf("%w: unknown template %q", ErrValidation, templateSlug)
+	}
 	if err := Validate(req.ComposeYAML, req.Env); err != nil {
 		return Service{}, RedactError(err, req.Env)
 	}
@@ -286,6 +294,7 @@ func (s *service) Create(ctx context.Context, userID uuid.UUID, req CreateReques
 		Status:        StatusCreating,
 		ComposeYAML:   req.ComposeYAML,
 		Env:           normalizeEnv(req.Env),
+		TemplateSlug:  templateSlug,
 		CreatedAt:     now,
 		UpdatedAt:     now,
 	}

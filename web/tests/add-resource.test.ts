@@ -16,7 +16,14 @@ import TemplateWizard from "@/features/templates/components/TemplateWizard.vue";
 import ResourcePicker from "@/features/add-resource/components/ResourcePicker.vue";
 import addResourceEn from "@/features/add-resource/locales/en";
 import addResourceVi from "@/features/add-resource/locales/vi";
-import { applicationBrand, brandFor, initialsOf, templateBrand } from "@/features/add-resource/utils/brands";
+import {
+  applicationBrand,
+  brandFor,
+  databaseBrand,
+  initialsOf,
+  serviceBrand,
+  templateBrand,
+} from "@/features/add-resource/utils/brands";
 import { cardMark } from "@/features/templates/utils/templateMark";
 import { checkCatalogParity } from "@/shared/i18n/catalog";
 import {
@@ -102,6 +109,63 @@ describe("brandFor", () => {
       color: "#5865f2",
     });
     expect(brandFor("", "")).toEqual({ logo: null, letters: "?", color: "#5865f2" });
+  });
+});
+
+describe("databaseBrand", () => {
+  it("maps every engine to its vendored mark", () => {
+    const logos = {
+      postgres: "postgresql",
+      mysql: "mysql",
+      mariadb: "mariadb",
+      mongodb: "mongodb",
+      redis: "redis",
+    };
+    for (const engine of ENGINES) {
+      expect(databaseBrand(engine.value, "orders").logo, engine.value).toBe(
+        logos[engine.value as keyof typeof logos],
+      );
+    }
+  });
+
+  it("falls back to initials for an unknown engine", () => {
+    expect(databaseBrand("oracle", "Orders")).toEqual({
+      logo: null,
+      letters: "OR",
+      color: "#5865f2",
+    });
+  });
+});
+
+describe("serviceBrand", () => {
+  it("uses the catalog icon for a template service", () => {
+    const templates = useTemplatesStore();
+    templates.templates = [
+      {
+        slug: "uptime-kuma",
+        name: "Uptime Kuma",
+        icon: "uptime-kuma",
+        description: "",
+      },
+    ];
+    const mark = serviceBrand({ name: "status", template: "uptime-kuma" });
+    expect(mark.logo).toBe("uptimekuma");
+    expect(mark.color).toBe("#369b6b");
+  });
+
+  it("falls back to the slug when the catalog is not loaded", () => {
+    useTemplatesStore().templates = [];
+    expect(serviceBrand({ name: "WordPress", template: "wordpress" }).logo).toBe(
+      "wordpress",
+    );
+  });
+
+  it("shows the compose mark for imports and existing rows", () => {
+    expect(serviceBrand({ name: "plausible" })).toEqual({
+      logo: "docker",
+      letters: "PL",
+      color: "#2496ed",
+    });
   });
 });
 

@@ -1,5 +1,4 @@
 import { mount } from "@vue/test-utils";
-import { NMessageProvider } from "naive-ui";
 import { createPinia, setActivePinia } from "pinia";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { defineComponent, h, ref } from "vue";
@@ -15,6 +14,21 @@ import {
 registerDiscoveredCatalogs();
 
 const { createDatabase } = vi.hoisted(() => ({ createDatabase: vi.fn() }));
+
+// A real naive-ui message leaves its 3s hide timer running after jsdom is torn
+// down; the wizard only needs the API surface here.
+vi.mock("naive-ui", async (importOriginal) => {
+  const mod = await importOriginal<typeof import("naive-ui")>();
+  return {
+    ...mod,
+    useMessage: () => ({
+      success: vi.fn(),
+      error: vi.fn(),
+      warning: vi.fn(),
+      info: vi.fn(),
+    }),
+  };
+});
 
 vi.mock("@/features/databases/api/databases", async (importOriginal) => {
   const mod =
@@ -44,12 +58,7 @@ function creatingDatabase() {
 }
 
 function harness(setup: () => unknown) {
-  return mount({
-    render: () =>
-      h(NMessageProvider, null, {
-        default: () => h(defineComponent({ setup: setup as never })),
-      }),
-  });
+  return mount(defineComponent({ setup: setup as never }));
 }
 
 beforeEach(() => {

@@ -26,6 +26,9 @@ Group=gotham-agent
 WorkingDirectory=/var/lib/gotham-agent
 Environment=GOTHAM_AGENT_CERT_DIR=/var/lib/gotham-agent
 Environment=GOTHAM_AGENT_BINARY=/var/lib/gotham-agent/bin/gotham-agent
+# ProtectHome hides ~/.docker; the docker CLI must keep its config (and so find
+# the compose plugin) inside the writable StateDirectory instead.
+Environment=DOCKER_CONFIG=/var/lib/gotham-agent/.docker
 Environment=GOTHAM_AGENT_UPDATE_STATUS=/var/lib/gotham-agent-updater/update.status
 Environment=GOTHAM_AGENT_UPDATE_PENDING=/var/lib/gotham-agent/update.pending
 Environment=GOTHAM_AGENT_UPDATE_LOCK=/var/lib/gotham-agent/update.lock

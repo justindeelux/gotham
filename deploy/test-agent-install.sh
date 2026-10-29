@@ -57,6 +57,9 @@
 #   V1    install-agent.sh validates every agent.env value before its first
 #         mutation (user, binary, CA): a direct run with a bad value fails
 #         with nothing created.
+#   G2    the unit sets DOCKER_CONFIG inside the StateDirectory and the
+#         installer creates that directory owned by the service user (0700):
+#         ProtectHome hides ~/.docker and the CLI then skips the compose plugin.
 #   L1    the codename probe times out, surfaces curl errors, and refuses on
 #         a network failure (never silently falling back) while an HTTP 404
 #         keeps the documented fallback/refusal.
@@ -1721,6 +1724,30 @@ grep -q 'SupplementaryGroups=docker' "${AGENT_INSTALLER}" \
     || fail "G1: the fallback unit in install-agent.sh no longer joins the docker group"
 rm -rf "${G1_DIR}"
 pass "G1: docker group ensured before the unit is written and enabled"
+
+# --- G2: the unit points DOCKER_CONFIG at a service-owned directory -----------
+echo "==> G2 the unit points DOCKER_CONFIG at a service-owned directory"
+G2_DIR="${SCRATCH}/g2"
+mkdir -p "${G2_DIR}"
+printf 'dummy CA for the docker-config dry-run path\n' >"${G2_DIR}/ca.pem"
+env GOTHAM_BASE_URL=http://127.0.0.1:9 GOTHAM_VERSION=v9.9.9-test TMPDIR="${G2_DIR}" \
+    sh "${AGENT_INSTALLER}" --ca "${G2_DIR}/ca.pem" --dry-run >"${G2_DIR}/dry.log" 2>&1 \
+    || fail "G2: --dry-run failed"
+grep -q 'mkdir -p /var/lib/gotham-agent/.docker' "${G2_DIR}/dry.log" \
+    || fail "G2: the installer does not create the docker config directory"
+grep -q 'chmod 0700 /var/lib/gotham-agent/.docker' "${G2_DIR}/dry.log" \
+    || fail "G2: the docker config directory is not created 0700"
+grep -q 'chown -R gotham-agent:gotham-agent /var/lib/gotham-agent/.docker' "${G2_DIR}/dry.log" \
+    || fail "G2: the docker config directory is not owned by the service user"
+# Both the checked-in unit and the fallback unit written without a checkout
+# carry the variable, so a fresh install finds the compose plugin under
+# ProtectHome.
+grep -q '^Environment=DOCKER_CONFIG=/var/lib/gotham-agent/.docker$' "${SCRIPT_DIR}/gotham-agent.service" \
+    || fail "G2: the checked-in unit does not set DOCKER_CONFIG"
+grep -q 'Environment=DOCKER_CONFIG=/var/lib/gotham-agent/.docker' "${AGENT_INSTALLER}" \
+    || fail "G2: the fallback unit in install-agent.sh does not set DOCKER_CONFIG"
+rm -rf "${G2_DIR}"
+pass "G2: DOCKER_CONFIG is set and its directory is service-owned"
 
 if [ "${FAILURES}" -eq 0 ]; then
     echo "ALL AGENT-INSTALL TESTS PASSED"

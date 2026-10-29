@@ -6,6 +6,8 @@ import { fileURLToPath } from "node:url";
 import { expect, test } from "@playwright/test";
 import type { Locator, Page } from "@playwright/test";
 
+import { waitForLayoutSettled } from "./support";
+
 /* global URL, StorageEvent, document, window, getComputedStyle:readonly */
 
 const testsDir = dirname(fileURLToPath(import.meta.url));
@@ -295,6 +297,9 @@ async function openTemplateWizard(page: Page): Promise<Locator> {
   await picker.locator('button.res-card[data-template="n8n"]').click();
   const wizard = page.locator(".template-wizard");
   await wizard.waitFor();
+  // The card enters with a 0.5 -> 1 scale transition anchored at the trigger.
+  // Measuring before it ends samples two frames and reports a fake offset.
+  await waitForLayoutSettled(page);
   return wizard;
 }
 
@@ -536,6 +541,7 @@ test("create step top-aligns Service name and Node, then stacks at 390px", async
   await page.screenshot({ path: test.info().outputPath("create-1366.png") });
 
   await page.setViewportSize({ width: 390, height: 900 });
+  await waitForLayoutSettled(page);
   const stackedName = await boxOf(page, ".wizard__metaform .field-service-name .n-input");
   const stackedNode = await boxOf(
     page,
@@ -582,6 +588,7 @@ test("compose preview highlights YAML and keeps a gap before the alert", async (
       })
       .toBeGreaterThan(1);
 
+    await waitForLayoutSettled(page);
     const tags = await boxOf(page, ".wizard__preview-body > .n-space");
     const previewBox = await boxOf(page, '[data-testid="compose-preview"]');
     const alert = await boxOf(page, ".wizard__preview-body > .n-alert");
@@ -592,6 +599,7 @@ test("compose preview highlights YAML and keeps a gap before the alert", async (
     });
 
     await page.setViewportSize({ width: 390, height: 900 });
+    await waitForLayoutSettled(page);
     const narrow = await boxOf(page, '[data-testid="compose-preview"]');
     expect(narrow.x + narrow.width).toBeLessThanOrEqual(390);
     await expectNoOverflow(page, 390);

@@ -208,11 +208,11 @@ func (h *backupHandler) listBackups(w http.ResponseWriter, r *http.Request) {
 	} else if set {
 		filter.Resource = &ref
 	}
-	limit, ok := optionalLimit(w, r)
+	limit, offset, ok := optionalPage(w, r)
 	if !ok {
 		return
 	}
-	filter.Limit = limit
+	filter.Limit, filter.Offset = limit, offset
 	backups, err := h.svc.ListBackups(r.Context(), userID, filter)
 	if err != nil {
 		h.writeError(w, err)
@@ -274,11 +274,11 @@ func (h *backupHandler) listRestores(w http.ResponseWriter, r *http.Request) {
 	} else if set {
 		filter.Resource = &ref
 	}
-	limit, ok := optionalLimit(w, r)
+	limit, offset, ok := optionalPage(w, r)
 	if !ok {
 		return
 	}
-	filter.Limit = limit
+	filter.Limit, filter.Offset = limit, offset
 	restores, err := h.svc.ListRestores(r.Context(), userID, filter)
 	if err != nil {
 		h.writeError(w, err)
@@ -579,6 +579,26 @@ func (h *backupHandler) writeError(w http.ResponseWriter, err error) {
 		h.logger.Error("backups: request failed", "error", err)
 		writeJSON(w, http.StatusInternalServerError, errorBody{Message: "internal error"})
 	}
+}
+
+// optionalPage reads limit/offset. Ordering is deterministic (created_at DESC,
+// id DESC) so a page is stable and a member's page is filled from the runs
+// they can actually reach, not from whatever happens to be newest.
+func optionalPage(w http.ResponseWriter, r *http.Request) (int, int, bool) {
+	limit, ok := optionalLimit(w, r)
+	if !ok {
+		return 0, 0, false
+	}
+	raw := strings.TrimSpace(r.URL.Query().Get("offset"))
+	if raw == "" {
+		return limit, 0, true
+	}
+	offset, err := strconv.Atoi(raw)
+	if err != nil || offset < 0 {
+		writeJSON(w, http.StatusBadRequest, errorBody{Message: "invalid offset"})
+		return 0, 0, false
+	}
+	return limit, offset, true
 }
 
 func optionalLimit(w http.ResponseWriter, r *http.Request) (int, bool) {

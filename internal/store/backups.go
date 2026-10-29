@@ -94,8 +94,8 @@ func (s *Store) ListRestoresByResource(ctx context.Context, params sqlc.ListRest
 	return s.queries.ListRestoresByResource(ctx, params)
 }
 
-func (s *Store) ListRestores(ctx context.Context, limit int32) ([]sqlc.Restore, error) {
-	return s.queries.ListRestores(ctx, limit)
+func (s *Store) ListRestores(ctx context.Context, params sqlc.ListRestoresParams) ([]sqlc.Restore, error) {
+	return s.queries.ListRestores(ctx, params)
 }
 
 func (s *Store) CreateBackupSchedule(ctx context.Context, params sqlc.CreateBackupScheduleParams) (sqlc.BackupSchedule, error) {
@@ -110,8 +110,8 @@ func (s *Store) ListBackupSchedulesByResource(ctx context.Context, params sqlc.L
 	return s.queries.ListBackupSchedulesByResource(ctx, params)
 }
 
-func (s *Store) ListBackupSchedules(ctx context.Context) ([]sqlc.BackupSchedule, error) {
-	return s.queries.ListBackupSchedules(ctx)
+func (s *Store) ListBackupSchedules(ctx context.Context, viewerID pgtype.UUID) ([]sqlc.BackupSchedule, error) {
+	return s.queries.ListBackupSchedules(ctx, viewerID)
 }
 
 func (s *Store) UpdateBackupSchedule(ctx context.Context, params sqlc.UpdateBackupScheduleParams) (sqlc.BackupSchedule, error) {

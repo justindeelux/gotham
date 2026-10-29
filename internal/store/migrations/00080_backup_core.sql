@@ -43,10 +43,12 @@ CREATE INDEX restores_service_idx ON restores (service_id, created_at DESC);
 ALTER TABLE backup_targets
     ADD COLUMN builtin boolean NOT NULL DEFAULT false;
 
+-- One built-in provider per account, so a resource owned by a member is
+-- labelled the same way as the owner's resources. Provider management stays
+-- owner-only; the extra rows only exist to name a local artifact.
 INSERT INTO backup_targets (user_id, name, kind, builtin)
 SELECT id, 'Local disk', 'local', true
 FROM users
-WHERE role = 'owner'
 ON CONFLICT (user_id, name) DO NOTHING;
 
 UPDATE backups b

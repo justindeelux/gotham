@@ -2,6 +2,7 @@ package backups
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"os"
 	"strings"
@@ -69,6 +70,11 @@ func (m *BackupManager) UpdateProvider(ctx context.Context, userID, providerID u
 		return BackupTarget{}, ErrNotFound
 	}
 	if target.Builtin {
+		// The built-in keeps its identity: a new name would free "Local disk"
+		// for the seeder and grow a second builtin on the next list.
+		if name := strings.TrimSpace(req.Name); name != "" && name != target.Name {
+			return BackupTarget{}, fmt.Errorf("%w: the built-in Local disk provider keeps its name", ErrBuiltinProvider)
+		}
 		if kind := strings.TrimSpace(req.Kind); kind != "" &&
 			!strings.EqualFold(kind, string(TargetLocal)) {
 			return BackupTarget{}, ErrBuiltinProvider
@@ -175,18 +181,26 @@ func (m *BackupManager) storeAndKey(
 	return store, key, nil
 }
 
-// defaultTarget is the owner's built-in Local disk provider. It keeps an
-// artifact from landing on the control-plane disk without a named provider.
+// defaultTarget is the resource owner's built-in Local disk provider. Every
+// account gets one, including a member who created a resource, so those runs
+// are labelled the same way as the owner's. If seeding is impossible the run
+// still falls back to the local store instead of failing.
 func (m *BackupManager) defaultTarget(ctx context.Context, ownerID uuid.UUID) (*BackupTarget, error) {
 	if ownerID == uuid.Nil || m.backups == nil {
 		return nil, nil
 	}
 	target, err := m.backups.GetBuiltinTarget(ctx, ownerID)
-	if err != nil {
-		if err == ErrNotFound {
-			return nil, nil
-		}
+	if err == nil {
+		return &target, nil
+	}
+	if !errors.Is(err, ErrNotFound) {
 		return nil, err
+	}
+	target, err = m.backups.EnsureBuiltinTarget(ctx, ownerID)
+	if err != nil {
+		m.logger.Warn("backups: could not seed the built-in provider",
+			"user_id", ownerID.String(), "error", err)
+		return nil, nil
 	}
 	return &target, nil
 }

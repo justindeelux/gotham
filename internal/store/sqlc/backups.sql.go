@@ -329,9 +329,10 @@ ON CONFLICT (user_id, name) DO UPDATE SET builtin = backup_targets.builtin
 RETURNING id, user_id, name, kind, endpoint, region, bucket, prefix, created_at, updated_at, builtin
 `
 
-// Idempotent: created on first start for every owner account, so a fresh
-// install can back up with no setup. Never turns a user-created provider into
-// the built-in one (created first wins the unique name).
+// Idempotent: created on first start for every account, so a fresh install can
+// back up with no setup. Never turns a user-created provider into the built-in
+// one (an existing row keeps its flag); callers resolve an existing builtin
+// first and treat a name conflict as "already seeded" rather than duplicating.
 func (q *Queries) EnsureBuiltinBackupTarget(ctx context.Context, userID pgtype.UUID) (BackupTarget, error) {
 	row := q.db.QueryRow(ctx, ensureBuiltinBackupTarget, userID)
 	var i BackupTarget
@@ -621,12 +622,21 @@ func (q *Queries) HasBackupsForTarget(ctx context.Context, targetID pgtype.UUID)
 }
 
 const listBackupSchedules = `-- name: ListBackupSchedules :many
-SELECT id, database_id, cron, target_id, enabled, last_run_at, next_run_at, created_at, updated_at, last_slot_at, target_changed_at, max_run_seconds, application_id, service_id FROM backup_schedules
-ORDER BY created_at DESC, id DESC
+SELECT s.id, s.database_id, s.cron, s.target_id, s.enabled, s.last_run_at, s.next_run_at, s.created_at, s.updated_at, s.last_slot_at, s.target_changed_at, s.max_run_seconds, s.application_id, s.service_id
+FROM backup_schedules s
+    LEFT JOIN databases d ON d.id = s.database_id
+    LEFT JOIN applications a ON a.id = s.application_id
+    LEFT JOIN services v ON v.id = s.service_id
+    LEFT JOIN environments e ON e.id = COALESCE(d.environment_id, a.environment_id, v.environment_id)
+WHERE can_access_environment($1::uuid, e.id)
+  AND (d.id IS NULL OR d.deleted_at IS NULL)
+  AND (v.id IS NULL OR v.deleted_at IS NULL)
+ORDER BY s.created_at DESC, s.id DESC
 `
 
-func (q *Queries) ListBackupSchedules(ctx context.Context) ([]BackupSchedule, error) {
-	rows, err := q.db.Query(ctx, listBackupSchedules)
+// Every schedule the viewer can reach, filtered by project grant in the query.
+func (q *Queries) ListBackupSchedules(ctx context.Context, viewerID pgtype.UUID) ([]BackupSchedule, error) {
+	rows, err := q.db.Query(ctx, listBackupSchedules, viewerID)
 	if err != nil {
 		return nil, err
 	}
@@ -780,21 +790,38 @@ func (q *Queries) ListBackupTargetsByUser(ctx context.Context, userID pgtype.UUI
 }
 
 const listBackups = `-- name: ListBackups :many
-SELECT id, database_id, schedule_id, type, status, size, location, target_id, container_id, error, created_at, finished_at, was_running, application_id, service_id FROM backups
-WHERE ($2::text IS NULL OR status = $2::text)
-ORDER BY created_at DESC, id DESC
-LIMIT $1
+SELECT b.id, b.database_id, b.schedule_id, b.type, b.status, b.size, b.location, b.target_id, b.container_id, b.error, b.created_at, b.finished_at, b.was_running, b.application_id, b.service_id
+FROM backups b
+    LEFT JOIN databases d ON d.id = b.database_id
+    LEFT JOIN applications a ON a.id = b.application_id
+    LEFT JOIN services v ON v.id = b.service_id
+    LEFT JOIN environments e ON e.id = COALESCE(d.environment_id, a.environment_id, v.environment_id)
+WHERE can_access_environment($3::uuid, e.id)
+  AND (d.id IS NULL OR d.deleted_at IS NULL)
+  AND (v.id IS NULL OR v.deleted_at IS NULL)
+  AND ($4::text IS NULL OR b.status = $4::text)
+ORDER BY b.created_at DESC, b.id DESC
+LIMIT $1 OFFSET $2
 `
 
 type ListBackupsParams struct {
-	Limit  int32   `json:"limit"`
-	Status *string `json:"status"`
+	Limit    int32       `json:"limit"`
+	Offset   int32       `json:"offset"`
+	ViewerID pgtype.UUID `json:"viewer_id"`
+	Status   *string     `json:"status"`
 }
 
-// The Backups page: newest runs across every resource the caller can see. The
-// HTTP layer filters the result set by project grant for members.
+// The Backups page: newest runs across every resource the viewer can reach.
+// The grant is applied before LIMIT/OFFSET, so another project's runs can
+// never fill (or starve) a member's page. Ordering is deterministic so an
+// offset page is stable between requests.
 func (q *Queries) ListBackups(ctx context.Context, arg ListBackupsParams) ([]Backup, error) {
-	rows, err := q.db.Query(ctx, listBackups, arg.Limit, arg.Status)
+	rows, err := q.db.Query(ctx, listBackups,
+		arg.Limit,
+		arg.Offset,
+		arg.ViewerID,
+		arg.Status,
+	)
 	if err != nil {
 		return nil, err
 	}
@@ -831,16 +858,17 @@ func (q *Queries) ListBackups(ctx context.Context, arg ListBackupsParams) ([]Bac
 
 const listBackupsByResource = `-- name: ListBackupsByResource :many
 SELECT id, database_id, schedule_id, type, status, size, location, target_id, container_id, error, created_at, finished_at, was_running, application_id, service_id FROM backups
-WHERE (database_id = $2::uuid
-    OR application_id = $3::uuid
-    OR service_id = $4::uuid)
-  AND ($5::text IS NULL OR status = $5::text)
+WHERE (database_id = $3::uuid
+    OR application_id = $4::uuid
+    OR service_id = $5::uuid)
+  AND ($6::text IS NULL OR status = $6::text)
 ORDER BY created_at DESC, id DESC
-LIMIT $1
+LIMIT $1 OFFSET $2
 `
 
 type ListBackupsByResourceParams struct {
 	Limit         int32       `json:"limit"`
+	Offset        int32       `json:"offset"`
 	DatabaseID    pgtype.UUID `json:"database_id"`
 	ApplicationID pgtype.UUID `json:"application_id"`
 	ServiceID     pgtype.UUID `json:"service_id"`
@@ -848,10 +876,12 @@ type ListBackupsByResourceParams struct {
 }
 
 // Newest runs of one resource, optionally narrowed by status. Exactly one of
-// the resource ids is set by the caller.
+// the resource ids is set by the caller, who has already been granted access
+// to that resource.
 func (q *Queries) ListBackupsByResource(ctx context.Context, arg ListBackupsByResourceParams) ([]Backup, error) {
 	rows, err := q.db.Query(ctx, listBackupsByResource,
 		arg.Limit,
+		arg.Offset,
 		arg.DatabaseID,
 		arg.ApplicationID,
 		arg.ServiceID,
@@ -942,13 +972,29 @@ func (q *Queries) ListDueBackupSchedules(ctx context.Context, nextRunAt pgtype.T
 }
 
 const listRestores = `-- name: ListRestores :many
-SELECT id, database_id, backup_id, status, error, created_at, finished_at, application_id, service_id FROM restores
-ORDER BY created_at DESC, id DESC
-LIMIT $1
+SELECT r.id, r.database_id, r.backup_id, r.status, r.error, r.created_at, r.finished_at, r.application_id, r.service_id
+FROM restores r
+    LEFT JOIN databases d ON d.id = r.database_id
+    LEFT JOIN applications a ON a.id = r.application_id
+    LEFT JOIN services v ON v.id = r.service_id
+    LEFT JOIN environments e ON e.id = COALESCE(d.environment_id, a.environment_id, v.environment_id)
+WHERE can_access_environment($3::uuid, e.id)
+  AND (d.id IS NULL OR d.deleted_at IS NULL)
+  AND (v.id IS NULL OR v.deleted_at IS NULL)
+ORDER BY r.created_at DESC, r.id DESC
+LIMIT $1 OFFSET $2
 `
 
-func (q *Queries) ListRestores(ctx context.Context, limit int32) ([]Restore, error) {
-	rows, err := q.db.Query(ctx, listRestores, limit)
+type ListRestoresParams struct {
+	Limit    int32       `json:"limit"`
+	Offset   int32       `json:"offset"`
+	ViewerID pgtype.UUID `json:"viewer_id"`
+}
+
+// Restore history across every resource the viewer can reach; same grant-before-
+// limit rule and deterministic order as ListBackups.
+func (q *Queries) ListRestores(ctx context.Context, arg ListRestoresParams) ([]Restore, error) {
+	rows, err := q.db.Query(ctx, listRestores, arg.Limit, arg.Offset, arg.ViewerID)
 	if err != nil {
 		return nil, err
 	}
@@ -979,15 +1025,16 @@ func (q *Queries) ListRestores(ctx context.Context, limit int32) ([]Restore, err
 
 const listRestoresByResource = `-- name: ListRestoresByResource :many
 SELECT id, database_id, backup_id, status, error, created_at, finished_at, application_id, service_id FROM restores
-WHERE database_id = $2::uuid
-   OR application_id = $3::uuid
-   OR service_id = $4::uuid
+WHERE database_id = $3::uuid
+   OR application_id = $4::uuid
+   OR service_id = $5::uuid
 ORDER BY created_at DESC, id DESC
-LIMIT $1
+LIMIT $1 OFFSET $2
 `
 
 type ListRestoresByResourceParams struct {
 	Limit         int32       `json:"limit"`
+	Offset        int32       `json:"offset"`
 	DatabaseID    pgtype.UUID `json:"database_id"`
 	ApplicationID pgtype.UUID `json:"application_id"`
 	ServiceID     pgtype.UUID `json:"service_id"`
@@ -998,6 +1045,7 @@ type ListRestoresByResourceParams struct {
 func (q *Queries) ListRestoresByResource(ctx context.Context, arg ListRestoresByResourceParams) ([]Restore, error) {
 	rows, err := q.db.Query(ctx, listRestoresByResource,
 		arg.Limit,
+		arg.Offset,
 		arg.DatabaseID,
 		arg.ApplicationID,
 		arg.ServiceID,

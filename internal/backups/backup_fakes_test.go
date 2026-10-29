@@ -153,6 +153,12 @@ func (r *fakeBackupRepository) getSchedule(id uuid.UUID) (BackupSchedule, bool) 
 	return schedule, ok
 }
 
+func (r *fakeBackupRepository) countTargets() int {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	return len(r.targets)
+}
+
 func (r *fakeBackupRepository) countBackups() int {
 	r.mu.Lock()
 	defer r.mu.Unlock()
@@ -228,7 +234,7 @@ func (r *fakeBackupRepository) matchResource(backup Backup, ref ResourceRef) boo
 	return backup.ResourceRef == ref
 }
 
-func (r *fakeBackupRepository) ListBackupsByResource(_ context.Context, ref ResourceRef, status BackupStatus, limit int) ([]Backup, error) {
+func (r *fakeBackupRepository) ListBackupsByResource(_ context.Context, ref ResourceRef, status BackupStatus, limit, offset int) ([]Backup, error) {
 	r.mu.Lock()
 	defer r.mu.Unlock()
 	if r.listBackupErr != nil {
@@ -243,6 +249,10 @@ func (r *fakeBackupRepository) ListBackupsByResource(_ context.Context, ref Reso
 		if status != "" && backup.Status != status {
 			continue
 		}
+		if offset > 0 {
+			offset--
+			continue
+		}
 		list = append(list, backup)
 		if limit > 0 && len(list) >= limit {
 			break
@@ -251,7 +261,7 @@ func (r *fakeBackupRepository) ListBackupsByResource(_ context.Context, ref Reso
 	return list, nil
 }
 
-func (r *fakeBackupRepository) ListBackups(_ context.Context, status BackupStatus, limit int) ([]Backup, error) {
+func (r *fakeBackupRepository) ListBackups(_ context.Context, _ uuid.UUID, status BackupStatus, limit, offset int) ([]Backup, error) {
 	r.mu.Lock()
 	defer r.mu.Unlock()
 	if r.listBackupErr != nil {
@@ -261,6 +271,10 @@ func (r *fakeBackupRepository) ListBackups(_ context.Context, status BackupStatu
 	for i := len(r.backupOrder) - 1; i >= 0; i-- {
 		backup := r.backups[r.backupOrder[i]]
 		if status != "" && backup.Status != status {
+			continue
+		}
+		if offset > 0 {
+			offset--
 			continue
 		}
 		list = append(list, backup)
@@ -394,7 +408,7 @@ func (r *fakeBackupRepository) ListRunningRestores(_ context.Context) ([]Restore
 	return list, nil
 }
 
-func (r *fakeBackupRepository) ListRestoresByResource(_ context.Context, ref ResourceRef, limit int) ([]Restore, error) {
+func (r *fakeBackupRepository) ListRestoresByResource(_ context.Context, ref ResourceRef, limit, offset int) ([]Restore, error) {
 	r.mu.Lock()
 	defer r.mu.Unlock()
 	if r.listRestoresErr != nil {
@@ -404,6 +418,10 @@ func (r *fakeBackupRepository) ListRestoresByResource(_ context.Context, ref Res
 	for i := len(r.restoreOrder) - 1; i >= 0; i-- {
 		restore := r.restores[r.restoreOrder[i]]
 		if restore.ResourceRef == ref {
+			if offset > 0 {
+				offset--
+				continue
+			}
 			list = append(list, restore)
 		}
 		if limit > 0 && len(list) == limit {
@@ -413,7 +431,7 @@ func (r *fakeBackupRepository) ListRestoresByResource(_ context.Context, ref Res
 	return list, nil
 }
 
-func (r *fakeBackupRepository) ListRestores(_ context.Context, limit int) ([]Restore, error) {
+func (r *fakeBackupRepository) ListRestores(_ context.Context, _ uuid.UUID, limit, offset int) ([]Restore, error) {
 	r.mu.Lock()
 	defer r.mu.Unlock()
 	if r.listRestoresErr != nil {
@@ -421,6 +439,10 @@ func (r *fakeBackupRepository) ListRestores(_ context.Context, limit int) ([]Res
 	}
 	list := make([]Restore, 0, len(r.restoreOrder))
 	for i := len(r.restoreOrder) - 1; i >= 0; i-- {
+		if offset > 0 {
+			offset--
+			continue
+		}
 		list = append(list, r.restores[r.restoreOrder[i]])
 		if limit > 0 && len(list) == limit {
 			break
@@ -466,7 +488,7 @@ func (r *fakeBackupRepository) ListBackupSchedulesByResource(_ context.Context, 
 	return list, nil
 }
 
-func (r *fakeBackupRepository) ListBackupSchedules(_ context.Context) ([]BackupSchedule, error) {
+func (r *fakeBackupRepository) ListBackupSchedules(_ context.Context, _ uuid.UUID) ([]BackupSchedule, error) {
 	r.mu.Lock()
 	defer r.mu.Unlock()
 	list := make([]BackupSchedule, 0, len(r.scheduleOrder))
@@ -590,6 +612,14 @@ func (r *fakeBackupRepository) CreateBackupTargetWithSecrets(_ context.Context, 
 func (r *fakeBackupRepository) EnsureBuiltinTarget(_ context.Context, userID uuid.UUID) (BackupTarget, error) {
 	r.mu.Lock()
 	defer r.mu.Unlock()
+	// Keyed on the flag, like the real repository: a renamed builtin stays the
+	// builtin instead of growing a duplicate.
+	for _, id := range r.targetOrder {
+		existing := r.targets[id]
+		if existing.UserID == userID && existing.Builtin {
+			return existing, nil
+		}
+	}
 	for _, id := range r.targetOrder {
 		existing := r.targets[id]
 		if existing.UserID == userID && existing.Name == BuiltinProviderName {

@@ -209,12 +209,12 @@ func (h *legacyHandler) listBackups(w http.ResponseWriter, r *http.Request) {
 	if !ok {
 		return
 	}
-	limit, ok := optionalLimit(w, r)
+	limit, offset, ok := optionalPage(w, r)
 	if !ok {
 		return
 	}
 	ref := ResourceRef{Type: ResourceDatabase, ID: databaseID}
-	backups, err := h.svc.ListBackups(r.Context(), userID, BackupFilter{Resource: &ref, Limit: limit})
+	backups, err := h.svc.ListBackups(r.Context(), userID, BackupFilter{Resource: &ref, Limit: limit, Offset: offset})
 	if err != nil {
 		h.writeLegacyError(w, err)
 		return
@@ -260,12 +260,12 @@ func (h *legacyHandler) listRestores(w http.ResponseWriter, r *http.Request) {
 	if !ok {
 		return
 	}
-	limit, ok := optionalLimit(w, r)
+	limit, offset, ok := optionalPage(w, r)
 	if !ok {
 		return
 	}
 	ref := ResourceRef{Type: ResourceDatabase, ID: databaseID}
-	restores, err := h.svc.ListRestores(r.Context(), userID, RestoreFilter{Resource: &ref, Limit: limit})
+	restores, err := h.svc.ListRestores(r.Context(), userID, RestoreFilter{Resource: &ref, Limit: limit, Offset: offset})
 	if err != nil {
 		h.writeLegacyError(w, err)
 		return
@@ -323,7 +323,7 @@ func (h *legacyHandler) updateSchedule(w http.ResponseWriter, r *http.Request) {
 	if !ok {
 		return
 	}
-	if err := h.assertDatabaseSchedule(r, databaseID, scheduleID); err != nil {
+	if err := h.assertDatabaseSchedule(r, userID, databaseID, scheduleID); err != nil {
 		h.writeLegacyError(w, err)
 		return
 	}
@@ -349,7 +349,7 @@ func (h *legacyHandler) deleteSchedule(w http.ResponseWriter, r *http.Request) {
 	if !ok {
 		return
 	}
-	if err := h.assertDatabaseSchedule(r, databaseID, scheduleID); err != nil {
+	if err := h.assertDatabaseSchedule(r, userID, databaseID, scheduleID); err != nil {
 		h.writeLegacyError(w, err)
 		return
 	}
@@ -447,8 +447,8 @@ func (h *legacyHandler) ownedDatabaseBackup(r *http.Request, userID, databaseID,
 	return backup, nil
 }
 
-func (h *legacyHandler) assertDatabaseSchedule(r *http.Request, databaseID, scheduleID uuid.UUID) error {
-	schedules, err := h.svc.ListSchedules(r.Context(), uuid.Nil, ResourceRef{Type: ResourceDatabase, ID: databaseID})
+func (h *legacyHandler) assertDatabaseSchedule(r *http.Request, userID, databaseID, scheduleID uuid.UUID) error {
+	schedules, err := h.svc.ListSchedules(r.Context(), userID, ResourceRef{Type: ResourceDatabase, ID: databaseID})
 	if err != nil {
 		return err
 	}

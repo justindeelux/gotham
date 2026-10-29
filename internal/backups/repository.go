@@ -18,8 +18,8 @@ type BackupRepository interface {
 	CreateBackup(ctx context.Context, backup Backup) (Backup, error)
 	CreateBackupWithTarget(ctx context.Context, backup Backup, validate func(*BackupTarget) error) (Backup, *BackupTarget, error)
 	GetBackup(ctx context.Context, backupID uuid.UUID) (Backup, error)
-	ListBackupsByResource(ctx context.Context, ref ResourceRef, status BackupStatus, limit int) ([]Backup, error)
-	ListBackups(ctx context.Context, status BackupStatus, limit int) ([]Backup, error)
+	ListBackupsByResource(ctx context.Context, ref ResourceRef, status BackupStatus, limit, offset int) ([]Backup, error)
+	ListBackups(ctx context.Context, viewerID uuid.UUID, status BackupStatus, limit, offset int) ([]Backup, error)
 	ListRunningBackups(ctx context.Context) ([]Backup, error)
 	FinishBackup(ctx context.Context, backup Backup) (Backup, error)
 	DeleteBackup(ctx context.Context, backupID uuid.UUID) (Backup, error)
@@ -28,13 +28,13 @@ type BackupRepository interface {
 	CreateRestore(ctx context.Context, restore Restore) (Restore, error)
 	FinishRestore(ctx context.Context, restore Restore) (Restore, error)
 	ListRunningRestores(ctx context.Context) ([]Restore, error)
-	ListRestoresByResource(ctx context.Context, ref ResourceRef, limit int) ([]Restore, error)
-	ListRestores(ctx context.Context, limit int) ([]Restore, error)
+	ListRestoresByResource(ctx context.Context, ref ResourceRef, limit, offset int) ([]Restore, error)
+	ListRestores(ctx context.Context, viewerID uuid.UUID, limit, offset int) ([]Restore, error)
 
 	CreateBackupSchedule(ctx context.Context, schedule BackupSchedule) (BackupSchedule, error)
 	GetBackupSchedule(ctx context.Context, scheduleID uuid.UUID) (BackupSchedule, error)
 	ListBackupSchedulesByResource(ctx context.Context, ref ResourceRef) ([]BackupSchedule, error)
-	ListBackupSchedules(ctx context.Context) ([]BackupSchedule, error)
+	ListBackupSchedules(ctx context.Context, viewerID uuid.UUID) ([]BackupSchedule, error)
 	UpdateBackupSchedule(ctx context.Context, schedule BackupSchedule) (BackupSchedule, error)
 	DeleteBackupSchedule(ctx context.Context, scheduleID uuid.UUID) (BackupSchedule, error)
 	ListDueBackupSchedules(ctx context.Context, now time.Time) ([]BackupSchedule, error)
@@ -108,9 +108,10 @@ func (r *storeBackupRepository) GetBackup(ctx context.Context, backupID uuid.UUI
 	return backupFromRow(row), nil
 }
 
-func (r *storeBackupRepository) ListBackupsByResource(ctx context.Context, ref ResourceRef, status BackupStatus, limit int) ([]Backup, error) {
+func (r *storeBackupRepository) ListBackupsByResource(ctx context.Context, ref ResourceRef, status BackupStatus, limit, offset int) ([]Backup, error) {
 	params := sqlc.ListBackupsByResourceParams{
-		Limit: int32(limit),
+		Limit:  int32(limit),
+		Offset: int32(offset),
 	}
 	db, app, svc := resourceColumns(ref)
 	params.DatabaseID, params.ApplicationID, params.ServiceID = db, app, svc
@@ -125,8 +126,12 @@ func (r *storeBackupRepository) ListBackupsByResource(ctx context.Context, ref R
 	return backupsFromRows(rows), nil
 }
 
-func (r *storeBackupRepository) ListBackups(ctx context.Context, status BackupStatus, limit int) ([]Backup, error) {
-	params := sqlc.ListBackupsParams{Limit: int32(limit)}
+func (r *storeBackupRepository) ListBackups(ctx context.Context, viewerID uuid.UUID, status BackupStatus, limit, offset int) ([]Backup, error) {
+	params := sqlc.ListBackupsParams{
+		Limit:    int32(limit),
+		Offset:   int32(offset),
+		ViewerID: pgUUID(viewerID),
+	}
 	if status != "" {
 		value := string(status)
 		params.Status = &value
@@ -226,10 +231,11 @@ func (r *storeBackupRepository) ListRunningRestores(ctx context.Context) ([]Rest
 	return restoresFromRows(rows), nil
 }
 
-func (r *storeBackupRepository) ListRestoresByResource(ctx context.Context, ref ResourceRef, limit int) ([]Restore, error) {
+func (r *storeBackupRepository) ListRestoresByResource(ctx context.Context, ref ResourceRef, limit, offset int) ([]Restore, error) {
 	db, app, svc := resourceColumns(ref)
 	rows, err := r.store.ListRestoresByResource(ctx, sqlc.ListRestoresByResourceParams{
 		Limit:         int32(limit),
+		Offset:        int32(offset),
 		DatabaseID:    db,
 		ApplicationID: app,
 		ServiceID:     svc,
@@ -240,8 +246,12 @@ func (r *storeBackupRepository) ListRestoresByResource(ctx context.Context, ref 
 	return restoresFromRows(rows), nil
 }
 
-func (r *storeBackupRepository) ListRestores(ctx context.Context, limit int) ([]Restore, error) {
-	rows, err := r.store.ListRestores(ctx, int32(limit))
+func (r *storeBackupRepository) ListRestores(ctx context.Context, viewerID uuid.UUID, limit, offset int) ([]Restore, error) {
+	rows, err := r.store.ListRestores(ctx, sqlc.ListRestoresParams{
+		Limit:    int32(limit),
+		Offset:   int32(offset),
+		ViewerID: pgUUID(viewerID),
+	})
 	if err != nil {
 		return nil, fmt.Errorf("backups: list restores: %w", err)
 	}
@@ -299,8 +309,8 @@ func (r *storeBackupRepository) ListBackupSchedulesByResource(ctx context.Contex
 	return schedules, nil
 }
 
-func (r *storeBackupRepository) ListBackupSchedules(ctx context.Context) ([]BackupSchedule, error) {
-	rows, err := r.store.ListBackupSchedules(ctx)
+func (r *storeBackupRepository) ListBackupSchedules(ctx context.Context, viewerID uuid.UUID) ([]BackupSchedule, error) {
+	rows, err := r.store.ListBackupSchedules(ctx, pgUUID(viewerID))
 	if err != nil {
 		return nil, fmt.Errorf("backups: list backup schedules: %w", err)
 	}
@@ -396,8 +406,18 @@ func (r *storeBackupRepository) CreateBackupTargetWithSecrets(ctx context.Contex
 }
 
 func (r *storeBackupRepository) EnsureBuiltinTarget(ctx context.Context, userID uuid.UUID) (BackupTarget, error) {
+	// Resolve an existing builtin first: the seeding is keyed on the flag, not
+	// on the name, so a renamed or differently named row can never grow a
+	// second "Local disk" provider.
+	if existing, err := r.GetBuiltinTarget(ctx, userID); err == nil {
+		return existing, nil
+	} else if !errors.Is(err, ErrNotFound) {
+		return BackupTarget{}, err
+	}
 	row, err := r.store.EnsureBuiltinBackupTarget(ctx, pgUUID(userID))
 	if err != nil {
+		// A user-created provider already holds the name; the account still has
+		// no builtin, so surface the cause instead of inserting a duplicate.
 		return BackupTarget{}, fmt.Errorf("backups: create the built-in provider: %w", err)
 	}
 	return targetFromRow(row), nil

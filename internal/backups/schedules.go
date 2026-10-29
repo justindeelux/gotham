@@ -13,7 +13,7 @@ func (m *BackupManager) ListSchedules(ctx context.Context, userID uuid.UUID, ref
 		return nil, err
 	}
 	if !ref.Valid() {
-		schedules, err := m.backups.ListBackupSchedules(ctx)
+		schedules, err := m.backups.ListBackupSchedules(ctx, userID)
 		if err != nil {
 			return nil, err
 		}

@@ -333,9 +333,19 @@ func TestListBackupsFiltersAndLimit(t *testing.T) {
 		t.Errorf("body has no backups key: %s", rec.Body)
 	}
 
+	rec = backupRequest(t, handler, http.MethodGet, "/v1/backups?limit=2&offset=5", "")
+	if rec.Code != http.StatusOK {
+		t.Fatalf("offset status = %d", rec.Code)
+	}
+	if svc.backupFilter.Limit != 2 || svc.backupFilter.Offset != 5 {
+		t.Errorf("page = %d/%d, want limit 2 offset 5", svc.backupFilter.Limit, svc.backupFilter.Offset)
+	}
+
 	for _, path := range []string{
 		"/v1/backups?resource_type=database",
 		"/v1/backups?limit=nope",
+		"/v1/backups?offset=-1",
+		"/v1/backups/restores?offset=nope",
 	} {
 		rec = backupRequest(t, handler, http.MethodGet, path, "")
 		if rec.Code != http.StatusBadRequest {

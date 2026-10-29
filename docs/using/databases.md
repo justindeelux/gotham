@@ -106,7 +106,9 @@ lists every run and schedule in one place. Next to it, `GET /v1/backups`,
 `POST /v1/backups`, `GET /v1/backups/{id}`, `POST /v1/backups/{id}/restore`,
 `GET/POST /v1/backups/schedules`, `PATCH/DELETE /v1/backups/schedules/{id}`,
 `GET /v1/backups/restores` and `GET/POST /v1/backups/providers` are the
-resource-agnostic API. Only `database` is accepted as a resource type for now;
+resource-agnostic API. Collection routes take `limit` and `offset` and order
+newest first, and the grant is applied before paging, so a member's page is
+filled from the runs they can actually reach. Only `database` is accepted as a resource type for now;
 other types answer `400` until their driver lands.
 
 The database-scoped routes listed on this page

@@ -87,11 +87,13 @@ type BackupFilter struct {
 	Resource *ResourceRef
 	Status   BackupStatus
 	Limit    int
+	Offset   int
 }
 
 type RestoreFilter struct {
 	Resource *ResourceRef
 	Limit    int
+	Offset   int
 }
 
 type RestoreResult struct {
@@ -413,6 +415,7 @@ func (m *BackupManager) ListBackups(ctx context.Context, userID uuid.UUID, filte
 		return nil, err
 	}
 	limit := clampBackupListLimit(filter.Limit)
+	offset := clampBackupListOffset(filter.Offset)
 	if kind := BackupStatus(strings.TrimSpace(string(filter.Status))); kind != "" {
 		switch kind {
 		case BackupRunning, BackupCompleted, BackupFailed:
@@ -428,9 +431,9 @@ func (m *BackupManager) ListBackups(ctx context.Context, userID uuid.UUID, filte
 		if resolveErr != nil {
 			return nil, resolveErr
 		}
-		backups, err = m.backups.ListBackupsByResource(ctx, resource.Ref(), filter.Status, limit)
+		backups, err = m.backups.ListBackupsByResource(ctx, resource.Ref(), filter.Status, limit, offset)
 	} else {
-		backups, err = m.backups.ListBackups(ctx, filter.Status, limit)
+		backups, err = m.backups.ListBackups(ctx, userID, filter.Status, limit, offset)
 	}
 	if err != nil {
 		return nil, err
@@ -462,6 +465,7 @@ func (m *BackupManager) ListRestores(ctx context.Context, userID uuid.UUID, filt
 		return nil, err
 	}
 	limit := clampBackupListLimit(filter.Limit)
+	offset := clampBackupListOffset(filter.Offset)
 	var restores []Restore
 	var err error
 	if filter.Resource != nil {
@@ -469,9 +473,9 @@ func (m *BackupManager) ListRestores(ctx context.Context, userID uuid.UUID, filt
 		if resolveErr != nil {
 			return nil, resolveErr
 		}
-		restores, err = m.backups.ListRestoresByResource(ctx, resource.Ref(), limit)
+		restores, err = m.backups.ListRestoresByResource(ctx, resource.Ref(), limit, offset)
 	} else {
-		restores, err = m.backups.ListRestores(ctx, limit)
+		restores, err = m.backups.ListRestores(ctx, userID, limit, offset)
 	}
 	if err != nil {
 		return nil, err
@@ -480,6 +484,13 @@ func (m *BackupManager) ListRestores(ctx context.Context, userID uuid.UUID, filt
 		return []Restore{}, nil
 	}
 	return restores, nil
+}
+
+func clampBackupListOffset(offset int) int {
+	if offset < 0 {
+		return 0
+	}
+	return offset
 }
 
 func clampBackupListLimit(limit int) int {

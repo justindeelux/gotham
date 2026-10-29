@@ -113,11 +113,11 @@ func TestBackupRepositoryRoundTrip(t *testing.T) {
 		t.Errorf("backup = %+v", backup)
 	}
 
-	listed, err := repo.ListBackupsByResource(ctx, ref, "", maxBackupListLimit)
+	listed, err := repo.ListBackupsByResource(ctx, ref, "", maxBackupListLimit, 0)
 	if err != nil || len(listed) != 1 {
 		t.Fatalf("ListBackupsByResource = %d rows (%v), want 1", len(listed), err)
 	}
-	other, err := repo.ListBackupsByResource(ctx, databaseRef(uuid.New()), "", maxBackupListLimit)
+	other, err := repo.ListBackupsByResource(ctx, databaseRef(uuid.New()), "", maxBackupListLimit, 0)
 	if err != nil || len(other) != 0 {
 		t.Fatalf("another resource listed %d rows (%v), want 0", len(other), err)
 	}
@@ -217,6 +217,25 @@ func TestBackupRepositoryRoundTrip(t *testing.T) {
 	if again, err := repo.GetBuiltinTarget(ctx, ownerID); err != nil || again.ID != target.ID {
 		t.Errorf("GetBuiltinTarget = %+v, %v", again, err)
 	}
+	// Renaming the builtin row behind the API must not seed a second one.
+	if _, err := st.DB.Exec(ctx, `UPDATE backup_targets SET name=$2 WHERE id=$1`, target.ID, "Renamed-"+target.ID.String()); err != nil {
+		t.Fatalf("rename builtin: %v", err)
+	}
+	seeded, err := repo.EnsureBuiltinTarget(ctx, ownerID)
+	if err != nil {
+		t.Fatalf("EnsureBuiltinTarget after rename: %v", err)
+	}
+	if seeded.ID != target.ID {
+		t.Errorf("seeded %s, want the existing builtin %s", seeded.ID, target.ID)
+	}
+	var builtinCount int
+	if err := st.DB.QueryRow(ctx,
+		`SELECT count(*) FROM backup_targets WHERE user_id=$1 AND builtin`, ownerID).Scan(&builtinCount); err != nil {
+		t.Fatalf("count builtin: %v", err)
+	}
+	if builtinCount != 1 {
+		t.Errorf("builtin providers = %d, want 1", builtinCount)
+	}
 
 	// A deleted resource cascades: no orphaned run rows stay behind.
 	if _, err := st.DB.Exec(ctx, `DELETE FROM databases WHERE id=$1`, databaseID); err != nil {
@@ -224,5 +243,147 @@ func TestBackupRepositoryRoundTrip(t *testing.T) {
 	}
 	if _, err := repo.GetBackup(ctx, backup.ID); err != ErrNotFound {
 		t.Errorf("backup survived its resource: %v", err)
+	}
+}
+
+type seededBackupResource struct {
+	projectID  uuid.UUID
+	envID      uuid.UUID
+	databaseID uuid.UUID
+}
+
+func seedBackupResource(t *testing.T, st *store.Store, ownerID uuid.UUID, name string) seededBackupResource {
+	t.Helper()
+	ctx := context.Background()
+	serverID, projectID, envID, databaseID := uuid.New(), uuid.New(), uuid.New(), uuid.New()
+	if _, err := st.DB.Exec(ctx,
+		`INSERT INTO servers(id,name,ip,ssh_user,status) VALUES($1,$2,'127.0.0.1','root','ready')`,
+		serverID, "node-"+serverID.String()); err != nil {
+		t.Fatalf("insert server: %v", err)
+	}
+	if _, err := st.DB.Exec(ctx, `INSERT INTO projects(id,name) VALUES($1,$2)`, projectID, name); err != nil {
+		t.Fatalf("insert project: %v", err)
+	}
+	if _, err := st.DB.Exec(ctx,
+		`INSERT INTO environments(id,project_id,name) VALUES($1,$2,'production')`, envID, projectID); err != nil {
+		t.Fatalf("insert environment: %v", err)
+	}
+	if _, err := st.DB.Exec(ctx,
+		`INSERT INTO databases(id,user_id,server_id,environment_id,name,engine,status,storage_path)
+		 VALUES($1,$2,$3,$4,$5,'postgres','running',$6)`,
+		databaseID, ownerID, serverID, envID, name, "gotham-db-"+databaseID.String()); err != nil {
+		t.Fatalf("insert database: %v", err)
+	}
+	t.Cleanup(func() {
+		cleanupCtx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+		defer cancel()
+		_, _ = st.DB.Exec(cleanupCtx, `DELETE FROM databases WHERE id=$1`, databaseID)
+		_, _ = st.DB.Exec(cleanupCtx, `DELETE FROM projects WHERE id=$1`, projectID)
+		_, _ = st.DB.Exec(cleanupCtx, `DELETE FROM servers WHERE id=$1`, serverID)
+	})
+	return seededBackupResource{projectID: projectID, envID: envID, databaseID: databaseID}
+}
+
+func insertBackup(t *testing.T, st *store.Store, databaseID uuid.UUID, createdAt time.Time) uuid.UUID {
+	t.Helper()
+	id := uuid.New()
+	if _, err := st.DB.Exec(context.Background(),
+		`INSERT INTO backups(id,database_id,type,status,size,created_at) VALUES($1,$2,'manual','completed',1,$3)`,
+		id, databaseID, createdAt); err != nil {
+		t.Fatalf("insert backup: %v", err)
+	}
+	return id
+}
+
+// A member's page must be filled from the runs they can reach, not from
+// whatever happens to be newest across the instance, and paging must be stable.
+func TestListBackupsPagesWithinTheMembersGrant(t *testing.T) {
+	repo, st := backupIntegrationRepo(t)
+	ctx := context.Background()
+
+	memberID := uuid.New()
+	if _, err := st.DB.Exec(ctx,
+		`INSERT INTO users(id,email,password_hash) VALUES($1,$2,'x')`,
+		memberID, "member-"+memberID.String()+"@example.com"); err != nil {
+		t.Fatalf("insert member: %v", err)
+	}
+	t.Cleanup(func() {
+		cleanupCtx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+		defer cancel()
+		_, _ = st.DB.Exec(cleanupCtx, `DELETE FROM users WHERE id=$1`, memberID)
+	})
+
+	otherID := uuid.New()
+	if _, err := st.DB.Exec(ctx,
+		`INSERT INTO users(id,email,password_hash) VALUES($1,$2,'x')`,
+		otherID, "other-"+otherID.String()+"@example.com"); err != nil {
+		t.Fatalf("insert other user: %v", err)
+	}
+	t.Cleanup(func() {
+		cleanupCtx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+		defer cancel()
+		_, _ = st.DB.Exec(cleanupCtx, `DELETE FROM users WHERE id=$1`, otherID)
+	})
+
+	granted := seedBackupResource(t, st, memberID, "visible-"+uuid.NewString())
+	hidden := seedBackupResource(t, st, otherID, "hidden-"+uuid.NewString())
+	if _, err := st.DB.Exec(ctx,
+		`INSERT INTO project_members(project_id,user_id,granted_by) VALUES($1,$2,$2)`, granted.projectID, memberID); err != nil {
+		t.Fatalf("grant project: %v", err)
+	}
+
+	// 60 newer runs in a project the member cannot see.
+	now := time.Now().UTC().Truncate(time.Microsecond)
+	for i := 0; i < 60; i++ {
+		insertBackup(t, st, hidden.databaseID, now.Add(time.Duration(i)*time.Second))
+	}
+	// 7 older runs the member may see.
+	var visible []uuid.UUID
+	for i := 0; i < 7; i++ {
+		visible = append(visible, insertBackup(t, st, granted.databaseID, now.Add(-time.Duration(i+1)*time.Second)))
+	}
+
+	page, err := repo.ListBackups(ctx, memberID, "", 5, 0)
+	if err != nil {
+		t.Fatalf("ListBackups page 1: %v", err)
+	}
+	if len(page) != 5 {
+		t.Fatalf("page 1 = %d rows, want a full page of 5", len(page))
+	}
+	for i, cleanup := range page {
+		// visible[i] is the i-th newest visible run.
+		if cleanup.ResourceRef.ID != granted.databaseID {
+			t.Fatalf("page 1 row %d belongs to %s, want the granted database", i, cleanup.ResourceRef)
+		}
+		if cleanup.ID != visible[i] {
+			t.Errorf("page 1 row %d = %s, want %s (newest first)", i, cleanup.ID, visible[i])
+		}
+	}
+
+	second, err := repo.ListBackups(ctx, memberID, "", 5, 5)
+	if err != nil {
+		t.Fatalf("ListBackups page 2: %v", err)
+	}
+	if len(second) != 2 {
+		t.Fatalf("page 2 = %d rows, want the remaining 2", len(second))
+	}
+	seen := map[uuid.UUID]bool{}
+	for _, backup := range append(page, second...) {
+		if seen[backup.ID] {
+			t.Errorf("backup %s appeared on both pages", backup.ID)
+		}
+		seen[backup.ID] = true
+	}
+	if len(seen) != 7 {
+		t.Fatalf("paged %d rows, want all 7 visible runs", len(seen))
+	}
+
+	// The owner of the hidden resource keeps seeing everything, newest first.
+	everyone, err := repo.ListBackups(ctx, uuid.New(), "", 100, 0)
+	if err != nil {
+		t.Fatalf("ListBackups unprivileged: %v", err)
+	}
+	if len(everyone) != 0 {
+		t.Errorf("an unprivileged viewer saw %d rows, want 0", len(everyone))
 	}
 }

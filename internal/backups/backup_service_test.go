@@ -106,6 +106,83 @@ func TestCreateBackupUsesBuiltinProviderByDefault(t *testing.T) {
 	}
 }
 
+func TestBuiltinProviderKeepsItsIdentity(t *testing.T) {
+	fixture := newBackupFixture(t)
+	ctx := context.Background()
+	providers, err := fixture.manager.ListProviders(ctx, fixture.userID)
+	if err != nil {
+		t.Fatalf("ListProviders: %v", err)
+	}
+	builtin := providers[0]
+
+	// Renaming it would free "Local disk" for the seeder and grow a duplicate.
+	if _, err := fixture.manager.UpdateProvider(ctx, fixture.userID, builtin.ID, ProviderRequest{Name: "Renamed"}); !errors.Is(err, ErrBuiltinProvider) {
+		t.Fatalf("rename err = %v, want ErrBuiltinProvider", err)
+	}
+	// The same name is still allowed and changes nothing.
+	if _, err := fixture.manager.UpdateProvider(ctx, fixture.userID, builtin.ID, ProviderRequest{Name: BuiltinProviderName}); err != nil {
+		t.Fatalf("same-name update: %v", err)
+	}
+
+	for i := 0; i < 3; i++ {
+		listed, err := fixture.manager.ListProviders(ctx, fixture.userID)
+		if err != nil {
+			t.Fatalf("ListProviders %d: %v", i, err)
+		}
+		if len(listed) != 1 || listed[0].ID != builtin.ID || !listed[0].Builtin {
+			t.Fatalf("listing %d = %+v, want exactly the builtin", i, listed)
+		}
+	}
+	// Seeding is keyed on the flag: even a row renamed behind the API cannot
+	// make a second builtin appear.
+	renamed := builtin
+	renamed.Name = "Renamed locally"
+	if _, err := fixture.backups.UpdateBackupTarget(ctx, renamed); err != nil {
+		t.Fatalf("rename in the repository: %v", err)
+	}
+	first, err := fixture.backups.EnsureBuiltinTarget(ctx, fixture.userID)
+	if err != nil {
+		t.Fatalf("EnsureBuiltinTarget: %v", err)
+	}
+	second, err := fixture.backups.EnsureBuiltinTarget(ctx, fixture.userID)
+	if err != nil {
+		t.Fatalf("EnsureBuiltinTarget(again): %v", err)
+	}
+	if first.ID != builtin.ID || second.ID != builtin.ID {
+		t.Fatalf("seeded %s then %s, want the existing %s", first.ID, second.ID, builtin.ID)
+	}
+	if got := fixture.backups.countTargets(); got != 1 {
+		t.Fatalf("providers = %d, want 1: seeding duplicated the builtin", got)
+	}
+}
+
+func TestBackupLabelsAResourceOwnedByAMember(t *testing.T) {
+	fixture := newBackupFixture(t)
+	fixture.source.mu.Lock()
+	fixture.source.owner = uuid.New()
+	memberOwner := fixture.source.owner
+	fixture.source.mu.Unlock()
+
+	backup := fixture.queueBackup(t)
+	if backup.TargetID == uuid.Nil {
+		t.Fatal("a member-owned resource produced an unlabelled artifact")
+	}
+	stored, err := fixture.manager.GetBackup(context.Background(), fixture.userID, backup.ID)
+	if err != nil {
+		t.Fatalf("GetBackup: %v", err)
+	}
+	if stored.ProviderName != BuiltinProviderName {
+		t.Errorf("provider name = %q, want %q", stored.ProviderName, BuiltinProviderName)
+	}
+	target, err := fixture.backups.GetBackupTarget(context.Background(), backup.TargetID)
+	if err != nil {
+		t.Fatalf("GetBackupTarget: %v", err)
+	}
+	if target.UserID != memberOwner || !target.Builtin || target.Kind != TargetLocal {
+		t.Errorf("target = %+v, want the member's own builtin", target)
+	}
+}
+
 func TestDeleteProviderRejectsBuiltin(t *testing.T) {
 	fixture := newBackupFixture(t)
 	providers, err := fixture.manager.ListProviders(context.Background(), fixture.userID)

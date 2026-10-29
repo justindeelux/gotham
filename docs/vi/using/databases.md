@@ -101,7 +101,9 @@ mọi lần chạy cùng lịch ở một chỗ. Bên cạnh đó, `GET /v1/back
 `GET /v1/backups/{id}`, `POST /v1/backups/{id}/restore`,
 `GET/POST /v1/backups/schedules`, `PATCH/DELETE /v1/backups/schedules/{id}`,
 `GET /v1/backups/restores` và `GET/POST /v1/backups/providers` là API độc lập với
-loại tài nguyên. Hiện chỉ `database` được chấp nhận làm loại tài nguyên; các loại
+loại tài nguyên. Các tuyến dạng bộ sưu tập nhận `limit` và `offset`, sắp xếp mới
+nhất trước, và quyền truy cập được áp dụng trước khi phân trang, nên trang của
+thành viên chứa đầy các lần chạy họ thực sự với tới được. Hiện chỉ `database` được chấp nhận làm loại tài nguyên; các loại
 khác trả `400` cho tới khi driver của chúng có mặt.
 
 Các tuyến gắn với cơ sở dữ liệu được nêu trên trang này

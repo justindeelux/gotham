@@ -17,12 +17,14 @@ const props = withDefaults(
     dangerLabel: string;
     dangerConfirm?: string;
     dangerBusy?: boolean;
+    dangerDisabled?: boolean;
   }>(),
   {
     serverPinned: false,
     serverPinnedReason: "",
     dangerConfirm: "",
     dangerBusy: false,
+    dangerDisabled: false,
   },
 );
 
@@ -62,7 +64,12 @@ function handleSave(scope: {
           <slot name="danger-action">
             <NPopconfirm @positive-click="emit('delete')">
               <template #trigger>
-                <NButton type="error" ghost :loading="props.dangerBusy">
+                <NButton
+                  type="error"
+                  ghost
+                  :loading="props.dangerBusy"
+                  :disabled="props.dangerDisabled"
+                >
                   {{ props.dangerLabel }}
                 </NButton>
               </template>

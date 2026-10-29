@@ -125,6 +125,7 @@ const activeTab = ref("overview");
           :danger-label="t('services.header.delete')"
           :danger-confirm="t('services.header.deleteConfirm', { name: service.name })"
           :danger-busy="busy === 'delete'"
+          :danger-disabled="busy !== null"
           @save="handleMove"
           @delete="() => void handleDelete()"
         />

@@ -144,6 +144,7 @@ const activeTab = computed<string>({
         :acting="detail.appsStore.acting"
         :control-hint="detail.controlHint.value"
         :container-is-running="detail.containerIsRunning.value"
+        :can-write="detail.canWrite.value"
         @deploy="detail.handleDeploy"
         @rollback="detail.openRollback"
         @stop="detail.handleStop"

@@ -685,6 +685,8 @@ const vi: ApplicationsMessages = {
   detail: {
     controlInProgress: "Đợt triển khai đang chạy. Hãy chờ hoàn tất.",
     controlNoContainer: "Chưa có container để điều khiển. Hãy triển khai ứng dụng trước.",
+    controlNodeOffline: "Node đang ngoại tuyến. Hãy kết nối lại trước khi dùng các thao tác này.",
+    controlReadOnly: "Chỉ chủ sở hữu mới có thể điều khiển ứng dụng này.",
     envSaved: "Đã lưu môi trường. Biến mới áp dụng từ đợt triển khai tiếp theo.",
     volumesSaved: "Đã lưu volume. Chúng tồn tại trên node sau các đợt triển khai.",
     deployQueued: "Đã xếp hàng triển khai",

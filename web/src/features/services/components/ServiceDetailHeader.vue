@@ -1,6 +1,8 @@
 <script setup lang="ts">
-import { NButton, NTag } from "naive-ui";
+import { NTag } from "naive-ui";
+import { computed } from "vue";
 
+import ResourceActionButton from "@/features/projects/components/ResourceActionButton.vue";
 import ResourceHeader from "@/features/projects/components/ResourceHeader.vue";
 import { serviceStatusLabel, serviceStatusTagType } from "@/features/services/api/services";
 import { useServiceDetailContext } from "@/features/services/composables/useServiceDetail";
@@ -11,8 +13,21 @@ function t(key: string, params?: Record<string, string | number>): string {
   return String(i18n.global.t(key, params ?? {}));
 }
 
-const { service, serviceId, busy, handleDeploy, handleRestart, handleStop } =
-  useServiceDetailContext();
+const {
+  service,
+  serviceId,
+  busy,
+  controlHint,
+  latestDeploy,
+  handleDeploy,
+  handleRestart,
+  handleStop,
+  handleStart,
+} = useServiceDetailContext();
+
+const deployLabel = computed<string>(() =>
+  latestDeploy.value ? t("services.header.redeploy") : t("services.header.deploy"),
+);
 </script>
 
 <template>
@@ -26,31 +41,44 @@ const { service, serviceId, busy, handleDeploy, handleRestart, handleStop } =
       </NTag>
     </template>
     <template #actions>
-      <NButton
-        v-if="service"
-        type="primary"
-        :loading="busy === 'deploy'"
-        :disabled="busy !== null"
-        @click="handleDeploy"
-      >
-        {{ t("services.header.deploy") }}
-      </NButton>
-      <NButton
-        v-if="service"
-        :loading="busy === 'restart'"
-        :disabled="busy !== null"
-        @click="handleRestart"
-      >
-        {{ t("services.header.restart") }}
-      </NButton>
-      <NButton
-        v-if="service"
-        :loading="busy === 'stop'"
-        :disabled="busy !== null"
-        @click="handleStop"
-      >
-        {{ t("services.header.stop") }}
-      </NButton>
+      <template v-if="service">
+        <ResourceActionButton
+          type="primary"
+          icon="refresh"
+          :label="deployLabel"
+          :loading="busy === 'deploy'"
+          :disabled="busy !== null"
+          :disabled-reason="controlHint"
+          @click="handleDeploy"
+        />
+        <ResourceActionButton
+          type="default"
+          icon="refresh"
+          :label="t('services.header.restart')"
+          :loading="busy === 'restart'"
+          :disabled="busy !== null"
+          :disabled-reason="controlHint"
+          @click="handleRestart"
+        />
+        <ResourceActionButton
+          type="error"
+          icon="stop"
+          :label="t('services.header.stop')"
+          :loading="busy === 'stop'"
+          :disabled="busy !== null || service.status === 'stopped'"
+          :disabled-reason="controlHint"
+          @click="handleStop"
+        />
+        <ResourceActionButton
+          type="success"
+          icon="play"
+          :label="t('services.header.start')"
+          :loading="busy === 'start'"
+          :disabled="busy !== null || service.status !== 'stopped'"
+          :disabled-reason="controlHint"
+          @click="handleStart"
+        />
+      </template>
     </template>
   </ResourceHeader>
 </template>

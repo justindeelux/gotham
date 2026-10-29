@@ -684,6 +684,8 @@ const en = {
   detail: {
     controlInProgress: "A deployment is in progress. Wait for it to finish.",
     controlNoContainer: "No container to control yet. Deploy the application first.",
+    controlNodeOffline: "The node is offline. Reconnect it before using these actions.",
+    controlReadOnly: "Only the owner can control this application.",
     envSaved: "Environment saved. New variables apply to the next deploy.",
     volumesSaved: "Volumes saved. They persist on the node across deploys.",
     deployQueued: "Deploy queued",

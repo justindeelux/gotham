@@ -45,6 +45,9 @@ const vi: typeof en = {
       settings: "Cài đặt",
     },
     noSelection: "Chưa chọn database.",
+    controlReadOnly: "Chỉ chủ sở hữu mới có thể điều khiển database này.",
+    controlInProgress: "Một thao tác đang chạy. Hãy chờ hoàn tất.",
+    controlNodeOffline: "Node đang ngoại tuyến. Hãy kết nối lại trước khi dùng các thao tác này.",
     serverPinnedReason:
       "Database không thể đổi server sau khi tạo; chỉ có thể chuyển sang environment khác.",
     actions: {

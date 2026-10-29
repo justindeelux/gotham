@@ -1,12 +1,13 @@
 <script setup lang="ts">
-import { NButton, NIcon, NTag, NTooltip } from "naive-ui";
+import { NTag } from "naive-ui";
+import { computed } from "vue";
 import { useI18n } from "vue-i18n";
 
 import type { BrandMark } from "@/features/add-resource";
 import type { Deployment } from "@/features/applications/api/applications";
 import DeploymentStatusTag from "@/features/applications/components/DeploymentStatusTag.vue";
+import ResourceActionButton from "@/features/projects/components/ResourceActionButton.vue";
 import ResourceHeader from "@/features/projects/components/ResourceHeader.vue";
-import GothamIcon from "@/shared/ui/GothamIcon.vue";
 
 interface Props {
   displayName: string;
@@ -19,9 +20,10 @@ interface Props {
   acting: boolean;
   controlHint: string | null;
   containerIsRunning: boolean;
+  canWrite?: boolean;
 }
 
-const props = defineProps<Props>();
+const props = withDefaults(defineProps<Props>(), { canWrite: true });
 
 const emit = defineEmits<{
   deploy: [];
@@ -31,6 +33,20 @@ const emit = defineEmits<{
 }>();
 
 const { t } = useI18n();
+
+const readOnlyHint = computed<string | null>(() =>
+  props.canWrite ? null : t("applications.detail.controlReadOnly"),
+);
+
+const deployHint = computed<string | null>(() =>
+  props.activeDeploying
+    ? t("applications.detail.controlInProgress")
+    : readOnlyHint.value,
+);
+
+const controlHint = computed<string | null>(
+  () => props.controlHint ?? readOnlyHint.value,
+);
 </script>
 
 <template>
@@ -50,63 +66,41 @@ const { t } = useI18n();
       </NTag>
     </template>
     <template #actions>
-      <NButton
+      <ResourceActionButton
         type="primary"
-        ghost
+        icon="refresh"
+        :label="props.activeDeploying ? t('applications.header.deploying') : t('applications.header.redeploy')"
         :loading="props.acting"
         :disabled="props.activeDeploying"
+        :disabled-reason="deployHint"
         @click="emit('deploy')"
-      >
-        <template #icon>
-          <NIcon><GothamIcon name="refresh" /></NIcon>
-        </template>
-        {{ props.activeDeploying ? t("applications.header.deploying") : t("applications.header.redeploy") }}
-      </NButton>
-      <NButton
+      />
+      <ResourceActionButton
         type="warning"
-        ghost
+        icon="history"
+        :label="t('applications.header.rollback')"
         :disabled="!props.canRollback || props.acting"
+        :disabled-reason="readOnlyHint"
         @click="emit('rollback')"
-      >
-        <template #icon>
-          <NIcon><GothamIcon name="history" /></NIcon>
-        </template>
-        {{ t("applications.header.rollback") }}
-      </NButton>
-      <NTooltip trigger="hover" :disabled="props.controlHint === null">
-        <template #trigger>
-          <NButton
-            type="error"
-            ghost
-            :loading="props.acting"
-            :disabled="props.acting || props.controlHint !== null || !props.containerIsRunning"
-            @click="emit('stop')"
-          >
-            <template #icon>
-              <NIcon><GothamIcon name="stop" /></NIcon>
-            </template>
-            {{ t("applications.header.stop") }}
-          </NButton>
-        </template>
-        {{ props.controlHint }}
-      </NTooltip>
-      <NTooltip trigger="hover" :disabled="props.controlHint === null">
-        <template #trigger>
-          <NButton
-            type="success"
-            ghost
-            :loading="props.acting"
-            :disabled="props.acting || props.controlHint !== null || props.containerIsRunning"
-            @click="emit('start')"
-          >
-            <template #icon>
-              <NIcon><GothamIcon name="play" /></NIcon>
-            </template>
-            {{ t("applications.header.start") }}
-          </NButton>
-        </template>
-        {{ props.controlHint }}
-      </NTooltip>
+      />
+      <ResourceActionButton
+        type="error"
+        icon="stop"
+        :label="t('applications.header.stop')"
+        :loading="props.acting"
+        :disabled="props.acting || !props.containerIsRunning"
+        :disabled-reason="controlHint"
+        @click="emit('stop')"
+      />
+      <ResourceActionButton
+        type="success"
+        icon="play"
+        :label="t('applications.header.start')"
+        :loading="props.acting"
+        :disabled="props.acting || props.containerIsRunning"
+        :disabled-reason="controlHint"
+        @click="emit('start')"
+      />
     </template>
   </ResourceHeader>
 </template>

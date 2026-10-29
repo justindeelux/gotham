@@ -42,6 +42,9 @@ const en = {
       settings: "Settings",
     },
     noSelection: "No database selected.",
+    controlReadOnly: "Only the owner can control this database.",
+    controlInProgress: "An action is already running. Wait for it to finish.",
+    controlNodeOffline: "The node is offline. Reconnect it before using these actions.",
     serverPinnedReason:
       "A database cannot change server once created; only moving it to another environment is possible.",
     actions: {

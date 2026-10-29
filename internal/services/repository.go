@@ -60,6 +60,7 @@ func (r *storeRepository) CreateService(ctx context.Context, service Service) (S
 		Status:        string(service.Status),
 		ComposeYaml:   service.ComposeYAML,
 		Env:           env,
+		TemplateSlug:  nullableText(service.TemplateSlug),
 	})
 	if err != nil {
 		if isUniqueViolation(err) {
@@ -379,6 +380,7 @@ func serviceFromRow(row sqlc.Service) (Service, error) {
 		Status:        Status(row.Status),
 		ComposeYAML:   row.ComposeYaml,
 		Env:           env,
+		TemplateSlug:  textOrEmpty(row.TemplateSlug),
 		CreatedAt:     timeFromPG(row.CreatedAt),
 		UpdatedAt:     timeFromPG(row.UpdatedAt),
 		DeletedAt:     timeFromPG(row.DeletedAt),
@@ -435,6 +437,20 @@ func pgUUID(id uuid.UUID) pgtype.UUID {
 		return pgtype.UUID{}
 	}
 	return pgtype.UUID{Bytes: id, Valid: true}
+}
+
+func nullableText(value string) *string {
+	if value == "" {
+		return nil
+	}
+	return &value
+}
+
+func textOrEmpty(value *string) string {
+	if value == nil {
+		return ""
+	}
+	return *value
 }
 
 func pgTime(value time.Time) pgtype.Timestamptz {

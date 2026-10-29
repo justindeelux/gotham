@@ -261,6 +261,7 @@ export function useTemplateWizard(
         server_id: serverId.value,
         compose_yaml: rendered.compose_yaml,
         env: rendered.env,
+        template: detail.value?.slug,
       });
       message.success(String(i18n.global.t("templates.toast.created", { name: created.value.name })));
     } catch (error) {

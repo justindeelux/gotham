@@ -16,6 +16,7 @@ type ServiceResponse struct {
 	ProjectID       string            `json:"project_id"`
 	ProjectName     string            `json:"project_name"`
 	ComposeProject  string            `json:"compose_project"`
+	Template        string            `json:"template,omitempty"`
 	ComposeYAML     string            `json:"compose_yaml,omitempty"`
 	Env             map[string]string `json:"env"`
 	Domains         []DomainRoute     `json:"domains"`
@@ -35,6 +36,7 @@ func NewServiceResponse(service Service, withCompose bool) ServiceResponse {
 		ProjectID:       service.ProjectID.String(),
 		ProjectName:     service.ProjectName,
 		ComposeProject:  ProjectName(service.ID),
+		Template:        service.TemplateSlug,
 		Env:             service.Env,
 		Domains:         []DomainRoute{},
 		CreatedAt:       service.CreatedAt,

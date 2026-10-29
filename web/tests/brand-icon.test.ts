@@ -80,6 +80,23 @@ describe("BrandIcon", () => {
     }
   });
 
+  it("keeps every resource brand mark readable on the dark surfaces", () => {
+    const marks = [
+      ...ENGINES.map((engine) => brandFor(engine.value, engine.label)),
+      ...["wordpress", "nextcloud", "n8n", "uptime-kuma"].map((icon) =>
+        templateBrand(icon, icon),
+      ),
+    ];
+    for (const mark of marks) {
+      for (const token of ["--surface-warm", "--surface", "--bg"]) {
+        expect(
+          contrastRatio(mark.color, tokenHex(token)),
+          `${mark.color} vs ${token}`,
+        ).toBeGreaterThanOrEqual(1.5);
+      }
+    }
+  });
+
   it("ships a vendored file for every mapped slug", () => {
     const keys = [
       "git_public",

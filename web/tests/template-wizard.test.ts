@@ -163,6 +163,7 @@ describe("create and deploy", () => {
       server_id: "srv-1",
       compose_yaml: "services:\n  redis: {}",
       env: { REDIS_PASSWORD: "secret" },
+      template: "redis",
     });
     expect(wizard?.created.value?.id).toBe("svc-1");
     await wizard?.handleDeploy();

@@ -25,6 +25,7 @@ type Service struct {
 	Status          Status
 	ComposeYAML     string
 	Env             map[string]string
+	TemplateSlug    string
 	CreatedAt       time.Time
 	UpdatedAt       time.Time
 	DeletedAt       time.Time

@@ -795,6 +795,7 @@ type Service struct {
 	UpdatedAt     pgtype.Timestamptz `json:"updated_at"`
 	DeletedAt     pgtype.Timestamptz `json:"deleted_at"`
 	EnvironmentID pgtype.UUID        `json:"environment_id"`
+	TemplateSlug  *string            `json:"template_slug"`
 }
 
 type ServiceDeploy struct {

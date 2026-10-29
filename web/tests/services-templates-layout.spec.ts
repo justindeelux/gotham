@@ -449,6 +449,20 @@ test("generated secret stays fully visible beside its actions", async ({ page })
       expect(inputBox!.x + inputBox!.width).toBeLessThanOrEqual(buttonBox!.x + 1);
     }
     expect(buttonBox!.x + buttonBox!.width).toBeLessThanOrEqual(width + 1);
+
+    const copy = page.locator(
+      '.field-encryption_key [aria-label="Copy Encryption key"]',
+    );
+    await expect(copy).toBeVisible();
+    const copyBox = await copy.boundingBox();
+    expect(copyBox, "copy button has a box").not.toBeNull();
+    const gap = copyBox!.x - (buttonBox!.x + buttonBox!.width);
+    expect(gap, `actions sit together at ${width}px`).toBeGreaterThanOrEqual(-1);
+    expect(gap, `actions sit together at ${width}px`).toBeLessThanOrEqual(16);
+    expect(
+      Math.abs(copyBox!.y - buttonBox!.y),
+      `actions share a row at ${width}px`,
+    ).toBeLessThanOrEqual(1);
     await expectNoOverflow(page, width);
     await page.screenshot({
       path: test.info().outputPath(`generated-secret-${width}.png`),

@@ -160,25 +160,27 @@ async function copyValue(field: TemplateField): Promise<void> {
             :aria-label="field.label"
             @update:value="(value: string) => setValue(field.key, value)"
           />
-          <NButton
-            size="small"
-            secondary
-            :disabled="disabled"
-            :aria-label="t('templates.secret.generateLabel', { label: field.label })"
-            @click="fillGenerated(field)"
-          >
-            {{ t("templates.secret.generate") }}
-          </NButton>
-          <NButton
-            v-if="fieldValue(field) !== ''"
-            size="small"
-            secondary
-            :disabled="disabled"
-            :aria-label="t('templates.secret.copyLabel', { label: field.label })"
-            @click="copyValue(field)"
-          >
-            {{ t("templates.secret.copy") }}
-          </NButton>
+          <div class="dynamic-form__secret-actions">
+            <NButton
+              size="small"
+              secondary
+              :disabled="disabled"
+              :aria-label="t('templates.secret.generateLabel', { label: field.label })"
+              @click="fillGenerated(field)"
+            >
+              {{ t("templates.secret.generate") }}
+            </NButton>
+            <NButton
+              v-if="fieldValue(field) !== ''"
+              size="small"
+              secondary
+              :disabled="disabled"
+              :aria-label="t('templates.secret.copyLabel', { label: field.label })"
+              @click="copyValue(field)"
+            >
+              {{ t("templates.secret.copy") }}
+            </NButton>
+          </div>
         </NInputGroup>
 
         <NInput
@@ -243,28 +245,21 @@ async function copyValue(field: TemplateField): Promise<void> {
 }
 
 .dynamic-form__secret-group {
-  display: grid;
-  grid-template-columns: repeat(2, minmax(0, 1fr));
-  justify-content: start;
-  justify-items: start;
+  display: flex;
+  flex-direction: column;
+  align-items: stretch;
   gap: var(--space-2);
 }
 
 .dynamic-form__secret-group :deep(.n-input) {
-  grid-column: 1 / -1;
   min-width: 0;
   border-radius: var(--radius-sm) !important;
 }
 
-.dynamic-form__secret-group :deep(.n-button) {
-  padding-left: var(--space-3);
-  padding-right: var(--space-3);
-  border-radius: var(--radius-sm) !important;
-}
-
-.dynamic-form__secret-group :deep(.n-button .n-button__state-border),
-.dynamic-form__secret-group :deep(.n-button .n-button__border) {
-  border-radius: var(--radius-sm) !important;
+.dynamic-form__secret-actions {
+  display: flex;
+  gap: var(--space-2);
+  justify-content: flex-start;
 }
 
 .sr-only {

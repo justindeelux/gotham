@@ -8,7 +8,20 @@ export const backupMessages = {
   providerNameRequired: "databases.validation.targetNameRequired",
   s3LocationRequired: "databases.validation.s3LocationRequired",
   s3KeysRequired: "databases.validation.s3KeysRequired",
+  keepLastInvalid: "backups.schedules.keepLastInvalid",
 } as const;
+
+export const keepLastSchema = z
+  .number({
+    error: backupMessages.keepLastInvalid,
+  })
+  .int(backupMessages.keepLastInvalid)
+  .min(1, backupMessages.keepLastInvalid)
+  .max(365, backupMessages.keepLastInvalid);
+
+export function isKeepLastValid(value: number | null): boolean {
+  return value === null || keepLastSchema.safeParse(value).success;
+}
 
 export const cronSchema = requiredString(backupMessages.cronRequired);
 

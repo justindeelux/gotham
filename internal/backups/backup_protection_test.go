@@ -136,7 +136,7 @@ func TestScheduleTargetChangeRecordsChange(t *testing.T) {
 	}
 }
 
-func TestDeleteTargetMarksScheduleForTargetChange(t *testing.T) {
+func TestDeleteProviderInUseIsRejected(t *testing.T) {
 	fixture := newBackupFixture(t)
 	target := fixture.backups.seedTarget(BackupTarget{UserID: fixture.userID, Name: "offsite", Kind: TargetS3})
 	schedule, err := fixture.manager.CreateSchedule(context.Background(), fixture.userID, ScheduleRequest{
@@ -146,18 +146,19 @@ func TestDeleteTargetMarksScheduleForTargetChange(t *testing.T) {
 	if err != nil {
 		t.Fatalf("CreateSchedule: %v", err)
 	}
-	if err := fixture.manager.DeleteProvider(context.Background(), fixture.userID, target.ID); err != nil {
-		t.Fatalf("DeleteTarget: %v", err)
+	err = fixture.manager.DeleteProvider(context.Background(), fixture.userID, target.ID, true)
+	if !errors.Is(err, ErrProviderInUse) {
+		t.Fatalf("DeleteProvider err = %v, want ErrProviderInUse", err)
 	}
 	stored, ok := fixture.backups.getSchedule(schedule.ID)
 	if !ok {
 		t.Fatal("schedule disappeared")
 	}
-	if stored.TargetID != uuid.Nil {
-		t.Fatalf("target = %s, want nil", stored.TargetID)
+	if stored.TargetID != target.ID {
+		t.Fatalf("target = %s, want the provider kept %s", stored.TargetID, target.ID)
 	}
-	if stored.TargetChangedAt.IsZero() {
-		t.Fatal("target deletion must record target_changed_at")
+	if _, ok := fixture.backups.targets[target.ID]; !ok {
+		t.Fatal("a provider in use must not be deleted")
 	}
 }
 

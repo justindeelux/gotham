@@ -32,6 +32,21 @@ func (m *BackupManager) ListProviders(ctx context.Context, userID uuid.UUID) ([]
 	if targets == nil {
 		return []BackupTarget{}, nil
 	}
+	usage, err := m.backups.BackupUsageByTarget(ctx, userID)
+	if err != nil {
+		m.logger.Warn("backups: could not read provider usage", "user_id", userID.String(), "error", err)
+	}
+	free, total, diskErr := diskStats(m.localDir)
+	for i := range targets {
+		if item, ok := usage[targets[i].ID]; ok {
+			targets[i].Usage.BackupCount = item.BackupCount
+			targets[i].Usage.TotalSize = item.TotalSize
+		}
+		if targets[i].Kind == TargetLocal && diskErr == nil {
+			targets[i].Usage.FreeSpace = free
+			targets[i].Usage.TotalSpace = total
+		}
+	}
 	return targets, nil
 }
 
@@ -103,7 +118,7 @@ func (m *BackupManager) UpdateProvider(ctx context.Context, userID, providerID u
 	return m.backups.UpdateBackupTargetWithSecrets(ctx, *target, sealed)
 }
 
-func (m *BackupManager) DeleteProvider(ctx context.Context, userID, providerID uuid.UUID) error {
+func (m *BackupManager) DeleteProvider(ctx context.Context, userID, providerID uuid.UUID, confirm bool) error {
 	target, err := m.ownedTarget(ctx, userID, providerID)
 	if err != nil {
 		return err
@@ -113,6 +128,31 @@ func (m *BackupManager) DeleteProvider(ctx context.Context, userID, providerID u
 	}
 	if target.Builtin {
 		return fmt.Errorf("%w: the built-in Local disk provider cannot be deleted", ErrBuiltinProvider)
+	}
+	schedules, err := m.backups.ListBackupScheduleIDsForTarget(ctx, providerID)
+	if err != nil {
+		return err
+	}
+	if len(schedules) > 0 {
+		ids := make([]string, 0, len(schedules))
+		for _, id := range schedules {
+			ids = append(ids, id.String())
+		}
+		return fmt.Errorf("%w: %d schedule(s) still use this provider (%s); move or delete them first",
+			ErrProviderInUse, len(schedules), strings.Join(ids, ", "))
+	}
+	backups, err := m.backups.CountBackupsForTarget(ctx, providerID)
+	if err != nil {
+		return err
+	}
+	if backups > 0 && !confirm {
+		return fmt.Errorf("%w: %d backup(s) use this provider and become unreadable; confirm to delete it",
+			ErrProviderHasBackups, backups)
+	}
+	if backups > 0 {
+		if err := m.backups.MarkBackupsProviderRemoved(ctx, providerID); err != nil {
+			return err
+		}
 	}
 	if _, err := m.backups.DeleteBackupTarget(ctx, providerID, userID); err != nil {
 		return err

@@ -291,5 +291,6 @@ project PATCH /api/v1/backups/schedules/{id}
 owner POST /api/v1/backups/providers
 owner POST /api/v1/backups/providers/{id}/test
 project POST /api/v1/backups
+project POST /api/v1/backups/{id}/cleanup
 project POST /api/v1/backups/{id}/restore
 project POST /api/v1/backups/schedules

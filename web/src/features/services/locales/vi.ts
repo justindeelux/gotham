@@ -141,7 +141,8 @@ const vi: typeof en = {
     controlDeployInProgress: "Đang triển khai. Hãy chờ hoàn tất trước khi dùng các thao tác này.",
     controlNodeOffline: "Node đang ngoại tuyến. Hãy kết nối lại trước khi dùng các thao tác này.",
     delete: "Xóa",
-    deleteConfirm: "Xóa dịch vụ {name}? Dự án sẽ dừng; các volume có tên vẫn giữ trên node.",
+    deleteConfirm:
+      "Xóa dịch vụ {name}? Dự án sẽ dừng; các volume có tên vẫn giữ trên node. Các bản sao lưu của nó cũng bị xóa.",
   },
   overview: {
     title: "Tổng quan",

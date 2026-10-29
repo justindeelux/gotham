@@ -40,6 +40,7 @@ type fakeBackupRepository struct {
 	secrets       map[uuid.UUID][]TargetSecret
 	serverIDs     []uuid.UUID
 	owners        []uuid.UUID
+	artifacts     []ArtifactCleanup
 
 	finishHook                   func(Backup)
 	beforeCreateBackupWithTarget func()
@@ -356,6 +357,164 @@ func (r *fakeBackupRepository) SetBackupWasRunning(_ context.Context, backupID u
 	}
 	backup.WasRunning = wasRunning
 	r.backups[backupID] = backup
+	return nil
+}
+
+func (r *fakeBackupRepository) ListCompletedScheduledBackups(_ context.Context, scheduleID uuid.UUID) ([]Backup, error) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	list := make([]Backup, 0, len(r.backupOrder))
+	for i := len(r.backupOrder) - 1; i >= 0; i-- {
+		backup := r.backups[r.backupOrder[i]]
+		if backup.ScheduleID == scheduleID && backup.Type == BackupScheduled && backup.Status == BackupCompleted {
+			list = append(list, backup)
+		}
+	}
+	return list, nil
+}
+
+func (r *fakeBackupRepository) ListFailedBackupsOlderThan(_ context.Context, before time.Time) ([]Backup, error) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	list := make([]Backup, 0)
+	for _, id := range r.backupOrder {
+		backup := r.backups[id]
+		if backup.Status == BackupFailed && !backup.CreatedAt.After(before) {
+			list = append(list, backup)
+		}
+	}
+	return list, nil
+}
+
+func (r *fakeBackupRepository) SetBackupCleanupPending(_ context.Context, backupID uuid.UUID, next time.Time) (Backup, error) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	backup, ok := r.backups[backupID]
+	if !ok {
+		return Backup{}, ErrNotFound
+	}
+	backup.CleanupPending = true
+	backup.CleanupError = ""
+	backup.CleanupAttempts = 0
+	backup.CleanupNextAttemptAt = next
+	r.backups[backupID] = backup
+	return backup, nil
+}
+
+func (r *fakeBackupRepository) SetBackupCleanupError(_ context.Context, backupID uuid.UUID, message string, attempts int, next time.Time) (Backup, error) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	backup, ok := r.backups[backupID]
+	if !ok {
+		return Backup{}, ErrNotFound
+	}
+	backup.CleanupError = message
+	backup.CleanupAttempts = attempts
+	backup.CleanupNextAttemptAt = next
+	r.backups[backupID] = backup
+	return backup, nil
+}
+
+func (r *fakeBackupRepository) ListDuePendingCleanups(_ context.Context, now time.Time) ([]Backup, error) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	list := make([]Backup, 0)
+	for _, id := range r.backupOrder {
+		backup := r.backups[id]
+		if backup.CleanupPending && !backup.CleanupNextAttemptAt.After(now) {
+			list = append(list, backup)
+		}
+	}
+	return list, nil
+}
+
+func (r *fakeBackupRepository) MarkBackupsProviderRemoved(_ context.Context, targetID uuid.UUID) error {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	for id, backup := range r.backups {
+		if backup.TargetID == targetID {
+			backup.ProviderRemoved = true
+			r.backups[id] = backup
+		}
+	}
+	return nil
+}
+
+func (r *fakeBackupRepository) CountBackupsForTarget(_ context.Context, targetID uuid.UUID) (int64, error) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	var count int64
+	for _, backup := range r.backups {
+		if backup.TargetID == targetID {
+			count++
+		}
+	}
+	return count, nil
+}
+
+func (r *fakeBackupRepository) ListBackupScheduleIDsForTarget(_ context.Context, targetID uuid.UUID) ([]uuid.UUID, error) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	ids := make([]uuid.UUID, 0)
+	for _, id := range r.scheduleOrder {
+		if r.schedules[id].TargetID == targetID {
+			ids = append(ids, id)
+		}
+	}
+	return ids, nil
+}
+
+func (r *fakeBackupRepository) BackupUsageByTarget(_ context.Context, userID uuid.UUID) (map[uuid.UUID]ProviderUsage, error) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	usage := make(map[uuid.UUID]ProviderUsage)
+	for _, backup := range r.backups {
+		target, ok := r.targets[backup.TargetID]
+		if !ok || target.UserID != userID {
+			continue
+		}
+		item := usage[backup.TargetID]
+		item.BackupCount++
+		item.TotalSize += backup.Size
+		usage[backup.TargetID] = item
+	}
+	return usage, nil
+}
+
+func (r *fakeBackupRepository) ListDueArtifactCleanups(_ context.Context, now time.Time) ([]ArtifactCleanup, error) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	list := make([]ArtifactCleanup, 0)
+	for _, item := range r.artifacts {
+		if !item.NextAttemptAt.After(now) {
+			list = append(list, item)
+		}
+	}
+	return list, nil
+}
+
+func (r *fakeBackupRepository) SetArtifactCleanupError(_ context.Context, id uuid.UUID, message string, attempts int, next time.Time) error {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	for i := range r.artifacts {
+		if r.artifacts[i].ID == id {
+			r.artifacts[i].LastError = message
+			r.artifacts[i].Attempts = attempts
+			r.artifacts[i].NextAttemptAt = next
+		}
+	}
+	return nil
+}
+
+func (r *fakeBackupRepository) DeleteArtifactCleanup(_ context.Context, id uuid.UUID) error {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	for i := range r.artifacts {
+		if r.artifacts[i].ID == id {
+			r.artifacts = append(r.artifacts[:i], r.artifacts[i+1:]...)
+			break
+		}
+	}
 	return nil
 }
 
@@ -753,6 +912,12 @@ func (r *fakeBackupRepository) DeleteBackupTarget(_ context.Context, targetID, u
 			r.schedules[id] = schedule
 		}
 	}
+	for id, backup := range r.backups {
+		if backup.TargetID == targetID {
+			backup.TargetID = uuid.Nil
+			r.backups[id] = backup
+		}
+	}
 	for i, id := range r.targetOrder {
 		if id == targetID {
 			r.targetOrder = append(r.targetOrder[:i], r.targetOrder[i+1:]...)
@@ -1017,13 +1182,14 @@ func discardLogger() *slog.Logger {
 }
 
 type fakeObjectStore struct {
-	mu      sync.Mutex
-	objects map[string][]byte
-	puts    []string
-	gets    []string
-	deletes []string
-	putErr  error
-	getErr  error
+	mu        sync.Mutex
+	objects   map[string][]byte
+	puts      []string
+	gets      []string
+	deletes   []string
+	putErr    error
+	getErr    error
+	deleteErr error
 }
 
 var _ ObjectStore = (*fakeObjectStore)(nil)
@@ -1070,6 +1236,9 @@ func (f *fakeObjectStore) Get(_ context.Context, location string) (io.ReadCloser
 func (f *fakeObjectStore) Delete(_ context.Context, location string) error {
 	f.mu.Lock()
 	defer f.mu.Unlock()
+	if f.deleteErr != nil {
+		return f.deleteErr
+	}
 	key := strings.TrimPrefix(location, locationS3Prefix+"bucket/")
 	delete(f.objects, key)
 	f.deletes = append(f.deletes, location)

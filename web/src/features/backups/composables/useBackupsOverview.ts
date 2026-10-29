@@ -19,7 +19,11 @@ import {
   matchesBackupFilters,
   resourceTypeLabel,
 } from "@/features/backups/utils/backupStatus";
-import { backupMessages, isCronPresent } from "@/features/backups/schemas/backups";
+import {
+  backupMessages,
+  isCronPresent,
+  isKeepLastValid,
+} from "@/features/backups/schemas/backups";
 import { useBackupsStore } from "@/features/backups/stores/backups";
 import { listDatabases } from "@/features/databases/api/databases";
 import type { Database } from "@/features/databases/api/databases";
@@ -69,6 +73,7 @@ export function useBackupsOverview() {
   const scheduleProviderId = ref("");
   const scheduleEnabled = ref(true);
   const scheduleMaxRunMinutes = ref(120);
+  const scheduleKeepLast = ref(7);
 
   const restoreOpen = ref(false);
   const restoreCandidate = ref<BackupRun | null>(null);
@@ -194,7 +199,11 @@ export function useBackupsOverview() {
   function providerName(
     providerId: string | undefined,
     runProviderName?: string,
+    providerRemoved = false,
   ): string {
+    if (providerRemoved) {
+      return t("backups.storage.providerRemoved");
+    }
     if (!providerId) {
       return t("backups.storage.localDisk");
     }
@@ -254,6 +263,7 @@ export function useBackupsOverview() {
     scheduleProviderId.value = "";
     scheduleEnabled.value = true;
     scheduleMaxRunMinutes.value = 120;
+    scheduleKeepLast.value = 7;
     scheduleDialogOpen.value = true;
   }
 
@@ -267,12 +277,17 @@ export function useBackupsOverview() {
       message.error(resolveValidationMessage(backupMessages.cronRequired));
       return;
     }
+    if (!isKeepLastValid(scheduleKeepLast.value)) {
+      message.error(resolveValidationMessage(backupMessages.keepLastInvalid));
+      return;
+    }
     try {
       await backupsStore.addSchedule(ref, {
         cron: scheduleCron.value.trim(),
         provider_id: scheduleProviderId.value,
         enabled: scheduleEnabled.value,
         max_run_seconds: Math.round(scheduleMaxRunMinutes.value * 60),
+        keep_last: scheduleKeepLast.value ?? 7,
       });
       message.success(
         t("databases.backups.schedules.saved", { cron: scheduleCron.value.trim() }),
@@ -315,6 +330,24 @@ export function useBackupsOverview() {
     try {
       await backupsStore.removeBackup(backup);
       message.success(t("databases.backups.runs.deleted"));
+    } catch (error) {
+      message.error(describeBackupError(error));
+    }
+  }
+
+  async function handleRetryCleanup(backup: BackupRun): Promise<void> {
+    try {
+      await backupsStore.retryCleanup(backup);
+      message.success(t("backups.runs.cleanupDone"));
+    } catch (error) {
+      message.error(describeBackupError(error));
+    }
+  }
+
+  async function handleDiscardCleanup(backup: BackupRun): Promise<void> {
+    try {
+      await backupsStore.discardCleanup(backup);
+      message.success(t("backups.runs.cleanupDiscarded"));
     } catch (error) {
       message.error(describeBackupError(error));
     }
@@ -392,11 +425,14 @@ export function useBackupsOverview() {
     scheduleProviderId,
     scheduleEnabled,
     scheduleMaxRunMinutes,
+    scheduleKeepLast,
     openScheduleCreate,
     submitSchedule,
     handleToggleSchedule,
     handleDeleteSchedule,
     handleDeleteBackup,
+    handleRetryCleanup,
+    handleDiscardCleanup,
     restoreOpen,
     restoreCandidate,
     restoring,

@@ -84,11 +84,19 @@ type Backup struct {
 	Location     string
 	TargetID     uuid.UUID
 	ProviderName string
-	ContainerID  string
-	WasRunning   bool
-	Error        string
-	CreatedAt    time.Time
-	FinishedAt   time.Time
+	// ProviderRemoved marks a run whose storage provider was deleted. The
+	// artifact is unreachable but the run stays listed instead of vanishing.
+	ProviderRemoved bool
+	ContainerID     string
+	WasRunning      bool
+	Error           string
+	// CleanupPending means the row is kept only until its artifact is gone.
+	CleanupPending       bool
+	CleanupError         string
+	CleanupAttempts      int
+	CleanupNextAttemptAt time.Time
+	CreatedAt            time.Time
+	FinishedAt           time.Time
 }
 
 type RestoreStatus string
@@ -120,8 +128,12 @@ type BackupSchedule struct {
 	LastSlotAt      time.Time
 	TargetChangedAt time.Time
 	MaxRunSeconds   int
-	CreatedAt       time.Time
-	UpdatedAt       time.Time
+	// KeepLast is the number of completed scheduled runs to keep. Nil means
+	// unlimited; schedules created before GOTHAM-131 stay nil so an upgrade
+	// never deletes a backup the owner did not agree to lose.
+	KeepLast  *int
+	CreatedAt time.Time
+	UpdatedAt time.Time
 }
 
 type TargetKind string
@@ -152,6 +164,31 @@ type BackupTarget struct {
 	Builtin   bool
 	CreatedAt time.Time
 	UpdatedAt time.Time
+
+	// Usage is display data for the Storage view; it is never persisted on the
+	// provider row.
+	Usage ProviderUsage
+}
+
+// ProviderUsage is per-provider storage usage from run rows. FreeSpace and
+// TotalSpace are only meaningful for the local disk.
+type ProviderUsage struct {
+	BackupCount int64 `json:"backup_count"`
+	TotalSize   int64 `json:"total_size"`
+	FreeSpace   int64 `json:"free_space,omitempty"`
+	TotalSpace  int64 `json:"total_space,omitempty"`
+}
+
+// ArtifactCleanup is an artifact left behind by a hard-deleted resource. It has
+// no resource foreign key on purpose: it must outlive the backup row cascade.
+type ArtifactCleanup struct {
+	ID            uuid.UUID
+	TargetID      uuid.UUID
+	Location      string
+	Attempts      int
+	NextAttemptAt time.Time
+	LastError     string
+	CreatedAt     time.Time
 }
 
 type TargetSecret struct {

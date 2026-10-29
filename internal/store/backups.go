@@ -78,6 +78,54 @@ func (s *Store) SetBackupWasRunning(ctx context.Context, params sqlc.SetBackupWa
 	return s.queries.SetBackupWasRunning(ctx, params)
 }
 
+func (s *Store) ListCompletedScheduledBackups(ctx context.Context, scheduleID pgtype.UUID) ([]sqlc.Backup, error) {
+	return s.queries.ListCompletedScheduledBackups(ctx, scheduleID)
+}
+
+func (s *Store) ListFailedBackupsOlderThan(ctx context.Context, before pgtype.Timestamptz) ([]sqlc.Backup, error) {
+	return s.queries.ListFailedBackupsOlderThan(ctx, before)
+}
+
+func (s *Store) SetBackupCleanupPending(ctx context.Context, params sqlc.SetBackupCleanupPendingParams) (sqlc.Backup, error) {
+	return s.queries.SetBackupCleanupPending(ctx, params)
+}
+
+func (s *Store) SetBackupCleanupError(ctx context.Context, params sqlc.SetBackupCleanupErrorParams) (sqlc.Backup, error) {
+	return s.queries.SetBackupCleanupError(ctx, params)
+}
+
+func (s *Store) ListDuePendingCleanups(ctx context.Context, now pgtype.Timestamptz) ([]sqlc.Backup, error) {
+	return s.queries.ListDuePendingCleanups(ctx, now)
+}
+
+func (s *Store) MarkBackupsProviderRemoved(ctx context.Context, targetID pgtype.UUID) error {
+	return s.queries.MarkBackupsProviderRemoved(ctx, targetID)
+}
+
+func (s *Store) CountBackupsForTarget(ctx context.Context, targetID pgtype.UUID) (int64, error) {
+	return s.queries.CountBackupsForTarget(ctx, targetID)
+}
+
+func (s *Store) ListBackupScheduleIDsForTarget(ctx context.Context, targetID pgtype.UUID) ([]pgtype.UUID, error) {
+	return s.queries.ListBackupScheduleIDsForTarget(ctx, targetID)
+}
+
+func (s *Store) BackupUsageByTarget(ctx context.Context, userID pgtype.UUID) ([]sqlc.BackupUsageByTargetRow, error) {
+	return s.queries.BackupUsageByTarget(ctx, userID)
+}
+
+func (s *Store) ListDueArtifactCleanups(ctx context.Context, now pgtype.Timestamptz) ([]sqlc.BackupArtifactCleanup, error) {
+	return s.queries.ListDueArtifactCleanups(ctx, now)
+}
+
+func (s *Store) SetArtifactCleanupError(ctx context.Context, params sqlc.SetArtifactCleanupErrorParams) error {
+	return s.queries.SetArtifactCleanupError(ctx, params)
+}
+
+func (s *Store) DeleteArtifactCleanup(ctx context.Context, id pgtype.UUID) error {
+	return s.queries.DeleteArtifactCleanup(ctx, id)
+}
+
 func (s *Store) CreateRestore(ctx context.Context, params sqlc.CreateRestoreParams) (sqlc.Restore, error) {
 	return s.queries.CreateRestore(ctx, params)
 }

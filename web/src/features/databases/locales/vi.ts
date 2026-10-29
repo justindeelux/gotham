@@ -71,10 +71,10 @@ const vi: typeof en = {
       rename: "Đổi tên",
     },
     deleteConfirm:
-      "Xóa database này? Container sẽ bị gỡ khỏi node, volume {volume} được giữ 7 ngày trước khi xóa vĩnh viễn.",
+      "Xóa database này? Container sẽ bị gỡ khỏi node, volume {volume} được giữ 7 ngày trước khi xóa vĩnh viễn. Khi database bị xóa vĩnh viễn, các bản sao lưu của nó cũng bị xóa.",
     deleteTitle: "Xóa database",
     deleteHint:
-      "Xóa sẽ gỡ container khỏi node và xóa thông tin đăng nhập khỏi control plane. Volume được giữ 7 ngày.",
+      "Xóa sẽ gỡ container khỏi node và xóa thông tin đăng nhập khỏi control plane. Volume được giữ 7 ngày; các bản sao lưu bị xóa khi database bị xóa vĩnh viễn.",
     overview: {
       details: "Chi tiết",
       engine: "Engine",

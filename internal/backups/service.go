@@ -60,6 +60,8 @@ type BackupService interface {
 	ListBackups(ctx context.Context, userID uuid.UUID, filter BackupFilter) ([]Backup, error)
 	GetBackup(ctx context.Context, userID, backupID uuid.UUID) (Backup, error)
 	DeleteBackup(ctx context.Context, userID, backupID uuid.UUID) error
+	RetryCleanup(ctx context.Context, userID, backupID uuid.UUID) error
+	DiscardBackup(ctx context.Context, userID, backupID uuid.UUID) error
 	RestoreBackup(ctx context.Context, userID, backupID uuid.UUID) (RestoreResult, error)
 	ListRestores(ctx context.Context, userID uuid.UUID, filter RestoreFilter) ([]Restore, error)
 
@@ -71,7 +73,7 @@ type BackupService interface {
 	ListProviders(ctx context.Context, userID uuid.UUID) ([]BackupTarget, error)
 	CreateProvider(ctx context.Context, userID uuid.UUID, req ProviderRequest) (BackupTarget, error)
 	UpdateProvider(ctx context.Context, userID, providerID uuid.UUID, req ProviderRequest) (BackupTarget, error)
-	DeleteProvider(ctx context.Context, userID, providerID uuid.UUID) error
+	DeleteProvider(ctx context.Context, userID, providerID uuid.UUID, confirm bool) error
 	TestProvider(ctx context.Context, userID, providerID uuid.UUID) (TargetCheck, error)
 
 	Close() error
@@ -110,6 +112,7 @@ type ScheduleRequest struct {
 	TargetID      *string     `json:"provider_id,omitempty"`
 	Enabled       *bool       `json:"enabled,omitempty"`
 	MaxRunSeconds *int        `json:"max_run_seconds,omitempty"`
+	KeepLast      *int        `json:"keep_last,omitempty"`
 }
 
 type ProviderRequest struct {
@@ -141,6 +144,7 @@ type BackupManager struct {
 	logger       *slog.Logger
 	schedulerInt time.Duration
 	notifier     BackupNotifier
+	cleanup      *cleanupSweeper
 
 	leases *JobLeases
 }
@@ -194,6 +198,7 @@ func NewBackupService(cfg BackupConfig) *BackupManager {
 		leases:       leases,
 	}
 	manager.scheduler = newBackupScheduler(manager, interval)
+	manager.cleanup = newCleanupSweeper(manager)
 	return manager
 }
 
@@ -214,12 +219,16 @@ func NewDefaultBackupService(cfg BackupConfig) BackupService {
 	if !cfg.DisableScheduler {
 		manager.scheduler.Start()
 	}
+	manager.cleanup.Start()
 	return manager
 }
 
 func (m *BackupManager) Close() error {
 	if m.scheduler != nil {
 		m.scheduler.Close()
+	}
+	if m.cleanup != nil {
+		m.cleanup.Close()
 	}
 	return nil
 }
@@ -544,20 +553,59 @@ func (m *BackupManager) DeleteBackup(ctx context.Context, userID, backupID uuid.
 	if backup.Status == BackupRunning {
 		return fmt.Errorf("%w: backup is still running", ErrBackupInFlight)
 	}
-	if backup.Location != "" {
-		store, err := m.storeForLocation(ctx, backup, resource.OwnerID)
-		if err == nil {
-			if err := store.Delete(ctx, backup.Location); err != nil {
-				return err
-			}
-		} else if !errors.Is(err, ErrValidation) {
-			return err
+	// The pending-delete path keeps a retryable row when the provider is
+	// unreachable. A local artifact is always deletable, so the old behaviour
+	// of "unknown location is not an error" only applied to already-unreadable
+	// S3 artifacts; keep that tolerance by checking the store explicitly.
+	if _, err := m.storeForLocation(ctx, backup, resource.OwnerID); err != nil &&
+		errors.Is(err, ErrValidation) {
+		m.logger.Warn("backups: deleting a run whose artifact is already unreachable",
+			"backup_id", backup.ID.String(), "error", err)
+		if _, delErr := m.backups.DeleteBackup(ctx, backupID); delErr != nil {
+			return delErr
 		}
+		return nil
 	}
-	if _, err := m.backups.DeleteBackup(ctx, backupID); err != nil {
+	return m.requestCleanup(ctx, backup)
+}
+
+// RetryCleanup lets an owner retry a run left in "Cleanup pending" by a
+// provider outage.
+func (m *BackupManager) RetryCleanup(ctx context.Context, userID, backupID uuid.UUID) error {
+	if err := m.backupsReady(); err != nil {
 		return err
 	}
-	return nil
+	backup, err := m.backups.GetBackup(ctx, backupID)
+	if err != nil {
+		return err
+	}
+	if _, _, err := m.resolve(ctx, backup.ResourceRef); err != nil {
+		return err
+	}
+	if !backup.CleanupPending {
+		return fmt.Errorf("%w: this backup has no pending cleanup", ErrValidation)
+	}
+	return m.requestCleanup(ctx, backup)
+}
+
+// DiscardBackup forgets a pending row without touching its artifact. It is the
+// owner's explicit escape hatch when a provider is gone for good.
+func (m *BackupManager) DiscardBackup(ctx context.Context, userID, backupID uuid.UUID) error {
+	if err := m.backupsReady(); err != nil {
+		return err
+	}
+	backup, err := m.backups.GetBackup(ctx, backupID)
+	if err != nil {
+		return err
+	}
+	if _, _, err := m.resolve(ctx, backup.ResourceRef); err != nil {
+		return err
+	}
+	if !backup.CleanupPending {
+		return fmt.Errorf("%w: this backup has no pending cleanup", ErrValidation)
+	}
+	_, err = m.backups.DeleteBackup(ctx, backupID)
+	return err
 }
 
 func (m *BackupManager) RestoreBackup(ctx context.Context, userID, backupID uuid.UUID) (RestoreResult, error) {

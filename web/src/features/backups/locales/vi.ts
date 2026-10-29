@@ -25,6 +25,13 @@ const vi = {
       "Hãy sao lưu ngay, hoặc mở một tài nguyên và thêm lịch để dữ liệu " +
       "được sao lưu tự động.",
     restore: "Khôi phục",
+    cleanupPending: "Đang chờ dọn dẹp",
+    retryCleanup: "Thử dọn lại",
+    discardCleanup: "Bỏ qua",
+    discardCleanupConfirm:
+      "Bỏ dòng này mà không xóa tệp sao lưu? Tệp vẫn nằm ở nơi lưu trữ và không thể quản lý từ đây.",
+    cleanupDone: "Đã dọn xong bản sao lưu.",
+    cleanupDiscarded: "Đã bỏ dòng chờ dọn dẹp.",
     inProgress: "đang chạy",
     seconds: "{count} giây",
     minutes: "{count} phút",
@@ -43,6 +50,16 @@ const vi = {
     title: "Lịch chạy",
     add: "Lịch mới",
     empty: "Chưa có lịch nào — sao lưu tự động đang tắt",
+    keepLastLabel: "Giữ số bản sao lưu theo lịch gần nhất",
+    keepLastHint:
+      "Các bản sao lưu theo lịch cũ hơn sẽ tự động bị xóa. Bản sao lưu thủ công không bao giờ bị xóa tự động.",
+    keepAll:
+      "Giữ mọi bản sao lưu theo lịch — sửa lịch để đặt giới hạn",
+    keepLast: "Giữ {count} bản sao lưu theo lịch gần nhất",
+    keepLastInvalid: "Số bản giữ lại phải từ 1 đến 365.",
+  },
+  errors: {
+    noSpace: "Không đủ dung lượng trống trên đĩa sao lưu",
   },
   backupNow: {
     action: "Sao lưu ngay",
@@ -79,7 +96,12 @@ const vi = {
       "tương thích S3 để giữ bản sao ở nơi khác.",
     localDisk: "Đĩa cục bộ",
     deletedProvider: "Nơi lưu trữ đã xóa",
+    providerRemoved: "Nơi lưu trữ đã bị xóa",
     unknownProvider: "Lưu trữ",
+    usage: "{count} bản sao lưu · {size}",
+    freeSpace: "Còn {free} trống trên {total}",
+    deleteConfirm:
+      "Xóa {name}? Các bản sao lưu ở đó sẽ không đọc được và không thể khôi phục. Không thể xóa nơi lưu trữ đang được một lịch sử dụng.",
   },
   resourceTypes: {
     application: "Ứng dụng",

@@ -12,6 +12,8 @@ import {
 } from "naive-ui";
 import { computed, provide } from "vue";
 
+import { formatBytes } from "@/shared/utils/format";
+
 import BackupProviderDialog from "@/features/backups/components/BackupProviderDialog.vue";
 import {
   providerCatalogKey,
@@ -94,6 +96,25 @@ async function handleDelete(providerId: string, name: string): Promise<void> {
                 )
               }}
             </NText>
+            <NText depth="3">
+              {{
+                t("backups.storage.usage", {
+                  count: provider.backup_count,
+                  size: formatBytes(provider.total_size),
+                })
+              }}
+            </NText>
+            <NText
+              v-if="provider.kind === 'local' && provider.free_space != null"
+              depth="3"
+            >
+              {{
+                t("backups.storage.freeSpace", {
+                  free: formatBytes(provider.free_space),
+                  total: formatBytes(provider.total_space ?? 0),
+                })
+              }}
+            </NText>
             <NText
               v-if="catalog.checks.value[provider.id] && !catalog.checks.value[provider.id].checking"
               :type="catalog.checks.value[provider.id].ok ? 'success' : 'error'"
@@ -134,7 +155,7 @@ async function handleDelete(providerId: string, name: string): Promise<void> {
                   {{ t("common.actions.delete") }}
                 </NButton>
               </template>
-              {{ t("databases.backups.targets.deleteConfirm", { name: provider.name }) }}
+              {{ t("backups.storage.deleteConfirm", { name: provider.name }) }}
             </NPopconfirm>
           </NSpace>
         </div>

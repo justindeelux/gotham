@@ -28,6 +28,9 @@ export interface BackupRun {
   size: number;
   location?: string;
   error?: string;
+  provider_removed?: boolean;
+  cleanup_pending?: boolean;
+  cleanup_error?: string;
   container_id?: string;
   created_at: string;
   finished_at?: string;
@@ -44,6 +47,7 @@ export interface BackupSchedule {
   last_run_at?: string;
   last_slot_at?: string;
   max_run_seconds: number;
+  keep_last?: number | null;
   created_at: string;
   updated_at: string;
 }
@@ -79,6 +83,10 @@ export interface StorageProvider {
   prefix?: string;
   builtin: boolean;
   has_credentials: boolean;
+  backup_count: number;
+  total_size: number;
+  free_space?: number;
+  total_space?: number;
   created_at: string;
   updated_at: string;
 }
@@ -107,6 +115,7 @@ export interface CreateScheduleInput {
   provider_id?: string;
   enabled?: boolean;
   max_run_seconds?: number;
+  keep_last?: number;
 }
 
 export interface UpdateScheduleInput {
@@ -114,6 +123,7 @@ export interface UpdateScheduleInput {
   provider_id?: string;
   enabled?: boolean;
   max_run_seconds?: number;
+  keep_last?: number;
 }
 
 export type BackupProtectionStatus =
@@ -236,6 +246,14 @@ export async function deleteBackup(backupId: string): Promise<void> {
   await http.delete(`/backups/${backupId}`);
 }
 
+export async function retryBackupCleanup(backupId: string): Promise<void> {
+  await http.post(`/backups/${backupId}/cleanup`, {});
+}
+
+export async function discardBackup(backupId: string): Promise<void> {
+  await http.delete(`/backups/${backupId}`, { params: { discard: "true" } });
+}
+
 export async function restoreBackup(backupId: string): Promise<RestoreResult> {
   const response = await http.post<RestoreEnvelope>(
     `/backups/${backupId}/restore`,
@@ -272,6 +290,9 @@ function scheduleBody(input: UpdateScheduleInput): Record<string, unknown> {
   }
   if (input.max_run_seconds !== undefined) {
     body.max_run_seconds = input.max_run_seconds;
+  }
+  if (input.keep_last !== undefined) {
+    body.keep_last = input.keep_last;
   }
   return body;
 }
@@ -327,8 +348,13 @@ export async function updateProvider(
   return response.data.provider;
 }
 
-export async function deleteProvider(providerId: string): Promise<void> {
-  await http.delete(`/backups/providers/${providerId}`);
+export async function deleteProvider(
+  providerId: string,
+  confirm = false,
+): Promise<void> {
+  await http.delete(`/backups/providers/${providerId}`, {
+    params: confirm ? { confirm: "true" } : undefined,
+  });
 }
 
 export async function testProvider(
@@ -397,6 +423,9 @@ export function describeBackupError(error: unknown): string {
     }
     if (error.status === 503) {
       return t("databases.errors.featureDisabled");
+    }
+    if (error.status === 507) {
+      return withSummary("backups.errors.noSpace", stripErrorPrefix(error.message));
     }
     return withSummary(
       "common.errors.requestFailed",

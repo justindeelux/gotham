@@ -9,12 +9,14 @@ import {
   deleteProvider,
   deleteSchedule,
   describeBackupError,
+  discardBackup,
   getResourceBackupProtection,
   listBackups,
   listProviders,
   listRestores,
   listSchedules,
   restoreBackup,
+  retryBackupCleanup,
   testProvider,
   updateProvider,
   updateSchedule,
@@ -225,15 +227,45 @@ export const useBackupsStore = defineStore("backups", () => {
     }
   }
 
+  function dropBackupLocally(backup: BackupRun): void {
+    const key = resourceKey(backup);
+    backupsByResource.value[key] = (
+      backupsByResource.value[key] ?? []
+    ).filter((item) => item.id !== backup.id);
+    allBackups.value = allBackups.value.filter((item) => item.id !== backup.id);
+  }
+
   async function removeBackup(backup: BackupRun): Promise<void> {
     backupsActing.value = true;
     try {
       await deleteBackup(backup.id);
-      const key = resourceKey(backup);
-      backupsByResource.value[key] = (
-        backupsByResource.value[key] ?? []
-      ).filter((item) => item.id !== backup.id);
-      allBackups.value = allBackups.value.filter((item) => item.id !== backup.id);
+      dropBackupLocally(backup);
+    } catch (err) {
+      backupsErrorRaw.value = err;
+      throw err;
+    } finally {
+      backupsActing.value = false;
+    }
+  }
+
+  async function retryCleanup(backup: BackupRun): Promise<void> {
+    backupsActing.value = true;
+    try {
+      await retryBackupCleanup(backup.id);
+      dropBackupLocally(backup);
+    } catch (err) {
+      backupsErrorRaw.value = err;
+      throw err;
+    } finally {
+      backupsActing.value = false;
+    }
+  }
+
+  async function discardCleanup(backup: BackupRun): Promise<void> {
+    backupsActing.value = true;
+    try {
+      await discardBackup(backup.id);
+      dropBackupLocally(backup);
     } catch (err) {
       backupsErrorRaw.value = err;
       throw err;
@@ -385,10 +417,13 @@ export const useBackupsStore = defineStore("backups", () => {
     }
   }
 
-  async function removeProvider(providerId: string): Promise<void> {
+  async function removeProvider(
+    providerId: string,
+    confirm = false,
+  ): Promise<void> {
     providersActing.value = true;
     try {
-      await deleteProvider(providerId);
+      await deleteProvider(providerId, confirm);
       providers.value = providers.value.filter((item) => item.id !== providerId);
     } catch (err) {
       providersErrorRaw.value = err;
@@ -466,6 +501,8 @@ export const useBackupsStore = defineStore("backups", () => {
     fetchProtection,
     backupNow,
     removeBackup,
+    retryCleanup,
+    discardCleanup,
     restore,
     addSchedule,
     editSchedule,

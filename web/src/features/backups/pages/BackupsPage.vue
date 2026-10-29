@@ -59,6 +59,12 @@ onMounted(() => {
   void overview.load();
 });
 
+function keepLastLabel(keepLast?: number | null): string {
+  return keepLast === null || keepLast === undefined
+    ? t("backups.schedules.keepAll")
+    : t("backups.schedules.keepLast", { count: keepLast });
+}
+
 function restorePrompt(backup: BackupRun): string {
   return t("backups.restore.prompt", {
     name: overview.resolveResource(backup.resource_type, backup.resource_id)
@@ -177,9 +183,23 @@ function restorePrompt(backup: BackupRun): string {
                     </div>
                   </td>
                   <td :data-label="t('backups.runs.columns.status')">
-                    <NTag :type="statusTagType(backup.status)" size="small">
+                    <NTag
+                      v-if="backup.cleanup_pending"
+                      type="warning"
+                      size="small"
+                    >
+                      {{ t("backups.runs.cleanupPending") }}
+                    </NTag>
+                    <NTag v-else :type="statusTagType(backup.status)" size="small">
                       {{ runDisplay("runStatus", backup.status) }}
                     </NTag>
+                    <NText
+                      v-if="backup.cleanup_pending && backup.cleanup_error"
+                      depth="3"
+                      class="cleanup-error"
+                    >
+                      {{ backup.cleanup_error }}
+                    </NText>
                   </td>
                   <td :data-label="t('backups.runs.columns.size')">
                     <NText class="mono">
@@ -191,7 +211,13 @@ function restorePrompt(backup: BackupRun): string {
                     </NText>
                   </td>
                   <td :data-label="t('backups.runs.columns.provider')">
-                    {{ overview.providerName(backup.provider_id, backup.provider_name) }}
+                    {{
+                      overview.providerName(
+                        backup.provider_id,
+                        backup.provider_name,
+                        backup.provider_removed,
+                      )
+                    }}
                   </td>
                   <td :data-label="t('backups.runs.columns.started')">
                     <span :title="backup.created_at">{{ relativeTime(backup.created_at) }}</span>
@@ -200,7 +226,28 @@ function restorePrompt(backup: BackupRun): string {
                     {{ runDuration(backup.created_at, backup.finished_at) }}
                   </td>
                   <td class="actions-cell" :data-label="t('backups.runs.columns.actions')">
-                    <NSpace :size="6">
+                    <NSpace v-if="backup.cleanup_pending" :size="6">
+                      <NButton
+                        size="tiny"
+                        secondary
+                        @click="() => void overview.handleRetryCleanup(backup)"
+                      >
+                        {{ t("backups.runs.retryCleanup") }}
+                      </NButton>
+                      <NPopconfirm
+                        @positive-click="
+                          () => void overview.handleDiscardCleanup(backup)
+                        "
+                      >
+                        <template #trigger>
+                          <NButton size="tiny" type="error" ghost>
+                            {{ t("backups.runs.discardCleanup") }}
+                          </NButton>
+                        </template>
+                        {{ t("backups.runs.discardCleanupConfirm") }}
+                      </NPopconfirm>
+                    </NSpace>
+                    <NSpace v-else :size="6">
                       <NButton
                         size="tiny"
                         secondary
@@ -266,6 +313,7 @@ function restorePrompt(backup: BackupRun): string {
                       · {{ t("databases.backups.schedules.lastRun") }}
                       <span :title="schedule.last_run_at">{{ relativeTime(schedule.last_run_at) }}</span>
                     </span>
+                    <span> · {{ keepLastLabel(schedule.keep_last) }}</span>
                   </NText>
                 </div>
                 <NSpace class="backup-row__actions" align="center" :size="8">
@@ -392,6 +440,17 @@ function restorePrompt(backup: BackupRun): string {
           <NText depth="3">{{ t("databases.backups.schedules.on") }}</NText>
           <NSwitch v-model:value="overview.scheduleEnabled.value" />
         </NSpace>
+        <NSpace align="center" :size="8">
+          <NText depth="3">{{ t("backups.schedules.keepLastLabel") }}</NText>
+          <NInputNumber
+            v-model:value="overview.scheduleKeepLast.value"
+            :min="1"
+            :max="365"
+            style="width: 120px"
+            :aria-label="t('backups.schedules.keepLastLabel')"
+          />
+        </NSpace>
+        <NText depth="3">{{ t("backups.schedules.keepLastHint") }}</NText>
         <NSpace justify="end" :size="8">
           <NButton @click="overview.scheduleDialogOpen.value = false">
             {{ t("common.actions.cancel") }}

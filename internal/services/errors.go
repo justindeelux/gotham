@@ -10,6 +10,7 @@ var (
 	ErrDeployInFlight   = errors.New("services: a deploy is in progress")
 	ErrServerPinned     = errors.New("services: a deployed service cannot change server")
 	ErrNameConflict     = errors.New("services: name already exists in the target environment")
+	ErrDomainConflict   = errors.New("services: domain already in use")
 	ErrAgentUnavailable = errors.New("services: agent unavailable")
 	ErrDeployFailed     = errors.New("services: deploy failed")
 	ErrDisabled         = errors.New("services: feature disabled")

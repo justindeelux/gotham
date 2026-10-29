@@ -33,6 +33,22 @@ type Service struct {
 	ProjectID       uuid.UUID
 	ProjectName     string
 	ServerName      string
+	PendingChanges  []string
+}
+
+// ServiceDomain is one managed host routed to a compose service. The labels
+// declared in the compose document are not rows here; they stay read-only
+// routes reported next to the managed ones.
+type ServiceDomain struct {
+	ID             uuid.UUID
+	ServiceID      uuid.UUID
+	ComposeService string
+	Port           int32
+	Domain         string
+	Protocol       string
+	Disabled       bool
+	CreatedAt      time.Time
+	UpdatedAt      time.Time
 }
 
 type DeployState string
@@ -49,6 +65,7 @@ type Deploy struct {
 	ServiceID   uuid.UUID
 	State       DeployState
 	ComposeYAML string
+	Domains     []string
 	Error       string
 	CreatedAt   time.Time
 	UpdatedAt   time.Time

@@ -68,6 +68,34 @@ func (s *Store) SoftDeleteService(ctx context.Context, id pgtype.UUID) (sqlc.Ser
 	return s.queries.SoftDeleteService(ctx, id)
 }
 
+func (s *Store) ListServiceDomainsByService(ctx context.Context, serviceID pgtype.UUID) ([]sqlc.ServiceDomain, error) {
+	return s.queries.ListServiceDomainsByService(ctx, serviceID)
+}
+
+func (s *Store) GetServiceDomainByNameAnyService(ctx context.Context, domain string) (sqlc.ServiceDomain, error) {
+	return s.queries.GetServiceDomainByNameAnyService(ctx, domain)
+}
+
+func (s *Store) CreateServiceDomain(ctx context.Context, params sqlc.CreateServiceDomainParams) (sqlc.ServiceDomain, error) {
+	return s.queries.CreateServiceDomain(ctx, params)
+}
+
+func (s *Store) UpdateServiceDomain(ctx context.Context, params sqlc.UpdateServiceDomainParams) (sqlc.ServiceDomain, error) {
+	return s.queries.UpdateServiceDomain(ctx, params)
+}
+
+func (s *Store) DeleteServiceDomain(ctx context.Context, params sqlc.DeleteServiceDomainParams) error {
+	return s.queries.DeleteServiceDomain(ctx, params)
+}
+
+func (s *Store) DeleteServiceDomainsByService(ctx context.Context, serviceID pgtype.UUID) error {
+	return s.queries.DeleteServiceDomainsByService(ctx, serviceID)
+}
+
+func (s *Store) ListProxiedServiceDomains(ctx context.Context) ([]sqlc.ListProxiedServiceDomainsRow, error) {
+	return s.queries.ListProxiedServiceDomains(ctx)
+}
+
 func (s *Store) CreateServiceDeploy(ctx context.Context, params sqlc.CreateServiceDeployParams) (sqlc.ServiceDeploy, error) {
 	return s.queries.CreateServiceDeploy(ctx, params)
 }

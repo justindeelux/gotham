@@ -68,6 +68,10 @@ type ServiceService interface {
 	Containers(ctx context.Context, userID, serviceID uuid.UUID) ([]ComposeContainer, error)
 	Logs(ctx context.Context, userID, serviceID uuid.UUID, composeService string, tail int64, follow bool) (LogStream, error)
 	Deploys(ctx context.Context, userID, serviceID uuid.UUID) ([]Deploy, error)
+	ListDomains(ctx context.Context, userID, serviceID uuid.UUID) ([]DomainView, error)
+	AddDomain(ctx context.Context, userID, serviceID uuid.UUID, in DomainInput) (ServiceDomain, error)
+	UpdateDomain(ctx context.Context, userID, serviceID, domainID uuid.UUID, in DomainInput) (ServiceDomain, error)
+	RemoveDomain(ctx context.Context, userID, serviceID, domainID uuid.UUID) error
 }
 
 type RouteSync interface {
@@ -269,10 +273,11 @@ func (s *service) Create(ctx context.Context, userID uuid.UUID, req CreateReques
 	if templateSlug != "" && (s.templateExists == nil || !s.templateExists(templateSlug)) {
 		return Service{}, fmt.Errorf("%w: unknown template %q", ErrValidation, templateSlug)
 	}
-	if err := Validate(req.ComposeYAML, req.Env); err != nil {
+	_, hosts, err := RenderService(req.ComposeYAML, req.Env, nil)
+	if err != nil {
 		return Service{}, RedactError(err, req.Env)
 	}
-	releaseDomain, err := s.guardComposeDomains(ctx, req.ComposeYAML, req.Env)
+	releaseDomain, err := s.guardHosts(ctx, hosts)
 	if err != nil {
 		return Service{}, err
 	}
@@ -308,30 +313,41 @@ func (s *service) List(ctx context.Context, userID uuid.UUID, filter ServiceFilt
 	if filter.EnvironmentID != uuid.Nil && filter.ProjectID != uuid.Nil {
 		return nil, fmt.Errorf("%w: environment_id and project_id are mutually exclusive", ErrValidation)
 	}
-	if filter.EnvironmentID != uuid.Nil {
+	var services []Service
+	var err error
+	switch {
+	case filter.EnvironmentID != uuid.Nil:
 		if _, err := s.repo.ResolveEnvironment(ctx, filter.EnvironmentID); err != nil {
 			return nil, err
 		}
-		return s.repo.ListServicesByEnvironment(ctx, filter.EnvironmentID)
-	}
-	if filter.ProjectID != uuid.Nil {
+		services, err = s.repo.ListServicesByEnvironment(ctx, filter.EnvironmentID)
+	case filter.ProjectID != uuid.Nil:
 		if _, err := s.repo.ResolveProject(ctx, filter.ProjectID); err != nil {
 			return nil, err
 		}
-		return s.repo.ListServicesByProject(ctx, filter.ProjectID)
+		services, err = s.repo.ListServicesByProject(ctx, filter.ProjectID)
+	default:
+		services, err = s.repo.ListServices(ctx, userID)
 	}
-	services, err := s.repo.ListServices(ctx, userID)
 	if err != nil {
 		return nil, err
 	}
 	if services == nil {
 		return []Service{}, nil
 	}
-	return services, nil
+	return s.decoratePending(ctx, services)
 }
 
 func (s *service) Get(ctx context.Context, userID, serviceID uuid.UUID) (Service, error) {
-	return s.service(ctx, userID, serviceID, false)
+	service, err := s.service(ctx, userID, serviceID, false)
+	if err != nil {
+		return Service{}, err
+	}
+	decorated, err := s.decoratePending(ctx, []Service{service})
+	if err != nil {
+		return Service{}, err
+	}
+	return decorated[0], nil
 }
 
 func (s *service) Update(ctx context.Context, userID, serviceID uuid.UUID, req UpdateRequest) (Service, error) {
@@ -397,10 +413,15 @@ func (s *service) Update(ctx context.Context, userID, serviceID uuid.UUID, req U
 	if err := validateEnv(service.Env); err != nil {
 		return Service{}, err
 	}
-	if err := Validate(service.ComposeYAML, service.Env); err != nil {
+	managed, err := s.repo.ListServiceDomains(ctx, service.ID)
+	if err != nil {
+		return Service{}, err
+	}
+	_, hosts, err := RenderService(service.ComposeYAML, service.Env, managed)
+	if err != nil {
 		return Service{}, RedactError(err, service.Env)
 	}
-	releaseDomain, err := s.guardComposeDomains(ctx, service.ComposeYAML, service.Env)
+	releaseDomain, err := s.guardHosts(ctx, hosts)
 	if err != nil {
 		return Service{}, err
 	}
@@ -411,7 +432,15 @@ func (s *service) Update(ctx context.Context, userID, serviceID uuid.UUID, req U
 	if req.ServerID == nil {
 		service.ServerID = uuid.Nil
 	}
-	return s.repo.UpdateServiceConfig(ctx, service)
+	updated, err := s.repo.UpdateServiceConfig(ctx, service)
+	if err != nil {
+		return Service{}, err
+	}
+	decorated, err := s.decoratePending(ctx, []Service{updated})
+	if err != nil {
+		return Service{}, err
+	}
+	return decorated[0], nil
 }
 
 func (s *service) Delete(ctx context.Context, userID, serviceID uuid.UUID) error {
@@ -424,7 +453,7 @@ func (s *service) Delete(ctx context.Context, userID, serviceID uuid.UUID) error
 	}
 	defer release()
 
-	rendered, renderErr := Render(service.ComposeYAML, service.Env)
+	rendered, _, renderErr := s.renderService(ctx, service)
 	if renderErr == nil {
 		if err := s.down(ctx, service, []byte(rendered.ComposeYAML)); err != nil {
 			return err
@@ -448,10 +477,24 @@ func (s *service) Delete(ctx context.Context, userID, serviceID uuid.UUID) error
 	if _, err := s.repo.SoftDeleteService(ctx, service.ID); err != nil {
 		return err
 	}
+	if err := s.repo.DeleteServiceDomains(ctx, service.ID); err != nil {
+		s.logger.Warn("services: could not delete managed domains of a deleted service",
+			"service_id", service.ID.String(), "error", err)
+	}
 	s.logger.Info("services: deleted; named volumes retained",
 		"service_id", service.ID.String(), "project", ProjectName(service.ID))
 	s.syncProxy(ctx, service.ServerID)
 	return nil
+}
+
+// renderService renders the stored document with the derived GOTHAM_DOMAIN
+// variables and the managed domains of this service.
+func (s *service) renderService(ctx context.Context, service Service) (RenderedSpec, []string, error) {
+	managed, err := s.repo.ListServiceDomains(ctx, service.ID)
+	if err != nil {
+		return RenderedSpec{}, nil, err
+	}
+	return RenderService(service.ComposeYAML, service.Env, managed)
 }
 
 func (s *service) latestRunningSnapshot(ctx context.Context, service Service) (*Deploy, error) {
@@ -479,7 +522,7 @@ func (s *service) Deploy(ctx context.Context, userID, serviceID uuid.UUID) (Serv
 		return Service{}, Deploy{}, err
 	}
 
-	rendered, err := Render(service.ComposeYAML, service.Env)
+	rendered, hosts, err := s.renderService(ctx, service)
 	if err != nil {
 		release()
 		return Service{}, Deploy{}, RedactError(err, service.Env)
@@ -490,6 +533,7 @@ func (s *service) Deploy(ctx context.Context, userID, serviceID uuid.UUID) (Serv
 		ServiceID:   service.ID,
 		State:       DeployDeploying,
 		ComposeYAML: rendered.ComposeYAML,
+		Domains:     hosts,
 		CreatedAt:   now,
 		UpdatedAt:   now,
 	})
@@ -592,7 +636,7 @@ func (s *service) Stop(ctx context.Context, userID, serviceID uuid.UUID) (Servic
 	}
 	defer release()
 
-	rendered, err := Render(service.ComposeYAML, service.Env)
+	rendered, _, err := s.renderService(ctx, service)
 	if err != nil {
 		return Service{}, RedactError(err, service.Env)
 	}
@@ -617,7 +661,7 @@ func (s *service) Restart(ctx context.Context, userID, serviceID uuid.UUID) (Ser
 	}
 	defer release()
 
-	rendered, err := Render(service.ComposeYAML, service.Env)
+	rendered, _, err := s.renderService(ctx, service)
 	if err != nil {
 		return Service{}, RedactError(err, service.Env)
 	}
@@ -679,7 +723,7 @@ func (s *service) Logs(ctx context.Context, userID, serviceID uuid.UUID, compose
 		return nil, fmt.Errorf("%w: tail must not be negative", ErrValidation)
 	}
 	if composeService != "" {
-		if rendered, renderErr := Render(service.ComposeYAML, service.Env); renderErr == nil {
+		if rendered, _, renderErr := s.renderService(ctx, service); renderErr == nil {
 			if !slices.Contains(rendered.Spec.Services, composeService) {
 				return nil, fmt.Errorf("%w: no compose service %q in this project", ErrValidation, composeService)
 			}
@@ -834,6 +878,9 @@ func validateEnv(env map[string]string) error {
 	for key := range env {
 		if !envKeyPattern.MatchString(key) {
 			return fmt.Errorf("%w: invalid environment variable name %q", ErrValidation, key)
+		}
+		if IsReservedEnv(key) {
+			return fmt.Errorf("%w: %s is reserved for the platform and derived from the service domains", ErrValidation, key)
 		}
 	}
 	return nil

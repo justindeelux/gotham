@@ -7,9 +7,11 @@ import (
 	"crypto/x509"
 	"encoding/pem"
 	"errors"
+	"io"
 	"log/slog"
 	"os"
 	"path/filepath"
+	"strings"
 	"sync"
 	"testing"
 	"time"
@@ -315,4 +317,13 @@ func (f *e2eDockerClient) Logs(context.Context, string, bool, int64) (<-chan age
 	chunks := make(chan agent.LogMessage)
 	close(chunks)
 	return chunks, nil
+}
+func (f *e2eDockerClient) VolumeMountpoint(context.Context, string) (string, error) {
+	return "/var/lib/docker/volumes/test/_data", nil
+}
+func (f *e2eDockerClient) ExportArchive(context.Context, string, string) (io.ReadCloser, error) {
+	return io.NopCloser(strings.NewReader("")), nil
+}
+func (f *e2eDockerClient) ImportArchive(context.Context, string, string, io.Reader) error {
+	return nil
 }

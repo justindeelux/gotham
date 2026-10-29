@@ -57,9 +57,10 @@ const (
 )
 
 type ServiceDomain struct {
-	Service string
-	Host    string
-	Port    int32
+	Service  string
+	Host     string
+	Port     int32
+	Protocol string
 }
 
 type ProxiedService struct {

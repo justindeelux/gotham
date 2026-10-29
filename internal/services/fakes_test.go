@@ -5,6 +5,7 @@ import (
 	"io"
 	"log/slog"
 	"os"
+	"strings"
 	"sync"
 	"testing"
 	"time"
@@ -27,6 +28,10 @@ type fakeRepository struct {
 	order    []uuid.UUID
 	deploys  map[uuid.UUID][]Deploy
 	servers  map[uuid.UUID]bool
+	domains  map[uuid.UUID][]ServiceDomain
+
+	applicationClaims map[string]bool
+	redirectSources   []string
 
 	createErr     error
 	getErr        error
@@ -47,6 +52,7 @@ func newFakeRepository() *fakeRepository {
 		services: make(map[uuid.UUID]Service),
 		deploys:  make(map[uuid.UUID][]Deploy),
 		servers:  make(map[uuid.UUID]bool),
+		domains:  make(map[uuid.UUID][]ServiceDomain),
 	}
 }
 
@@ -239,6 +245,101 @@ func (r *fakeRepository) ServerExists(_ context.Context, serverID uuid.UUID) (bo
 	return true, nil
 }
 
+func (r *fakeRepository) ListRoutableServices(_ context.Context) ([]Service, error) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	services := make([]Service, 0, len(r.order))
+	for _, id := range r.order {
+		if service, ok := r.services[id]; ok && r.live(service) {
+			services = append(services, service)
+		}
+	}
+	return services, nil
+}
+
+func (r *fakeRepository) ListServiceDomains(_ context.Context, serviceID uuid.UUID) ([]ServiceDomain, error) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	return append([]ServiceDomain{}, r.domains[serviceID]...), nil
+}
+
+func (r *fakeRepository) CreateServiceDomain(_ context.Context, domain ServiceDomain) (ServiceDomain, error) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	if domain.ID == uuid.Nil {
+		domain.ID = uuid.New()
+	}
+	if !domain.Disabled {
+		for _, existing := range r.domains {
+			for _, other := range existing {
+				if !other.Disabled && strings.EqualFold(other.Domain, domain.Domain) {
+					return ServiceDomain{}, ErrDomainConflict
+				}
+			}
+		}
+	}
+	r.domains[domain.ServiceID] = append(r.domains[domain.ServiceID], domain)
+	return domain, nil
+}
+
+func (r *fakeRepository) UpdateServiceDomain(_ context.Context, domain ServiceDomain) (ServiceDomain, error) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	list := r.domains[domain.ServiceID]
+	for i, existing := range list {
+		if existing.ID == domain.ID {
+			list[i] = domain
+			return domain, nil
+		}
+	}
+	return ServiceDomain{}, ErrNotFound
+}
+
+func (r *fakeRepository) DeleteServiceDomain(_ context.Context, serviceID, domainID uuid.UUID) error {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	list := r.domains[serviceID]
+	for i, existing := range list {
+		if existing.ID == domainID {
+			r.domains[serviceID] = append(list[:i], list[i+1:]...)
+			return nil
+		}
+	}
+	return ErrNotFound
+}
+
+func (r *fakeRepository) DeleteServiceDomains(_ context.Context, serviceID uuid.UUID) error {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	delete(r.domains, serviceID)
+	return nil
+}
+
+func (r *fakeRepository) ServiceDomainClaim(_ context.Context, domain string) (ServiceDomain, error) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	for _, list := range r.domains {
+		for _, existing := range list {
+			if strings.EqualFold(existing.Domain, domain) {
+				return existing, nil
+			}
+		}
+	}
+	return ServiceDomain{}, ErrNotFound
+}
+
+func (r *fakeRepository) ApplicationDomainClaim(_ context.Context, domain string) (bool, error) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	return r.applicationClaims[strings.ToLower(domain)], nil
+}
+
+func (r *fakeRepository) ListRedirectSources(_ context.Context) ([]string, error) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	return append([]string{}, r.redirectSources...), nil
+}
+
 func (r *fakeRepository) seedEnvironment() (uuid.UUID, uuid.UUID) {
 	r.mu.Lock()
 	defer r.mu.Unlock()
@@ -346,6 +447,7 @@ type fakeAgent struct {
 	logsErr     error
 
 	services  []string
+	ps        []ComposeContainer
 	streamErr error
 	validated []string
 	ups       []fakeUp
@@ -429,6 +531,9 @@ func (a *fakeAgent) Ps(_ context.Context, project string) ([]ComposeContainer, e
 	a.psCalls = append(a.psCalls, project)
 	if a.psErr != nil {
 		return nil, a.psErr
+	}
+	if a.ps != nil {
+		return append([]ComposeContainer{}, a.ps...), nil
 	}
 	return []ComposeContainer{{Service: "web", State: "running"}}, nil
 }

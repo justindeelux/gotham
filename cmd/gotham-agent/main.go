@@ -196,7 +196,8 @@ func runServe() int {
 				serverOptions = append(serverOptions, agent.WithoutControlPlanePeer())
 			}
 			server, err := agent.NewServer(cfg.ListenAddr, creds, agent.NewDockerServer(docker, log,
-				agent.WithManagedVolumeRoot(cfg.ManagedVolumeRoot)), log, serverOptions...)
+				agent.WithManagedVolumeRoot(cfg.ManagedVolumeRoot),
+				agent.WithArchiveDeniedPaths(cfg.ComposeRoot, cfg.BackupRoot, cfg.CertDir, cfg.DockerSock)), log, serverOptions...)
 			if err != nil {
 				startErr = err
 				return

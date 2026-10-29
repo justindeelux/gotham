@@ -86,9 +86,9 @@ func (q *Queries) CreateService(ctx context.Context, arg CreateServiceParams) (S
 }
 
 const createServiceDeploy = `-- name: CreateServiceDeploy :one
-INSERT INTO service_deploys (id, service_id, state, compose_yaml)
-VALUES ($1, $2, $3, $4)
-RETURNING id, service_id, state, compose_yaml, error, created_at, updated_at, finished_at
+INSERT INTO service_deploys (id, service_id, state, compose_yaml, domains)
+VALUES ($1, $2, $3, $4, $5)
+RETURNING id, service_id, state, compose_yaml, error, created_at, updated_at, finished_at, domains
 `
 
 type CreateServiceDeployParams struct {
@@ -96,6 +96,7 @@ type CreateServiceDeployParams struct {
 	ServiceID   pgtype.UUID `json:"service_id"`
 	State       string      `json:"state"`
 	ComposeYaml string      `json:"compose_yaml"`
+	Domains     []string    `json:"domains"`
 }
 
 func (q *Queries) CreateServiceDeploy(ctx context.Context, arg CreateServiceDeployParams) (ServiceDeploy, error) {
@@ -104,6 +105,7 @@ func (q *Queries) CreateServiceDeploy(ctx context.Context, arg CreateServiceDepl
 		arg.ServiceID,
 		arg.State,
 		arg.ComposeYaml,
+		arg.Domains,
 	)
 	var i ServiceDeploy
 	err := row.Scan(
@@ -115,6 +117,7 @@ func (q *Queries) CreateServiceDeploy(ctx context.Context, arg CreateServiceDepl
 		&i.CreatedAt,
 		&i.UpdatedAt,
 		&i.FinishedAt,
+		&i.Domains,
 	)
 	return i, err
 }
@@ -218,7 +221,7 @@ func (q *Queries) ListRoutableServices(ctx context.Context) ([]Service, error) {
 }
 
 const listServiceDeploys = `-- name: ListServiceDeploys :many
-SELECT id, service_id, state, compose_yaml, error, created_at, updated_at, finished_at FROM service_deploys
+SELECT id, service_id, state, compose_yaml, error, created_at, updated_at, finished_at, domains FROM service_deploys
 WHERE service_id = $1
 ORDER BY created_at DESC, id DESC
 LIMIT $2
@@ -247,6 +250,7 @@ func (q *Queries) ListServiceDeploys(ctx context.Context, arg ListServiceDeploys
 			&i.CreatedAt,
 			&i.UpdatedAt,
 			&i.FinishedAt,
+			&i.Domains,
 		); err != nil {
 			return nil, err
 		}
@@ -259,7 +263,7 @@ func (q *Queries) ListServiceDeploys(ctx context.Context, arg ListServiceDeploys
 }
 
 const listServiceDeploysByState = `-- name: ListServiceDeploysByState :many
-SELECT d.id, d.service_id, d.state, d.compose_yaml, d.error, d.created_at, d.updated_at, d.finished_at FROM service_deploys d
+SELECT d.id, d.service_id, d.state, d.compose_yaml, d.error, d.created_at, d.updated_at, d.finished_at, d.domains FROM service_deploys d
 JOIN services s ON s.id = d.service_id
 WHERE d.state = $1 AND s.deleted_at IS NULL
 ORDER BY d.created_at ASC, d.id ASC
@@ -285,6 +289,7 @@ func (q *Queries) ListServiceDeploysByState(ctx context.Context, state string) (
 			&i.CreatedAt,
 			&i.UpdatedAt,
 			&i.FinishedAt,
+			&i.Domains,
 		); err != nil {
 			return nil, err
 		}
@@ -601,7 +606,7 @@ SET state = $2,
     finished_at = $4,
     updated_at = now()
 WHERE id = $1
-RETURNING id, service_id, state, compose_yaml, error, created_at, updated_at, finished_at
+RETURNING id, service_id, state, compose_yaml, error, created_at, updated_at, finished_at, domains
 `
 
 type UpdateServiceDeployParams struct {
@@ -628,6 +633,7 @@ func (q *Queries) UpdateServiceDeploy(ctx context.Context, arg UpdateServiceDepl
 		&i.CreatedAt,
 		&i.UpdatedAt,
 		&i.FinishedAt,
+		&i.Domains,
 	)
 	return i, err
 }

@@ -77,9 +77,21 @@ func TestResourceHistoryRollupsAndRetention(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 90*time.Second)
 	defer cancel()
 	st := openIntegrationStore(t, ctx)
-	appID, serverID := resourceTestScope(t, ctx, st)
 
-	base := time.Now().UTC().Truncate(time.Minute).Add(-10 * time.Minute)
+	// Fixtures are anchored to the current hour so retention keeps its meaning,
+	// and each case pins its minute of the hour: the six buckets must roll up
+	// correctly whether or not they straddle an hour boundary.
+	hour := time.Now().UTC().Truncate(time.Hour)
+	for _, minute := range []int{0, 2, 5, 8, 10, 55, 58, 59} {
+		t.Run(fmt.Sprintf("minute-%02d", minute), func(t *testing.T) {
+			appID, serverID := resourceTestScope(t, ctx, st)
+			assertResourceHistoryRollupsAndRetention(t, ctx, st, appID, serverID, hour.Add(time.Duration(minute)*time.Minute))
+		})
+	}
+}
+
+func assertResourceHistoryRollupsAndRetention(t *testing.T, ctx context.Context, st *store.Store, appID, serverID pgtype.UUID, base time.Time) {
+	t.Helper()
 	var rows []sqlc.InsertResourceSamplesParams
 	for minute := 0; minute < 5; minute++ {
 		at := base.Add(time.Duration(minute) * time.Minute)
@@ -131,6 +143,10 @@ func TestResourceHistoryRollupsAndRetention(t *testing.T) {
 		t.Error("partial replica coverage was not retained in the rollup")
 	}
 
+	// The six buckets may straddle an hour boundary, so read every hour bucket
+	// they land in instead of assuming they all share the one holding base.
+	hourStart := base.Truncate(time.Hour)
+	hourEnd := base.Add(6 * time.Minute).Truncate(time.Hour).Add(time.Hour)
 	if _, err := st.UpsertResourceHourRollups(ctx, base, base.Add(6*time.Minute)); err != nil {
 		t.Fatalf("UpsertResourceHourRollups: %v", err)
 	}
@@ -138,8 +154,8 @@ func TestResourceHistoryRollupsAndRetention(t *testing.T) {
 		ResourceType: "application",
 		ResourceID:   appID,
 		Tier:         "hour",
-		RangeStart:   pgtype.Timestamptz{Time: base.Truncate(time.Hour), Valid: true},
-		RangeEnd:     pgtype.Timestamptz{Time: base.Truncate(time.Hour).Add(time.Hour), Valid: true},
+		RangeStart:   pgtype.Timestamptz{Time: hourStart, Valid: true},
+		RangeEnd:     pgtype.Timestamptz{Time: hourEnd, Valid: true},
 	})
 	if err != nil {
 		t.Fatalf("ListResourceRollupPoints hour: %v", err)
@@ -175,8 +191,8 @@ func TestResourceHistoryRollupsAndRetention(t *testing.T) {
 	}
 	if remaining, err := st.ListResourceRollupPoints(ctx, sqlc.ListResourceRollupPointsParams{
 		ResourceType: "application", ResourceID: appID, Tier: "hour",
-		RangeStart: pgtype.Timestamptz{Time: base.Truncate(time.Hour), Valid: true},
-		RangeEnd:   pgtype.Timestamptz{Time: base.Truncate(time.Hour).Add(time.Hour), Valid: true},
+		RangeStart: pgtype.Timestamptz{Time: hourStart, Valid: true},
+		RangeEnd:   pgtype.Timestamptz{Time: hourEnd, Valid: true},
 	}); err != nil || len(remaining) == 0 {
 		t.Errorf("hour rows after minute retention = %d, %v; want them kept", len(remaining), err)
 	}

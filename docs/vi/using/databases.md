@@ -88,20 +88,38 @@ Chuỗi kết nối phụ thuộc vào cách cơ sở dữ liệu được phơi
 
 ## Sao lưu
 
-Mở tab **Sao lưu** của một cơ sở dữ liệu để quản lý các lần chạy, lịch và đích lưu
-trữ. Một bản sao lưu là một lần kết xuất dữ liệu (dump) của engine do một container
-tạm thời thực hiện trên cùng node; artifact được nén và lưu vào đích đã chọn. Các
-lần chạy được liệt kê kèm loại (`manual` hoặc `scheduled`), trạng thái, kích thước,
-đích đến và dấu thời gian. Một lần chạy thất bại vẫn giữ dòng và văn bản lỗi của
-nó, nên bạn thấy được chỗ sai trước khi chạy lại.
+Mở tab **Sao lưu** của một cơ sở dữ liệu để quản lý các lần chạy, lịch và nhà cung
+cấp lưu trữ. Một bản sao lưu là một lần kết xuất dữ liệu (dump) của engine do một
+container tạm thời thực hiện trên cùng node; artifact được nén và lưu vào đích đã
+chọn. Các lần chạy được liệt kê kèm loại (`manual` hoặc `scheduled`), trạng thái,
+kích thước, đích đến và dấu thời gian. Một lần chạy thất bại vẫn giữ dòng và văn
+bản lỗi của nó, nên bạn thấy được chỗ sai trước khi chạy lại.
+
+Sao lưu là một tính năng riêng: cùng một lõi phục vụ cơ sở dữ liệu hôm nay và sẽ
+phục vụ lưu trữ của ứng dụng cùng volume của service, và trang **Sao lưu** liệt kê
+mọi lần chạy cùng lịch ở một chỗ. Bên cạnh đó, `GET /v1/backups`, `POST /v1/backups`,
+`GET /v1/backups/{id}`, `POST /v1/backups/{id}/restore`,
+`GET/POST /v1/backups/schedules`, `PATCH/DELETE /v1/backups/schedules/{id}`,
+`GET /v1/backups/restores` và `GET/POST /v1/backups/providers` là API độc lập với
+loại tài nguyên. Các tuyến dạng bộ sưu tập nhận `limit` và `offset`, sắp xếp mới
+nhất trước, và quyền truy cập được áp dụng trước khi phân trang, nên trang của
+thành viên chứa đầy các lần chạy họ thực sự với tới được. Hiện chỉ `database` được chấp nhận làm loại tài nguyên; các loại
+khác trả `400` cho tới khi driver của chúng có mặt.
+
+Các tuyến gắn với cơ sở dữ liệu được nêu trên trang này
+(`/v1/databases/{id}/backups`, `.../schedules`, `.../restore` và
+`/v1/databases/backup-targets`) là **bí danh đã lỗi thời** của lõi đó. Chúng giữ
+nguyên hình dạng yêu cầu và phản hồi, nên token và MCP client hiện có vẫn hoạt
+động, và luôn mô tả cùng các dòng công việc, cùng cách bố trí artifact như các
+tuyến mới.
 
 ### Sao lưu ngay
 
 **Sao lưu ngay** xếp hàng một lần chạy thủ công. Việc kết xuất dữ liệu dừng
 container của cơ sở dữ liệu trong lúc container tạm thời đọc volume, nên cơ sở dữ
 liệu tạm thời không khả dụng; nó được khởi động lại sau đó nếu trước đó đang chạy.
-Điều tương tự cũng đúng với các lần chạy theo lịch. Chọn một đích cho mỗi lần chạy,
-hoặc để mặc định.
+Điều tương tự cũng đúng với các lần chạy theo lịch. Chọn một nhà cung cấp cho mỗi
+lần chạy, hoặc để mặc định.
 
 ### Khôi phục
 
@@ -119,26 +137,32 @@ Một lịch là biểu thức cron năm trường trên control plane: phút, g
 tháng, tháng, ngày trong tuần. Các trường chấp nhận `*`, giá trị đơn, khoảng,
 bước (`*/5`, `1-10/2`) và danh sách phân tách bằng dấu phẩy của những dạng đó. Lần
 chạy tới được tính khi bạn lưu và hiển thị trong danh sách. Mỗi lịch có thể bật
-hoặc tạm dừng và mang đích riêng; không có đích thì các lần chạy rơi vào kho cục bộ
-mặc định. Xóa một lịch không đụng tới các bản sao lưu trước đó.
+hoặc tạm dừng và mang nhà cung cấp riêng; không có thì các lần chạy rơi vào nhà
+cung cấp **Đĩa cục bộ** có sẵn. Xóa một lịch không đụng tới các bản sao lưu trước
+đó.
 
-### Đích lưu trữ
+### Nhà cung cấp lưu trữ
 
-Khi không cấu hình đích nào, bản sao lưu đi vào đĩa của control plane. Lưu trữ
-tương thích S3 được hỗ trợ với AWS S3, Cloudflare R2, MinIO và các dịch vụ tương
-tự: cấu hình endpoint, region, bucket, tiền tố khóa tùy chọn, access key và secret
-key.
+Nhà cung cấp là một danh mục ở cấp chủ sở hữu: cấu hình một lần và dùng cho mọi cơ
+sở dữ liệu. Mỗi bản cài có sẵn nhà cung cấp **Đĩa cục bộ** ghi vào thư mục sao lưu
+của control plane. Nó luôn được liệt kê, không thể đổi sang loại khác và không thể
+xóa, nên bản cài mới sao lưu được mà không cần thiết lập gì và artifact không bao
+giờ rơi vào một đích không tên.
 
-Các đích được cấu hình trong **Sao lưu → Đích sao lưu**, một lần cho tài khoản chủ
-sở hữu chứ không phải cho mỗi cơ sở dữ liệu. Chỉ chủ sở hữu cấu hình chúng; bản sao
-lưu do thành viên bắt đầu dùng đích cục bộ. Các khóa được niêm phong trên máy chủ
-và không bao giờ hiển thị lại,
-nên biểu mẫu chỉnh sửa giữ nguyên các khóa đã lưu khi các trường khóa để trống.
-**Kiểm tra** kiểm tra endpoint và thông tin đăng nhập với bucket rồi báo kết quả.
+Lưu trữ tương thích S3 được hỗ trợ với AWS S3, Cloudflare R2, MinIO và các dịch vụ
+tương tự: cấu hình endpoint, region, bucket, tiền tố khóa tùy chọn, access key và
+secret key. Các nhà cung cấp được cấu hình trong **Sao lưu → Nhà cung cấp lưu trữ**,
+một lần cho tài khoản chủ sở hữu chứ không phải cho mỗi cơ sở dữ liệu. Chỉ chủ sở
+hữu cấu hình chúng; thành viên có thể chạy, liệt kê và khôi phục bản sao lưu của
+cơ sở dữ liệu thuộc dự án mình tham gia, nhưng không thể chọn hay đọc nhà cung cấp.
+Các khóa được niêm phong trên máy chủ và không bao giờ hiển thị lại, nên biểu mẫu
+chỉnh sửa giữ nguyên các khóa đã lưu khi các trường khóa để trống. **Kiểm tra**
+kiểm tra endpoint và thông tin đăng nhập với bucket, hoặc khả năng ghi của thư mục
+cục bộ, rồi báo kết quả.
 
-Xóa một đích không xóa các bản sao lưu trước đó, nhưng chúng không còn đọc lại được
-từ đích đó, nên việc khôi phục từ chúng sẽ thất bại. Thư mục đích cục bộ là một cài
-đặt control plane trên máy chủ.
+Xóa một nhà cung cấp không xóa các bản sao lưu trước đó, nhưng chúng không còn đọc
+lại được từ nhà cung cấp đó, nên việc khôi phục từ chúng sẽ thất bại. Thư mục sao
+lưu cục bộ là một cài đặt control plane trên máy chủ.
 
 > [!TIP]
 > Sao lưu sẽ dừng cơ sở dữ liệu. Với một cơ sở dữ liệu đang bận rộn, hãy lên lịch

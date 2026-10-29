@@ -1,8 +1,10 @@
-package databases
+package backups
 
 import (
 	"context"
+	"errors"
 	"fmt"
+	"os"
 	"strings"
 
 	"github.com/google/uuid"
@@ -10,12 +12,18 @@ import (
 	"github.com/justindeelux/gotham/internal/providers"
 )
 
-func (m *BackupManager) ListTargets(ctx context.Context, userID uuid.UUID) ([]BackupTarget, error) {
+func (m *BackupManager) ListProviders(ctx context.Context, userID uuid.UUID) ([]BackupTarget, error) {
 	if err := m.backupsReady(); err != nil {
 		return nil, err
 	}
 	if userID == uuid.Nil {
 		return nil, ErrNotFound
+	}
+	// The built-in provider is part of the contract, not a row a migration
+	// must have created: ensure it before listing so it is always visible.
+	if _, err := m.backups.EnsureBuiltinTarget(ctx, userID); err != nil {
+		m.logger.Warn("backups: could not ensure the built-in provider",
+			"user_id", userID.String(), "error", err)
 	}
 	targets, err := m.backups.ListBackupTargetsByUser(ctx, userID)
 	if err != nil {
@@ -27,7 +35,7 @@ func (m *BackupManager) ListTargets(ctx context.Context, userID uuid.UUID) ([]Ba
 	return targets, nil
 }
 
-func (m *BackupManager) CreateTarget(ctx context.Context, userID uuid.UUID, req TargetRequest) (BackupTarget, error) {
+func (m *BackupManager) CreateProvider(ctx context.Context, userID uuid.UUID, req ProviderRequest) (BackupTarget, error) {
 	if err := m.backupsReady(); err != nil {
 		return BackupTarget{}, err
 	}
@@ -50,23 +58,36 @@ func (m *BackupManager) CreateTarget(ctx context.Context, userID uuid.UUID, req 
 	if err != nil {
 		return BackupTarget{}, err
 	}
-	created, err := m.backups.CreateBackupTargetWithSecrets(ctx, target, sealed)
+	return m.backups.CreateBackupTargetWithSecrets(ctx, target, sealed)
+}
+
+func (m *BackupManager) UpdateProvider(ctx context.Context, userID, providerID uuid.UUID, req ProviderRequest) (BackupTarget, error) {
+	target, err := m.ownedTarget(ctx, userID, providerID)
 	if err != nil {
 		return BackupTarget{}, err
 	}
-	return created, nil
-}
-
-func (m *BackupManager) UpdateTarget(ctx context.Context, userID, targetID uuid.UUID, req TargetRequest) (BackupTarget, error) {
-	target, err := m.ownedTarget(ctx, userID, targetID)
-	if err != nil {
-		return BackupTarget{}, err
+	if target == nil {
+		return BackupTarget{}, ErrNotFound
+	}
+	if target.Builtin {
+		// The built-in keeps its identity: a new name would free "Local disk"
+		// for the seeder and grow a second builtin on the next list.
+		if name := strings.TrimSpace(req.Name); name != "" && name != target.Name {
+			return BackupTarget{}, fmt.Errorf("%w: the built-in Local disk provider keeps its name", ErrBuiltinProvider)
+		}
+		if kind := strings.TrimSpace(req.Kind); kind != "" &&
+			!strings.EqualFold(kind, string(TargetLocal)) {
+			return BackupTarget{}, ErrBuiltinProvider
+		}
+		req.Kind = string(TargetLocal)
+		req.Endpoint, req.Bucket, req.AccessKey, req.SecretKey = "", "", "", ""
+		req.Region, req.Prefix = nil, nil
 	}
 	if err := applyTargetRequest(target, req); err != nil {
 		return BackupTarget{}, err
 	}
 	if target.Kind == TargetS3 && !requestCarriesCredentials(req) {
-		stored, err := m.targetHasStoredCredentials(ctx, targetID)
+		stored, err := m.targetHasStoredCredentials(ctx, providerID)
 		if err != nil {
 			return BackupTarget{}, err
 		}
@@ -79,27 +100,33 @@ func (m *BackupManager) UpdateTarget(ctx context.Context, userID, targetID uuid.
 		return BackupTarget{}, err
 	}
 	target.UpdatedAt = m.now()
-	updated, err := m.backups.UpdateBackupTargetWithSecrets(ctx, *target, sealed)
-	if err != nil {
-		return BackupTarget{}, err
-	}
-	return updated, nil
+	return m.backups.UpdateBackupTargetWithSecrets(ctx, *target, sealed)
 }
 
-func (m *BackupManager) DeleteTarget(ctx context.Context, userID, targetID uuid.UUID) error {
-	if _, err := m.ownedTarget(ctx, userID, targetID); err != nil {
+func (m *BackupManager) DeleteProvider(ctx context.Context, userID, providerID uuid.UUID) error {
+	target, err := m.ownedTarget(ctx, userID, providerID)
+	if err != nil {
 		return err
 	}
-	if _, err := m.backups.DeleteBackupTarget(ctx, targetID, userID); err != nil {
+	if target == nil {
+		return ErrNotFound
+	}
+	if target.Builtin {
+		return fmt.Errorf("%w: the built-in Local disk provider cannot be deleted", ErrBuiltinProvider)
+	}
+	if _, err := m.backups.DeleteBackupTarget(ctx, providerID, userID); err != nil {
 		return err
 	}
 	return nil
 }
 
-func (m *BackupManager) TestTarget(ctx context.Context, userID, targetID uuid.UUID) (TargetCheck, error) {
-	target, err := m.ownedTarget(ctx, userID, targetID)
+func (m *BackupManager) TestProvider(ctx context.Context, userID, providerID uuid.UUID) (TargetCheck, error) {
+	target, err := m.ownedTarget(ctx, userID, providerID)
 	if err != nil {
 		return TargetCheck{}, err
+	}
+	if target == nil {
+		return TargetCheck{}, ErrNotFound
 	}
 	store, err := m.storeForTarget(ctx, target)
 	if err != nil {
@@ -107,6 +134,9 @@ func (m *BackupManager) TestTarget(ctx context.Context, userID, targetID uuid.UU
 	}
 	s3, ok := store.(*s3Store)
 	if !ok {
+		if err := writableDir(m.localDir); err != nil {
+			return TargetCheck{OK: false, Message: boundedDiag(err.Error())}, nil
+		}
 		return TargetCheck{OK: true, Message: "local backup directory is ready"}, nil
 	}
 	exists, err := s3.bucketExists(ctx)
@@ -119,17 +149,28 @@ func (m *BackupManager) TestTarget(ctx context.Context, userID, targetID uuid.UU
 	return TargetCheck{OK: true, Message: "connected to " + target.Bucket}, nil
 }
 
+func writableDir(dir string) error {
+	file, err := os.CreateTemp(dir, ".gotham-write-check-*")
+	if err != nil {
+		return fmt.Errorf("%w: backup directory is not writable: %v", ErrValidation, err)
+	}
+	name := file.Name()
+	_ = file.Close()
+	_ = os.Remove(name)
+	return nil
+}
+
 func (m *BackupManager) storeAndKey(
 	ctx context.Context,
 	target *BackupTarget,
-	database Database,
+	resource Resource,
 	runID uuid.UUID,
+	extension string,
 ) (ObjectStore, string, error) {
-	engine, ok := LookupBackupEngine(database.Engine)
-	if !ok {
-		return nil, "", fmt.Errorf("%w: engine %q has no backup engine", ErrValidation, database.Engine)
+	if strings.TrimSpace(extension) == "" {
+		return nil, "", fmt.Errorf("%w: the backup driver reported no artifact extension", ErrValidation)
 	}
-	key := fmt.Sprintf("databases/%s/%s.%s.gz", database.ID, runID, engine.DumpExtension())
+	key := fmt.Sprintf("%ss/%s/%s.%s.gz", resource.Type, resource.ID, runID, extension)
 	if m.objects != nil {
 		return m.objects, key, nil
 	}
@@ -140,6 +181,30 @@ func (m *BackupManager) storeAndKey(
 	return store, key, nil
 }
 
+// defaultTarget is the resource owner's built-in Local disk provider. Every
+// account gets one, including a member who created a resource, so those runs
+// are labelled the same way as the owner's. If seeding is impossible the run
+// still falls back to the local store instead of failing.
+func (m *BackupManager) defaultTarget(ctx context.Context, ownerID uuid.UUID) (*BackupTarget, error) {
+	if ownerID == uuid.Nil || m.backups == nil {
+		return nil, nil
+	}
+	target, err := m.backups.GetBuiltinTarget(ctx, ownerID)
+	if err == nil {
+		return &target, nil
+	}
+	if !errors.Is(err, ErrNotFound) {
+		return nil, err
+	}
+	target, err = m.backups.EnsureBuiltinTarget(ctx, ownerID)
+	if err != nil {
+		m.logger.Warn("backups: could not seed the built-in provider",
+			"user_id", ownerID.String(), "error", err)
+		return nil, nil
+	}
+	return &target, nil
+}
+
 func (m *BackupManager) storeForTarget(ctx context.Context, target *BackupTarget) (ObjectStore, error) {
 	if m.objects != nil {
 		return m.objects, nil
@@ -148,7 +213,7 @@ func (m *BackupManager) storeForTarget(ctx context.Context, target *BackupTarget
 		return newLocalStore(m.localDir)
 	}
 	if target.Kind != TargetS3 {
-		return nil, fmt.Errorf("%w: unsupported target kind %q", ErrValidation, target.Kind)
+		return nil, fmt.Errorf("%w: unsupported provider kind %q", ErrValidation, target.Kind)
 	}
 	config, err := m.openTarget(ctx, *target)
 	if err != nil {
@@ -157,7 +222,7 @@ func (m *BackupManager) storeForTarget(ctx context.Context, target *BackupTarget
 	return newS3Store(config)
 }
 
-func (m *BackupManager) storeForLocation(ctx context.Context, backup Backup, database *Database) (ObjectStore, error) {
+func (m *BackupManager) storeForLocation(ctx context.Context, backup Backup, ownerID uuid.UUID) (ObjectStore, error) {
 	if m.objects != nil {
 		return m.objects, nil
 	}
@@ -166,13 +231,13 @@ func (m *BackupManager) storeForLocation(ctx context.Context, backup Backup, dat
 		return newLocalStore(m.localDir)
 	case strings.HasPrefix(backup.Location, locationS3Prefix):
 		if backup.TargetID == uuid.Nil {
-			return nil, fmt.Errorf("%w: the storage target of this backup no longer exists", ErrValidation)
+			return nil, fmt.Errorf("%w: the storage provider of this backup no longer exists", ErrValidation)
 		}
 		target, err := m.backups.GetBackupTarget(ctx, backup.TargetID)
 		if err != nil {
 			return nil, err
 		}
-		if database != nil && target.UserID != database.UserID {
+		if ownerID != uuid.Nil && target.UserID != ownerID {
 			return nil, ErrNotFound
 		}
 		return m.storeForTarget(ctx, &target)
@@ -200,12 +265,12 @@ func (m *BackupManager) openTarget(ctx context.Context, target BackupTarget) (s3
 	}, nil
 }
 
-func requestCarriesCredentials(req TargetRequest) bool {
+func requestCarriesCredentials(req ProviderRequest) bool {
 	return strings.TrimSpace(req.AccessKey) != "" && strings.TrimSpace(req.SecretKey) != ""
 }
 
 func s3CredentialsRequired() error {
-	return fmt.Errorf("%w: s3 targets need both an access key and a secret key", ErrValidation)
+	return fmt.Errorf("%w: s3 providers need both an access key and a secret key", ErrValidation)
 }
 
 func (m *BackupManager) targetHasStoredCredentials(ctx context.Context, targetID uuid.UUID) (bool, error) {
@@ -232,7 +297,7 @@ func sealTargetSecrets(secret string, targetID uuid.UUID, accessKey, secretKey s
 		}
 		ciphertext, err := providers.SealSecret(secret, pair[1])
 		if err != nil {
-			return nil, fmt.Errorf("databases: seal %s: %w", pair[0], err)
+			return nil, fmt.Errorf("backups: seal %s: %w", pair[0], err)
 		}
 		sealed = append(sealed, TargetSecret{
 			TargetID:   targetID,
@@ -248,7 +313,7 @@ func openTargetSecrets(secret string, secrets []TargetSecret) (string, string, e
 	for _, item := range secrets {
 		value, err := providers.OpenSecret(secret, item.Ciphertext)
 		if err != nil {
-			return "", "", fmt.Errorf("databases: open %s: %w", item.Key, err)
+			return "", "", fmt.Errorf("backups: open %s: %w", item.Key, err)
 		}
 		switch item.Key {
 		case targetSecretAccessKey:
@@ -260,7 +325,7 @@ func openTargetSecrets(secret string, secrets []TargetSecret) (string, string, e
 	return accessKey, secretKey, nil
 }
 
-func applyTargetRequest(target *BackupTarget, req TargetRequest) error {
+func applyTargetRequest(target *BackupTarget, req ProviderRequest) error {
 	if name := strings.TrimSpace(req.Name); name != "" {
 		target.Name = name
 	}
@@ -269,7 +334,7 @@ func applyTargetRequest(target *BackupTarget, req TargetRequest) error {
 		case TargetS3, TargetLocal:
 			target.Kind = TargetKind(kind)
 		default:
-			return fmt.Errorf("%w: unsupported target kind %q (supported: s3, local)", ErrValidation, req.Kind)
+			return fmt.Errorf("%w: unsupported provider kind %q (supported: s3, local)", ErrValidation, req.Kind)
 		}
 	}
 	if endpoint := strings.TrimSpace(req.Endpoint); endpoint != "" {
@@ -293,10 +358,10 @@ func applyTargetRequest(target *BackupTarget, req TargetRequest) error {
 	}
 	if target.Kind == TargetS3 {
 		if strings.TrimSpace(target.Endpoint) == "" {
-			return fmt.Errorf("%w: endpoint is required for an s3 target", ErrValidation)
+			return fmt.Errorf("%w: endpoint is required for an s3 provider", ErrValidation)
 		}
 		if strings.TrimSpace(target.Bucket) == "" {
-			return fmt.Errorf("%w: bucket is required for an s3 target", ErrValidation)
+			return fmt.Errorf("%w: bucket is required for an s3 provider", ErrValidation)
 		}
 	}
 	return nil
@@ -322,7 +387,7 @@ func (m *BackupManager) ownedTargetID(ctx context.Context, userID uuid.UUID, raw
 	}
 	targetID, err := uuid.Parse(raw)
 	if err != nil {
-		return uuid.Nil, fmt.Errorf("%w: invalid target id", ErrValidation)
+		return uuid.Nil, fmt.Errorf("%w: invalid provider id", ErrValidation)
 	}
 	if _, err := m.ownedTarget(ctx, userID, targetID); err != nil {
 		return uuid.Nil, err
@@ -330,7 +395,7 @@ func (m *BackupManager) ownedTargetID(ctx context.Context, userID uuid.UUID, raw
 	return targetID, nil
 }
 
-func (m *BackupManager) targetOwnedByDatabase(ctx context.Context, targetID, databaseOwner uuid.UUID) error {
+func (m *BackupManager) targetOwnedByResource(ctx context.Context, targetID, resourceOwner uuid.UUID) error {
 	if targetID == uuid.Nil {
 		return nil
 	}
@@ -338,7 +403,7 @@ func (m *BackupManager) targetOwnedByDatabase(ctx context.Context, targetID, dat
 	if err != nil {
 		return err
 	}
-	if target.Kind == TargetS3 && target.UserID != databaseOwner {
+	if target.Kind == TargetS3 && target.UserID != resourceOwner {
 		return ErrNotFound
 	}
 	return nil

@@ -2,6 +2,8 @@ package store
 
 import (
 	"context"
+	"fmt"
+	"strings"
 	"time"
 
 	"github.com/google/uuid"
@@ -17,8 +19,9 @@ func (s *Store) ResourceProject(ctx context.Context, kind string, id uuid.UUID) 
 		"database":    `SELECT e.project_id FROM databases r JOIN environments e ON e.id=r.environment_id WHERE r.id=$1 AND r.deleted_at IS NULL`,
 		"service":     `SELECT e.project_id FROM services r JOIN environments e ON e.id=r.environment_id WHERE r.id=$1 AND r.deleted_at IS NULL`,
 		"deployment":  `SELECT e.project_id FROM deployments d JOIN applications a ON a.id=d.application_id JOIN environments e ON e.id=a.environment_id WHERE d.id=$1`,
-		"backup":      `SELECT e.project_id FROM backups b JOIN databases d ON d.id=b.database_id JOIN environments e ON e.id=d.environment_id WHERE b.id=$1`,
-		"schedule":    `SELECT e.project_id FROM backup_schedules b JOIN databases d ON d.id=b.database_id JOIN environments e ON e.id=d.environment_id WHERE b.id=$1`,
+		"backup":      backupProjectQuery("backups", "b"),
+		"schedule":    backupProjectQuery("backup_schedules", "b"),
+		"restore":     backupProjectQuery("restores", "r"),
 		"channel": `SELECT e.project_id
  FROM notification_channels n
  JOIN applications a ON n.resource_type='application' AND a.id=n.resource_id
@@ -123,6 +126,25 @@ func (s *Store) ReplaceProjectMembers(ctx context.Context, projectID, ownerID uu
 	return tx.Commit(ctx)
 }
 
+// backupProjectQuery resolves the project of a run/schedule/restore through
+// whichever resource column the row carries. The columns are real foreign keys
+// and exactly one is set, so the UNION yields at most one row.
+func backupProjectQuery(table, alias string) string {
+	return fmt.Sprintf(`SELECT e.project_id
+ FROM %[1]s %[2]s JOIN databases d ON d.id=%[2]s.database_id JOIN environments e ON e.id=d.environment_id WHERE %[2]s.id=$1
+ UNION ALL SELECT e.project_id FROM %[1]s %[2]s JOIN applications a ON a.id=%[2]s.application_id JOIN environments e ON e.id=a.environment_id WHERE %[2]s.id=$1
+ UNION ALL SELECT e.project_id FROM %[1]s %[2]s JOIN services v ON v.id=%[2]s.service_id JOIN environments e ON e.id=v.environment_id WHERE %[2]s.id=$1`, table, alias)
+}
+
+// backupGrantQuery answers a member's access for a whole collection of
+// runs/schedules/restores in one query.
+func backupGrantQuery(table, alias string) string {
+	const filter = " AND m.user_id=$1 AND %[2]s.id=ANY($2::uuid[])"
+	return fmt.Sprintf(`SELECT %[2]s.id FROM %[1]s %[2]s JOIN databases d ON d.id=%[2]s.database_id JOIN environments e ON e.id=d.environment_id JOIN project_members m ON m.project_id=e.project_id WHERE true`+filter+`
+ UNION SELECT %[2]s.id FROM %[1]s %[2]s JOIN applications a ON a.id=%[2]s.application_id JOIN environments e ON e.id=a.environment_id JOIN project_members m ON m.project_id=e.project_id WHERE true`+filter+`
+ UNION SELECT %[2]s.id FROM %[1]s %[2]s JOIN services v ON v.id=%[2]s.service_id JOIN environments e ON e.id=v.environment_id JOIN project_members m ON m.project_id=e.project_id WHERE true`+filter, table, alias)
+}
+
 // GrantedResourceIDs filters a whole collection in one query before serialization.
 func (s *Store) GrantedResourceIDs(ctx context.Context, userID uuid.UUID, kind string, ids []uuid.UUID) (map[uuid.UUID]bool, error) {
 	allowed := make(map[uuid.UUID]bool)
@@ -136,6 +158,9 @@ func (s *Store) GrantedResourceIDs(ctx context.Context, userID uuid.UUID, kind s
 		"service":     `services r JOIN environments e ON e.id=r.environment_id JOIN project_members m ON m.project_id=e.project_id`,
 		"deployment":  `deployments r JOIN applications a ON a.id=r.application_id JOIN environments e ON e.id=a.environment_id JOIN project_members m ON m.project_id=e.project_id`,
 		"channel":     `notification_channels r LEFT JOIN applications a ON r.resource_type='application' AND a.id=r.resource_id LEFT JOIN databases d ON r.resource_type='database' AND d.id=r.resource_id JOIN environments e ON e.id=COALESCE(a.environment_id,d.environment_id) JOIN project_members m ON m.project_id=e.project_id`,
+		"backup":      backupGrantQuery("backups", "b"),
+		"schedule":    backupGrantQuery("backup_schedules", "b"),
+		"restore":     backupGrantQuery("restores", "r"),
 	}
 	relation, ok := relations[kind]
 	if !ok {
@@ -143,6 +168,9 @@ func (s *Store) GrantedResourceIDs(ctx context.Context, userID uuid.UUID, kind s
 	}
 	// The relation comes exclusively from the fixed allowlist above.
 	query := "SELECT r.id FROM " + relation + " WHERE m.user_id=$1 AND r.id=ANY($2::uuid[])"
+	if strings.HasPrefix(relation, "SELECT ") {
+		query = relation
+	}
 	if kind == "database" || kind == "service" {
 		query += " AND r.deleted_at IS NULL"
 	}

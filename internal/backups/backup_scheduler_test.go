@@ -1,4 +1,4 @@
-package databases
+package backups
 
 import (
 	"context"
@@ -118,22 +118,22 @@ func TestSchedulerTickFiresOnlyDueSchedules(t *testing.T) {
 	ctx := context.Background()
 
 	due := fixture.backups.seedSchedule(BackupSchedule{
-		DatabaseID: fixture.database.ID,
-		Cron:       "0 2 * * *",
-		Enabled:    true,
-		NextRunAt:  time.Now().Add(-time.Minute),
+		ResourceRef: databaseRef(fixture.databaseID),
+		Cron:        "0 2 * * *",
+		Enabled:     true,
+		NextRunAt:   time.Now().Add(-time.Minute),
 	})
 	disabled := fixture.backups.seedSchedule(BackupSchedule{
-		DatabaseID: fixture.database.ID,
-		Cron:       "0 4 * * *",
-		Enabled:    false,
-		NextRunAt:  time.Now().Add(-time.Minute),
+		ResourceRef: databaseRef(fixture.databaseID),
+		Cron:        "0 4 * * *",
+		Enabled:     false,
+		NextRunAt:   time.Now().Add(-time.Minute),
 	})
 	future := fixture.backups.seedSchedule(BackupSchedule{
-		DatabaseID: fixture.database.ID,
-		Cron:       "0 5 * * *",
-		Enabled:    true,
-		NextRunAt:  time.Now().Add(time.Hour),
+		ResourceRef: databaseRef(fixture.databaseID),
+		Cron:        "0 5 * * *",
+		Enabled:     true,
+		NextRunAt:   time.Now().Add(time.Hour),
 	})
 
 	started, err := fixture.manager.scheduler.tick(ctx)
@@ -177,9 +177,9 @@ func TestSchedulerSingleFlightPerSchedule(t *testing.T) {
 	fixture := newBackupFixture(t)
 	ctx := context.Background()
 	schedule := fixture.backups.seedSchedule(BackupSchedule{
-		DatabaseID: fixture.database.ID,
-		Enabled:    true,
-		NextRunAt:  time.Now().Add(-time.Minute),
+		ResourceRef: databaseRef(fixture.databaseID),
+		Enabled:     true,
+		NextRunAt:   time.Now().Add(-time.Minute),
 	})
 	if !fixture.manager.scheduler.claim(schedule.ID) {
 		t.Fatal("could not claim the schedule")
@@ -205,15 +205,15 @@ func TestSchedulerSkipsBusyDatabaseAndKeepsCadence(t *testing.T) {
 	fixture := newBackupFixture(t)
 	ctx := context.Background()
 	schedule := fixture.backups.seedSchedule(BackupSchedule{
-		DatabaseID: fixture.database.ID,
-		Cron:       "0 2 * * *",
-		Enabled:    true,
-		NextRunAt:  time.Now().Add(-time.Minute),
+		ResourceRef: databaseRef(fixture.databaseID),
+		Cron:        "0 2 * * *",
+		Enabled:     true,
+		NextRunAt:   time.Now().Add(-time.Minute),
 	})
-	if !fixture.manager.claim(fixture.database.ID) {
+	if !fixture.manager.claim(fixture.databaseID) {
 		t.Fatal("could not claim the database")
 	}
-	defer fixture.manager.release(fixture.database.ID)
+	defer fixture.manager.release(fixture.databaseID)
 
 	started, err := fixture.manager.scheduler.tick(ctx)
 	if err != nil {
@@ -231,10 +231,10 @@ func TestSchedulerSkipsBusyDatabaseAndKeepsCadence(t *testing.T) {
 func TestSchedulerTickWithInvalidCronDoesNothing(t *testing.T) {
 	fixture := newBackupFixture(t)
 	schedule := fixture.backups.seedSchedule(BackupSchedule{
-		DatabaseID: fixture.database.ID,
-		Cron:       "not-a-cron",
-		Enabled:    true,
-		NextRunAt:  time.Now().Add(-time.Minute),
+		ResourceRef: databaseRef(fixture.databaseID),
+		Cron:        "not-a-cron",
+		Enabled:     true,
+		NextRunAt:   time.Now().Add(-time.Minute),
 	})
 
 	started, err := fixture.manager.scheduler.tick(context.Background())
@@ -257,9 +257,9 @@ func TestSchedulerStartAndClose(t *testing.T) {
 	fixture := newBackupFixture(t)
 	fixture.manager.scheduler.interval = 5 * time.Millisecond
 	fixture.backups.seedSchedule(BackupSchedule{
-		DatabaseID: fixture.database.ID,
-		Enabled:    true,
-		NextRunAt:  time.Now().Add(-time.Minute),
+		ResourceRef: databaseRef(fixture.databaseID),
+		Enabled:     true,
+		NextRunAt:   time.Now().Add(-time.Minute),
 	})
 
 	fixture.manager.scheduler.Start()
@@ -294,10 +294,10 @@ func TestSchedulerFallBackRecoveryAdvancesFromServedSlot(t *testing.T) {
 	served := time.Date(2025, 11, 2, 5, 30, 0, 0, time.UTC).In(loc)
 	now := time.Date(2025, 11, 2, 6, 0, 0, 0, time.UTC).In(loc)
 	schedule := fixture.backups.seedSchedule(BackupSchedule{
-		DatabaseID: fixture.database.ID,
-		Cron:       "30 1 * * *",
-		Enabled:    true,
-		NextRunAt:  served,
+		ResourceRef: databaseRef(fixture.databaseID),
+		Cron:        "30 1 * * *",
+		Enabled:     true,
+		NextRunAt:   served,
 	})
 
 	if started := fixture.manager.scheduler.fire(context.Background(), schedule, now); started != 1 {

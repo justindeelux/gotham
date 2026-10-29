@@ -147,7 +147,9 @@ func NewService(cfg Config) *Service {
 	}
 }
 
-func NewDefaultService(cfg Config) DatabaseService {
+// NewDefaultService returns the concrete service so a caller can wire it as a
+// backup driver; it is nil when the feature is off or a dependency is missing.
+func NewDefaultService(cfg Config) *Service {
 	if cfg.repository() == nil || cfg.Containers == nil {
 		return nil
 	}

@@ -1,4 +1,4 @@
-package databases
+package backups
 
 import (
 	"context"
@@ -6,7 +6,7 @@ import (
 	"sync"
 	"testing"
 
-	"github.com/justindeelux/gotham/internal/containers"
+	"errors"
 )
 
 type recordingBackupNotifier struct {
@@ -43,11 +43,14 @@ func TestBackupCompletionNotifies(t *testing.T) {
 	if result.Status != BackupCompleted {
 		t.Errorf("status = %q, want completed", result.Status)
 	}
-	if result.BackupID != backup.ID || result.DatabaseID != fixture.database.ID {
-		t.Errorf("ids = %s/%s, want %s/%s", result.BackupID, result.DatabaseID, backup.ID, fixture.database.ID)
+	if result.BackupID != backup.ID || result.ResourceID != fixture.databaseID {
+		t.Errorf("ids = %s/%s, want %s/%s", result.BackupID, result.ResourceID, backup.ID, fixture.databaseID)
 	}
-	if result.Database != fixture.database.Name {
-		t.Errorf("database = %q, want %q", result.Database, fixture.database.Name)
+	if result.ResourceType != ResourceDatabase {
+		t.Errorf("resource type = %q, want database", result.ResourceType)
+	}
+	if result.Name != "test-database" {
+		t.Errorf("name = %q, want the resolved resource name", result.Name)
 	}
 	if result.Error != "" {
 		t.Errorf("error = %q, want empty on success", result.Error)
@@ -59,13 +62,7 @@ func TestBackupCompletionNotifies(t *testing.T) {
 
 func TestBackupFailureNotifies(t *testing.T) {
 	fixture := newBackupFixture(t)
-	fixture.containers.logFn = func(opts containers.RunOptions) [][]byte {
-		runID := envValue(opts.Env, "GOTHAM_RUN_ID")
-		return [][]byte{[]byte(
-			jobStartPrefix + runID + "\n" +
-				jobEndPrefix + runID + " fail 7\n" +
-				"pg_dump: error: could not connect\n")}
-	}
+	fixture.source.captureErr = errors.New("databases: temporary container failed with status 7")
 	notifier := &recordingBackupNotifier{}
 	fixture.manager.notifier = notifier
 
@@ -82,8 +79,8 @@ func TestBackupFailureNotifies(t *testing.T) {
 	if !strings.Contains(result.Error, "status 7") {
 		t.Errorf("error = %q, want the job failure", result.Error)
 	}
-	if result.Database != fixture.database.Name {
-		t.Errorf("database = %q, want %q", result.Database, fixture.database.Name)
+	if result.Name != "test-database" {
+		t.Errorf("name = %q, want the resolved resource name", result.Name)
 	}
 }
 

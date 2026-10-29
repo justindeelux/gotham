@@ -1,4 +1,4 @@
-package databases
+package backups
 
 import (
 	"context"
@@ -67,15 +67,15 @@ func TestSweepSkipsJobStartedMidList(t *testing.T) {
 	gated := &gatedContainers{release: make(chan struct{}), entered: make(chan struct{})}
 
 	manager := NewBackupService(BackupConfig{
-		Repository:         backups,
-		DatabaseRepository: newFakeRepository(),
-		Containers:         gated,
-		Secret:             testSecret,
-		Logger:             discardLogger(),
-		LocalDir:           t.TempDir(),
-		JobTimeout:         time.Second,
-		SchedulerInterval:  time.Hour,
-		DisableScheduler:   true,
+		Repository:        backups,
+		Sources:           map[ResourceType]Source{ResourceDatabase: newFakeSource()},
+		Containers:        gated,
+		Secret:            testSecret,
+		Logger:            discardLogger(),
+		LocalDir:          t.TempDir(),
+		JobTimeout:        time.Second,
+		SchedulerInterval: time.Hour,
+		DisableScheduler:  true,
 	})
 	t.Cleanup(func() { _ = manager.Close() })
 
@@ -94,13 +94,13 @@ func TestSweepSkipsJobStartedMidList(t *testing.T) {
 	if !manager.claim(databaseID) {
 		t.Fatal("could not claim the database lease")
 	}
-	run := backups.seedBackup(Backup{DatabaseID: databaseID, Status: BackupRunning})
+	run := backups.seedBackup(Backup{ResourceRef: databaseRef(databaseID), Status: BackupRunning})
 	gated.mu.Lock()
 	gated.listed = []containers.Container{{ID: "fresh-job", Labels: map[string]string{
-		labelManaged:    "true",
-		labelRole:       roleBackup,
-		labelDatabaseID: databaseID.String(),
-		labelBackupID:   run.ID.String(),
+		LabelManaged:    "true",
+		LabelRole:       RoleBackup,
+		LabelResourceID: databaseID.String(),
+		LabelBackupID:   run.ID.String(),
 	}}}
 	gated.mu.Unlock()
 	close(gated.release)
@@ -127,15 +127,15 @@ func TestStartupSweepDoesNotBlockConstructor(t *testing.T) {
 	done := make(chan BackupService, 1)
 	go func() {
 		done <- NewDefaultBackupService(BackupConfig{
-			Repository:         backups,
-			DatabaseRepository: newFakeRepository(),
-			Containers:         hanging,
-			Secret:             testSecret,
-			Logger:             discardLogger(),
-			LocalDir:           t.TempDir(),
-			JobTimeout:         time.Second,
-			SchedulerInterval:  time.Hour,
-			DisableScheduler:   true,
+			Repository:        backups,
+			Sources:           map[ResourceType]Source{ResourceDatabase: newFakeSource()},
+			Containers:        hanging,
+			Secret:            testSecret,
+			Logger:            discardLogger(),
+			LocalDir:          t.TempDir(),
+			JobTimeout:        time.Second,
+			SchedulerInterval: time.Hour,
+			DisableScheduler:  true,
 		})
 	}()
 

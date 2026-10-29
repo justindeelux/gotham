@@ -13,7 +13,7 @@ import (
 
 	"github.com/google/uuid"
 
-	"github.com/justindeelux/gotham/internal/databases"
+	"github.com/justindeelux/gotham/internal/backups"
 	"github.com/justindeelux/gotham/internal/deploy"
 	"github.com/justindeelux/gotham/internal/providers"
 )
@@ -353,19 +353,21 @@ func TestBackupFinishedMapsTerminalOutcome(t *testing.T) {
 	notifier := newFakeNotifier()
 	setFactory(t, service, map[uuid.UUID]*fakeNotifier{channel.ID: notifier})
 
-	service.BackupFinished(context.Background(), databases.BackupResult{
-		DatabaseID: databaseID,
-		Database:   "orders-db",
+	service.BackupFinished(context.Background(), backups.BackupResult{
+		ResourceType: backups.ResourceDatabase,
+		ResourceID:   databaseID,
+		Name:         "orders-db",
 
-		Status:     databases.BackupFailed,
+		Status:     backups.BackupFailed,
 		Error:      "dump exited 1",
 		FinishedAt: time.Date(2026, 9, 29, 12, 0, 0, 0, time.UTC),
 	})
-	service.BackupFinished(context.Background(), databases.BackupResult{
-		DatabaseID: databaseID,
-		Database:   "orders-db",
+	service.BackupFinished(context.Background(), backups.BackupResult{
+		ResourceType: backups.ResourceDatabase,
+		ResourceID:   databaseID,
+		Name:         "orders-db",
 
-		Status:     databases.BackupCompleted,
+		Status:     backups.BackupCompleted,
 		FinishedAt: time.Date(2026, 9, 29, 12, 1, 0, 0, time.UTC),
 	})
 
@@ -392,7 +394,7 @@ func TestBackupFinishedMapsTerminalOutcome(t *testing.T) {
 func TestDeployFinishedWithoutNotifierIsSafe(t *testing.T) {
 	var nilService *Service
 	nilService.DeployFinished(context.Background(), deploy.DeployResult{State: deploy.StateFailed})
-	nilService.BackupFinished(context.Background(), databases.BackupResult{Status: databases.BackupFailed})
+	nilService.BackupFinished(context.Background(), backups.BackupResult{Status: backups.BackupFailed})
 	nilService.Dispatch(sampleEvent())
 
 	t.Setenv(FeatureEnv, "false")

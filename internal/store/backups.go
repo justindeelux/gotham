@@ -50,11 +50,12 @@ func (s *Store) GetBackup(ctx context.Context, id pgtype.UUID) (sqlc.Backup, err
 	return s.queries.GetBackup(ctx, id)
 }
 
-func (s *Store) ListBackupsByDatabase(ctx context.Context, databaseID pgtype.UUID, limit int32) ([]sqlc.Backup, error) {
-	return s.queries.ListBackupsByDatabase(ctx, sqlc.ListBackupsByDatabaseParams{
-		DatabaseID: databaseID,
-		Limit:      limit,
-	})
+func (s *Store) ListBackupsByResource(ctx context.Context, params sqlc.ListBackupsByResourceParams) ([]sqlc.Backup, error) {
+	return s.queries.ListBackupsByResource(ctx, params)
+}
+
+func (s *Store) ListBackups(ctx context.Context, params sqlc.ListBackupsParams) ([]sqlc.Backup, error) {
+	return s.queries.ListBackups(ctx, params)
 }
 
 func (s *Store) HasBackupsForTarget(ctx context.Context, targetID pgtype.UUID) (bool, error) {
@@ -89,8 +90,12 @@ func (s *Store) ListRunningRestores(ctx context.Context) ([]sqlc.Restore, error)
 	return s.queries.ListRunningRestores(ctx)
 }
 
-func (s *Store) ListRestoresByDatabase(ctx context.Context, params sqlc.ListRestoresByDatabaseParams) ([]sqlc.Restore, error) {
-	return s.queries.ListRestoresByDatabase(ctx, params)
+func (s *Store) ListRestoresByResource(ctx context.Context, params sqlc.ListRestoresByResourceParams) ([]sqlc.Restore, error) {
+	return s.queries.ListRestoresByResource(ctx, params)
+}
+
+func (s *Store) ListRestores(ctx context.Context, params sqlc.ListRestoresParams) ([]sqlc.Restore, error) {
+	return s.queries.ListRestores(ctx, params)
 }
 
 func (s *Store) CreateBackupSchedule(ctx context.Context, params sqlc.CreateBackupScheduleParams) (sqlc.BackupSchedule, error) {
@@ -101,8 +106,12 @@ func (s *Store) GetBackupSchedule(ctx context.Context, id pgtype.UUID) (sqlc.Bac
 	return s.queries.GetBackupSchedule(ctx, id)
 }
 
-func (s *Store) ListBackupSchedulesByDatabase(ctx context.Context, databaseID pgtype.UUID) ([]sqlc.BackupSchedule, error) {
-	return s.queries.ListBackupSchedulesByDatabase(ctx, databaseID)
+func (s *Store) ListBackupSchedulesByResource(ctx context.Context, params sqlc.ListBackupSchedulesByResourceParams) ([]sqlc.BackupSchedule, error) {
+	return s.queries.ListBackupSchedulesByResource(ctx, params)
+}
+
+func (s *Store) ListBackupSchedules(ctx context.Context, viewerID pgtype.UUID) ([]sqlc.BackupSchedule, error) {
+	return s.queries.ListBackupSchedules(ctx, viewerID)
 }
 
 func (s *Store) UpdateBackupSchedule(ctx context.Context, params sqlc.UpdateBackupScheduleParams) (sqlc.BackupSchedule, error) {
@@ -127,6 +136,14 @@ func (s *Store) MarkBackupScheduleRun(ctx context.Context, params sqlc.MarkBacku
 
 func (s *Store) CreateBackupTarget(ctx context.Context, params sqlc.CreateBackupTargetParams) (sqlc.BackupTarget, error) {
 	return s.queries.CreateBackupTarget(ctx, params)
+}
+
+func (s *Store) EnsureBuiltinBackupTarget(ctx context.Context, userID pgtype.UUID) (sqlc.BackupTarget, error) {
+	return s.queries.EnsureBuiltinBackupTarget(ctx, userID)
+}
+
+func (s *Store) GetBuiltinBackupTarget(ctx context.Context, userID pgtype.UUID) (sqlc.BackupTarget, error) {
+	return s.queries.GetBuiltinBackupTarget(ctx, userID)
 }
 
 func (s *Store) GetBackupTarget(ctx context.Context, id pgtype.UUID) (sqlc.BackupTarget, error) {
@@ -221,4 +238,8 @@ func (s *Store) UpsertBackupTargetSecret(ctx context.Context, params sqlc.Upsert
 
 func (s *Store) ListBackupTargetSecrets(ctx context.Context, targetID pgtype.UUID) ([]sqlc.BackupTargetSecret, error) {
 	return s.queries.ListBackupTargetSecrets(ctx, targetID)
+}
+
+func (s *Store) ListOwnerUserIDs(ctx context.Context) ([]pgtype.UUID, error) {
+	return s.queries.ListOwnerUserIDs(ctx)
 }

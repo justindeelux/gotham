@@ -1,4 +1,4 @@
-package databases
+package backups
 
 import (
 	"context"
@@ -13,8 +13,9 @@ import (
 
 func TestScheduleMaxRunSecondsDefaultsAndValidates(t *testing.T) {
 	fixture := newBackupFixture(t)
-	created, err := fixture.manager.CreateSchedule(context.Background(), fixture.userID, fixture.database.ID, ScheduleRequest{
-		Cron: "0 2 * * *",
+	created, err := fixture.manager.CreateSchedule(context.Background(), fixture.userID, ScheduleRequest{
+		Resource: databaseRef(fixture.databaseID),
+		Cron:     "0 2 * * *",
 	})
 	if err != nil {
 		t.Fatalf("CreateSchedule: %v", err)
@@ -24,21 +25,24 @@ func TestScheduleMaxRunSecondsDefaultsAndValidates(t *testing.T) {
 	}
 
 	tooShort := MinMaxBackupRunSeconds - 1
-	if _, err := fixture.manager.CreateSchedule(context.Background(), fixture.userID, fixture.database.ID, ScheduleRequest{
-		Cron: "0 2 * * *", MaxRunSeconds: &tooShort,
+	if _, err := fixture.manager.CreateSchedule(context.Background(), fixture.userID, ScheduleRequest{
+		Resource: databaseRef(fixture.databaseID),
+		Cron:     "0 2 * * *", MaxRunSeconds: &tooShort,
 	}); !errors.Is(err, ErrValidation) {
 		t.Fatalf("too short error = %v", err)
 	}
 	tooLong := MaxMaxBackupRunSeconds + 1
-	if _, err := fixture.manager.CreateSchedule(context.Background(), fixture.userID, fixture.database.ID, ScheduleRequest{
-		Cron: "0 2 * * *", MaxRunSeconds: &tooLong,
+	if _, err := fixture.manager.CreateSchedule(context.Background(), fixture.userID, ScheduleRequest{
+		Resource: databaseRef(fixture.databaseID),
+		Cron:     "0 2 * * *", MaxRunSeconds: &tooLong,
 	}); !errors.Is(err, ErrValidation) {
 		t.Fatalf("too long error = %v", err)
 	}
 
 	valid := 45 * 60
-	updated, err := fixture.manager.UpdateSchedule(context.Background(), fixture.userID, fixture.database.ID, created.ID, ScheduleRequest{
-		Cron: "0 2 * * *", MaxRunSeconds: &valid,
+	updated, err := fixture.manager.UpdateSchedule(context.Background(), fixture.userID, created.ID, ScheduleRequest{
+		Resource: databaseRef(fixture.databaseID),
+		Cron:     "0 2 * * *", MaxRunSeconds: &valid,
 	})
 	if err != nil {
 		t.Fatalf("UpdateSchedule: %v", err)
@@ -52,14 +56,15 @@ func TestScheduleEditKeepsAMissedSlot(t *testing.T) {
 	fixture := newBackupFixture(t)
 	missed := time.Now().UTC().Add(-2 * time.Hour).Truncate(time.Second)
 	schedule := fixture.backups.seedSchedule(BackupSchedule{
-		DatabaseID: fixture.database.ID,
-		Cron:       "0 2 * * *",
-		Enabled:    true,
-		NextRunAt:  missed,
+		ResourceRef: databaseRef(fixture.databaseID),
+		Cron:        "0 2 * * *",
+		Enabled:     true,
+		NextRunAt:   missed,
 	})
 
-	updated, err := fixture.manager.UpdateSchedule(context.Background(), fixture.userID, fixture.database.ID, schedule.ID, ScheduleRequest{
-		Cron: "0 3 * * *", Enabled: boolPtr(true),
+	updated, err := fixture.manager.UpdateSchedule(context.Background(), fixture.userID, schedule.ID, ScheduleRequest{
+		Resource: databaseRef(fixture.databaseID),
+		Cron:     "0 3 * * *", Enabled: boolPtr(true),
 	})
 	if err != nil {
 		t.Fatalf("UpdateSchedule: %v", err)
@@ -72,8 +77,9 @@ func TestScheduleEditKeepsAMissedSlot(t *testing.T) {
 	}
 
 	// A second edit must not clear the evidence either.
-	again, err := fixture.manager.UpdateSchedule(context.Background(), fixture.userID, fixture.database.ID, schedule.ID, ScheduleRequest{
-		Cron: "0 4 * * *", Enabled: boolPtr(false),
+	again, err := fixture.manager.UpdateSchedule(context.Background(), fixture.userID, schedule.ID, ScheduleRequest{
+		Resource: databaseRef(fixture.databaseID),
+		Cron:     "0 4 * * *", Enabled: boolPtr(false),
 	})
 	if err != nil {
 		t.Fatalf("second UpdateSchedule: %v", err)
@@ -87,7 +93,7 @@ func TestSchedulerRecordsTheServedSlot(t *testing.T) {
 	fixture := newBackupFixture(t)
 	slot := time.Now().UTC().Add(-time.Minute)
 	schedule := fixture.backups.seedSchedule(BackupSchedule{
-		DatabaseID: fixture.database.ID, Cron: "0 2 * * *", Enabled: true, NextRunAt: slot,
+		ResourceRef: databaseRef(fixture.databaseID), Cron: "0 2 * * *", Enabled: true, NextRunAt: slot,
 	})
 	if started := fixture.manager.scheduler.fire(context.Background(), schedule, time.Now().UTC()); started != 1 {
 		t.Fatalf("fire started %d", started)
@@ -105,8 +111,9 @@ func TestScheduleTargetChangeRecordsChange(t *testing.T) {
 	fixture := newBackupFixture(t)
 	targetA := fixture.backups.seedTarget(BackupTarget{UserID: fixture.userID, Name: "a", Kind: TargetS3})
 	targetB := fixture.backups.seedTarget(BackupTarget{UserID: fixture.userID, Name: "b", Kind: TargetS3})
-	created, err := fixture.manager.CreateSchedule(context.Background(), fixture.userID, fixture.database.ID, ScheduleRequest{
-		Cron: "0 2 * * *", TargetID: strPtr(targetA.ID.String()),
+	created, err := fixture.manager.CreateSchedule(context.Background(), fixture.userID, ScheduleRequest{
+		Resource: databaseRef(fixture.databaseID),
+		Cron:     "0 2 * * *", TargetID: strPtr(targetA.ID.String()),
 	})
 	if err != nil {
 		t.Fatalf("CreateSchedule: %v", err)
@@ -114,8 +121,9 @@ func TestScheduleTargetChangeRecordsChange(t *testing.T) {
 	if !created.TargetChangedAt.IsZero() {
 		t.Fatalf("new schedule change = %v, want zero", created.TargetChangedAt)
 	}
-	updated, err := fixture.manager.UpdateSchedule(context.Background(), fixture.userID, fixture.database.ID, created.ID, ScheduleRequest{
-		Cron: "0 2 * * *", TargetID: strPtr(targetB.ID.String()),
+	updated, err := fixture.manager.UpdateSchedule(context.Background(), fixture.userID, created.ID, ScheduleRequest{
+		Resource: databaseRef(fixture.databaseID),
+		Cron:     "0 2 * * *", TargetID: strPtr(targetB.ID.String()),
 	})
 	if err != nil {
 		t.Fatalf("UpdateSchedule: %v", err)
@@ -131,13 +139,14 @@ func TestScheduleTargetChangeRecordsChange(t *testing.T) {
 func TestDeleteTargetMarksScheduleForTargetChange(t *testing.T) {
 	fixture := newBackupFixture(t)
 	target := fixture.backups.seedTarget(BackupTarget{UserID: fixture.userID, Name: "offsite", Kind: TargetS3})
-	schedule, err := fixture.manager.CreateSchedule(context.Background(), fixture.userID, fixture.database.ID, ScheduleRequest{
-		Cron: "0 2 * * *", TargetID: strPtr(target.ID.String()),
+	schedule, err := fixture.manager.CreateSchedule(context.Background(), fixture.userID, ScheduleRequest{
+		Resource: databaseRef(fixture.databaseID),
+		Cron:     "0 2 * * *", TargetID: strPtr(target.ID.String()),
 	})
 	if err != nil {
 		t.Fatalf("CreateSchedule: %v", err)
 	}
-	if err := fixture.manager.DeleteTarget(context.Background(), fixture.userID, target.ID); err != nil {
+	if err := fixture.manager.DeleteProvider(context.Background(), fixture.userID, target.ID); err != nil {
 		t.Fatalf("DeleteTarget: %v", err)
 	}
 	stored, ok := fixture.backups.getSchedule(schedule.ID)
@@ -155,14 +164,14 @@ func TestDeleteTargetMarksScheduleForTargetChange(t *testing.T) {
 func TestBackupRunLeaseIsPerRun(t *testing.T) {
 	fixture := newBackupFixture(t)
 	runID, other := uuid.New(), uuid.New()
-	if !fixture.manager.claimRun(fixture.database.ID, runID) {
+	if !fixture.manager.claimRun(fixture.databaseID, runID) {
 		t.Fatal("could not claim the run")
 	}
-	defer fixture.manager.release(fixture.database.ID)
-	if !fixture.manager.BackupRunActive(fixture.database.ID, runID) {
+	defer fixture.manager.release(fixture.databaseID)
+	if !fixture.manager.BackupRunActive(fixture.databaseID, runID) {
 		t.Fatal("the owning run must be active")
 	}
-	if fixture.manager.BackupRunActive(fixture.database.ID, other) {
+	if fixture.manager.BackupRunActive(fixture.databaseID, other) {
 		t.Fatal("another run on the same database must not look active")
 	}
 }

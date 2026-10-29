@@ -6,7 +6,9 @@ import { fileURLToPath } from "node:url";
 import { expect, test } from "@playwright/test";
 import type { Locator, Page } from "@playwright/test";
 
-/* global URL, StorageEvent, document, window:readonly */
+import { waitForLayoutSettled } from "./support";
+
+/* global URL, StorageEvent, document, window, getComputedStyle:readonly */
 
 const testsDir = dirname(fileURLToPath(import.meta.url));
 const webdistRoot = resolve(testsDir, "../../internal/server/webdist");
@@ -108,14 +110,14 @@ const n8nDetail = {
       label: "Encryption key",
       type: "secret",
       required: true,
-      help: "Encrypts stored credentials; keep it safe, losing it locks the credentials.",
     },
   ],
 };
 
 const n8nRender = {
   slug: "n8n",
-  compose_yaml: "services:\n  n8n:\n    image: n8nio/n8n:1.0\n",
+  compose_yaml:
+    'services:\n  n8n:\n    image: "n8nio/n8n:1.0"\n    environment:\n      N8N_ENCRYPTION_KEY: ${encryption_key}\n    # exposed by Traefik\n    ports:\n      - "5678:5678"\n',
   env: { N8N_ENCRYPTION_KEY: "s3cret" },
   spec: { services: ["n8n"], domains: [], named_volumes: ["n8n-data"], mounts: [] },
 };
@@ -288,6 +290,52 @@ async function openServicePicker(page: Page): Promise<Locator> {
   await picker.getByRole("tab").nth(1).click();
   await picker.locator(".res-pane").waitFor();
   return picker;
+}
+
+async function openTemplateWizard(page: Page): Promise<Locator> {
+  const picker = await openServicePicker(page);
+  await picker.locator('button.res-card[data-template="n8n"]').click();
+  const wizard = page.locator(".template-wizard");
+  await wizard.waitFor();
+  // The card enters with a 0.5 -> 1 scale transition anchored at the trigger.
+  // Measuring before it ends samples two frames and reports a fake offset.
+  await waitForLayoutSettled(page);
+  return wizard;
+}
+
+async function openPreviewStep(page: Page): Promise<Locator> {
+  const wizard = await openTemplateWizard(page);
+  await page.locator('[data-testid="wizard-step-1"]').waitFor();
+  await page.locator(".field-domain input").fill("n8n.example.com");
+  await page.locator(".field-encryption_key input").fill("hunter2");
+  await page.getByRole("button", { name: "Next", exact: true }).click();
+  await expect(page.locator('[data-testid="compose-preview"]')).toBeVisible();
+  return wizard;
+}
+
+async function openCreateStep(page: Page): Promise<Locator> {
+  const wizard = await openPreviewStep(page);
+  const next = page.getByRole("button", { name: "Next", exact: true });
+  await expect(next).toBeEnabled();
+  await next.click();
+  await page.locator('[data-testid="wizard-step-3"]').waitFor();
+  return wizard;
+}
+
+async function previewTokenColors(page: Page): Promise<string[]> {
+  return page.locator('[data-testid="compose-preview"] .cm-content').evaluate((root) => {
+    const seen = new Set<string>();
+    for (const span of root.querySelectorAll("span")) {
+      seen.add(getComputedStyle(span).color);
+    }
+    return [...seen];
+  });
+}
+
+async function boxOf(page: Page, selector: string) {
+  const box = await page.locator(selector).boundingBox();
+  expect(box, `${selector} has a box`).not.toBeNull();
+  return box!;
 }
 
 async function expectNoOverflow(page: Page, width: number): Promise<void> {
@@ -469,4 +517,107 @@ test("unknown failures pair a localized summary with the identical raw detail", 
       await page.unrouteAll({ behavior: "wait" });
     }
   }
+});
+
+test("create step top-aligns Service name and Node, then stacks at 390px", async ({
+  page,
+}) => {
+  await page.setViewportSize({ width: 1366, height: 900 });
+  await mockApi(page);
+  const wizard = await openCreateStep(page);
+
+  const nameInput = await boxOf(page, ".wizard__metaform .field-service-name .n-input");
+  const nodeSelect = await boxOf(
+    page,
+    ".wizard__metaform > .n-form-item:nth-child(2) .n-select",
+  );
+  expect(
+    Math.abs(nameInput.y - nodeSelect.y),
+    "Service name and Node inputs share one top edge",
+  ).toBeLessThanOrEqual(1);
+
+  await expect(wizard).not.toContainText("/api/v1");
+  await expect(page.locator(".template-wizard .wizard__desc")).toHaveCount(0);
+  await page.screenshot({ path: test.info().outputPath("create-1366.png") });
+
+  await page.setViewportSize({ width: 390, height: 900 });
+  await waitForLayoutSettled(page);
+  const stackedName = await boxOf(page, ".wizard__metaform .field-service-name .n-input");
+  const stackedNode = await boxOf(
+    page,
+    ".wizard__metaform > .n-form-item:nth-child(2) .n-select",
+  );
+  expect(
+    stackedNode.y,
+    "stacked fields keep a normal vertical gap",
+  ).toBeGreaterThanOrEqual(stackedName.y + stackedName.height + 11);
+  await expectNoOverflow(page, 390);
+  await page.screenshot({ path: test.info().outputPath("create-390.png") });
+});
+
+test("configure step top-aligns fields where only one has hint text", async ({ page }) => {
+  await page.setViewportSize({ width: 1366, height: 900 });
+  await mockApi(page);
+  await openTemplateWizard(page);
+
+  const domain = await boxOf(page, ".field-domain .n-input");
+  const key = await boxOf(page, ".field-encryption_key .n-input");
+  expect(
+    Math.abs(domain.y - key.y),
+    "inputs on the same dynamic-form row share one top edge",
+  ).toBeLessThanOrEqual(1);
+});
+
+test("compose preview highlights YAML and keeps a gap before the alert", async ({
+  page,
+}) => {
+  for (const theme of ["dark", "light"] as const) {
+    await page.setViewportSize({ width: 1366, height: 900 });
+    await page.addInitScript((value: string) => {
+      window.localStorage.setItem("gotham.files.editor.v1.u-1", value);
+    }, JSON.stringify({ version: 1, theme }));
+    await mockApi(page);
+    await openPreviewStep(page);
+
+    const preview = page.locator('[data-testid="compose-preview"]');
+    await expect(preview).toContainText("n8nio/n8n");
+    await expect(preview).toContainText("${encryption_key}");
+    await expect
+      .poll(async () => new Set(await previewTokenColors(page)).size, {
+        message: `${theme}: YAML keys and strings use distinct colours`,
+      })
+      .toBeGreaterThan(1);
+
+    await waitForLayoutSettled(page);
+    const tags = await boxOf(page, ".wizard__preview-body > .n-space");
+    const previewBox = await boxOf(page, '[data-testid="compose-preview"]');
+    const alert = await boxOf(page, ".wizard__preview-body > .n-alert");
+    expect(tags.y + tags.height + 11).toBeLessThanOrEqual(previewBox.y);
+    expect(previewBox.y + previewBox.height + 11).toBeLessThanOrEqual(alert.y);
+    await page.screenshot({
+      path: test.info().outputPath(`preview-${theme}-1366.png`),
+    });
+
+    await page.setViewportSize({ width: 390, height: 900 });
+    await waitForLayoutSettled(page);
+    const narrow = await boxOf(page, '[data-testid="compose-preview"]');
+    expect(narrow.x + narrow.width).toBeLessThanOrEqual(390);
+    await expectNoOverflow(page, 390);
+    await page.screenshot({
+      path: test.info().outputPath(`preview-${theme}-390.png`),
+    });
+    await page.unrouteAll({ behavior: "wait" });
+  }
+});
+
+test("stacked forms elsewhere keep their item gap", async ({ page }) => {
+  await page.setViewportSize({ width: 1366, height: 900 });
+  await mockApi(page);
+  const picker = await openServicePicker(page);
+  await picker.getByRole("link", { name: "Import a compose file" }).click();
+
+  const yamlField = page.locator(".field-import-yaml");
+  await expect(yamlField).toBeVisible();
+  const marginTop = await yamlField.evaluate((element) => getComputedStyle(element).marginTop);
+  expect(marginTop, "stacked form items keep the shared rhythm").toBe("16px");
 });

@@ -78,6 +78,7 @@ const vi: typeof en = {
     empty: "Môi trường đang trống. Lưu môi trường trống sẽ xóa sạch nó.",
     add: "Thêm biến",
     save: "Lưu môi trường",
+    reservedKey: "{key} được suy ra từ tên miền của dịch vụ và không thể đặt tại đây.",
     unavailable: "Không có môi trường.",
     loading: "Đang tải môi trường…",
   },

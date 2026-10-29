@@ -119,8 +119,8 @@ WHERE deleted_at IS NULL
 ORDER BY created_at ASC, id ASC;
 
 -- name: CreateServiceDeploy :one
-INSERT INTO service_deploys (id, service_id, state, compose_yaml)
-VALUES ($1, $2, $3, $4)
+INSERT INTO service_deploys (id, service_id, state, compose_yaml, domains)
+VALUES ($1, $2, $3, $4, $5)
 RETURNING *;
 
 -- name: UpdateServiceDeploy :one

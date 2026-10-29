@@ -93,6 +93,7 @@ export interface CreateServiceInput {
   env?: Record<string, string>;
   deploy?: boolean;
   template?: string;
+  domains?: ServiceDomainInput[];
 }
 
 export interface UpdateServiceInput {

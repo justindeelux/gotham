@@ -1,14 +1,15 @@
 name: Uptime Kuma
 icon: uptime-kuma
-description: Uptime Kuma monitoring with a persistent named volume and a routed domain.
+description: Uptime Kuma monitoring with a persistent named volume and an optional routed domain.
 fields:
   - key: domain
     label: Domain
     type: text
-    required: true
+    required: false
+    default: ""
     placeholder: status.example.com
-    help: The public host served by the node's Traefik proxy.
-    pattern: ^[A-Za-z0-9][A-Za-z0-9.-]*$
+    help: Optional. Leave empty to add a domain later from the service page.
+    pattern: ^([A-Za-z0-9][A-Za-z0-9.-]*)?$
     max_length: 253
   - key: tz
     label: Timezone
@@ -18,3 +19,7 @@ fields:
     pattern: ^[A-Za-z0-9_/+-]+$
     max_length: 64
     help: IANA timezone name used by the container clock and notifications.
+routes:
+  - service: uptime-kuma
+    port: 3001
+    domain_field: domain

@@ -124,6 +124,65 @@ func TestLoadSample(t *testing.T) {
 	}
 }
 
+func TestLoadRoutes(t *testing.T) {
+	withRoutes := func(routes string) map[string]string {
+		files := sampleFiles()
+		files["demo/template.yaml"] = sampleTemplateYAML + routes
+		return files
+	}
+
+	catalog := mustCatalog(t, withRoutes("routes:\n  - service: web\n    port: 8080\n    domain_field: domain\n"))
+	template, _ := catalog.Get("demo")
+	if len(template.Routes) != 1 || template.Routes[0] != (Route{Service: "web", Port: 8080, DomainField: "domain"}) {
+		t.Fatalf("routes = %+v", template.Routes)
+	}
+
+	cases := map[string]struct {
+		files map[string]string
+		want  string
+	}{
+		"unknown service": {
+			files: withRoutes("routes:\n  - service: ghost\n    port: 80\n    domain_field: domain\n"),
+			want:  "compose service \"ghost\"",
+		},
+		"non-text field": {
+			files: withRoutes("routes:\n  - service: web\n    port: 80\n    domain_field: count\n"),
+			want:  "must be a text field",
+		},
+		"unknown field": {
+			files: withRoutes("routes:\n  - service: web\n    port: 80\n    domain_field: gone\n"),
+			want:  "is not declared",
+		},
+		"bad port": {
+			files: withRoutes("routes:\n  - service: web\n    port: 0\n    domain_field: domain\n"),
+			want:  "port must be between 1 and 65535",
+		},
+		"duplicate service": {
+			files: withRoutes("routes:\n  - service: web\n    port: 80\n    domain_field: domain\n  - service: web\n    port: 81\n    domain_field: domain\n"),
+			want:  "duplicate route",
+		},
+	}
+	for name, tc := range cases {
+		t.Run(name, func(t *testing.T) {
+			if _, err := catalogFrom(tc.files); err == nil || !strings.Contains(err.Error(), tc.want) {
+				t.Fatalf("Load = %v, want an error containing %q", err, tc.want)
+			}
+		})
+	}
+}
+
+func TestLoadAllowsRouteFieldOutsideCompose(t *testing.T) {
+	files := sampleFiles()
+	files["demo/template.yaml"] = sampleTemplateYAML + "routes:\n  - service: web\n    port: 80\n    domain_field: domain\n"
+	files["demo/compose.yaml"] = strings.Replace(
+		sampleComposeYAML,
+		"    labels:\n      gotham.domain: \"{{ .domain }}\"\n",
+		"",
+		1,
+	)
+	mustCatalog(t, files)
+}
+
 func TestLoadRejectsBadDefinitions(t *testing.T) {
 	cases := map[string]struct {
 		files map[string]string

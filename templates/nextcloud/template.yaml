@@ -7,7 +7,7 @@ fields:
     type: text
     required: true
     placeholder: cloud.example.com
-    help: The public host served by the node's Traefik proxy.
+    help: Required for the first install; the official image only reads its trusted-domain list then. Add more domains from the service page after the install.
     pattern: ^[A-Za-z0-9][A-Za-z0-9.-]*$
     max_length: 253
   - key: admin_user
@@ -45,3 +45,7 @@ fields:
     required: true
     generate: true
     help: Nextcloud always ships with Redis; use Generate to protect the cache instance.
+routes:
+  - service: nextcloud
+    port: 80
+    domain_field: domain

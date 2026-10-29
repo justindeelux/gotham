@@ -111,6 +111,54 @@ func TestCreateRejectsReservedDomainEnvironment(t *testing.T) {
 	}
 }
 
+func TestCreateWithDomains(t *testing.T) {
+	repo := newFakeRepository()
+	svc := newDomainTestService(t, repo, &fakeAgent{}, &fakeRouteSync{})
+	created, err := svc.Create(context.Background(), uuid.New(), CreateRequest{
+		Name:          "optional-domain",
+		EnvironmentID: mustEnvironment(t, repo),
+		ServerID:      repo.seedServer(),
+		ComposeYAML:   "services:\n  web:\n    image: nginx:1.27\n    ports:\n      - \"80\"\n",
+		Domains: []DomainInput{
+			{Domain: "App.Example.com", ComposeService: "web", Port: 80},
+		},
+	})
+	if err != nil {
+		t.Fatalf("Create: %v", err)
+	}
+	domains, err := repo.ListServiceDomains(context.Background(), created.ID)
+	if err != nil {
+		t.Fatalf("ListServiceDomains: %v", err)
+	}
+	if len(domains) != 1 {
+		t.Fatalf("domains = %+v, want one managed row", domains)
+	}
+	if domain := domains[0]; domain.Domain != "app.example.com" || domain.Protocol != "http" || domain.ComposeService != "web" || domain.Port != 80 {
+		t.Errorf("domain = %+v", domain)
+	}
+}
+
+func TestCreateWithTakenDomainCreatesNothing(t *testing.T) {
+	repo := newFakeRepository()
+	repo.applicationClaims = map[string]bool{"taken.example.com": true}
+	svc := newDomainTestService(t, repo, &fakeAgent{}, &fakeRouteSync{})
+	_, err := svc.Create(context.Background(), uuid.New(), CreateRequest{
+		Name:          "blocked",
+		EnvironmentID: mustEnvironment(t, repo),
+		ServerID:      repo.seedServer(),
+		ComposeYAML:   "services:\n  web:\n    image: nginx:1.27\n",
+		Domains: []DomainInput{
+			{Domain: "taken.example.com", ComposeService: "web", Port: 80},
+		},
+	})
+	if !errors.Is(err, ErrDomainConflict) {
+		t.Fatalf("Create err = %v, want ErrDomainConflict", err)
+	}
+	if len(repo.services) != 0 {
+		t.Fatalf("services = %+v, want nothing created", repo.services)
+	}
+}
+
 func TestAddDomainValidationAndConflicts(t *testing.T) {
 	repo := newFakeRepository()
 	svc := newDomainTestService(t, repo, &fakeAgent{}, &fakeRouteSync{})

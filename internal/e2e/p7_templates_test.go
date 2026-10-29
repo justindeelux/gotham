@@ -100,11 +100,13 @@ func TestP7TemplateWordPressProduction(t *testing.T) {
 	if err != nil {
 		t.Fatalf("render wordpress: %v", err)
 	}
-	if len(rendered.Spec.Domains) != 1 || rendered.Spec.Domains[0].Domain != domain {
-		t.Fatalf("domains = %+v, want the requested host", rendered.Spec.Domains)
+	if len(rendered.Domains) != 1 || rendered.Domains[0].Domain != domain {
+		t.Fatalf("domains = %+v, want the requested host", rendered.Domains)
+	}
+	if strings.Contains(rendered.ComposeYAML, "gotham.domain") {
+		t.Fatalf("the rendered document still carries a gotham.domain label:\n%s", rendered.ComposeYAML)
 	}
 	for _, expected := range []string{
-		"gotham.domain: " + domain,
 		"WORDPRESS_DB_PASSWORD: ${db_password}",
 		"MYSQL_ROOT_PASSWORD: ${db_root_password}",
 		"wordpress_data",
@@ -138,6 +140,9 @@ func TestP7TemplateWordPressProduction(t *testing.T) {
 		ServerID:      h.serverID,
 		ComposeYAML:   rendered.ComposeYAML,
 		Env:           rendered.Env,
+		Domains: []services.DomainInput{
+			{Domain: domain, ComposeService: "wordpress", Port: 80, Protocol: "http"},
+		},
 	})
 	if err != nil {
 		t.Fatalf("Create: %v", err)

@@ -105,7 +105,7 @@ const templates = [
     name: "n8n",
     icon: "n8n",
     description:
-      "n8n workflow automation with a persistent named volume and a routed domain.",
+      "n8n workflow automation with a persistent named volume and an optional routed domain.",
   },
   {
     slug: "acme-custom",
@@ -120,16 +120,17 @@ const n8nDetail = {
   name: "n8n",
   icon: "n8n",
   description:
-    "n8n workflow automation with a persistent named volume and a routed domain.",
+    "n8n workflow automation with a persistent named volume and an optional routed domain.",
   fields: [
     {
       key: "domain",
       label: "Domain",
       type: "text",
-      required: true,
+      required: false,
+      default: "",
       placeholder: "n8n.example.com",
-      help: "The public host served by the node's Traefik proxy.",
-      pattern: "^[A-Za-z0-9][A-Za-z0-9.-]*$",
+      help: "Optional. Leave empty to add a domain later from the service page. Webhook URLs need a domain.",
+      pattern: "^([A-Za-z0-9][A-Za-z0-9.-]*)?$",
       max_length: 253,
     },
     {
@@ -147,6 +148,7 @@ const n8nRender = {
   compose_yaml:
     'services:\n  n8n:\n    image: "n8nio/n8n:1.0"\n    environment:\n      N8N_ENCRYPTION_KEY: ${encryption_key}\n    # exposed by Traefik\n    ports:\n      - "5678:5678"\n',
   env: { N8N_ENCRYPTION_KEY: "s3cret" },
+  domains: [],
   spec: { services: ["n8n"], domains: [], named_volumes: ["n8n-data"], mounts: [] },
 };
 
@@ -390,14 +392,14 @@ test("service picker renders overlay copy at every width, en and vi", async ({
           "Pick a service template, or import a Docker Compose file.",
         );
         await expect(picker).toContainText(
-          "n8n workflow automation with a persistent named volume and a routed domain.",
+          "n8n workflow automation with a persistent named volume and an optional routed domain.",
         );
       } else {
         await expect(picker.locator(".res-pane")).toContainText(
           "Chọn template service, hoặc nhập tệp Docker Compose.",
         );
         await expect(picker).toContainText(
-          "Tự động hóa quy trình n8n với volume có tên bền vững và tên miền được định tuyến.",
+          "Tự động hóa quy trình n8n với volume có tên bền vững và tên miền định tuyến không bắt buộc.",
         );
       }
       await expect(picker).toContainText(
@@ -418,11 +420,11 @@ test("wizard keeps its draft while feedback switches language", async ({ page })
   await page.locator('[data-testid="wizard-step-1"]').waitFor();
   await expect(page.locator(".template-wizard")).toContainText("Step 1 / 3");
   await expect(page.locator(".field-domain")).toContainText(
-    "The public host served by the node's Traefik proxy.",
+    "Optional. Leave empty to add a domain later from the service page. Webhook URLs need a domain.",
   );
   await switchLocale(page, "vi");
   await expect(page.locator(".field-domain")).toContainText(
-    "Host công khai do Traefik proxy của node phục vụ.",
+    "Không bắt buộc. Để trống để thêm tên miền sau từ trang dịch vụ. URL webhook cần có tên miền.",
   );
   await switchLocale(page, "en");
   await page.locator(".field-domain input").fill("not a domain!!!");

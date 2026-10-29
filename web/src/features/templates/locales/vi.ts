@@ -19,6 +19,9 @@ const vi: typeof en = {
     notFoundWithDetail: "Không tìm thấy: {detail}",
     disabled: "Dịch vụ đang tắt trên control plane này. Hãy đề nghị chủ sở hữu bật.",
   },
+  field: {
+    optionalLabel: "{label} (tùy chọn)",
+  },
   wizard: {
     title: "Triển khai mẫu {name}",
     steps: {
@@ -66,10 +69,10 @@ const vi: typeof en = {
   overlay: {
     n8n: {
       description:
-        "Tự động hóa quy trình n8n với volume có tên bền vững và tên miền được định tuyến.",
+        "Tự động hóa quy trình n8n với volume có tên bền vững và tên miền định tuyến không bắt buộc.",
       fields: {
         domain: {
-          help: "Host công khai do Traefik proxy của node phục vụ.",
+          help: "Không bắt buộc. Để trống để thêm tên miền sau từ trang dịch vụ. URL webhook cần có tên miền.",
         },
         encryption_key: {
           help: "Mã hóa thông tin đăng nhập đã lưu; dùng Tạo ngẫu nhiên để có giá trị mạnh. Mất khóa sẽ khóa luôn thông tin.",
@@ -90,7 +93,7 @@ const vi: typeof en = {
         "Nextcloud với PostgreSQL và Redis, các volume có tên bền vững và tên miền được định tuyến.",
       fields: {
         domain: {
-          help: "Host công khai do Traefik proxy của node phục vụ.",
+          help: "Bắt buộc cho lần cài đặt đầu; image chính thức chỉ đọc danh sách tên miền tin cậy khi đó. Thêm tên miền khác từ trang dịch vụ sau khi cài đặt.",
         },
         admin_password: {
           help: "Mật khẩu quản trị Nextcloud ban đầu; dùng Tạo ngẫu nhiên để có giá trị mạnh.",
@@ -102,10 +105,10 @@ const vi: typeof en = {
     },
     "uptime-kuma": {
       description:
-        "Giám sát Uptime Kuma với volume có tên bền vững và tên miền được định tuyến.",
+        "Giám sát Uptime Kuma với volume có tên bền vững và tên miền định tuyến không bắt buộc.",
       fields: {
         domain: {
-          help: "Host công khai do Traefik proxy của node phục vụ.",
+          help: "Không bắt buộc. Để trống để thêm tên miền sau từ trang dịch vụ.",
         },
         tz: {
           help: "Tên múi giờ IANA cho đồng hồ container và thông báo.",
@@ -114,10 +117,10 @@ const vi: typeof en = {
     },
     wordpress: {
       description:
-        "WordPress với cơ sở dữ liệu MySQL, các volume có tên bền vững và tên miền được định tuyến.",
+        "WordPress với cơ sở dữ liệu MySQL, các volume có tên bền vững và tên miền định tuyến không bắt buộc.",
       fields: {
         domain: {
-          help: "Host công khai do Traefik proxy của node phục vụ.",
+          help: "Không bắt buộc. Để trống để thêm tên miền sau từ trang dịch vụ.",
         },
         db_password: {
           help: "WordPress và MySQL cùng dùng; dùng Tạo ngẫu nhiên để có giá trị mạnh.",

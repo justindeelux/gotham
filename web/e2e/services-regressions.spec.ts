@@ -174,8 +174,9 @@ test.describe("services fix regressions", () => {
     const suffix = uniqueSuffix();
     const server = await seedServer(request, headers, suffix, "fix2");
     const { projectId, projectName, environmentId } = await seedProjectEnvironment(request, headers);
-    const oldDomain = `fix-old-${suffix}.example.test`;
-    const newDomain = `fix-new-${suffix}.example.test`;
+    const unique = suffix.replace(/-/g, "_");
+    const oldName = `fix_old_${unique}`;
+    const newName = `fix_new_${unique}`;
     const serviceName = `fix2-tpl-${suffix}`;
 
     await page.goto(environmentURL(projectId, environmentId));
@@ -189,17 +190,18 @@ test.describe("services fix regressions", () => {
       .first();
     const step1 = wizard.locator('[data-testid="wizard-step-1"]');
     await expect(step1).toBeVisible();
-    await step1.locator(".field-domain input").fill(oldDomain);
+    await step1.locator(".field-domain input").fill(`fix-${suffix}.example.test`);
+    await step1.locator(".field-db_name input").fill(oldName);
     await step1.locator(".field-db_password input").fill(`fix2-db-${suffix}`);
     await step1.locator(".field-db_root_password input").fill(`fix2-root-${suffix}`);
     await wizard.getByRole("button", { name: "Next" }).click();
 
     const step2 = wizard.locator('[data-testid="wizard-step-2"]');
     const preview = step2.locator('[data-testid="compose-preview"]');
-    await expect(preview).toContainText(oldDomain);
+    await expect(preview).toContainText(oldName);
 
     await wizard.getByRole("button", { name: "Back" }).click();
-    await step1.locator(".field-domain input").fill(newDomain);
+    await step1.locator(".field-db_name input").fill(newName);
     const hold: { release: (() => void) | null } = { release: null };
     await page.route("**/api/v1/templates/*/render", async (route) => {
       const response = await route.fetch();
@@ -219,8 +221,8 @@ test.describe("services fix regressions", () => {
     }
     release();
 
-    await expect(preview).toContainText(newDomain);
-    await expect(preview).not.toContainText(oldDomain);
+    await expect(preview).toContainText(newName);
+    await expect(preview).not.toContainText(oldName);
 
     await wizard.getByRole("button", { name: "Next" }).click();
     const step3 = wizard.locator('[data-testid="wizard-step-3"]');
@@ -251,8 +253,8 @@ test.describe("services fix regressions", () => {
       throw new Error(`service ${serviceName} is not listed by the API`);
     }
     const detail = await serviceDetail(request, headers, created.id);
-    expect(detail.compose_yaml).toContain(newDomain);
-    expect(detail.compose_yaml).not.toContain(oldDomain);
+    expect(detail.compose_yaml).toContain(newName);
+    expect(detail.compose_yaml).not.toContain(oldName);
   });
 
   test("R3: an unreadable deploy history is not presented as empty", async ({

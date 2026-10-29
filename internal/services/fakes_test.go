@@ -88,6 +88,28 @@ func (r *fakeRepository) CreateService(_ context.Context, service Service) (Serv
 	return service, nil
 }
 
+func (r *fakeRepository) CreateServiceWithDomains(ctx context.Context, service Service, domains []ServiceDomain) (Service, error) {
+	created, err := r.CreateService(ctx, service)
+	if err != nil {
+		return Service{}, err
+	}
+	for _, domain := range domains {
+		if _, err := r.CreateServiceDomain(ctx, domain); err != nil {
+			r.mu.Lock()
+			delete(r.services, created.ID)
+			for i, id := range r.order {
+				if id == created.ID {
+					r.order = append(r.order[:i], r.order[i+1:]...)
+					break
+				}
+			}
+			r.mu.Unlock()
+			return Service{}, err
+		}
+	}
+	return created, nil
+}
+
 func (r *fakeRepository) GetService(_ context.Context, serviceID uuid.UUID) (Service, error) {
 	r.mu.Lock()
 	defer r.mu.Unlock()

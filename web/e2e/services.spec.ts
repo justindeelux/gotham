@@ -127,7 +127,7 @@ test.describe("services & templates", () => {
     await expect(step2).toBeVisible();
     const preview = step2.locator('[data-testid="compose-preview"]');
     await expect(preview).toContainText("image: wordpress:6-apache");
-    await expect(preview).toContainText(domain);
+    await expect(preview).not.toContainText("gotham.domain");
     await expect(preview).toContainText("${db_password}");
     await expect(preview).not.toContainText(dbPassword);
     await expect(preview).not.toContainText(rootPassword);
@@ -151,6 +151,9 @@ test.describe("services & templates", () => {
     await wizard.getByRole("button", { name: "Create service" }).click();
     const createBody = (await createRequest).postDataJSON() as Record<string, unknown>;
     expect(createBody["environment_id"]).toBe(environmentId);
+    expect(createBody["domains"]).toEqual([
+      { domain, compose_service: "wordpress", port: 80, protocol: "http" },
+    ]);
 
     const created = wizard.locator('[data-testid="wizard-created"]');
     await expect(created).toBeVisible();
@@ -177,6 +180,19 @@ test.describe("services & templates", () => {
     expect(detail.compose_yaml).toContain("${db_password}");
     expect(detail.compose_yaml).not.toContain(dbPassword);
     expect(detail.compose_yaml).not.toContain(rootPassword);
+    expect(detail.compose_yaml).not.toContain("gotham.domain");
+
+    const domainsResponse = await request.get(
+      `/api/v1/services/${stored.id}/domains`,
+      { headers },
+    );
+    expect(domainsResponse.status(), await domainsResponse.text()).toBe(200);
+    const { domains } = (await domainsResponse.json()) as {
+      domains: Array<{ domain: string; source: string }>;
+    };
+    expect(domains).toContainEqual(
+      expect.objectContaining({ domain, source: "managed" }),
+    );
 
     await wizard.getByRole("button", { name: "Close", exact: true }).click();
     await expect(picker).toBeVisible();

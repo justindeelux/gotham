@@ -70,6 +70,7 @@ const renderResult = {
   slug: "redis",
   compose_yaml: "services:\n  redis: {}",
   env: { REDIS_PASSWORD: "secret" },
+  domains: [{ service: "redis", domain: "cache.example.com", port: 6379 }],
   spec: { services: ["redis"], named_volumes: [], domains: [] },
 };
 
@@ -184,6 +185,14 @@ describe("create and deploy", () => {
       env: { REDIS_PASSWORD: "secret" },
       deploy: true,
       template: "redis",
+      domains: [
+        {
+          domain: "cache.example.com",
+          compose_service: "redis",
+          port: 6379,
+          protocol: "http",
+        },
+      ],
     });
     expect(deployService).not.toHaveBeenCalled();
     expect(closed).toBe(1);

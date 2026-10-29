@@ -2,16 +2,13 @@ services:
   n8n:
     image: n8nio/n8n:1
     restart: unless-stopped
-    labels:
-      gotham.domain: "{{ .domain }}"
-      gotham.domain.port: "5678"
     ports:
       - "5678"
     environment:
-      N8N_HOST: "{{ .domain }}"
+      N8N_HOST: "${GOTHAM_DOMAIN:-localhost}"
       N8N_PORT: "5678"
       N8N_PROTOCOL: https
-      WEBHOOK_URL: "https://{{ .domain }}/"
+      WEBHOOK_URL: "https://${GOTHAM_DOMAIN:-localhost}/"
       N8N_ENCRYPTION_KEY: "{{ .encryption_key }}"
       GENERIC_TIMEZONE: "{{ .timezone }}"
       TZ: "{{ .timezone }}"

@@ -14,6 +14,7 @@ import (
 
 	"gopkg.in/yaml.v3"
 
+	"github.com/justindeelux/gotham/internal/proxy"
 	"github.com/justindeelux/gotham/internal/services"
 )
 
@@ -21,6 +22,9 @@ type RenderResult struct {
 	ComposeYAML string
 	Env         map[string]string
 	Spec        services.ComposeSpec
+	// Domains holds the managed routes the template declares through its
+	// routes list. A route whose domain field is empty is omitted.
+	Domains []services.DomainRoute
 }
 
 func (c *Catalog) Render(slug string, values map[string]any) (RenderResult, error) {
@@ -110,7 +114,19 @@ func (t Template) Render(values map[string]any) (RenderResult, error) {
 	if err != nil {
 		return RenderResult{}, services.RedactError(fmt.Errorf("template %s: %w", t.Slug, err), secrets)
 	}
-	return RenderResult{ComposeYAML: document, Env: env, Spec: spec}, nil
+	domains := make([]services.DomainRoute, 0, len(t.Routes))
+	for _, route := range t.Routes {
+		host := proxy.NormalizeDomain(resolved[route.DomainField])
+		if host == "" {
+			continue
+		}
+		if err := proxy.ValidateDomain(host); err != nil {
+			return RenderResult{}, services.RedactError(
+				fmt.Errorf("%w: field %q: %v", ErrValidation, route.DomainField, err), secrets)
+		}
+		domains = append(domains, services.DomainRoute{Service: route.Service, Port: route.Port, Domain: host})
+	}
+	return RenderResult{ComposeYAML: document, Env: env, Spec: spec, Domains: domains}, nil
 }
 
 func (f Field) resolve(values map[string]any) (string, error) {

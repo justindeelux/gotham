@@ -286,6 +286,60 @@ func TestProjectAccessRouteMatrix(t *testing.T) {
 	}
 }
 
+// The newest runs of another project must not fill the page a member asks for:
+// the grant is applied before LIMIT, so the page comes back full.
+func TestProjectMemberBackupPageIsNotStarved(t *testing.T) {
+	f := newAccessFixture(t)
+	f.grant(t)
+	ctx := context.Background()
+	now := time.Now().UTC()
+	for i := 0; i < 60; i++ {
+		if _, err := f.store.DB.Exec(ctx,
+			`INSERT INTO backups(id,database_id,type,status,created_at) VALUES($1,$2,'manual','completed',$3)`,
+			uuid.New(), f.databases[1], now.Add(time.Duration(i)*time.Second)); err != nil {
+			t.Fatal(err)
+		}
+	}
+	for i := 0; i < 3; i++ {
+		if _, err := f.store.DB.Exec(ctx,
+			`INSERT INTO backups(id,database_id,type,status,created_at) VALUES($1,$2,'manual','completed',$3)`,
+			uuid.New(), f.databases[0], now.Add(-time.Duration(i+1)*time.Second)); err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	bearer := "Bearer " + f.member.AccessToken
+	rec := doRequest(t, f.server, "GET", "/api/v1/backups?limit=2", "", bearer)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("list=%d %s", rec.Code, rec.Body.String())
+	}
+	var envelope struct {
+		Backups []map[string]any `json:"backups"`
+	}
+	if err := json.Unmarshal(rec.Body.Bytes(), &envelope); err != nil {
+		t.Fatal(err)
+	}
+	if len(envelope.Backups) != 2 {
+		t.Fatalf("page = %d rows, want a full page of 2: %s", len(envelope.Backups), rec.Body.String())
+	}
+	for _, row := range envelope.Backups {
+		if row["resource_id"] != f.databases[0].String() {
+			t.Fatalf("page contains %v, want only the granted database", row["resource_id"])
+		}
+	}
+
+	rec = doRequest(t, f.server, "GET", "/api/v1/backups?limit=2&offset=2", "", bearer)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("page 2=%d %s", rec.Code, rec.Body.String())
+	}
+	if err := json.Unmarshal(rec.Body.Bytes(), &envelope); err != nil {
+		t.Fatal(err)
+	}
+	if len(envelope.Backups) != 2 {
+		t.Fatalf("page 2 = %d rows, want the remaining two", len(envelope.Backups))
+	}
+}
+
 // The generic backup surface filters by project grant: a member sees only the
 // runs of resources they can reach and cannot restore somebody else's backup.
 func TestProjectMemberSeesOnlyAccessibleBackups(t *testing.T) {

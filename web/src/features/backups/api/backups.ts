@@ -32,6 +32,7 @@ export interface BackupRun {
   cleanup_pending?: boolean;
   cleanup_error?: string;
   container_id?: string;
+  pause_during_backup: boolean;
   created_at: string;
   finished_at?: string;
 }

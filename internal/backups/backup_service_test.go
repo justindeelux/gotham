@@ -106,9 +106,13 @@ func TestCreateBackupPassesThePauseChoice(t *testing.T) {
 			if err != nil {
 				t.Fatalf("CreateBackup: %v", err)
 			}
+			want := request == nil || *request
+			if queued.PauseDuringBackup != want {
+				t.Fatalf("run row pause = %v, want %v", queued.PauseDuringBackup, want)
+			}
 			fixture.waitBackup(t, queued.ID)
-			if got := fixture.source.captures[0].Pause; got != (request == nil || *request) {
-				t.Fatalf("pause = %v, want %v", got, request == nil || *request)
+			if got := fixture.source.captures[0].Pause; got != want {
+				t.Fatalf("pause = %v, want %v", got, want)
 			}
 		})
 	}

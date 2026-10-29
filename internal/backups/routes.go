@@ -41,11 +41,15 @@ type backupResponse struct {
 	// artifact is unreachable but the run stays visible.
 	ProviderRemoved bool `json:"provider_removed,omitempty"`
 	// CleanupPending marks a run whose artifact removal is still outstanding.
-	CleanupPending bool       `json:"cleanup_pending,omitempty"`
-	CleanupError   string     `json:"cleanup_error,omitempty"`
-	ContainerID    string     `json:"container_id,omitempty"`
-	CreatedAt      time.Time  `json:"created_at"`
-	FinishedAt     *time.Time `json:"finished_at,omitempty"`
+	CleanupPending bool   `json:"cleanup_pending,omitempty"`
+	CleanupError   string `json:"cleanup_error,omitempty"`
+	ContainerID    string `json:"container_id,omitempty"`
+	// PauseDuringBackup is the choice the run was started with. False is
+	// meaningful only for applications and services: it labels the run as
+	// possibly inconsistent.
+	PauseDuringBackup bool       `json:"pause_during_backup"`
+	CreatedAt         time.Time  `json:"created_at"`
+	FinishedAt        *time.Time `json:"finished_at,omitempty"`
 }
 
 type backupEnvelope struct {
@@ -703,19 +707,20 @@ func optionalLimit(w http.ResponseWriter, r *http.Request) (int, bool) {
 
 func newBackupResponse(backup Backup) backupResponse {
 	response := backupResponse{
-		ID:              backup.ID.String(),
-		ResourceType:    backup.ResourceRef.Type,
-		ResourceID:      backup.ResourceRef.ID.String(),
-		Type:            backup.Type,
-		Status:          backup.Status,
-		Size:            backup.Size,
-		Location:        backup.Location,
-		Error:           backup.Error,
-		ProviderRemoved: backup.ProviderRemoved,
-		CleanupPending:  backup.CleanupPending,
-		CleanupError:    backup.CleanupError,
-		ContainerID:     backup.ContainerID,
-		CreatedAt:       backup.CreatedAt,
+		ID:                backup.ID.String(),
+		ResourceType:      backup.ResourceRef.Type,
+		ResourceID:        backup.ResourceRef.ID.String(),
+		Type:              backup.Type,
+		Status:            backup.Status,
+		Size:              backup.Size,
+		Location:          backup.Location,
+		Error:             backup.Error,
+		ProviderRemoved:   backup.ProviderRemoved,
+		CleanupPending:    backup.CleanupPending,
+		CleanupError:      backup.CleanupError,
+		ContainerID:       backup.ContainerID,
+		PauseDuringBackup: backup.PauseDuringBackup,
+		CreatedAt:         backup.CreatedAt,
 	}
 	if backup.ScheduleID != uuid.Nil {
 		response.ScheduleID = backup.ScheduleID.String()

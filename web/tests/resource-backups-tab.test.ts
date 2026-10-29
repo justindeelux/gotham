@@ -12,6 +12,7 @@ import {
 
 const state = vi.hoisted(() => ({
   contents: [] as Array<{ name: string; kind: string; target?: string }>,
+  backups: [] as Array<Record<string, unknown>>,
 }));
 
 vi.mock("naive-ui", async (importOriginal) => {
@@ -31,7 +32,7 @@ vi.mock("@/features/backups/api/backups", async (importOriginal) => {
     await importOriginal<typeof import("@/features/backups/api/backups")>();
   return {
     ...original,
-    listBackups: async () => [],
+    listBackups: async () => state.backups,
     listRestores: async () => [],
     listSchedules: async () => [],
     getResourceBackupProtection: async () => ({
@@ -50,6 +51,7 @@ beforeEach(() => {
   resetLocaleState();
   syncComposerLocale("en");
   state.contents = [];
+  state.backups = [];
 });
 
 function mountTab() {
@@ -83,6 +85,25 @@ describe("ResourceBackupsTab contents", () => {
     expect(wrapper.text()).toContain(
       "Stop the resource while the archive is taken",
     );
+  });
+
+  it("labels a run that was taken without stopping", async () => {
+    state.backups = [
+      {
+        id: "run-1",
+        resource_type: "application",
+        resource_id: "app-1",
+        type: "manual",
+        status: "completed",
+        size: 1024,
+        pause_during_backup: false,
+        created_at: "2026-01-01T00:00:00Z",
+      },
+    ];
+    const wrapper = mountTab();
+    await flushPromises();
+
+    expect(wrapper.get("#backup-runs").text()).toContain("Did not stop");
   });
 
   it("explains why an application has nothing to capture", async () => {

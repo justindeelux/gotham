@@ -273,6 +273,9 @@ func (s *Service) DeploySystem(ctx context.Context, appID uuid.UUID) (Deployment
 	if appID == uuid.Nil {
 		return Deployment{}, fmt.Errorf("%w: invalid application id", ErrValidation)
 	}
+	if s.refuseDuringBackup(ctx, appID) {
+		return Deployment{}, ErrBackupInFlight
+	}
 	app, err := s.repo.GetApplication(ctx, appID)
 	if err != nil {
 		return Deployment{}, err

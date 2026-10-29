@@ -192,18 +192,19 @@ func (s *Source) Restore(ctx context.Context, req backups.RestoreRequest) error 
 	if len(plan.sources) == 0 {
 		return emptyResourceError(req.Resource.Type)
 	}
-	if plan.running {
-		if err := plan.stop(ctx); err != nil {
-			return err
-		}
-	}
 	// The core stores every artifact gzip-compressed; the agent takes a
-	// tar.gz. Undo only the core's layer here.
+	// tar.gz. Undo only the core's layer here, before stopping anything: a
+	// corrupt artifact must not cost the resource its uptime.
 	archive, err := gzip.NewReader(req.Artifact)
 	if err != nil {
 		return fmt.Errorf("%w: the backup artifact is not valid gzip", backups.ErrValidation)
 	}
 	defer func() { _ = archive.Close() }()
+	if plan.running {
+		if err := plan.stop(ctx); err != nil {
+			return err
+		}
+	}
 	if err := s.archiver.RestoreVolumes(ctx, plan.serverID, plan.sources,
 		containers.RestoreModeReplace, archive); err != nil {
 		// A replace restore has already cleared the target. Leave the
@@ -305,7 +306,11 @@ func (s *Source) applicationPlan(ctx context.Context, ref backups.ResourceRef) (
 			Target: mountTargets(entry.Mounts),
 		})
 	}
-	result.running = s.applicationRunning(ctx, app)
+	running, err := s.applicationRunning(ctx, app)
+	if err != nil {
+		return plan{}, err
+	}
+	result.running = running
 	return result, nil
 }
 
@@ -390,17 +395,20 @@ func (s *Source) busy(ctx context.Context, resource backups.Resource) error {
 	return nil
 }
 
-func (s *Source) applicationRunning(ctx context.Context, app deploy.Application) bool {
+// applicationRunning reports whether the app is up. A lookup failure fails the
+// run: treating it as "stopped" would archive a live app or skip the stop on
+// restore without anyone noticing.
+func (s *Source) applicationRunning(ctx context.Context, app deploy.Application) (bool, error) {
 	runtime, err := s.applications.GetApplicationRuntime(ctx, app.UserID, app.ID)
 	if err != nil {
-		return false
+		return false, fmt.Errorf("volumes: read the application runtime: %w", mapDeployError(err))
 	}
 	for _, container := range runtime.Containers {
 		if container.State == "running" {
-			return true
+			return true, nil
 		}
 	}
-	return false
+	return false, nil
 }
 
 func (s *Source) servicePlan(ctx context.Context, ref backups.ResourceRef) (plan, error) {

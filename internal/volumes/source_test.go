@@ -18,15 +18,16 @@ import (
 )
 
 type fakeApplications struct {
-	app       deploy.Application
-	storages  []deploy.Storage
-	listing   deploy.VolumeListing
-	runtime   deploy.ApplicationRuntime
-	deploying bool
-	stops     int
-	starts    int
-	stopErr   error
-	startErr  error
+	app        deploy.Application
+	storages   []deploy.Storage
+	listing    deploy.VolumeListing
+	runtime    deploy.ApplicationRuntime
+	runtimeErr error
+	deploying  bool
+	stops      int
+	starts     int
+	stopErr    error
+	startErr   error
 }
 
 func (f *fakeApplications) GetApplication(context.Context, uuid.UUID, uuid.UUID) (deploy.Application, error) {
@@ -42,7 +43,7 @@ func (f *fakeApplications) ListVolumes(context.Context, uuid.UUID, uuid.UUID) (d
 }
 
 func (f *fakeApplications) GetApplicationRuntime(context.Context, uuid.UUID, uuid.UUID) (deploy.ApplicationRuntime, error) {
-	return f.runtime, nil
+	return f.runtime, f.runtimeErr
 }
 
 func (f *fakeApplications) ListDeployments(context.Context, uuid.UUID, uuid.UUID) ([]deploy.Deployment, error) {
@@ -382,6 +383,36 @@ func TestApplicationRefusesWhileADeployIsInFlight(t *testing.T) {
 		Resource: resource, RunID: uuid.New(), Sink: io.Discard, Pause: true,
 	}); !errors.Is(err, backups.ErrResourceBusy) {
 		t.Fatalf("err = %v; want ErrResourceBusy", err)
+	}
+}
+
+func TestApplicationCaptureFailsWhenTheRuntimeLookupFails(t *testing.T) {
+	source, apps, archiver, app := applicationFixture(t, "/var/lib/gotham/volumes/app/uploads")
+	apps.runtimeErr = errors.New("agent unreachable")
+	resource, _ := source.Resolve(context.Background(), backups.ResourceRef{Type: backups.ResourceApplication, ID: app.ID})
+	_, err := source.Capture(context.Background(), backups.CaptureRequest{
+		Resource: resource, RunID: uuid.New(), Sink: io.Discard, Pause: true,
+	})
+	if err == nil || !strings.Contains(err.Error(), "agent unreachable") {
+		t.Fatalf("err = %v; want the runtime lookup failure", err)
+	}
+	if apps.stops != 0 || archiver.archive != 0 {
+		t.Fatalf("stops = %d, archives = %d; a failed lookup must not start the run",
+			apps.stops, archiver.archive)
+	}
+}
+
+func TestApplicationRestoreValidatesTheArtifactBeforeStopping(t *testing.T) {
+	source, apps, _, app := applicationFixture(t, "/var/lib/gotham/volumes/app/uploads")
+	resource, _ := source.Resolve(context.Background(), backups.ResourceRef{Type: backups.ResourceApplication, ID: app.ID})
+	err := source.Restore(context.Background(), backups.RestoreRequest{
+		Resource: resource, BackupID: uuid.New(), Artifact: strings.NewReader("not gzip"),
+	})
+	if !errors.Is(err, backups.ErrValidation) {
+		t.Fatalf("err = %v; want ErrValidation for a corrupt artifact", err)
+	}
+	if apps.stops != 0 {
+		t.Fatalf("stops = %d; a corrupt artifact must not cost the app its uptime", apps.stops)
 	}
 }
 

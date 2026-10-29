@@ -688,6 +688,9 @@ func (s *Service) controlContainer(ctx context.Context, userID, appID uuid.UUID,
 	if !Enabled() {
 		return Deployment{}, ErrDisabled
 	}
+	if s.refuseDuringBackup(ctx, appID) {
+		return Deployment{}, ErrBackupInFlight
+	}
 	app, err := s.application(ctx, userID, appID, true)
 	if err != nil {
 		return Deployment{}, err

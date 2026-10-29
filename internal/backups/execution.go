@@ -36,10 +36,10 @@ func (m *BackupManager) startRun(
 		return Backup{}, ErrBackupInFlight
 	}
 	backup := Backup{
-		ID:          backupID,
-		ResourceRef: resource.Ref(),
-		ScheduleID:  scheduleID,
-		Type:        typ,
+		ID:                backupID,
+		ResourceRef:       resource.Ref(),
+		ScheduleID:        scheduleID,
+		Type:              typ,
 		Status:            BackupRunning,
 		PauseDuringBackup: pause,
 		CreatedAt:         m.now(),

@@ -38,6 +38,7 @@ function run(overrides: Partial<BackupRun> = {}): BackupRun {
     type: "manual",
     status: "completed",
     size: 1024,
+    pause_during_backup: true,
     created_at: "2026-10-01T12:00:00.000Z",
     finished_at: "2026-10-01T12:02:30.000Z",
     ...overrides,

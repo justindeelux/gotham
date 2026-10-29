@@ -115,6 +115,14 @@ const backups = inject(resourceBackupsKey)!;
                   )
                 }}
               </NTag>
+              <NTag
+                v-if="backup.resource_type !== 'database' && !backup.pause_during_backup"
+                size="small"
+                type="warning"
+                :bordered="false"
+              >
+                {{ t("backups.resourceTab.noPauseTag") }}
+              </NTag>
               <NText class="mono" depth="3">
                 {{
                   backup.status === "running"

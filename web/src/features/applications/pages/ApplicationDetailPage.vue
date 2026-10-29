@@ -98,7 +98,6 @@ const activeTab = computed<string>({
         v-if="blockedTerminal"
         type="info"
         :show-icon="true"
-        class="app-blocked-terminal"
       >
         <template #header>
           {{ t("applications.terminal.notAllowedTitle") }}
@@ -110,7 +109,6 @@ const activeTab = computed<string>({
         v-if="pendingChanges.length > 0"
         type="warning"
         :show-icon="true"
-        class="app-redeploy-banner"
       >
         <template #header>
           {{ t("applications.detail.redeployTitle") }}
@@ -340,13 +338,5 @@ const activeTab = computed<string>({
   display: flex;
   flex-direction: column;
   min-height: min(60vh, 34rem);
-}
-
-.app-blocked-terminal {
-  margin-bottom: 12px;
-}
-
-.app-redeploy-banner {
-  margin-bottom: 12px;
 }
 </style>

@@ -36,13 +36,14 @@ const props = withDefaults(
     </nav>
 
     <NSpin :show="props.loading">
-      <NAlert v-if="props.error" type="error" :show-icon="true" class="frame-alert">
-        {{ props.error }}
-      </NAlert>
-
-      <template v-if="!props.notFound">
-        <slot name="banner" />
-      </template>
+      <div v-if="props.error || $slots.banner" class="page-banners">
+        <NAlert v-if="props.error" type="error" :show-icon="true">
+          {{ props.error }}
+        </NAlert>
+        <template v-if="!props.notFound">
+          <slot name="banner" />
+        </template>
+      </div>
       <slot name="header" />
 
       <template v-if="props.notFound">

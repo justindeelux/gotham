@@ -1,6 +1,7 @@
 <script setup lang="ts">
 import { NAlert, NSpace, NSpin, NTag } from "naive-ui";
 
+import CodeEditor from "@/features/files/components/CodeEditor.vue";
 import type { TemplateRender } from "@/features/templates/api/templates";
 import { activeLocale, i18n } from "@/shared/i18n";
 
@@ -26,41 +27,50 @@ function unit(one: string, other: string, count: number): string {
 <template>
   <section class="wizard__step" data-testid="wizard-step-2">
     <NSpin :show="renderLoading">
-      <NAlert v-if="renderError" type="error" :show-icon="true">
-        {{ renderError }}
-      </NAlert>
-      <template v-else-if="render">
-        <NSpace :size="8" align="center">
-          <NTag size="small">{{ unit("templates.preview.servicesOne", "templates.preview.servicesOther", render.spec.services.length) }}</NTag>
-          <NTag size="small">
-            {{
-              unit(
-                "templates.preview.volumesOne",
-                "templates.preview.volumesOther",
-                render.spec.named_volumes.length,
-              )
-            }}
-          </NTag>
-          <NTag size="small">
-            {{
-              unit(
-                "templates.preview.domainsOne",
-                "templates.preview.domainsOther",
-                render.spec.domains.length,
-              )
-            }}
-          </NTag>
-        </NSpace>
-        <pre class="wizard__preview mono" data-testid="compose-preview">{{
-          render.compose_yaml
-        }}</pre>
-        <NAlert type="info" :show-icon="true">
-          {{ t("templates.preview.secretNote", { ref: "${field}" }) }}
-          <template v-if="secretKeys.length > 0">
-            {{ t("templates.preview.heldSeparately", { keys: secretKeys.join(", ") }) }}
-          </template>
+      <div class="wizard__preview-body">
+        <NAlert v-if="renderError" type="error" :show-icon="true">
+          {{ renderError }}
         </NAlert>
-      </template>
+        <template v-else-if="render">
+          <NSpace :size="8" align="center">
+            <NTag size="small">{{ unit("templates.preview.servicesOne", "templates.preview.servicesOther", render.spec.services.length) }}</NTag>
+            <NTag size="small">
+              {{
+                unit(
+                  "templates.preview.volumesOne",
+                  "templates.preview.volumesOther",
+                  render.spec.named_volumes.length,
+                )
+              }}
+            </NTag>
+            <NTag size="small">
+              {{
+                unit(
+                  "templates.preview.domainsOne",
+                  "templates.preview.domainsOther",
+                  render.spec.domains.length,
+                )
+              }}
+            </NTag>
+          </NSpace>
+          <div class="wizard__preview" data-testid="compose-preview">
+            <CodeEditor
+              :model-value="render.compose_yaml"
+              preset="yaml"
+              read-only
+              wrap
+              height="40vh"
+              :aria-label="t('templates.wizard.steps.preview')"
+            />
+          </div>
+          <NAlert type="info" :show-icon="true">
+            {{ t("templates.preview.secretNote", { ref: "${field}" }) }}
+            <template v-if="secretKeys.length > 0">
+              {{ t("templates.preview.heldSeparately", { keys: secretKeys.join(", ") }) }}
+            </template>
+          </NAlert>
+        </template>
+      </div>
     </NSpin>
   </section>
 </template>
@@ -73,22 +83,14 @@ function unit(one: string, other: string, count: number): string {
   min-width: 0;
 }
 
-.wizard__preview {
-  margin: 0;
-  background: var(--surface-warm);
-  border: 1px solid var(--border);
-  border-radius: var(--radius-md);
-  padding: var(--space-3);
-  font-size: var(--text-xs);
-  line-height: 1.6;
-  color: var(--fg);
-  overflow: auto;
-  max-height: 40vh;
-  white-space: pre-wrap;
-  word-break: break-word;
+.wizard__preview-body {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-3);
+  min-width: 0;
 }
 
-.mono {
-  font-family: var(--font-mono);
+.wizard__preview {
+  min-width: 0;
 }
 </style>

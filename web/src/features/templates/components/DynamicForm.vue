@@ -77,7 +77,7 @@ function setValue(key: string, value: string): void {
 </script>
 
 <template>
-  <NForm label-placement="top" class="dynamic-form">
+  <NForm label-placement="top" class="dynamic-form form--grid">
     <NFormItem
       v-for="field in fields"
       :key="field.key"
@@ -151,6 +151,7 @@ function setValue(key: string, value: string): void {
   display: grid;
   grid-template-columns: repeat(2, minmax(0, 1fr));
   gap: var(--form-item-gap) var(--space-4);
+  align-items: start;
 }
 
 .dynamic-form__item {

@@ -109,7 +109,7 @@ async function onSubmit(): Promise<void> {
     <NAlert v-if="error" type="error" class="schedule-note" data-testid="schedule-error">
       {{ t("updates.errors.save", { message: error }) }}
     </NAlert>
-    <NForm ref="formRef" :model="form" :rules="rules" class="schedule-form" @submit.prevent="onSubmit">
+    <NForm ref="formRef" :model="form" :rules="rules" class="schedule-form form--grid" @submit.prevent="onSubmit">
       <NFormItem :show-label="false">
         <div class="switch-row">
           <NSwitch
@@ -199,10 +199,6 @@ async function onSubmit(): Promise<void> {
   gap: var(--form-item-gap) var(--space-8);
   align-items: start;
   max-width: 960px;
-}
-
-.n-form.schedule-form > * {
-  margin-top: 0;
 }
 
 .schedule-form > .n-form-item:has(.switch-row),

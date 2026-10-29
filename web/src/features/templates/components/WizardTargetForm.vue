@@ -41,7 +41,7 @@ const emit = defineEmits<{
   <NAlert v-if="scopeError" type="error" :show-icon="true">
     {{ scopeError }}
   </NAlert>
-  <NForm label-placement="top" class="wizard__metaform">
+  <NForm label-placement="top" class="wizard__metaform form--grid">
     <NFormItem
       :label="t('templates.target.nameLabel')"
       required
@@ -64,26 +64,14 @@ const emit = defineEmits<{
   <NAlert v-if="createError" type="error" :show-icon="true">
     {{ createError }}
   </NAlert>
-  <p class="wizard__desc">
-    {{ t("templates.target.description", { endpoint: "POST /api/v1/services" }) }}
-  </p>
 </template>
 
 <style scoped>
 .wizard__metaform {
   display: grid;
   grid-template-columns: repeat(2, minmax(0, 1fr));
-  gap: 0 var(--space-4);
-}
-
-.wizard__desc {
-  margin: 0;
-  font-size: var(--text-xs);
-  color: var(--muted);
-}
-
-.mono {
-  font-family: var(--font-mono);
+  gap: var(--form-item-gap) var(--space-4);
+  align-items: start;
 }
 
 @media (max-width: 720px) {

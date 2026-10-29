@@ -42,9 +42,6 @@ function t(key: string, params?: Record<string, string | number>): string {
         {{ route.domain }}
       </NTag>
     </NSpace>
-    <p class="wizard__desc">
-      {{ t("templates.created.description") }}
-    </p>
     <NAlert v-if="deployError" type="error" :show-icon="true">
       {{ deployError }}
     </NAlert>
@@ -82,12 +79,6 @@ function t(key: string, params?: Record<string, string | number>): string {
 
 .wizard__success h4 {
   font-size: var(--text-base);
-}
-
-.wizard__desc {
-  margin: 0;
-  font-size: var(--text-xs);
-  color: var(--muted);
 }
 
 .mono {

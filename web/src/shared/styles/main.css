@@ -121,7 +121,9 @@ a {
   display: none;
 }
 
-.n-form:not(.dynamic-form) > * + * {
+/* Stacked forms only. Grid forms (.form--grid) space their rows with `gap`; a
+   margin on the second column would push it down instead of separating rows. */
+.n-form:not(.form--grid) > * + * {
   margin-top: var(--form-item-gap);
 }
 

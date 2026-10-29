@@ -109,6 +109,12 @@ cùng phiên bản cần người vận hành đặt lại trên node:
 sudo gotham-agent update reset
 ```
 
+Bản cập nhật chỉ thay tệp nhị phân cũng sửa môi trường CLI docker trong sandbox
+systemd: khi unit ẩn `~/.docker` (`ProtectHome=true`), agent trỏ `DOCKER_CONFIG`
+vào `/var/lib/gotham-agent/.docker` lúc khởi động, nên `docker compose` tìm thấy
+plugin mà không cần cài lại. Việc cài lại còn ghi biến này (và thư mục đó) vào
+unit.
+
 Cài lại một phiên bản cụ thể là một lần cài bình thường với
 `GOTHAM_VERSION=vX.Y.Z`; xem [Cài đặt](/vi/guide/install).
 

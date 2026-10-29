@@ -107,6 +107,12 @@ control plane; retrying the same version needs an operator reset on the node:
 sudo gotham-agent update reset
 ```
 
+The binary-only update also fixes the docker CLI environment under the systemd
+sandbox: when the unit hides `~/.docker` (`ProtectHome=true`), the agent points
+`DOCKER_CONFIG` at `/var/lib/gotham-agent/.docker` at startup, so `docker
+compose` finds its plugin without a reinstall. A reinstall additionally writes
+the variable (and that directory) into the unit.
+
 Reinstalling a specific version is a normal install with
 `GOTHAM_VERSION=vX.Y.Z`; see [Install](/guide/install).
 

@@ -1,9 +1,10 @@
 <script setup lang="ts">
-import { NAvatar, NButton } from "naive-ui";
+import { NAvatar } from "naive-ui";
 import { inject } from "vue";
 
 import DatabaseStatusTag from "@/features/databases/components/DatabaseStatusTag.vue";
 import { databaseDetailKey } from "@/features/databases/composables/useDatabaseDetail";
+import ResourceActionButton from "@/features/projects/components/ResourceActionButton.vue";
 import ResourceHeader from "@/features/projects/components/ResourceHeader.vue";
 
 import { i18n } from "@/shared/i18n";
@@ -31,27 +32,33 @@ const detail = inject(databaseDetailKey)!;
       />
     </template>
     <template #actions>
-      <NButton
-        :disabled="!detail.canStart.value"
+      <ResourceActionButton
+        type="primary"
+        icon="refresh"
+        :label="t('databases.detail.actions.restart')"
         :loading="detail.databasesStore.acting"
-        @click="() => void detail.handleLifecycle('start')"
-      >
-        {{ t("databases.detail.actions.start") }}
-      </NButton>
-      <NButton
-        :disabled="!detail.canStop.value"
-        :loading="detail.databasesStore.acting"
-        @click="() => void detail.handleLifecycle('stop')"
-      >
-        {{ t("databases.detail.actions.stop") }}
-      </NButton>
-      <NButton
         :disabled="!detail.canRestart.value"
-        :loading="detail.databasesStore.acting"
+        :disabled-reason="detail.controlHint.value"
         @click="() => void detail.handleLifecycle('restart')"
-      >
-        {{ t("databases.detail.actions.restart") }}
-      </NButton>
+      />
+      <ResourceActionButton
+        type="error"
+        icon="stop"
+        :label="t('databases.detail.actions.stop')"
+        :loading="detail.databasesStore.acting"
+        :disabled="!detail.canStop.value"
+        :disabled-reason="detail.controlHint.value"
+        @click="() => void detail.handleLifecycle('stop')"
+      />
+      <ResourceActionButton
+        type="success"
+        icon="play"
+        :label="t('databases.detail.actions.start')"
+        :loading="detail.databasesStore.acting"
+        :disabled="!detail.canStart.value"
+        :disabled-reason="detail.controlHint.value"
+        @click="() => void detail.handleLifecycle('start')"
+      />
     </template>
   </ResourceHeader>
 </template>

@@ -33,6 +33,7 @@ export interface ServiceDetailContext {
   notFound: Ref<boolean>;
   actionError: Ref<string | null>;
   busy: Ref<string | null>;
+  controlHint: ComputedRef<string | null>;
   composeYaml: Ref<string>;
   composeEditing: Ref<boolean>;
   composeSaving: Ref<boolean>;
@@ -65,6 +66,7 @@ export interface ServiceDetailContext {
   handleDeploy(): Promise<void>;
   handleStop(): Promise<void>;
   handleRestart(): Promise<void>;
+  handleStart(): Promise<void>;
   handleDelete(): Promise<void>;
 }
 
@@ -373,6 +375,19 @@ export function useServiceDetail(): ServiceDetailContext {
     }
   }
 
+  async function handleStart(): Promise<void> {
+    busy.value = "start";
+    actionFailure.value = null;
+    try {
+      await servicesStore.restart(serviceId.value);
+      message.success(String(i18n.global.t("services.toast.started")));
+    } catch (err) {
+      actionFailure.value = err;
+    } finally {
+      busy.value = null;
+    }
+  }
+
   async function handleDelete(): Promise<void> {
     const current = service.value;
     busy.value = "delete";
@@ -396,6 +411,26 @@ export function useServiceDetail(): ServiceDetailContext {
   }
 
   const canWrite = computed<boolean>(() => projectsStore.canWrite);
+
+  const controlHint = computed<string | null>(() => {
+    void activeLocale.value;
+    if (!canWrite.value) {
+      return String(i18n.global.t("services.header.controlReadOnly"));
+    }
+    if (busy.value !== null) {
+      return String(i18n.global.t("services.header.controlInProgress"));
+    }
+    const serverId = service.value?.server_id;
+    if (
+      serverId &&
+      serversStore.servers.some(
+        (server) => server.id === serverId && server.status === "offline",
+      )
+    ) {
+      return String(i18n.global.t("services.header.controlNodeOffline"));
+    }
+    return null;
+  });
 
   const moveSaving = ref(false);
   const moveFailure: Ref<unknown> = ref(null);
@@ -486,6 +521,7 @@ export function useServiceDetail(): ServiceDetailContext {
     notFound,
     actionError,
     busy,
+    controlHint,
     composeYaml,
     composeEditing,
     composeSaving,
@@ -518,6 +554,7 @@ export function useServiceDetail(): ServiceDetailContext {
     handleDeploy,
     handleStop,
     handleRestart,
+    handleStart,
     handleDelete,
   };
 }

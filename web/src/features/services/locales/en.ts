@@ -124,8 +124,13 @@ const en = {
   },
   header: {
     deploy: "Deploy",
+    redeploy: "Redeploy",
     restart: "Restart",
     stop: "Stop",
+    start: "Start",
+    controlReadOnly: "Only the owner can control this service.",
+    controlInProgress: "An action is already running. Wait for it to finish.",
+    controlNodeOffline: "The node is offline. Reconnect it before using these actions.",
     delete: "Delete",
     deleteConfirm: "Delete the service {name}? The project goes down; its named volumes stay on the node.",
   },
@@ -185,6 +190,7 @@ const en = {
     deployState: "Deploy {state}.",
     stopped: "Service stopped. Named volumes were kept.",
     restartSent: "Restart sent to the node agent.",
+    started: "Start sent to the node agent.",
     deleted: "Service deleted. Named volumes were kept on the node.",
   },
 };

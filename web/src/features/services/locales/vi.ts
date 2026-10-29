@@ -126,8 +126,13 @@ const vi: typeof en = {
   },
   header: {
     deploy: "Triển khai",
+    redeploy: "Triển khai lại",
     restart: "Khởi động lại",
     stop: "Dừng",
+    start: "Khởi động",
+    controlReadOnly: "Chỉ chủ sở hữu mới có thể điều khiển dịch vụ này.",
+    controlInProgress: "Một thao tác đang chạy. Hãy chờ hoàn tất.",
+    controlNodeOffline: "Node đang ngoại tuyến. Hãy kết nối lại trước khi dùng các thao tác này.",
     delete: "Xóa",
     deleteConfirm: "Xóa dịch vụ {name}? Dự án sẽ dừng; các volume có tên vẫn giữ trên node.",
   },
@@ -187,6 +192,7 @@ const vi: typeof en = {
     deployState: "Triển khai {state}.",
     stopped: "Đã dừng dịch vụ. Các volume có tên được giữ lại.",
     restartSent: "Đã gửi lệnh khởi động lại tới node agent.",
+    started: "Đã gửi lệnh khởi động tới node agent.",
     deleted: "Đã xóa dịch vụ. Các volume có tên vẫn giữ trên node.",
   },
 };

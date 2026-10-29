@@ -508,7 +508,7 @@ test("service detail renders history at every width, en and vi", async ({ page }
       await expect(page.locator(".service-detail-page")).toContainText("gotham-svc-1");
       await expect(page.locator(".service-detail-page")).toContainText("blog.example.com:80");
       const deploy = page.getByRole("button", {
-        name: locale === "vi" ? "Triển khai" : "Deploy",
+        name: locale === "vi" ? "Triển khai lại" : "Redeploy",
         exact: true,
       });
       await expect(deploy).toBeVisible();

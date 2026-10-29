@@ -67,10 +67,10 @@ const en = {
   overlay: {
     n8n: {
       description:
-        "n8n workflow automation with a persistent named volume and a routed domain.",
+        "n8n workflow automation with a persistent named volume and an optional routed domain.",
       fields: {
         domain: {
-          help: "Optional. Leave empty to add a domain later from the service page.",
+          help: "Optional. Leave empty to add a domain later from the service page. Webhook URLs need a domain.",
         },
         encryption_key: {
           help: "Encrypts stored credentials; use Generate for a strong value. Losing it locks the credentials.",
@@ -103,7 +103,7 @@ const en = {
     },
     "uptime-kuma": {
       description:
-        "Uptime Kuma monitoring with a persistent named volume and a routed domain.",
+        "Uptime Kuma monitoring with a persistent named volume and an optional routed domain.",
       fields: {
         domain: {
           help: "Optional. Leave empty to add a domain later from the service page.",
@@ -115,7 +115,7 @@ const en = {
     },
     wordpress: {
       description:
-        "WordPress with a MySQL database, persistent named volumes and a routed domain.",
+        "WordPress with a MySQL database, persistent named volumes and an optional routed domain.",
       fields: {
         domain: {
           help: "Optional. Leave empty to add a domain later from the service page.",

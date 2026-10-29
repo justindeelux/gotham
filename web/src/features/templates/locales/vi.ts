@@ -69,10 +69,10 @@ const vi: typeof en = {
   overlay: {
     n8n: {
       description:
-        "Tự động hóa quy trình n8n với volume có tên bền vững và tên miền được định tuyến.",
+        "Tự động hóa quy trình n8n với volume có tên bền vững và tên miền định tuyến không bắt buộc.",
       fields: {
         domain: {
-          help: "Không bắt buộc. Để trống để thêm tên miền sau từ trang dịch vụ.",
+          help: "Không bắt buộc. Để trống để thêm tên miền sau từ trang dịch vụ. URL webhook cần có tên miền.",
         },
         encryption_key: {
           help: "Mã hóa thông tin đăng nhập đã lưu; dùng Tạo ngẫu nhiên để có giá trị mạnh. Mất khóa sẽ khóa luôn thông tin.",
@@ -105,7 +105,7 @@ const vi: typeof en = {
     },
     "uptime-kuma": {
       description:
-        "Giám sát Uptime Kuma với volume có tên bền vững và tên miền được định tuyến.",
+        "Giám sát Uptime Kuma với volume có tên bền vững và tên miền định tuyến không bắt buộc.",
       fields: {
         domain: {
           help: "Không bắt buộc. Để trống để thêm tên miền sau từ trang dịch vụ.",
@@ -117,7 +117,7 @@ const vi: typeof en = {
     },
     wordpress: {
       description:
-        "WordPress với cơ sở dữ liệu MySQL, các volume có tên bền vững và tên miền được định tuyến.",
+        "WordPress với cơ sở dữ liệu MySQL, các volume có tên bền vững và tên miền định tuyến không bắt buộc.",
       fields: {
         domain: {
           help: "Không bắt buộc. Để trống để thêm tên miền sau từ trang dịch vụ.",

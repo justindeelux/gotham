@@ -105,7 +105,7 @@ const templates = [
     name: "n8n",
     icon: "n8n",
     description:
-      "n8n workflow automation with a persistent named volume and a routed domain.",
+      "n8n workflow automation with a persistent named volume and an optional routed domain.",
   },
   {
     slug: "acme-custom",
@@ -120,7 +120,7 @@ const n8nDetail = {
   name: "n8n",
   icon: "n8n",
   description:
-    "n8n workflow automation with a persistent named volume and a routed domain.",
+    "n8n workflow automation with a persistent named volume and an optional routed domain.",
   fields: [
     {
       key: "domain",
@@ -129,7 +129,7 @@ const n8nDetail = {
       required: false,
       default: "",
       placeholder: "n8n.example.com",
-      help: "Optional. Leave empty to add a domain later from the service page.",
+      help: "Optional. Leave empty to add a domain later from the service page. Webhook URLs need a domain.",
       pattern: "^([A-Za-z0-9][A-Za-z0-9.-]*)?$",
       max_length: 253,
     },
@@ -392,14 +392,14 @@ test("service picker renders overlay copy at every width, en and vi", async ({
           "Pick a service template, or import a Docker Compose file.",
         );
         await expect(picker).toContainText(
-          "n8n workflow automation with a persistent named volume and a routed domain.",
+          "n8n workflow automation with a persistent named volume and an optional routed domain.",
         );
       } else {
         await expect(picker.locator(".res-pane")).toContainText(
           "Chọn template service, hoặc nhập tệp Docker Compose.",
         );
         await expect(picker).toContainText(
-          "Tự động hóa quy trình n8n với volume có tên bền vững và tên miền được định tuyến.",
+          "Tự động hóa quy trình n8n với volume có tên bền vững và tên miền định tuyến không bắt buộc.",
         );
       }
       await expect(picker).toContainText(
@@ -420,11 +420,11 @@ test("wizard keeps its draft while feedback switches language", async ({ page })
   await page.locator('[data-testid="wizard-step-1"]').waitFor();
   await expect(page.locator(".template-wizard")).toContainText("Step 1 / 3");
   await expect(page.locator(".field-domain")).toContainText(
-    "Optional. Leave empty to add a domain later from the service page.",
+    "Optional. Leave empty to add a domain later from the service page. Webhook URLs need a domain.",
   );
   await switchLocale(page, "vi");
   await expect(page.locator(".field-domain")).toContainText(
-    "Không bắt buộc. Để trống để thêm tên miền sau từ trang dịch vụ.",
+    "Không bắt buộc. Để trống để thêm tên miền sau từ trang dịch vụ. URL webhook cần có tên miền.",
   );
   await switchLocale(page, "en");
   await page.locator(".field-domain input").fill("not a domain!!!");

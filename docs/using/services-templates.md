@@ -213,6 +213,10 @@ port 80, n8n 5678 and Uptime Kuma 3001. WordPress, n8n and Uptime Kuma accept an
 empty domain, so the service starts with no route and you add one later from the
 Domains tab.
 
+n8n derives the webhook URLs it displays from `GOTHAM_DOMAIN`. Without a domain
+it falls back to `localhost`, so those URLs only become reachable after you
+attach a domain and redeploy the service.
+
 Nextcloud keeps its domain required. The official image only reads
 `NEXTCLOUD_TRUSTED_DOMAINS` on the first install; a host attached to an existing
 install is rejected as untrusted. Add further Nextcloud hosts from the Domains

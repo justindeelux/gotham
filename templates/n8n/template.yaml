@@ -8,7 +8,7 @@ fields:
     required: false
     default: ""
     placeholder: n8n.example.com
-    help: Optional. Leave empty to add a domain later from the service page.
+    help: Optional. Leave empty to add a domain later from the service page. Webhook URLs need a domain.
     pattern: ^([A-Za-z0-9][A-Za-z0-9.-]*)?$
     max_length: 253
   - key: encryption_key

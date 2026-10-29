@@ -225,7 +225,7 @@ describe("template overlay falls back to provider metadata", () => {
     slug: "n8n",
     name: "n8n",
     icon: "n8n",
-    description: "n8n workflow automation with a persistent named volume and a routed domain.",
+    description: "n8n workflow automation with a persistent named volume and an optional routed domain.",
   };
   const foreign: TemplateSummary = {
     slug: "acme-custom",
@@ -239,7 +239,7 @@ describe("template overlay falls back to provider metadata", () => {
     expect(templateOverlayDescription(foreign)).toBe(foreign.description);
     setLocale("vi", null);
     expect(templateOverlayDescription(bundled)).toBe(
-      "Tự động hóa quy trình n8n với volume có tên bền vững và tên miền được định tuyến.",
+      "Tự động hóa quy trình n8n với volume có tên bền vững và tên miền định tuyến không bắt buộc.",
     );
     expect(templateOverlayDescription(foreign)).toBe(foreign.description);
   });
@@ -260,13 +260,13 @@ describe("template overlay falls back to provider metadata", () => {
       help: "Operator help stays untouched.",
     };
     expect(templateOverlayFieldHelp("n8n", domain)).toBe(
-      "Optional. Leave empty to add a domain later from the service page.",
+      "Optional. Leave empty to add a domain later from the service page. Webhook URLs need a domain.",
     );
     expect(templateOverlayFieldHelp("n8n", custom)).toBe(custom.help);
     expect(templateOverlayFieldHelp("acme-custom", domain)).toBe(domain.help);
     setLocale("vi", null);
     expect(templateOverlayFieldHelp("n8n", domain)).toBe(
-      "Không bắt buộc. Để trống để thêm tên miền sau từ trang dịch vụ.",
+      "Không bắt buộc. Để trống để thêm tên miền sau từ trang dịch vụ. URL webhook cần có tên miền.",
     );
     expect(templateOverlayFieldHelp("n8n", custom)).toBe(custom.help);
     expect(templateOverlayFieldHelp("acme-custom", domain)).toBe(domain.help);

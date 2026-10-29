@@ -206,6 +206,10 @@ tuyến đường: WordPress và Nextcloud dùng cổng 80, n8n 5678 và Uptime 
 WordPress, n8n và Uptime Kuma chấp nhận tên miền rỗng, nên dịch vụ khởi động không
 có tuyến đường và bạn thêm tên miền sau từ tab Tên miền.
 
+n8n lấy `GOTHAM_DOMAIN` để tạo các URL webhook mà nó hiển thị. Khi chưa có tên
+miền, nó dùng `localhost`, nên các URL đó chỉ truy cập được sau khi bạn gắn tên
+miền và triển khai lại dịch vụ.
+
 Nextcloud giữ tên miền ở dạng bắt buộc. Image chính thức chỉ đọc
 `NEXTCLOUD_TRUSTED_DOMAINS` trong lần cài đặt đầu; một host gắn vào bản cài đã có sẽ
 bị từ chối là không tin cậy. Hãy thêm các host Nextcloud khác từ tab Tên miền sau khi

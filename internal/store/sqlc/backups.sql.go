@@ -13,31 +13,35 @@ import (
 
 const createBackup = `-- name: CreateBackup :one
 INSERT INTO backups (
-    id, database_id, schedule_id, type, status, size, location,
-    target_id, container_id, error, finished_at
+    id, database_id, application_id, service_id, schedule_id, type, status,
+    size, location, target_id, container_id, error, finished_at
 )
-VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11)
-RETURNING id, database_id, schedule_id, type, status, size, location, target_id, container_id, error, created_at, finished_at, was_running
+VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13)
+RETURNING id, database_id, schedule_id, type, status, size, location, target_id, container_id, error, created_at, finished_at, was_running, application_id, service_id
 `
 
 type CreateBackupParams struct {
-	ID          pgtype.UUID        `json:"id"`
-	DatabaseID  pgtype.UUID        `json:"database_id"`
-	ScheduleID  pgtype.UUID        `json:"schedule_id"`
-	Type        string             `json:"type"`
-	Status      string             `json:"status"`
-	Size        int64              `json:"size"`
-	Location    string             `json:"location"`
-	TargetID    pgtype.UUID        `json:"target_id"`
-	ContainerID string             `json:"container_id"`
-	Error       string             `json:"error"`
-	FinishedAt  pgtype.Timestamptz `json:"finished_at"`
+	ID            pgtype.UUID        `json:"id"`
+	DatabaseID    pgtype.UUID        `json:"database_id"`
+	ApplicationID pgtype.UUID        `json:"application_id"`
+	ServiceID     pgtype.UUID        `json:"service_id"`
+	ScheduleID    pgtype.UUID        `json:"schedule_id"`
+	Type          string             `json:"type"`
+	Status        string             `json:"status"`
+	Size          int64              `json:"size"`
+	Location      string             `json:"location"`
+	TargetID      pgtype.UUID        `json:"target_id"`
+	ContainerID   string             `json:"container_id"`
+	Error         string             `json:"error"`
+	FinishedAt    pgtype.Timestamptz `json:"finished_at"`
 }
 
 func (q *Queries) CreateBackup(ctx context.Context, arg CreateBackupParams) (Backup, error) {
 	row := q.db.QueryRow(ctx, createBackup,
 		arg.ID,
 		arg.DatabaseID,
+		arg.ApplicationID,
+		arg.ServiceID,
 		arg.ScheduleID,
 		arg.Type,
 		arg.Status,
@@ -63,19 +67,26 @@ func (q *Queries) CreateBackup(ctx context.Context, arg CreateBackupParams) (Bac
 		&i.CreatedAt,
 		&i.FinishedAt,
 		&i.WasRunning,
+		&i.ApplicationID,
+		&i.ServiceID,
 	)
 	return i, err
 }
 
 const createBackupSchedule = `-- name: CreateBackupSchedule :one
-INSERT INTO backup_schedules (id, database_id, cron, target_id, enabled, next_run_at, max_run_seconds)
-VALUES ($1, $2, $3, $4, $5, $6, $7)
-RETURNING id, database_id, cron, target_id, enabled, last_run_at, next_run_at, created_at, updated_at, last_slot_at, target_changed_at, max_run_seconds
+INSERT INTO backup_schedules (
+    id, database_id, application_id, service_id, cron, target_id, enabled,
+    next_run_at, max_run_seconds
+)
+VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)
+RETURNING id, database_id, cron, target_id, enabled, last_run_at, next_run_at, created_at, updated_at, last_slot_at, target_changed_at, max_run_seconds, application_id, service_id
 `
 
 type CreateBackupScheduleParams struct {
 	ID            pgtype.UUID        `json:"id"`
 	DatabaseID    pgtype.UUID        `json:"database_id"`
+	ApplicationID pgtype.UUID        `json:"application_id"`
+	ServiceID     pgtype.UUID        `json:"service_id"`
 	Cron          string             `json:"cron"`
 	TargetID      pgtype.UUID        `json:"target_id"`
 	Enabled       bool               `json:"enabled"`
@@ -87,6 +98,8 @@ func (q *Queries) CreateBackupSchedule(ctx context.Context, arg CreateBackupSche
 	row := q.db.QueryRow(ctx, createBackupSchedule,
 		arg.ID,
 		arg.DatabaseID,
+		arg.ApplicationID,
+		arg.ServiceID,
 		arg.Cron,
 		arg.TargetID,
 		arg.Enabled,
@@ -107,6 +120,8 @@ func (q *Queries) CreateBackupSchedule(ctx context.Context, arg CreateBackupSche
 		&i.LastSlotAt,
 		&i.TargetChangedAt,
 		&i.MaxRunSeconds,
+		&i.ApplicationID,
+		&i.ServiceID,
 	)
 	return i, err
 }
@@ -114,7 +129,7 @@ func (q *Queries) CreateBackupSchedule(ctx context.Context, arg CreateBackupSche
 const createBackupTarget = `-- name: CreateBackupTarget :one
 INSERT INTO backup_targets (id, user_id, name, kind, endpoint, region, bucket, prefix)
 VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
-RETURNING id, user_id, name, kind, endpoint, region, bucket, prefix, created_at, updated_at
+RETURNING id, user_id, name, kind, endpoint, region, bucket, prefix, created_at, updated_at, builtin
 `
 
 type CreateBackupTargetParams struct {
@@ -151,6 +166,7 @@ func (q *Queries) CreateBackupTarget(ctx context.Context, arg CreateBackupTarget
 		&i.Prefix,
 		&i.CreatedAt,
 		&i.UpdatedAt,
+		&i.Builtin,
 	)
 	return i, err
 }
@@ -181,22 +197,26 @@ func (q *Queries) CreateBackupTargetSecret(ctx context.Context, arg CreateBackup
 }
 
 const createRestore = `-- name: CreateRestore :one
-INSERT INTO restores (id, database_id, backup_id, status)
-VALUES ($1, $2, $3, $4)
-RETURNING id, database_id, backup_id, status, error, created_at, finished_at
+INSERT INTO restores (id, database_id, application_id, service_id, backup_id, status)
+VALUES ($1, $2, $3, $4, $5, $6)
+RETURNING id, database_id, backup_id, status, error, created_at, finished_at, application_id, service_id
 `
 
 type CreateRestoreParams struct {
-	ID         pgtype.UUID `json:"id"`
-	DatabaseID pgtype.UUID `json:"database_id"`
-	BackupID   pgtype.UUID `json:"backup_id"`
-	Status     string      `json:"status"`
+	ID            pgtype.UUID `json:"id"`
+	DatabaseID    pgtype.UUID `json:"database_id"`
+	ApplicationID pgtype.UUID `json:"application_id"`
+	ServiceID     pgtype.UUID `json:"service_id"`
+	BackupID      pgtype.UUID `json:"backup_id"`
+	Status        string      `json:"status"`
 }
 
 func (q *Queries) CreateRestore(ctx context.Context, arg CreateRestoreParams) (Restore, error) {
 	row := q.db.QueryRow(ctx, createRestore,
 		arg.ID,
 		arg.DatabaseID,
+		arg.ApplicationID,
+		arg.ServiceID,
 		arg.BackupID,
 		arg.Status,
 	)
@@ -209,6 +229,8 @@ func (q *Queries) CreateRestore(ctx context.Context, arg CreateRestoreParams) (R
 		&i.Error,
 		&i.CreatedAt,
 		&i.FinishedAt,
+		&i.ApplicationID,
+		&i.ServiceID,
 	)
 	return i, err
 }
@@ -216,7 +238,7 @@ func (q *Queries) CreateRestore(ctx context.Context, arg CreateRestoreParams) (R
 const deleteBackup = `-- name: DeleteBackup :one
 DELETE FROM backups
 WHERE id = $1
-RETURNING id, database_id, schedule_id, type, status, size, location, target_id, container_id, error, created_at, finished_at, was_running
+RETURNING id, database_id, schedule_id, type, status, size, location, target_id, container_id, error, created_at, finished_at, was_running, application_id, service_id
 `
 
 func (q *Queries) DeleteBackup(ctx context.Context, id pgtype.UUID) (Backup, error) {
@@ -236,6 +258,8 @@ func (q *Queries) DeleteBackup(ctx context.Context, id pgtype.UUID) (Backup, err
 		&i.CreatedAt,
 		&i.FinishedAt,
 		&i.WasRunning,
+		&i.ApplicationID,
+		&i.ServiceID,
 	)
 	return i, err
 }
@@ -243,7 +267,7 @@ func (q *Queries) DeleteBackup(ctx context.Context, id pgtype.UUID) (Backup, err
 const deleteBackupSchedule = `-- name: DeleteBackupSchedule :one
 DELETE FROM backup_schedules
 WHERE id = $1
-RETURNING id, database_id, cron, target_id, enabled, last_run_at, next_run_at, created_at, updated_at, last_slot_at, target_changed_at, max_run_seconds
+RETURNING id, database_id, cron, target_id, enabled, last_run_at, next_run_at, created_at, updated_at, last_slot_at, target_changed_at, max_run_seconds, application_id, service_id
 `
 
 func (q *Queries) DeleteBackupSchedule(ctx context.Context, id pgtype.UUID) (BackupSchedule, error) {
@@ -262,6 +286,8 @@ func (q *Queries) DeleteBackupSchedule(ctx context.Context, id pgtype.UUID) (Bac
 		&i.LastSlotAt,
 		&i.TargetChangedAt,
 		&i.MaxRunSeconds,
+		&i.ApplicationID,
+		&i.ServiceID,
 	)
 	return i, err
 }
@@ -269,7 +295,7 @@ func (q *Queries) DeleteBackupSchedule(ctx context.Context, id pgtype.UUID) (Bac
 const deleteBackupTarget = `-- name: DeleteBackupTarget :one
 DELETE FROM backup_targets
 WHERE id = $1 AND user_id = $2
-RETURNING id, user_id, name, kind, endpoint, region, bucket, prefix, created_at, updated_at
+RETURNING id, user_id, name, kind, endpoint, region, bucket, prefix, created_at, updated_at, builtin
 `
 
 type DeleteBackupTargetParams struct {
@@ -291,6 +317,36 @@ func (q *Queries) DeleteBackupTarget(ctx context.Context, arg DeleteBackupTarget
 		&i.Prefix,
 		&i.CreatedAt,
 		&i.UpdatedAt,
+		&i.Builtin,
+	)
+	return i, err
+}
+
+const ensureBuiltinBackupTarget = `-- name: EnsureBuiltinBackupTarget :one
+INSERT INTO backup_targets (user_id, name, kind, builtin)
+VALUES ($1, 'Local disk', 'local', true)
+ON CONFLICT (user_id, name) DO UPDATE SET builtin = backup_targets.builtin
+RETURNING id, user_id, name, kind, endpoint, region, bucket, prefix, created_at, updated_at, builtin
+`
+
+// Idempotent: created on first start for every owner account, so a fresh
+// install can back up with no setup. Never turns a user-created provider into
+// the built-in one (created first wins the unique name).
+func (q *Queries) EnsureBuiltinBackupTarget(ctx context.Context, userID pgtype.UUID) (BackupTarget, error) {
+	row := q.db.QueryRow(ctx, ensureBuiltinBackupTarget, userID)
+	var i BackupTarget
+	err := row.Scan(
+		&i.ID,
+		&i.UserID,
+		&i.Name,
+		&i.Kind,
+		&i.Endpoint,
+		&i.Region,
+		&i.Bucket,
+		&i.Prefix,
+		&i.CreatedAt,
+		&i.UpdatedAt,
+		&i.Builtin,
 	)
 	return i, err
 }
@@ -304,7 +360,7 @@ SET status = $2,
     container_id = $6,
     finished_at = $7
 WHERE id = $1
-RETURNING id, database_id, schedule_id, type, status, size, location, target_id, container_id, error, created_at, finished_at, was_running
+RETURNING id, database_id, schedule_id, type, status, size, location, target_id, container_id, error, created_at, finished_at, was_running, application_id, service_id
 `
 
 type FinishBackupParams struct {
@@ -342,6 +398,8 @@ func (q *Queries) FinishBackup(ctx context.Context, arg FinishBackupParams) (Bac
 		&i.CreatedAt,
 		&i.FinishedAt,
 		&i.WasRunning,
+		&i.ApplicationID,
+		&i.ServiceID,
 	)
 	return i, err
 }
@@ -352,7 +410,7 @@ SET status = $2,
     error = $3,
     finished_at = $4
 WHERE id = $1
-RETURNING id, database_id, backup_id, status, error, created_at, finished_at
+RETURNING id, database_id, backup_id, status, error, created_at, finished_at, application_id, service_id
 `
 
 type FinishRestoreParams struct {
@@ -378,15 +436,15 @@ func (q *Queries) FinishRestore(ctx context.Context, arg FinishRestoreParams) (R
 		&i.Error,
 		&i.CreatedAt,
 		&i.FinishedAt,
+		&i.ApplicationID,
+		&i.ServiceID,
 	)
 	return i, err
 }
 
 const getBackup = `-- name: GetBackup :one
-SELECT b.id, b.database_id, b.schedule_id, b.type, b.status, b.size, b.location, b.target_id, b.container_id, b.error, b.created_at, b.finished_at, b.was_running
-FROM backups b
-    JOIN databases d ON d.id = b.database_id
-WHERE b.id = $1 AND d.deleted_at IS NULL
+SELECT id, database_id, schedule_id, type, status, size, location, target_id, container_id, error, created_at, finished_at, was_running, application_id, service_id FROM backups
+WHERE id = $1
 `
 
 func (q *Queries) GetBackup(ctx context.Context, id pgtype.UUID) (Backup, error) {
@@ -406,15 +464,15 @@ func (q *Queries) GetBackup(ctx context.Context, id pgtype.UUID) (Backup, error)
 		&i.CreatedAt,
 		&i.FinishedAt,
 		&i.WasRunning,
+		&i.ApplicationID,
+		&i.ServiceID,
 	)
 	return i, err
 }
 
 const getBackupSchedule = `-- name: GetBackupSchedule :one
-SELECT s.id, s.database_id, s.cron, s.target_id, s.enabled, s.last_run_at, s.next_run_at, s.created_at, s.updated_at, s.last_slot_at, s.target_changed_at, s.max_run_seconds
-FROM backup_schedules s
-    JOIN databases d ON d.id = s.database_id
-WHERE s.id = $1 AND d.deleted_at IS NULL
+SELECT id, database_id, cron, target_id, enabled, last_run_at, next_run_at, created_at, updated_at, last_slot_at, target_changed_at, max_run_seconds, application_id, service_id FROM backup_schedules
+WHERE id = $1
 `
 
 func (q *Queries) GetBackupSchedule(ctx context.Context, id pgtype.UUID) (BackupSchedule, error) {
@@ -433,12 +491,14 @@ func (q *Queries) GetBackupSchedule(ctx context.Context, id pgtype.UUID) (Backup
 		&i.LastSlotAt,
 		&i.TargetChangedAt,
 		&i.MaxRunSeconds,
+		&i.ApplicationID,
+		&i.ServiceID,
 	)
 	return i, err
 }
 
 const getBackupTarget = `-- name: GetBackupTarget :one
-SELECT id, user_id, name, kind, endpoint, region, bucket, prefix, created_at, updated_at FROM backup_targets
+SELECT id, user_id, name, kind, endpoint, region, bucket, prefix, created_at, updated_at, builtin FROM backup_targets
 WHERE id = $1
 `
 
@@ -456,12 +516,13 @@ func (q *Queries) GetBackupTarget(ctx context.Context, id pgtype.UUID) (BackupTa
 		&i.Prefix,
 		&i.CreatedAt,
 		&i.UpdatedAt,
+		&i.Builtin,
 	)
 	return i, err
 }
 
 const getBackupTargetForShare = `-- name: GetBackupTargetForShare :one
-SELECT id, user_id, name, kind, endpoint, region, bucket, prefix, created_at, updated_at FROM backup_targets
+SELECT id, user_id, name, kind, endpoint, region, bucket, prefix, created_at, updated_at, builtin FROM backup_targets
 WHERE id = $1
 FOR SHARE
 `
@@ -483,12 +544,13 @@ func (q *Queries) GetBackupTargetForShare(ctx context.Context, id pgtype.UUID) (
 		&i.Prefix,
 		&i.CreatedAt,
 		&i.UpdatedAt,
+		&i.Builtin,
 	)
 	return i, err
 }
 
 const getBackupTargetForUpdate = `-- name: GetBackupTargetForUpdate :one
-SELECT id, user_id, name, kind, endpoint, region, bucket, prefix, created_at, updated_at FROM backup_targets
+SELECT id, user_id, name, kind, endpoint, region, bucket, prefix, created_at, updated_at, builtin FROM backup_targets
 WHERE id = $1
 FOR UPDATE
 `
@@ -509,6 +571,33 @@ func (q *Queries) GetBackupTargetForUpdate(ctx context.Context, id pgtype.UUID) 
 		&i.Prefix,
 		&i.CreatedAt,
 		&i.UpdatedAt,
+		&i.Builtin,
+	)
+	return i, err
+}
+
+const getBuiltinBackupTarget = `-- name: GetBuiltinBackupTarget :one
+SELECT id, user_id, name, kind, endpoint, region, bucket, prefix, created_at, updated_at, builtin FROM backup_targets
+WHERE user_id = $1 AND builtin
+ORDER BY created_at, id
+LIMIT 1
+`
+
+func (q *Queries) GetBuiltinBackupTarget(ctx context.Context, userID pgtype.UUID) (BackupTarget, error) {
+	row := q.db.QueryRow(ctx, getBuiltinBackupTarget, userID)
+	var i BackupTarget
+	err := row.Scan(
+		&i.ID,
+		&i.UserID,
+		&i.Name,
+		&i.Kind,
+		&i.Endpoint,
+		&i.Region,
+		&i.Bucket,
+		&i.Prefix,
+		&i.CreatedAt,
+		&i.UpdatedAt,
+		&i.Builtin,
 	)
 	return i, err
 }
@@ -520,7 +609,7 @@ SELECT EXISTS (
 ) AS has_backups
 `
 
-// A target whose destination changed would strand every backup that records
+// A provider whose destination changed would strand every backup that records
 // (or is about to record) a location against the old endpoint/bucket, so the
 // update path asks this first. A running backup counts: it captured the old
 // configuration and will finish by recording the old destination.
@@ -531,16 +620,13 @@ func (q *Queries) HasBackupsForTarget(ctx context.Context, targetID pgtype.UUID)
 	return has_backups, err
 }
 
-const listBackupSchedulesByDatabase = `-- name: ListBackupSchedulesByDatabase :many
-SELECT s.id, s.database_id, s.cron, s.target_id, s.enabled, s.last_run_at, s.next_run_at, s.created_at, s.updated_at, s.last_slot_at, s.target_changed_at, s.max_run_seconds
-FROM backup_schedules s
-    JOIN databases d ON d.id = s.database_id
-WHERE s.database_id = $1 AND d.deleted_at IS NULL
-ORDER BY s.created_at DESC, s.id DESC
+const listBackupSchedules = `-- name: ListBackupSchedules :many
+SELECT id, database_id, cron, target_id, enabled, last_run_at, next_run_at, created_at, updated_at, last_slot_at, target_changed_at, max_run_seconds, application_id, service_id FROM backup_schedules
+ORDER BY created_at DESC, id DESC
 `
 
-func (q *Queries) ListBackupSchedulesByDatabase(ctx context.Context, databaseID pgtype.UUID) ([]BackupSchedule, error) {
-	rows, err := q.db.Query(ctx, listBackupSchedulesByDatabase, databaseID)
+func (q *Queries) ListBackupSchedules(ctx context.Context) ([]BackupSchedule, error) {
+	rows, err := q.db.Query(ctx, listBackupSchedules)
 	if err != nil {
 		return nil, err
 	}
@@ -561,6 +647,57 @@ func (q *Queries) ListBackupSchedulesByDatabase(ctx context.Context, databaseID 
 			&i.LastSlotAt,
 			&i.TargetChangedAt,
 			&i.MaxRunSeconds,
+			&i.ApplicationID,
+			&i.ServiceID,
+		); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
+const listBackupSchedulesByResource = `-- name: ListBackupSchedulesByResource :many
+SELECT id, database_id, cron, target_id, enabled, last_run_at, next_run_at, created_at, updated_at, last_slot_at, target_changed_at, max_run_seconds, application_id, service_id FROM backup_schedules
+WHERE database_id = $1::uuid
+   OR application_id = $2::uuid
+   OR service_id = $3::uuid
+ORDER BY created_at DESC, id DESC
+`
+
+type ListBackupSchedulesByResourceParams struct {
+	DatabaseID    pgtype.UUID `json:"database_id"`
+	ApplicationID pgtype.UUID `json:"application_id"`
+	ServiceID     pgtype.UUID `json:"service_id"`
+}
+
+func (q *Queries) ListBackupSchedulesByResource(ctx context.Context, arg ListBackupSchedulesByResourceParams) ([]BackupSchedule, error) {
+	rows, err := q.db.Query(ctx, listBackupSchedulesByResource, arg.DatabaseID, arg.ApplicationID, arg.ServiceID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	items := []BackupSchedule{}
+	for rows.Next() {
+		var i BackupSchedule
+		if err := rows.Scan(
+			&i.ID,
+			&i.DatabaseID,
+			&i.Cron,
+			&i.TargetID,
+			&i.Enabled,
+			&i.LastRunAt,
+			&i.NextRunAt,
+			&i.CreatedAt,
+			&i.UpdatedAt,
+			&i.LastSlotAt,
+			&i.TargetChangedAt,
+			&i.MaxRunSeconds,
+			&i.ApplicationID,
+			&i.ServiceID,
 		); err != nil {
 			return nil, err
 		}
@@ -605,9 +742,9 @@ func (q *Queries) ListBackupTargetSecrets(ctx context.Context, targetID pgtype.U
 }
 
 const listBackupTargetsByUser = `-- name: ListBackupTargetsByUser :many
-SELECT id, user_id, name, kind, endpoint, region, bucket, prefix, created_at, updated_at FROM backup_targets
+SELECT id, user_id, name, kind, endpoint, region, bucket, prefix, created_at, updated_at, builtin FROM backup_targets
 WHERE user_id = $1
-ORDER BY created_at DESC, id DESC
+ORDER BY builtin DESC, created_at DESC, id DESC
 `
 
 func (q *Queries) ListBackupTargetsByUser(ctx context.Context, userID pgtype.UUID) ([]BackupTarget, error) {
@@ -630,6 +767,7 @@ func (q *Queries) ListBackupTargetsByUser(ctx context.Context, userID pgtype.UUI
 			&i.Prefix,
 			&i.CreatedAt,
 			&i.UpdatedAt,
+			&i.Builtin,
 		); err != nil {
 			return nil, err
 		}
@@ -641,22 +779,22 @@ func (q *Queries) ListBackupTargetsByUser(ctx context.Context, userID pgtype.UUI
 	return items, nil
 }
 
-const listBackupsByDatabase = `-- name: ListBackupsByDatabase :many
-SELECT b.id, b.database_id, b.schedule_id, b.type, b.status, b.size, b.location, b.target_id, b.container_id, b.error, b.created_at, b.finished_at, b.was_running
-FROM backups b
-    JOIN databases d ON d.id = b.database_id
-WHERE b.database_id = $1 AND d.deleted_at IS NULL
-ORDER BY b.created_at DESC, b.id DESC
-LIMIT $2
+const listBackups = `-- name: ListBackups :many
+SELECT id, database_id, schedule_id, type, status, size, location, target_id, container_id, error, created_at, finished_at, was_running, application_id, service_id FROM backups
+WHERE ($2::text IS NULL OR status = $2::text)
+ORDER BY created_at DESC, id DESC
+LIMIT $1
 `
 
-type ListBackupsByDatabaseParams struct {
-	DatabaseID pgtype.UUID `json:"database_id"`
-	Limit      int32       `json:"limit"`
+type ListBackupsParams struct {
+	Limit  int32   `json:"limit"`
+	Status *string `json:"status"`
 }
 
-func (q *Queries) ListBackupsByDatabase(ctx context.Context, arg ListBackupsByDatabaseParams) ([]Backup, error) {
-	rows, err := q.db.Query(ctx, listBackupsByDatabase, arg.DatabaseID, arg.Limit)
+// The Backups page: newest runs across every resource the caller can see. The
+// HTTP layer filters the result set by project grant for members.
+func (q *Queries) ListBackups(ctx context.Context, arg ListBackupsParams) ([]Backup, error) {
+	rows, err := q.db.Query(ctx, listBackups, arg.Limit, arg.Status)
 	if err != nil {
 		return nil, err
 	}
@@ -678,6 +816,70 @@ func (q *Queries) ListBackupsByDatabase(ctx context.Context, arg ListBackupsByDa
 			&i.CreatedAt,
 			&i.FinishedAt,
 			&i.WasRunning,
+			&i.ApplicationID,
+			&i.ServiceID,
+		); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
+const listBackupsByResource = `-- name: ListBackupsByResource :many
+SELECT id, database_id, schedule_id, type, status, size, location, target_id, container_id, error, created_at, finished_at, was_running, application_id, service_id FROM backups
+WHERE (database_id = $2::uuid
+    OR application_id = $3::uuid
+    OR service_id = $4::uuid)
+  AND ($5::text IS NULL OR status = $5::text)
+ORDER BY created_at DESC, id DESC
+LIMIT $1
+`
+
+type ListBackupsByResourceParams struct {
+	Limit         int32       `json:"limit"`
+	DatabaseID    pgtype.UUID `json:"database_id"`
+	ApplicationID pgtype.UUID `json:"application_id"`
+	ServiceID     pgtype.UUID `json:"service_id"`
+	Status        *string     `json:"status"`
+}
+
+// Newest runs of one resource, optionally narrowed by status. Exactly one of
+// the resource ids is set by the caller.
+func (q *Queries) ListBackupsByResource(ctx context.Context, arg ListBackupsByResourceParams) ([]Backup, error) {
+	rows, err := q.db.Query(ctx, listBackupsByResource,
+		arg.Limit,
+		arg.DatabaseID,
+		arg.ApplicationID,
+		arg.ServiceID,
+		arg.Status,
+	)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	items := []Backup{}
+	for rows.Next() {
+		var i Backup
+		if err := rows.Scan(
+			&i.ID,
+			&i.DatabaseID,
+			&i.ScheduleID,
+			&i.Type,
+			&i.Status,
+			&i.Size,
+			&i.Location,
+			&i.TargetID,
+			&i.ContainerID,
+			&i.Error,
+			&i.CreatedAt,
+			&i.FinishedAt,
+			&i.WasRunning,
+			&i.ApplicationID,
+			&i.ServiceID,
 		); err != nil {
 			return nil, err
 		}
@@ -690,13 +892,20 @@ func (q *Queries) ListBackupsByDatabase(ctx context.Context, arg ListBackupsByDa
 }
 
 const listDueBackupSchedules = `-- name: ListDueBackupSchedules :many
-SELECT s.id, s.database_id, s.cron, s.target_id, s.enabled, s.last_run_at, s.next_run_at, s.created_at, s.updated_at, s.last_slot_at, s.target_changed_at, s.max_run_seconds
+SELECT s.id, s.database_id, s.cron, s.target_id, s.enabled, s.last_run_at, s.next_run_at, s.created_at, s.updated_at, s.last_slot_at, s.target_changed_at, s.max_run_seconds, s.application_id, s.service_id
 FROM backup_schedules s
-    JOIN databases d ON d.id = s.database_id
-WHERE s.enabled AND s.next_run_at <= $1 AND d.deleted_at IS NULL
+WHERE s.enabled AND s.next_run_at <= $1
+  AND (s.database_id IS NULL OR EXISTS (
+        SELECT 1 FROM databases d WHERE d.id = s.database_id AND d.deleted_at IS NULL))
+  AND (s.application_id IS NULL OR EXISTS (
+        SELECT 1 FROM applications a WHERE a.id = s.application_id))
+  AND (s.service_id IS NULL OR EXISTS (
+        SELECT 1 FROM services v WHERE v.id = s.service_id AND v.deleted_at IS NULL))
 ORDER BY s.next_run_at ASC, s.id ASC
 `
 
+// Due schedules whose resource still exists; a soft-deleted resource must not
+// keep producing runs while its grace window ticks down.
 func (q *Queries) ListDueBackupSchedules(ctx context.Context, nextRunAt pgtype.Timestamptz) ([]BackupSchedule, error) {
 	rows, err := q.db.Query(ctx, listDueBackupSchedules, nextRunAt)
 	if err != nil {
@@ -719,6 +928,8 @@ func (q *Queries) ListDueBackupSchedules(ctx context.Context, nextRunAt pgtype.T
 			&i.LastSlotAt,
 			&i.TargetChangedAt,
 			&i.MaxRunSeconds,
+			&i.ApplicationID,
+			&i.ServiceID,
 		); err != nil {
 			return nil, err
 		}
@@ -730,24 +941,14 @@ func (q *Queries) ListDueBackupSchedules(ctx context.Context, nextRunAt pgtype.T
 	return items, nil
 }
 
-const listRestoresByDatabase = `-- name: ListRestoresByDatabase :many
-SELECT r.id, r.database_id, r.backup_id, r.status, r.error, r.created_at, r.finished_at
-FROM restores r
-    JOIN databases d ON d.id = r.database_id
-WHERE r.database_id = $1 AND d.deleted_at IS NULL
-ORDER BY r.created_at DESC, r.id DESC
-LIMIT $2
+const listRestores = `-- name: ListRestores :many
+SELECT id, database_id, backup_id, status, error, created_at, finished_at, application_id, service_id FROM restores
+ORDER BY created_at DESC, id DESC
+LIMIT $1
 `
 
-type ListRestoresByDatabaseParams struct {
-	DatabaseID pgtype.UUID `json:"database_id"`
-	Limit      int32       `json:"limit"`
-}
-
-// The durable restore history of one live database, newest first. Bounded by
-// the caller so the table cannot grow an unbounded response.
-func (q *Queries) ListRestoresByDatabase(ctx context.Context, arg ListRestoresByDatabaseParams) ([]Restore, error) {
-	rows, err := q.db.Query(ctx, listRestoresByDatabase, arg.DatabaseID, arg.Limit)
+func (q *Queries) ListRestores(ctx context.Context, limit int32) ([]Restore, error) {
+	rows, err := q.db.Query(ctx, listRestores, limit)
 	if err != nil {
 		return nil, err
 	}
@@ -763,6 +964,61 @@ func (q *Queries) ListRestoresByDatabase(ctx context.Context, arg ListRestoresBy
 			&i.Error,
 			&i.CreatedAt,
 			&i.FinishedAt,
+			&i.ApplicationID,
+			&i.ServiceID,
+		); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
+const listRestoresByResource = `-- name: ListRestoresByResource :many
+SELECT id, database_id, backup_id, status, error, created_at, finished_at, application_id, service_id FROM restores
+WHERE database_id = $2::uuid
+   OR application_id = $3::uuid
+   OR service_id = $4::uuid
+ORDER BY created_at DESC, id DESC
+LIMIT $1
+`
+
+type ListRestoresByResourceParams struct {
+	Limit         int32       `json:"limit"`
+	DatabaseID    pgtype.UUID `json:"database_id"`
+	ApplicationID pgtype.UUID `json:"application_id"`
+	ServiceID     pgtype.UUID `json:"service_id"`
+}
+
+// The durable restore history of one live resource, newest first. Bounded by
+// the caller so the table cannot grow an unbounded response.
+func (q *Queries) ListRestoresByResource(ctx context.Context, arg ListRestoresByResourceParams) ([]Restore, error) {
+	rows, err := q.db.Query(ctx, listRestoresByResource,
+		arg.Limit,
+		arg.DatabaseID,
+		arg.ApplicationID,
+		arg.ServiceID,
+	)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	items := []Restore{}
+	for rows.Next() {
+		var i Restore
+		if err := rows.Scan(
+			&i.ID,
+			&i.DatabaseID,
+			&i.BackupID,
+			&i.Status,
+			&i.Error,
+			&i.CreatedAt,
+			&i.FinishedAt,
+			&i.ApplicationID,
+			&i.ServiceID,
 		); err != nil {
 			return nil, err
 		}
@@ -775,7 +1031,7 @@ func (q *Queries) ListRestoresByDatabase(ctx context.Context, arg ListRestoresBy
 }
 
 const listRunningBackups = `-- name: ListRunningBackups :many
-SELECT id, database_id, schedule_id, type, status, size, location, target_id, container_id, error, created_at, finished_at, was_running FROM backups
+SELECT id, database_id, schedule_id, type, status, size, location, target_id, container_id, error, created_at, finished_at, was_running, application_id, service_id FROM backups
 WHERE status = 'running'
 ORDER BY created_at ASC
 `
@@ -805,6 +1061,8 @@ func (q *Queries) ListRunningBackups(ctx context.Context) ([]Backup, error) {
 			&i.CreatedAt,
 			&i.FinishedAt,
 			&i.WasRunning,
+			&i.ApplicationID,
+			&i.ServiceID,
 		); err != nil {
 			return nil, err
 		}
@@ -817,7 +1075,7 @@ func (q *Queries) ListRunningBackups(ctx context.Context) ([]Backup, error) {
 }
 
 const listRunningRestores = `-- name: ListRunningRestores :many
-SELECT id, database_id, backup_id, status, error, created_at, finished_at FROM restores
+SELECT id, database_id, backup_id, status, error, created_at, finished_at, application_id, service_id FROM restores
 WHERE status = 'running'
 ORDER BY created_at ASC
 `
@@ -841,6 +1099,8 @@ func (q *Queries) ListRunningRestores(ctx context.Context) ([]Restore, error) {
 			&i.Error,
 			&i.CreatedAt,
 			&i.FinishedAt,
+			&i.ApplicationID,
+			&i.ServiceID,
 		); err != nil {
 			return nil, err
 		}
@@ -859,7 +1119,7 @@ SET last_slot_at = next_run_at,
     next_run_at = $3,
     updated_at = now()
 WHERE id = $1
-RETURNING id, database_id, cron, target_id, enabled, last_run_at, next_run_at, created_at, updated_at, last_slot_at, target_changed_at, max_run_seconds
+RETURNING id, database_id, cron, target_id, enabled, last_run_at, next_run_at, created_at, updated_at, last_slot_at, target_changed_at, max_run_seconds, application_id, service_id
 `
 
 type MarkBackupScheduleRunParams struct {
@@ -884,6 +1144,8 @@ func (q *Queries) MarkBackupScheduleRun(ctx context.Context, arg MarkBackupSched
 		&i.LastSlotAt,
 		&i.TargetChangedAt,
 		&i.MaxRunSeconds,
+		&i.ApplicationID,
+		&i.ServiceID,
 	)
 	return i, err
 }
@@ -914,7 +1176,7 @@ type SetBackupWasRunningParams struct {
 }
 
 // Records the pre-job container state as observed by the pause, so the
-// boot-time sweep only restarts a database the job itself stopped.
+// boot-time sweep only restarts a resource the job itself stopped.
 func (q *Queries) SetBackupWasRunning(ctx context.Context, arg SetBackupWasRunningParams) error {
 	_, err := q.db.Exec(ctx, setBackupWasRunning, arg.ID, arg.WasRunning)
 	return err
@@ -931,7 +1193,7 @@ SET cron = $2,
     max_run_seconds = $8,
     updated_at = now()
 WHERE id = $1
-RETURNING id, database_id, cron, target_id, enabled, last_run_at, next_run_at, created_at, updated_at, last_slot_at, target_changed_at, max_run_seconds
+RETURNING id, database_id, cron, target_id, enabled, last_run_at, next_run_at, created_at, updated_at, last_slot_at, target_changed_at, max_run_seconds, application_id, service_id
 `
 
 type UpdateBackupScheduleParams struct {
@@ -970,6 +1232,8 @@ func (q *Queries) UpdateBackupSchedule(ctx context.Context, arg UpdateBackupSche
 		&i.LastSlotAt,
 		&i.TargetChangedAt,
 		&i.MaxRunSeconds,
+		&i.ApplicationID,
+		&i.ServiceID,
 	)
 	return i, err
 }
@@ -984,7 +1248,7 @@ SET name = $2,
     prefix = $7,
     updated_at = now()
 WHERE id = $1
-RETURNING id, user_id, name, kind, endpoint, region, bucket, prefix, created_at, updated_at
+RETURNING id, user_id, name, kind, endpoint, region, bucket, prefix, created_at, updated_at, builtin
 `
 
 type UpdateBackupTargetParams struct {
@@ -1019,6 +1283,7 @@ func (q *Queries) UpdateBackupTarget(ctx context.Context, arg UpdateBackupTarget
 		&i.Prefix,
 		&i.CreatedAt,
 		&i.UpdatedAt,
+		&i.Builtin,
 	)
 	return i, err
 }

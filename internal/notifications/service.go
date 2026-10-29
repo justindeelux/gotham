@@ -16,7 +16,7 @@ import (
 
 	"github.com/google/uuid"
 
-	"github.com/justindeelux/gotham/internal/databases"
+	"github.com/justindeelux/gotham/internal/backups"
 	"github.com/justindeelux/gotham/internal/deploy"
 	"github.com/justindeelux/gotham/internal/proxy"
 	"github.com/justindeelux/gotham/internal/servers"
@@ -106,9 +106,9 @@ type Service struct {
 }
 
 var (
-	_ NotificationService      = (*Service)(nil)
-	_ deploy.Notifier          = (*Service)(nil)
-	_ databases.BackupNotifier = (*Service)(nil)
+	_ NotificationService    = (*Service)(nil)
+	_ deploy.Notifier        = (*Service)(nil)
+	_ backups.BackupNotifier = (*Service)(nil)
 )
 
 func NewService(cfg Config) *Service {
@@ -769,23 +769,32 @@ func (s *Service) RedeployNeeded(_ context.Context, result deploy.RedeployResult
 	})
 }
 
-func (s *Service) BackupFinished(_ context.Context, result databases.BackupResult) {
+func (s *Service) BackupFinished(_ context.Context, result backups.BackupResult) {
 	if s == nil || !Enabled() {
 		return
 	}
 	outcome := OutcomeFailure
-	if result.Status == databases.BackupCompleted {
+	if result.Status == backups.BackupCompleted {
 		outcome = OutcomeSuccess
 	}
 	s.Dispatch(Event{
 		Kind:         EventBackup,
 		Outcome:      outcome,
-		ResourceType: ResourceDatabase,
-		ResourceID:   result.DatabaseID,
-		Name:         result.Database,
+		ResourceType: notificationResourceType(result.ResourceType),
+		ResourceID:   result.ResourceID,
+		Name:         result.Name,
 		Error:        result.Error,
 		At:           result.FinishedAt,
 	})
+}
+
+// notificationResourceType keeps the channel scope vocabulary of this package;
+// a database-backup notification has always been scoped to a database.
+func notificationResourceType(kind backups.ResourceType) string {
+	if kind == backups.ResourceApplication {
+		return ResourceApplication
+	}
+	return ResourceDatabase
 }
 
 func (s *Service) ServerStateChanged(_ context.Context, change servers.StateChange) {

@@ -234,6 +234,10 @@ func TestProjectAccessRouteMatrix(t *testing.T) {
 					return f.services[1].String()
 				case "channel":
 					return f.channels[1].String()
+				case "backup":
+					return f.backups[1].String()
+				case "schedule":
+					return f.schedules[1].String()
 				}
 			case "{deployment_id}":
 				return f.deployments[1].String()
@@ -278,6 +282,57 @@ func TestProjectAccessRouteMatrix(t *testing.T) {
 	for key := range matrix {
 		if !seen[key] {
 			t.Errorf("stale matrix route: %s", key)
+		}
+	}
+}
+
+// The generic backup surface filters by project grant: a member sees only the
+// runs of resources they can reach and cannot restore somebody else's backup.
+func TestProjectMemberSeesOnlyAccessibleBackups(t *testing.T) {
+	f := newAccessFixture(t)
+	bearer := "Bearer " + f.member.AccessToken
+
+	rec := doRequest(t, f.server, "GET", "/api/v1/backups", "", bearer)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("ungranted list=%d %s", rec.Code, rec.Body.String())
+	}
+	var envelope struct {
+		Backups []map[string]any `json:"backups"`
+	}
+	if err := json.Unmarshal(rec.Body.Bytes(), &envelope); err != nil {
+		t.Fatal(err)
+	}
+	if len(envelope.Backups) != 0 {
+		t.Fatalf("ungranted list leaked %d backups", len(envelope.Backups))
+	}
+
+	f.grant(t)
+	rec = doRequest(t, f.server, "GET", "/api/v1/backups", "", bearer)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("granted list=%d %s", rec.Code, rec.Body.String())
+	}
+	if err := json.Unmarshal(rec.Body.Bytes(), &envelope); err != nil {
+		t.Fatal(err)
+	}
+	if len(envelope.Backups) != 1 || envelope.Backups[0]["id"] != f.backups[0].String() {
+		t.Fatalf("backups=%s, want only the granted project's run", rec.Body.String())
+	}
+	if strings.Contains(rec.Body.String(), f.backups[1].String()) {
+		t.Fatalf("another project's backup leaked: %s", rec.Body.String())
+	}
+
+	for _, path := range []string{
+		"/api/v1/backups/" + f.backups[1].String(),
+		"/api/v1/backups/" + f.backups[1].String() + "/restore",
+		"/api/v1/backups/schedules?resource_type=database&resource_id=" + f.databases[1].String(),
+	} {
+		method := http.MethodGet
+		if strings.HasSuffix(path, "/restore") {
+			method = http.MethodPost
+		}
+		rec := doRequest(t, f.server, method, path, "", bearer)
+		if rec.Code != http.StatusNotFound {
+			t.Errorf("%s %s=%d, want 404", method, path, rec.Code)
 		}
 	}
 }
@@ -527,6 +582,9 @@ var projectBodyReferences = map[string][]string{
 	"POST /api/v1/databases/{id}/restore":                 {"backup_id"},
 	"POST /api/v1/databases/{id}/schedules":               {"target_id"},
 	"PATCH /api/v1/databases/{id}/schedules/{scheduleId}": {"target_id"},
+	"POST /api/v1/backups":                                {"provider_id"},
+	"POST /api/v1/backups/schedules":                      {"provider_id"},
+	"PATCH /api/v1/backups/schedules/{id}":                {"provider_id"},
 	"POST /api/v1/services":                               {"environment_id", "server_id"},
 	"PATCH /api/v1/services/{id}":                         {"environment_id", "server_id"},
 	"POST /api/v1/notification-channels":                  {"resource_id"},
@@ -541,11 +599,14 @@ func (f *accessFixture) assertProjectReferenceKeys(t *testing.T, method, path st
 		return
 	}
 	policy := projectPolicies[key]
-	target := map[string]uuid.UUID{"application": f.apps[0], "database": f.databases[0], "service": f.services[0], "channel": f.channels[0]}[policy.kind]
+	target := map[string]uuid.UUID{"application": f.apps[0], "database": f.databases[0], "service": f.services[0], "channel": f.channels[0], "backup": f.backups[0], "schedule": f.schedules[0]}[policy.kind]
 	url := strings.ReplaceAll(strings.ReplaceAll(path, "{id}", target.String()), "{scheduleId}", f.schedules[0].String())
 	base := fmt.Sprintf(`"environment_id":"%s"`, f.environments[0])
-	if policy.kind == "channel" {
+	switch policy.kind {
+	case "channel":
 		base = fmt.Sprintf(`"resource_type":"application","resource_id":"%s"`, f.apps[0])
+	case "backup", "schedule", "restore":
+		base = fmt.Sprintf(`"resource_type":"database","resource_id":"%s"`, f.databases[0])
 	}
 	for _, reference := range references {
 		folded := strings.Replace(reference, "s", "ſ", 1)

@@ -1,4 +1,4 @@
-package databases
+package backups
 
 import (
 	"bytes"
@@ -265,7 +265,7 @@ func TestBackupFlushesArtifactBeforeRecordingCompletion(t *testing.T) {
 func TestUpdateTargetLocksDestinationWithCompletedBackups(t *testing.T) {
 	fixture := newBackupFixture(t)
 	ctx := context.Background()
-	target, err := fixture.manager.CreateTarget(ctx, fixture.userID, TargetRequest{
+	target, err := fixture.manager.CreateProvider(ctx, fixture.userID, ProviderRequest{
 		Name: "s3", Kind: "s3", Endpoint: "https://s3.example.com", Bucket: "old",
 		AccessKey: "ak", SecretKey: "sk",
 	})
@@ -273,11 +273,11 @@ func TestUpdateTargetLocksDestinationWithCompletedBackups(t *testing.T) {
 		t.Fatalf("CreateTarget: %v", err)
 	}
 	fixture.backups.seedBackup(Backup{
-		DatabaseID: fixture.database.ID, Status: BackupCompleted,
+		ResourceRef: databaseRef(fixture.databaseID), Status: BackupCompleted,
 		TargetID: target.ID, Location: locationS3Prefix + "old/key.gz",
 	})
 
-	if _, err := fixture.manager.UpdateTarget(ctx, fixture.userID, target.ID, TargetRequest{Bucket: "new"}); !errors.Is(err, ErrTargetStranded) {
+	if _, err := fixture.manager.UpdateProvider(ctx, fixture.userID, target.ID, ProviderRequest{Bucket: "new"}); !errors.Is(err, ErrTargetStranded) {
 		t.Fatalf("bucket move err = %v, want ErrTargetStranded", err)
 	}
 	stored, err := fixture.backups.GetBackupTarget(ctx, target.ID)
@@ -288,13 +288,13 @@ func TestUpdateTargetLocksDestinationWithCompletedBackups(t *testing.T) {
 		t.Errorf("bucket = %q, want the locked old value", stored.Bucket)
 	}
 
-	if _, err := fixture.manager.UpdateTarget(ctx, fixture.userID, target.ID, TargetRequest{
+	if _, err := fixture.manager.UpdateProvider(ctx, fixture.userID, target.ID, ProviderRequest{
 		Name: "renamed", Prefix: strPtr("new-prefix/"),
 	}); err != nil {
 		t.Fatalf("name/prefix update: %v", err)
 	}
 
-	runningTarget, err := fixture.manager.CreateTarget(ctx, fixture.userID, TargetRequest{
+	runningTarget, err := fixture.manager.CreateProvider(ctx, fixture.userID, ProviderRequest{
 		Name: "s3-running", Kind: "s3", Endpoint: "https://s3.example.com", Bucket: "old",
 		AccessKey: "ak", SecretKey: "sk",
 	})
@@ -302,9 +302,9 @@ func TestUpdateTargetLocksDestinationWithCompletedBackups(t *testing.T) {
 		t.Fatalf("CreateTarget(running): %v", err)
 	}
 	fixture.backups.seedBackup(Backup{
-		DatabaseID: fixture.database.ID, Status: BackupRunning, TargetID: runningTarget.ID,
+		ResourceRef: databaseRef(fixture.databaseID), Status: BackupRunning, TargetID: runningTarget.ID,
 	})
-	if _, err := fixture.manager.UpdateTarget(ctx, fixture.userID, runningTarget.ID, TargetRequest{Bucket: "moved"}); !errors.Is(err, ErrTargetStranded) {
+	if _, err := fixture.manager.UpdateProvider(ctx, fixture.userID, runningTarget.ID, ProviderRequest{Bucket: "moved"}); !errors.Is(err, ErrTargetStranded) {
 		t.Fatalf("running-backup bucket move err = %v, want ErrTargetStranded", err)
 	}
 }
@@ -318,7 +318,7 @@ func TestUpdateTargetIsAtomicWhenSealingFails(t *testing.T) {
 	})
 	fixture.backups.secretErr = errors.New("credential write failed")
 
-	if _, err := fixture.manager.UpdateTarget(ctx, fixture.userID, target.ID, TargetRequest{
+	if _, err := fixture.manager.UpdateProvider(ctx, fixture.userID, target.ID, ProviderRequest{
 		Endpoint: "https://new.example.com", AccessKey: "ak", SecretKey: "sk",
 	}); err == nil {
 		t.Fatal("expected the credential failure to surface")
@@ -332,12 +332,33 @@ func TestUpdateTargetIsAtomicWhenSealingFails(t *testing.T) {
 	}
 }
 
+type sweepContainers struct {
+	containers.ContainerService
+	listed     []containers.Container
+	removes    []string
+	freshLists int
+}
+
+func (c *sweepContainers) List(context.Context, uuid.UUID) ([]containers.Container, error) {
+	return c.listed, nil
+}
+
+func (c *sweepContainers) ListFresh(context.Context, uuid.UUID) ([]containers.Container, error) {
+	c.freshLists++
+	return c.listed, nil
+}
+
+func (c *sweepContainers) Remove(_ context.Context, _ uuid.UUID, containerID string) error {
+	c.removes = append(c.removes, containerID)
+	return nil
+}
+
 func TestSweepJobContainers(t *testing.T) {
 	fixture := newBackupFixture(t)
 	fixture.backups.serverIDs = []uuid.UUID{fixture.serverID}
 
 	liveRun := fixture.backups.seedBackup(Backup{
-		DatabaseID: fixture.database.ID, Status: BackupRunning,
+		ResourceRef: databaseRef(fixture.databaseID), Status: BackupRunning,
 	})
 	leasedDB := uuid.New()
 	if !fixture.manager.claim(leasedDB) {
@@ -345,33 +366,32 @@ func TestSweepJobContainers(t *testing.T) {
 	}
 	defer fixture.manager.release(leasedDB)
 
-	fixture.containers.listed = []containers.Container{
+	sweep := &sweepContainers{listed: []containers.Container{
 		{ID: "db-container", Labels: map[string]string{
-			labelManaged: "true", labelDatabaseID: fixture.database.ID.String(),
+			LabelManaged: "true", LabelResourceID: fixture.databaseID.String(),
 		}},
 		{ID: "leftover-backup", Labels: map[string]string{
-			labelManaged: "true", labelRole: roleBackup,
-			labelDatabaseID: uuid.New().String(), labelBackupID: uuid.New().String(),
+			LabelManaged: "true", LabelRole: RoleBackup,
+			LabelResourceID: uuid.New().String(), LabelBackupID: uuid.New().String(),
 		}},
 		{ID: "live-restore", Labels: map[string]string{
-			labelManaged: "true", labelRole: roleRestore,
-			labelDatabaseID: uuid.New().String(), labelBackupID: liveRun.ID.String(),
+			LabelManaged: "true", LabelRole: RoleRestore,
+			LabelResourceID: uuid.New().String(), LabelBackupID: liveRun.ID.String(),
 		}},
 		{ID: "leased-stage", Labels: map[string]string{
-			labelManaged: "true", labelRole: roleStage,
-			labelDatabaseID: leasedDB.String(), labelBackupID: uuid.New().String(),
+			LabelManaged: "true", LabelRole: RoleStage,
+			LabelResourceID: leasedDB.String(), LabelBackupID: uuid.New().String(),
 		}},
 		{ID: "unmanaged", Labels: map[string]string{
-			labelRole: roleBackup, labelDatabaseID: uuid.New().String(),
+			LabelRole: RoleBackup, LabelResourceID: uuid.New().String(),
 		}},
-	}
+	}}
+	fixture.manager.containers = sweep
 
 	fixture.manager.sweepJobContainers()
 
-	fixture.containers.mu.Lock()
-	removes := append([]string(nil), fixture.containers.removes...)
-	freshLists := fixture.containers.freshLists
-	fixture.containers.mu.Unlock()
+	removes := sweep.removes
+	freshLists := sweep.freshLists
 	if len(removes) != 1 || removes[0] != "leftover-backup" {
 		t.Errorf("removed %v, want exactly [leftover-backup]", removes)
 	}
@@ -398,10 +418,11 @@ func TestClampBackupListLimit(t *testing.T) {
 
 func TestListBackupsRespectsLimit(t *testing.T) {
 	fixture := newBackupFixture(t)
+	ref2 := databaseRef(fixture.databaseID)
 	for i := 0; i < 5; i++ {
-		fixture.backups.seedBackup(Backup{DatabaseID: fixture.database.ID, Status: BackupCompleted})
+		fixture.backups.seedBackup(Backup{ResourceRef: databaseRef(fixture.databaseID), Status: BackupCompleted})
 	}
-	backups, err := fixture.manager.ListBackups(context.Background(), fixture.userID, fixture.database.ID, 2)
+	backups, err := fixture.manager.ListBackups(context.Background(), fixture.userID, BackupFilter{Resource: &ref2, Limit: 2})
 	if err != nil {
 		t.Fatalf("ListBackups: %v", err)
 	}

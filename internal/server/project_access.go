@@ -183,6 +183,15 @@ func (s *Server) authorizeProjectReferences(r *http.Request, userID uuid.UUID, p
 			return false
 		}
 	}
+	// A resource filter must resolve to a grant, otherwise a member could tell
+	// an existing resource in another project from a missing one.
+	queryType := strings.TrimSpace(r.URL.Query().Get("resource_type"))
+	queryID := strings.TrimSpace(r.URL.Query().Get("resource_id"))
+	if queryType != "" || queryID != "" {
+		if queryType == "" || queryID == "" || !s.canAccessResource(r.Context(), userID, queryType, queryID) {
+			return false
+		}
+	}
 	for key, values := range r.URL.Query() {
 		if kind, ok := refs[strings.ToLower(key)]; ok {
 			for _, id := range values {
@@ -230,7 +239,7 @@ func (s *Server) authorizeProjectReferences(r *http.Request, userID uuid.UUID, p
 			return false
 		}
 	}
-	if policy.create && policy.kind != "channel" {
+	if policy.create && (policy.kind == "application" || policy.kind == "database" || policy.kind == "service") {
 		var environment string
 		if json.Unmarshal(normalized["environment_id"], &environment) != nil || !s.canAccessResource(r.Context(), userID, "environment", environment) {
 			return false
@@ -259,7 +268,7 @@ func (s *Server) authorizeProjectReferences(r *http.Request, userID uuid.UUID, p
 		if json.Unmarshal(resourceType, &kind) != nil || json.Unmarshal(resourceID, &id) != nil {
 			return false
 		}
-		if kind != "application" && kind != "database" {
+		if kind != "application" && kind != "database" && kind != "service" {
 			return false
 		}
 		if !s.canAccessResource(r.Context(), userID, kind, id) {
@@ -271,7 +280,7 @@ func (s *Server) authorizeProjectReferences(r *http.Request, userID uuid.UUID, p
 
 func operatorReference(key string) bool {
 	switch strings.ToLower(key) {
-	case "server_id", "target_id", "private_key_id", "ssh_key_id", "github_app_id", "provider_connection_id":
+	case "server_id", "target_id", "provider_id", "private_key_id", "ssh_key_id", "github_app_id", "provider_connection_id":
 		return true
 	}
 	return false

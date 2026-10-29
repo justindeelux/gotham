@@ -10,7 +10,7 @@ import (
 var errProjectJSONKeys = errors.New("non-canonical or duplicate reference keys")
 
 func projectReferenceKey(key string) string {
-	for _, canonical := range []string{"project_id", "environment_id", "application_id", "database_id", "service_id", "deployment_id", "backup_id", "schedule_id", "resource_type", "resource_id", "server_id", "target_id", "private_key_id", "ssh_key_id", "github_app_id", "provider_connection_id"} {
+	for _, canonical := range []string{"project_id", "environment_id", "application_id", "database_id", "service_id", "deployment_id", "backup_id", "schedule_id", "resource_type", "resource_id", "server_id", "target_id", "provider_id", "private_key_id", "ssh_key_id", "github_app_id", "provider_connection_id"} {
 		if strings.EqualFold(key, canonical) {
 			return canonical
 		}

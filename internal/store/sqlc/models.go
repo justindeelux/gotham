@@ -95,19 +95,21 @@ type ApplicationWebhook struct {
 }
 
 type Backup struct {
-	ID          pgtype.UUID        `json:"id"`
-	DatabaseID  pgtype.UUID        `json:"database_id"`
-	ScheduleID  pgtype.UUID        `json:"schedule_id"`
-	Type        string             `json:"type"`
-	Status      string             `json:"status"`
-	Size        int64              `json:"size"`
-	Location    string             `json:"location"`
-	TargetID    pgtype.UUID        `json:"target_id"`
-	ContainerID string             `json:"container_id"`
-	Error       string             `json:"error"`
-	CreatedAt   pgtype.Timestamptz `json:"created_at"`
-	FinishedAt  pgtype.Timestamptz `json:"finished_at"`
-	WasRunning  bool               `json:"was_running"`
+	ID            pgtype.UUID        `json:"id"`
+	DatabaseID    pgtype.UUID        `json:"database_id"`
+	ScheduleID    pgtype.UUID        `json:"schedule_id"`
+	Type          string             `json:"type"`
+	Status        string             `json:"status"`
+	Size          int64              `json:"size"`
+	Location      string             `json:"location"`
+	TargetID      pgtype.UUID        `json:"target_id"`
+	ContainerID   string             `json:"container_id"`
+	Error         string             `json:"error"`
+	CreatedAt     pgtype.Timestamptz `json:"created_at"`
+	FinishedAt    pgtype.Timestamptz `json:"finished_at"`
+	WasRunning    bool               `json:"was_running"`
+	ApplicationID pgtype.UUID        `json:"application_id"`
+	ServiceID     pgtype.UUID        `json:"service_id"`
 }
 
 type BackupSchedule struct {
@@ -123,6 +125,8 @@ type BackupSchedule struct {
 	LastSlotAt      pgtype.Timestamptz `json:"last_slot_at"`
 	TargetChangedAt pgtype.Timestamptz `json:"target_changed_at"`
 	MaxRunSeconds   int32              `json:"max_run_seconds"`
+	ApplicationID   pgtype.UUID        `json:"application_id"`
+	ServiceID       pgtype.UUID        `json:"service_id"`
 }
 
 type BackupTarget struct {
@@ -136,6 +140,7 @@ type BackupTarget struct {
 	Prefix    string             `json:"prefix"`
 	CreatedAt pgtype.Timestamptz `json:"created_at"`
 	UpdatedAt pgtype.Timestamptz `json:"updated_at"`
+	Builtin   bool               `json:"builtin"`
 }
 
 type BackupTargetSecret struct {
@@ -696,13 +701,15 @@ type ResourceSample struct {
 }
 
 type Restore struct {
-	ID         pgtype.UUID        `json:"id"`
-	DatabaseID pgtype.UUID        `json:"database_id"`
-	BackupID   pgtype.UUID        `json:"backup_id"`
-	Status     string             `json:"status"`
-	Error      string             `json:"error"`
-	CreatedAt  pgtype.Timestamptz `json:"created_at"`
-	FinishedAt pgtype.Timestamptz `json:"finished_at"`
+	ID            pgtype.UUID        `json:"id"`
+	DatabaseID    pgtype.UUID        `json:"database_id"`
+	BackupID      pgtype.UUID        `json:"backup_id"`
+	Status        string             `json:"status"`
+	Error         string             `json:"error"`
+	CreatedAt     pgtype.Timestamptz `json:"created_at"`
+	FinishedAt    pgtype.Timestamptz `json:"finished_at"`
+	ApplicationID pgtype.UUID        `json:"application_id"`
+	ServiceID     pgtype.UUID        `json:"service_id"`
 }
 
 type RuntimeMonitorReplica struct {

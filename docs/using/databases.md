@@ -94,18 +94,34 @@ The connection string depends on how the database is exposed:
 ## Backups
 
 Open the **Backups** tab of a database to manage runs, schedules and storage
-targets. A backup is an engine dump taken by a temporary container on the same
+providers. A backup is an engine dump taken by a temporary container on the same
 node; the artifact is compressed and stored in the selected destination. Runs
 are listed with type (`manual` or `scheduled`), status, size, destination and
 timestamps. A failed run keeps its row and error text, so you can see what went
 wrong before running it again.
+
+Backups are a feature of their own: the same core serves databases today and
+will serve application storage and service volumes, and the **Backups** page
+lists every run and schedule in one place. Next to it, `GET /v1/backups`,
+`POST /v1/backups`, `GET /v1/backups/{id}`, `POST /v1/backups/{id}/restore`,
+`GET/POST /v1/backups/schedules`, `PATCH/DELETE /v1/backups/schedules/{id}`,
+`GET /v1/backups/restores` and `GET/POST /v1/backups/providers` are the
+resource-agnostic API. Only `database` is accepted as a resource type for now;
+other types answer `400` until their driver lands.
+
+The database-scoped routes listed on this page
+(`/v1/databases/{id}/backups`, `.../schedules`, `.../restore` and
+`/v1/databases/backup-targets`) are **deprecated aliases** of that core. They
+keep their request and response shapes, so existing tokens and MCP clients keep
+working, and they always describe the same job rows and the same artifact layout
+as the new routes.
 
 ### Back up now
 
 **Backup now** queues a manual run. Taking a dump stops the database container
 while the temporary container reads the volume, so the database is briefly
 unavailable; it is started again afterwards if it was running. The same is true
-of scheduled runs. Choose a destination per run, or leave the default.
+of scheduled runs. Choose a provider per run, or leave the default.
 
 ### Restore
 
@@ -123,25 +139,30 @@ A schedule is a five-field cron expression in the control plane: minute, hour,
 day of month, month, day of week. Fields accept `*`, single values, ranges,
 steps (`*/5`, `1-10/2`) and comma lists of those. The next run is computed when
 you save and shown in the list. Each schedule can be enabled or paused and
-carries its own destination; without one, runs land in the default local store.
-Deleting a schedule leaves past backups untouched.
+carries its own provider; without one, runs land in the built-in Local disk
+provider. Deleting a schedule leaves past backups untouched.
 
-### Storage targets
+### Storage providers
 
-Backups go to the control plane disk when no target is configured.
+Providers are an owner-level catalogue: configure one once and use it from every
+database. Every install ships a built-in **Local disk** provider that writes to
+the control plane's backup directory. It is always listed, cannot be changed
+into another kind and cannot be deleted, so a fresh install can back up with no
+setup and an artifact never lands on an unnamed destination.
+
 S3-compatible storage is supported against AWS S3, Cloudflare R2, MinIO and
 similar services: configure an endpoint, region, bucket, optional key prefix,
-access key and secret key.
+access key and secret key. Providers are configured under **Backups → Storage
+providers**, once for the owner account rather than per database. Only the owner
+configures them; a member can run, list and restore backups of a database in a
+project they belong to, but cannot choose or read a provider. The keys are
+sealed on the server and never shown back, so an edit form leaves stored keys in
+place when the key fields are blank. **Test** checks the endpoint and
+credentials against the bucket, or the local directory's writability, and
+reports the result.
 
-Targets are configured under **Backups → Backup targets**, once for the owner
-account rather than per database. Only the owner configures them; a backup a
-member starts uses the local destination. The keys
-are sealed on the server and never shown back, so an
-edit form leaves stored keys in place when the key fields are blank. **Test**
-checks the endpoint and credentials against the bucket and reports the result.
-
-Deleting a target does not delete past backups, but they can no longer be read
-back from that target, so restores from them will fail. The local destination
+Deleting a provider does not delete past backups, but they can no longer be read
+back from that provider, so restores from them will fail. The local backup
 directory is a control-plane setting on the host.
 
 > [!TIP]

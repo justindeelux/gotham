@@ -148,6 +148,32 @@ func (q *Queries) GetUserByID(ctx context.Context, id pgtype.UUID) (User, error)
 	return i, err
 }
 
+const listOwnerUserIDs = `-- name: ListOwnerUserIDs :many
+SELECT id FROM users
+WHERE role = 'owner'
+ORDER BY id
+`
+
+func (q *Queries) ListOwnerUserIDs(ctx context.Context) ([]pgtype.UUID, error) {
+	rows, err := q.db.Query(ctx, listOwnerUserIDs)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	items := []pgtype.UUID{}
+	for rows.Next() {
+		var id pgtype.UUID
+		if err := rows.Scan(&id); err != nil {
+			return nil, err
+		}
+		items = append(items, id)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
 const setUserPasswordHash = `-- name: SetUserPasswordHash :one
 UPDATE users
 SET password_hash = $2, updated_at = now(), credential_version = credential_version + 1

@@ -8,6 +8,11 @@ SELECT id, email, created_at, password_hash, avatar, updated_at, credential_vers
 FROM users
 WHERE id = $1;
 
+-- name: ListOwnerUserIDs :many
+SELECT id FROM users
+WHERE role = 'owner'
+ORDER BY id;
+
 -- name: CreateUser :one
 INSERT INTO users (email, password_hash)
 VALUES ($1, $2)

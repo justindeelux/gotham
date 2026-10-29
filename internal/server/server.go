@@ -19,6 +19,7 @@ import (
 	"github.com/google/uuid"
 
 	"github.com/justindeelux/gotham/internal/auth"
+	"github.com/justindeelux/gotham/internal/backups"
 	"github.com/justindeelux/gotham/internal/backupwatch"
 	"github.com/justindeelux/gotham/internal/clientip"
 	"github.com/justindeelux/gotham/internal/config"
@@ -83,7 +84,7 @@ type Server struct {
 	instanceSvc       *instance.Service
 	deploy            deploy.DeployService
 	proxy             proxy.ProxyService
-	backups           databases.BackupService
+	backups           backups.BackupService
 	databaseSvc       databases.DatabaseService
 	composeSvc        services.ServiceService
 	toolchain         toolchain.ToolchainService
@@ -491,8 +492,9 @@ func (s *Server) routes() (http.Handler, error) {
 		s.databaseSvc = databaseSvc
 		databases.Mount(api, s.resourceAuth(), RequireScopes(auth.ScopeDeploy), UserIDFromContext, databaseSvc)
 
-		s.backups = s.backupService(containerService)
-		databases.MountBackups(api, s.resourceAuth(), s.resourceAuth(), UserIDFromContext, s.backups)
+		s.backups = s.backupService(containerService, databaseSvc)
+		backups.Mount(api, s.resourceAuth(), UserIDFromContext, s.backups)
+		backups.MountLegacy(api, s.resourceAuth(), s.resourceAuth(), UserIDFromContext, s.backups)
 		s.backupwatch = s.backupwatchService()
 		backupwatch.Mount(api, s.resourceAuth(), s.backupwatch)
 
@@ -812,21 +814,26 @@ func (s *Server) databaseService(containerService containers.ContainerService) d
 	})
 }
 
-func (s *Server) backupService(containerService containers.ContainerService) databases.BackupService {
-	if s.persistence == nil || containerService == nil {
+func (s *Server) backupService(containerService containers.ContainerService, databaseSvc databases.DatabaseService) backups.BackupService {
+	if s.persistence == nil || containerService == nil || databaseSvc == nil {
 		return nil
 	}
-	cfg := databases.BackupConfig{
+	sources := map[backups.ResourceType]backups.Source{}
+	if concrete, ok := databaseSvc.(*databases.Service); ok {
+		sources[backups.ResourceDatabase] = databases.NewBackupSource(concrete)
+	}
+	cfg := backups.BackupConfig{
 		Store:      s.persistence,
+		Sources:    sources,
 		Containers: containerService,
 		Secret:     s.secretKey,
 		Logger:     s.logger,
 		Leases:     s.jobLeases,
 	}
-	if notifier, ok := s.notify.(databases.BackupNotifier); ok {
+	if notifier, ok := s.notify.(backups.BackupNotifier); ok {
 		cfg.Notifier = notifier
 	}
-	return databases.NewDefaultBackupService(cfg)
+	return backups.NewDefaultBackupService(cfg)
 }
 
 func (s *Server) incidentService() *incidents.Service {

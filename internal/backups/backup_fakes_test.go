@@ -1,4 +1,4 @@
-package databases
+package backups
 
 import (
 	"bytes"
@@ -14,86 +14,33 @@ import (
 	"time"
 
 	"github.com/google/uuid"
-
-	"github.com/justindeelux/gotham/internal/containers"
 )
 
 const dumpPayload = "CREATE TABLE orders (id bigint PRIMARY KEY);\nINSERT INTO orders VALUES (1);\n"
 
-func testDatabase(engine, version string) Database {
-	id := uuid.New()
-	now := time.Now().UTC()
-	return Database{
-		ID:          id,
-		UserID:      uuid.New(),
-		ServerID:    uuid.New(),
-		Name:        "test-" + engine,
-		Engine:      engine,
-		Version:     version,
-		Status:      StatusRunning,
-		ContainerID: "db-container",
-		StoragePath: VolumeName(id),
-		CreatedAt:   now,
-		UpdatedAt:   now,
-	}
-}
-
-func testCredentials() Credentials {
-	return Credentials{
-		Username:     "gotham_app",
-		Password:     "s3cret-password",
-		Database:     "gotham_app",
-		RootPassword: "root-password",
-	}
-}
+const testSecret = "0123456789abcdef0123456789abcdef"
 
 func strPtr(s string) *string { return &s }
 
-func containsEnv(env []string, prefix string) bool {
-	for _, entry := range env {
-		if len(entry) >= len(prefix) && entry[:len(prefix)] == prefix {
-			return true
-		}
-	}
-	return false
-}
-
-func envValue(env []string, key string) string {
-	prefix := key + "="
-	for _, entry := range env {
-		if len(entry) >= len(prefix) && entry[:len(prefix)] == prefix {
-			return entry[len(prefix):]
-		}
-	}
-	return ""
-}
-
-func defaultJobLogs(opts containers.RunOptions) [][]byte {
-	runID := envValue(opts.Env, "GOTHAM_RUN_ID")
-	switch opts.Labels[labelRole] {
-	case roleStage, roleRestore:
-		return [][]byte{[]byte(
-			jobStartPrefix + runID + "\n" +
-				jobPayloadPrefix + runID + " 0\n" +
-				jobEndPrefix + runID + " ok\n")}
-	default:
-		return [][]byte{jobFrameB64(runID, []byte(dumpPayload))}
-	}
+func databaseRef(id uuid.UUID) ResourceRef {
+	return ResourceRef{Type: ResourceDatabase, ID: id}
 }
 
 type fakeBackupRepository struct {
 	mu sync.Mutex
 
-	backups                      map[uuid.UUID]Backup
-	backupOrder                  []uuid.UUID
-	restores                     map[uuid.UUID]Restore
-	restoreOrder                 []uuid.UUID
-	schedules                    map[uuid.UUID]BackupSchedule
-	scheduleOrder                []uuid.UUID
-	targets                      map[uuid.UUID]BackupTarget
-	targetOrder                  []uuid.UUID
-	secrets                      map[uuid.UUID][]TargetSecret
-	serverIDs                    []uuid.UUID
+	backups       map[uuid.UUID]Backup
+	backupOrder   []uuid.UUID
+	restores      map[uuid.UUID]Restore
+	restoreOrder  []uuid.UUID
+	schedules     map[uuid.UUID]BackupSchedule
+	scheduleOrder []uuid.UUID
+	targets       map[uuid.UUID]BackupTarget
+	targetOrder   []uuid.UUID
+	secrets       map[uuid.UUID][]TargetSecret
+	serverIDs     []uuid.UUID
+	owners        []uuid.UUID
+
 	finishHook                   func(Backup)
 	beforeCreateBackupWithTarget func()
 
@@ -152,21 +99,7 @@ func (r *fakeBackupRepository) getRestore(id uuid.UUID) (Restore, bool) {
 func (r *fakeBackupRepository) seedBackup(backup Backup) Backup {
 	r.mu.Lock()
 	defer r.mu.Unlock()
-	if backup.ID == uuid.Nil {
-		backup.ID = uuid.New()
-	}
-	if backup.Status == "" {
-		backup.Status = BackupCompleted
-	}
-	if backup.Type == "" {
-		backup.Type = BackupManual
-	}
-	if backup.CreatedAt.IsZero() {
-		backup.CreatedAt = time.Now().UTC()
-	}
-	r.backups[backup.ID] = backup
-	r.backupOrder = append(r.backupOrder, backup.ID)
-	return backup
+	return r.seedBackupLocked(backup)
 }
 
 func (r *fakeBackupRepository) seedSchedule(schedule BackupSchedule) BackupSchedule {
@@ -264,6 +197,12 @@ func (r *fakeBackupRepository) seedBackupLocked(backup Backup) Backup {
 	if backup.ID == uuid.Nil {
 		backup.ID = uuid.New()
 	}
+	if backup.Status == "" {
+		backup.Status = BackupCompleted
+	}
+	if backup.Type == "" {
+		backup.Type = BackupManual
+	}
 	if backup.CreatedAt.IsZero() {
 		backup.CreatedAt = time.Now().UTC()
 	}
@@ -285,7 +224,11 @@ func (r *fakeBackupRepository) GetBackup(_ context.Context, backupID uuid.UUID) 
 	return backup, nil
 }
 
-func (r *fakeBackupRepository) ListBackupsByDatabase(_ context.Context, databaseID uuid.UUID, limit int) ([]Backup, error) {
+func (r *fakeBackupRepository) matchResource(backup Backup, ref ResourceRef) bool {
+	return backup.ResourceRef == ref
+}
+
+func (r *fakeBackupRepository) ListBackupsByResource(_ context.Context, ref ResourceRef, status BackupStatus, limit int) ([]Backup, error) {
 	r.mu.Lock()
 	defer r.mu.Unlock()
 	if r.listBackupErr != nil {
@@ -294,11 +237,35 @@ func (r *fakeBackupRepository) ListBackupsByDatabase(_ context.Context, database
 	list := make([]Backup, 0, len(r.backupOrder))
 	for i := len(r.backupOrder) - 1; i >= 0; i-- {
 		backup := r.backups[r.backupOrder[i]]
-		if backup.DatabaseID == databaseID {
-			list = append(list, backup)
-			if limit > 0 && len(list) >= limit {
-				break
-			}
+		if !r.matchResource(backup, ref) {
+			continue
+		}
+		if status != "" && backup.Status != status {
+			continue
+		}
+		list = append(list, backup)
+		if limit > 0 && len(list) >= limit {
+			break
+		}
+	}
+	return list, nil
+}
+
+func (r *fakeBackupRepository) ListBackups(_ context.Context, status BackupStatus, limit int) ([]Backup, error) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	if r.listBackupErr != nil {
+		return nil, r.listBackupErr
+	}
+	list := make([]Backup, 0, len(r.backupOrder))
+	for i := len(r.backupOrder) - 1; i >= 0; i-- {
+		backup := r.backups[r.backupOrder[i]]
+		if status != "" && backup.Status != status {
+			continue
+		}
+		list = append(list, backup)
+		if limit > 0 && len(list) >= limit {
+			break
 		}
 	}
 	return list, nil
@@ -427,7 +394,7 @@ func (r *fakeBackupRepository) ListRunningRestores(_ context.Context) ([]Restore
 	return list, nil
 }
 
-func (r *fakeBackupRepository) ListRestoresByDatabase(_ context.Context, databaseID uuid.UUID, limit int) ([]Restore, error) {
+func (r *fakeBackupRepository) ListRestoresByResource(_ context.Context, ref ResourceRef, limit int) ([]Restore, error) {
 	r.mu.Lock()
 	defer r.mu.Unlock()
 	if r.listRestoresErr != nil {
@@ -436,9 +403,25 @@ func (r *fakeBackupRepository) ListRestoresByDatabase(_ context.Context, databas
 	list := make([]Restore, 0, len(r.restoreOrder))
 	for i := len(r.restoreOrder) - 1; i >= 0; i-- {
 		restore := r.restores[r.restoreOrder[i]]
-		if restore.DatabaseID == databaseID {
+		if restore.ResourceRef == ref {
 			list = append(list, restore)
 		}
+		if limit > 0 && len(list) == limit {
+			break
+		}
+	}
+	return list, nil
+}
+
+func (r *fakeBackupRepository) ListRestores(_ context.Context, limit int) ([]Restore, error) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	if r.listRestoresErr != nil {
+		return nil, r.listRestoresErr
+	}
+	list := make([]Restore, 0, len(r.restoreOrder))
+	for i := len(r.restoreOrder) - 1; i >= 0; i-- {
+		list = append(list, r.restores[r.restoreOrder[i]])
 		if limit > 0 && len(list) == limit {
 			break
 		}
@@ -470,15 +453,25 @@ func (r *fakeBackupRepository) GetBackupSchedule(_ context.Context, scheduleID u
 	return schedule, nil
 }
 
-func (r *fakeBackupRepository) ListBackupSchedulesByDatabase(_ context.Context, databaseID uuid.UUID) ([]BackupSchedule, error) {
+func (r *fakeBackupRepository) ListBackupSchedulesByResource(_ context.Context, ref ResourceRef) ([]BackupSchedule, error) {
 	r.mu.Lock()
 	defer r.mu.Unlock()
 	list := make([]BackupSchedule, 0, len(r.scheduleOrder))
 	for i := len(r.scheduleOrder) - 1; i >= 0; i-- {
 		schedule := r.schedules[r.scheduleOrder[i]]
-		if schedule.DatabaseID == databaseID {
+		if schedule.ResourceRef == ref {
 			list = append(list, schedule)
 		}
+	}
+	return list, nil
+}
+
+func (r *fakeBackupRepository) ListBackupSchedules(_ context.Context) ([]BackupSchedule, error) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	list := make([]BackupSchedule, 0, len(r.scheduleOrder))
+	for i := len(r.scheduleOrder) - 1; i >= 0; i-- {
+		list = append(list, r.schedules[r.scheduleOrder[i]])
 	}
 	return list, nil
 }
@@ -592,6 +585,41 @@ func (r *fakeBackupRepository) CreateBackupTargetWithSecrets(_ context.Context, 
 		r.upsertSecretLocked(secret)
 	}
 	return target, nil
+}
+
+func (r *fakeBackupRepository) EnsureBuiltinTarget(_ context.Context, userID uuid.UUID) (BackupTarget, error) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	for _, id := range r.targetOrder {
+		existing := r.targets[id]
+		if existing.UserID == userID && existing.Name == BuiltinProviderName {
+			return existing, nil
+		}
+	}
+	target := BackupTarget{
+		ID:        uuid.New(),
+		UserID:    userID,
+		Name:      BuiltinProviderName,
+		Kind:      TargetLocal,
+		Builtin:   true,
+		CreatedAt: time.Now().UTC(),
+		UpdatedAt: time.Now().UTC(),
+	}
+	r.targets[target.ID] = target
+	r.targetOrder = append(r.targetOrder, target.ID)
+	return target, nil
+}
+
+func (r *fakeBackupRepository) GetBuiltinTarget(_ context.Context, userID uuid.UUID) (BackupTarget, error) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	for _, id := range r.targetOrder {
+		existing := r.targets[id]
+		if existing.UserID == userID && existing.Builtin {
+			return existing, nil
+		}
+	}
+	return BackupTarget{}, ErrNotFound
 }
 
 func (r *fakeBackupRepository) GetBackupTarget(_ context.Context, targetID uuid.UUID) (BackupTarget, error) {
@@ -763,15 +791,105 @@ func (r *fakeBackupRepository) getSecrets(targetID uuid.UUID) []TargetSecret {
 	return secrets
 }
 
+func (r *fakeBackupRepository) ListOwnerIDs(context.Context) ([]uuid.UUID, error) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	ids := make([]uuid.UUID, len(r.owners))
+	copy(ids, r.owners)
+	return ids, nil
+}
+
+// fakeSource stands in for a resource driver. It records the requests the core
+// makes and streams a fixed payload, so core behaviour can be asserted without
+// a container service.
+type fakeSource struct {
+	mu sync.Mutex
+
+	owner       uuid.UUID
+	resolves    int
+	captures    []CaptureRequest
+	restores    []RestoreRequest
+	recovers    []RecoverRequest
+	payload     string
+	extension   string
+	captureErr  error
+	restoreErr  error
+	recoverErr  error
+	resolveErr  error
+	wasRunning  bool
+	containerID string
+}
+
+var _ Source = (*fakeSource)(nil)
+
+func newFakeSource() *fakeSource {
+	return &fakeSource{payload: dumpPayload, extension: "dump", containerID: "job-container"}
+}
+
+func (s *fakeSource) Resolve(_ context.Context, ref ResourceRef) (Resource, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.resolves++
+	if s.resolveErr != nil {
+		return Resource{}, s.resolveErr
+	}
+	return Resource{Type: ref.Type, ID: ref.ID, OwnerID: s.owner, Name: "test-" + string(ref.Type)}, nil
+}
+
+func (s *fakeSource) Describe(context.Context, ResourceRef) (string, error) {
+	return "test-resource", nil
+}
+
+func (s *fakeSource) Capture(ctx context.Context, req CaptureRequest) (CaptureResult, error) {
+	s.mu.Lock()
+	s.captures = append(s.captures, req)
+	err := s.captureErr
+	payload := s.payload
+	extension := s.extension
+	containerID := s.containerID
+	wasRunning := s.wasRunning
+	s.mu.Unlock()
+	if req.Recorder != nil {
+		if recordErr := req.Recorder.SetWasRunning(ctx, req.RunID, wasRunning); recordErr != nil {
+			return CaptureResult{ContainerID: containerID, Extension: extension}, recordErr
+		}
+	}
+	if err != nil {
+		return CaptureResult{ContainerID: containerID, Extension: extension}, err
+	}
+	if _, writeErr := io.WriteString(req.Sink, payload); writeErr != nil {
+		return CaptureResult{ContainerID: containerID, Extension: extension}, writeErr
+	}
+	return CaptureResult{ContainerID: containerID, Extension: extension}, nil
+}
+
+func (s *fakeSource) Restore(ctx context.Context, req RestoreRequest) error {
+	s.mu.Lock()
+	s.restores = append(s.restores, req)
+	err := s.restoreErr
+	s.mu.Unlock()
+	if err != nil {
+		return err
+	}
+	_, readErr := io.Copy(io.Discard, req.Artifact)
+	return readErr
+}
+
+func (s *fakeSource) Recover(_ context.Context, req RecoverRequest) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.recovers = append(s.recovers, req)
+	return s.recoverErr
+}
+
 type backupFixture struct {
 	manager    *BackupManager
-	databases  *fakeRepository
+	source     *fakeSource
 	backups    *fakeBackupRepository
-	containers *fakeContainers
 	dir        string
 	userID     uuid.UUID
+	databaseID uuid.UUID
 	serverID   uuid.UUID
-	database   Database
 }
 
 func newBackupFixture(t *testing.T) *backupFixture {
@@ -782,32 +900,27 @@ func newBackupFixture(t *testing.T) *backupFixture {
 func newBackupFixtureWith(t *testing.T, logger *slog.Logger) *backupFixture {
 	t.Helper()
 
-	databaseRepo := newFakeRepository()
-	serverID := databaseRepo.seedServer()
+	repo := newFakeBackupRepository()
+	source := newFakeSource()
 	fixture := &backupFixture{
-		databases:  databaseRepo,
-		backups:    newFakeBackupRepository(),
-		containers: &fakeContainers{},
+		source:     source,
+		backups:    repo,
 		dir:        t.TempDir(),
 		userID:     uuid.New(),
-		serverID:   serverID,
+		databaseID: uuid.New(),
+		serverID:   uuid.New(),
 	}
-	database := testDatabase(EnginePostgres, "")
-	database.UserID = fixture.userID
-	database.ServerID = serverID
-	fixture.database = databaseRepo.seed(database)
-	fixture.containers.setRunning(database.ContainerID)
-	fixture.containers.logFn = defaultJobLogs
+	source.owner = fixture.userID
+	repo.owners = []uuid.UUID{fixture.userID}
 
 	fixture.manager = NewBackupService(BackupConfig{
-		Repository:         fixture.backups,
-		DatabaseRepository: databaseRepo,
-		Containers:         fixture.containers,
-		Secret:             testSecret,
-		Logger:             logger,
-		LocalDir:           fixture.dir,
-		JobTimeout:         30 * time.Second,
-		SchedulerInterval:  time.Hour,
+		Repository:        repo,
+		Sources:           map[ResourceType]Source{ResourceDatabase: source},
+		Secret:            testSecret,
+		Logger:            logger,
+		LocalDir:          fixture.dir,
+		JobTimeout:        30 * time.Second,
+		SchedulerInterval: time.Hour,
 	})
 	t.Cleanup(func() { _ = fixture.manager.Close() })
 	return fixture
@@ -828,7 +941,9 @@ func (f *backupFixture) waitBackup(t *testing.T, backupID uuid.UUID) Backup {
 
 func (f *backupFixture) queueBackup(t *testing.T) Backup {
 	t.Helper()
-	queued, err := f.manager.CreateBackup(context.Background(), f.userID, f.database.ID, CreateBackupRequest{})
+	queued, err := f.manager.CreateBackup(context.Background(), f.userID, CreateBackupRequest{
+		Resource: databaseRef(f.databaseID),
+	})
 	if err != nil {
 		t.Fatalf("CreateBackup: %v", err)
 	}
@@ -865,6 +980,10 @@ func waitFor(t *testing.T, what string, cond func() bool) {
 		time.Sleep(5 * time.Millisecond)
 	}
 	t.Fatalf("timed out waiting for %s", what)
+}
+
+func discardLogger() *slog.Logger {
+	return slog.New(slog.NewTextHandler(io.Discard, nil))
 }
 
 type fakeObjectStore struct {

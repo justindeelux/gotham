@@ -1,4 +1,4 @@
-package databases
+package backups
 
 import (
 	"context"
@@ -8,14 +8,25 @@ import (
 	"github.com/google/uuid"
 )
 
-func (m *BackupManager) ListSchedules(ctx context.Context, userID, databaseID uuid.UUID) ([]BackupSchedule, error) {
+func (m *BackupManager) ListSchedules(ctx context.Context, userID uuid.UUID, ref ResourceRef) ([]BackupSchedule, error) {
 	if err := m.backupsReady(); err != nil {
 		return nil, err
 	}
-	if _, err := m.database(ctx, userID, databaseID, false); err != nil {
+	if !ref.Valid() {
+		schedules, err := m.backups.ListBackupSchedules(ctx)
+		if err != nil {
+			return nil, err
+		}
+		if schedules == nil {
+			return []BackupSchedule{}, nil
+		}
+		return schedules, nil
+	}
+	resource, _, err := m.resolve(ctx, ref)
+	if err != nil {
 		return nil, err
 	}
-	schedules, err := m.backups.ListBackupSchedulesByDatabase(ctx, databaseID)
+	schedules, err := m.backups.ListBackupSchedulesByResource(ctx, resource.Ref())
 	if err != nil {
 		return nil, err
 	}
@@ -25,8 +36,8 @@ func (m *BackupManager) ListSchedules(ctx context.Context, userID, databaseID uu
 	return schedules, nil
 }
 
-func (m *BackupManager) CreateSchedule(ctx context.Context, userID, databaseID uuid.UUID, req ScheduleRequest) (BackupSchedule, error) {
-	database, err := m.database(ctx, userID, databaseID, true)
+func (m *BackupManager) CreateSchedule(ctx context.Context, userID uuid.UUID, req ScheduleRequest) (BackupSchedule, error) {
+	resource, _, err := m.resolve(ctx, req.Resource)
 	if err != nil {
 		return BackupSchedule{}, err
 	}
@@ -40,7 +51,7 @@ func (m *BackupManager) CreateSchedule(ctx context.Context, userID, databaseID u
 		if targetID, err = m.ownedTargetID(ctx, userID, *req.TargetID); err != nil {
 			return BackupSchedule{}, err
 		}
-		if err := m.targetOwnedByDatabase(ctx, targetID, database.UserID); err != nil {
+		if err := m.targetOwnedByResource(ctx, targetID, resource.OwnerID); err != nil {
 			return BackupSchedule{}, err
 		}
 	}
@@ -55,7 +66,7 @@ func (m *BackupManager) CreateSchedule(ctx context.Context, userID, databaseID u
 	now := m.now()
 	schedule := BackupSchedule{
 		ID:            uuid.New(),
-		DatabaseID:    databaseID,
+		ResourceRef:   resource.Ref(),
 		Cron:          cron,
 		TargetID:      targetID,
 		Enabled:       enabled,
@@ -68,23 +79,23 @@ func (m *BackupManager) CreateSchedule(ctx context.Context, userID, databaseID u
 	if err != nil {
 		return BackupSchedule{}, err
 	}
-	m.logger.Info("databases: backup schedule created",
-		"schedule_id", created.ID.String(), "database_id", databaseID.String(),
+	m.logger.Info("backups: backup schedule created",
+		"schedule_id", created.ID.String(), "resource", resource.Ref().String(),
 		"cron", cron, "next_run_at", created.NextRunAt.Format(time.RFC3339))
 	return created, nil
 }
 
-func (m *BackupManager) UpdateSchedule(ctx context.Context, userID, databaseID, scheduleID uuid.UUID, req ScheduleRequest) (BackupSchedule, error) {
-	database, err := m.database(ctx, userID, databaseID, true)
-	if err != nil {
-		return BackupSchedule{}, err
-	}
+func (m *BackupManager) UpdateSchedule(ctx context.Context, userID, scheduleID uuid.UUID, req ScheduleRequest) (BackupSchedule, error) {
 	schedule, err := m.backups.GetBackupSchedule(ctx, scheduleID)
 	if err != nil {
 		return BackupSchedule{}, err
 	}
-	if schedule.DatabaseID != databaseID {
+	if req.Resource.Valid() && req.Resource != schedule.ResourceRef {
 		return BackupSchedule{}, ErrNotFound
+	}
+	resource, _, err := m.resolve(ctx, schedule.ResourceRef)
+	if err != nil {
+		return BackupSchedule{}, err
 	}
 	cron := strings.TrimSpace(req.Cron)
 	next, err := nextCronTime(cron, m.now(), time.Local)
@@ -100,7 +111,7 @@ func (m *BackupManager) UpdateSchedule(ctx context.Context, userID, databaseID, 
 		if targetID, err = m.ownedTargetID(ctx, userID, *req.TargetID); err != nil {
 			return BackupSchedule{}, err
 		}
-		if err := m.targetOwnedByDatabase(ctx, targetID, database.UserID); err != nil {
+		if err := m.targetOwnedByResource(ctx, targetID, resource.OwnerID); err != nil {
 			return BackupSchedule{}, err
 		}
 	}
@@ -132,16 +143,13 @@ func (m *BackupManager) UpdateSchedule(ctx context.Context, userID, databaseID, 
 	return m.backups.UpdateBackupSchedule(ctx, schedule)
 }
 
-func (m *BackupManager) DeleteSchedule(ctx context.Context, userID, databaseID, scheduleID uuid.UUID) error {
-	if _, err := m.database(ctx, userID, databaseID, true); err != nil {
-		return err
-	}
+func (m *BackupManager) DeleteSchedule(ctx context.Context, userID, scheduleID uuid.UUID) error {
 	schedule, err := m.backups.GetBackupSchedule(ctx, scheduleID)
 	if err != nil {
 		return err
 	}
-	if schedule.DatabaseID != databaseID {
-		return ErrNotFound
+	if _, _, err := m.resolve(ctx, schedule.ResourceRef); err != nil {
+		return err
 	}
 	if _, err := m.backups.DeleteBackupSchedule(ctx, scheduleID); err != nil {
 		return err

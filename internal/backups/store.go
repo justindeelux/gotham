@@ -1,4 +1,4 @@
-package databases
+package backups
 
 import (
 	"context"
@@ -68,14 +68,14 @@ func pathWithin(root, dir string) bool {
 
 func newLocalStore(dir string) (*localStore, error) {
 	if strings.TrimSpace(dir) == "" {
-		return nil, errors.New("databases: local backup directory is not configured")
+		return nil, errors.New("backups: local backup directory is not configured")
 	}
 	abs, err := filepath.Abs(dir)
 	if err != nil {
-		return nil, fmt.Errorf("databases: resolve backup directory: %w", err)
+		return nil, fmt.Errorf("backups: resolve backup directory: %w", err)
 	}
 	if err := os.MkdirAll(abs, 0o750); err != nil {
-		return nil, fmt.Errorf("databases: create backup directory: %w", err)
+		return nil, fmt.Errorf("backups: create backup directory: %w", err)
 	}
 	return &localStore{dir: abs}, nil
 }
@@ -88,11 +88,11 @@ func (s *localStore) Put(_ context.Context, key string, data io.Reader, size int
 		return "", err
 	}
 	if err := os.MkdirAll(filepath.Dir(target), 0o750); err != nil {
-		return "", fmt.Errorf("databases: create backup directory: %w", err)
+		return "", fmt.Errorf("backups: create backup directory: %w", err)
 	}
 	file, err := os.OpenFile(target, os.O_WRONLY|os.O_CREATE|os.O_TRUNC, 0o640)
 	if err != nil {
-		return "", fmt.Errorf("databases: create backup file: %w", err)
+		return "", fmt.Errorf("backups: create backup file: %w", err)
 	}
 	written, copyErr := io.Copy(file, data)
 	var syncErr error
@@ -102,23 +102,23 @@ func (s *localStore) Put(_ context.Context, key string, data io.Reader, size int
 	closeErr := file.Close()
 	if copyErr != nil {
 		_ = os.Remove(target)
-		return "", fmt.Errorf("databases: write backup file: %w", copyErr)
+		return "", fmt.Errorf("backups: write backup file: %w", copyErr)
 	}
 	if syncErr != nil {
 		_ = os.Remove(target)
-		return "", fmt.Errorf("databases: flush backup file: %w", syncErr)
+		return "", fmt.Errorf("backups: flush backup file: %w", syncErr)
 	}
 	if closeErr != nil {
 		_ = os.Remove(target)
-		return "", fmt.Errorf("databases: write backup file: %w", closeErr)
+		return "", fmt.Errorf("backups: write backup file: %w", closeErr)
 	}
 	if size >= 0 && written != size {
 		_ = os.Remove(target)
-		return "", fmt.Errorf("databases: wrote %d bytes, expected %d", written, size)
+		return "", fmt.Errorf("backups: wrote %d bytes, expected %d", written, size)
 	}
 	if err := fsyncDirChain(filepath.Dir(target), s.dir); err != nil {
 		_ = os.Remove(target)
-		return "", fmt.Errorf("databases: flush backup directory: %w", err)
+		return "", fmt.Errorf("backups: flush backup directory: %w", err)
 	}
 	return locationFilePrefix + target, nil
 }
@@ -133,7 +133,7 @@ func (s *localStore) Get(_ context.Context, location string) (io.ReadCloser, err
 		if errors.Is(err, os.ErrNotExist) {
 			return nil, fmt.Errorf("%w: backup file is missing on disk", ErrNotFound)
 		}
-		return nil, fmt.Errorf("databases: open backup file: %w", err)
+		return nil, fmt.Errorf("backups: open backup file: %w", err)
 	}
 	return opened, nil
 }
@@ -144,7 +144,7 @@ func (s *localStore) Delete(_ context.Context, location string) error {
 		return err
 	}
 	if err := os.Remove(file); err != nil && !errors.Is(err, os.ErrNotExist) {
-		return fmt.Errorf("databases: remove backup file: %w", err)
+		return fmt.Errorf("backups: remove backup file: %w", err)
 	}
 	return nil
 }
@@ -202,7 +202,7 @@ func newS3Store(cfg s3Config) (*s3Store, error) {
 		Region: cfg.region,
 	})
 	if err != nil {
-		return nil, fmt.Errorf("databases: build s3 client: %w", err)
+		return nil, fmt.Errorf("backups: build s3 client: %w", err)
 	}
 	return &s3Store{client: client, bucket: cfg.bucket, prefix: normalizePrefix(cfg.prefix)}, nil
 }
@@ -215,10 +215,10 @@ func (s *s3Store) Put(ctx context.Context, key string, data io.Reader, size int6
 		ContentType: "application/gzip",
 	})
 	if err != nil {
-		return "", fmt.Errorf("databases: upload backup to s3: %w", err)
+		return "", fmt.Errorf("backups: upload backup to s3: %w", err)
 	}
 	if size >= 0 && info.Size != size {
-		return "", fmt.Errorf("databases: uploaded %d bytes, expected %d", info.Size, size)
+		return "", fmt.Errorf("backups: uploaded %d bytes, expected %d", info.Size, size)
 	}
 	return locationS3Prefix + s.bucket + "/" + object, nil
 }
@@ -232,11 +232,11 @@ func (s *s3Store) Get(ctx context.Context, location string) (io.ReadCloser, erro
 		if isS3NotFound(err) {
 			return nil, fmt.Errorf("%w: backup object is missing in %s", ErrNotFound, s.bucket)
 		}
-		return nil, fmt.Errorf("databases: stat backup in s3: %w", err)
+		return nil, fmt.Errorf("backups: stat backup in s3: %w", err)
 	}
 	reader, err := s.client.GetObject(ctx, s.bucket, object, minio.GetObjectOptions{})
 	if err != nil {
-		return nil, fmt.Errorf("databases: download backup from s3: %w", err)
+		return nil, fmt.Errorf("backups: download backup from s3: %w", err)
 	}
 	return reader, nil
 }
@@ -247,7 +247,7 @@ func (s *s3Store) Delete(ctx context.Context, location string) error {
 		return err
 	}
 	if err := s.client.RemoveObject(ctx, s.bucket, object, minio.RemoveObjectOptions{}); err != nil {
-		return fmt.Errorf("databases: delete backup from s3: %w", err)
+		return fmt.Errorf("backups: delete backup from s3: %w", err)
 	}
 	return nil
 }
@@ -255,7 +255,7 @@ func (s *s3Store) Delete(ctx context.Context, location string) error {
 func (s *s3Store) bucketExists(ctx context.Context) (bool, error) {
 	ok, err := s.client.BucketExists(ctx, s.bucket)
 	if err != nil {
-		return false, fmt.Errorf("databases: check s3 bucket: %w", err)
+		return false, fmt.Errorf("backups: check s3 bucket: %w", err)
 	}
 	return ok, nil
 }

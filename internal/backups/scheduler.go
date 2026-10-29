@@ -1,4 +1,4 @@
-package databases
+package backups
 
 import (
 	"context"
@@ -319,15 +319,15 @@ func (s *backupScheduler) loop(ctx context.Context) {
 			return
 		case <-ticker.C:
 			if _, err := s.tick(ctx); err != nil && ctx.Err() == nil {
-				s.logger.Error("databases: backup scheduler tick failed", "error", err)
+				s.logger.Error("backups: backup scheduler tick failed", "error", err)
 			}
 		}
 	}
 }
 
 func (s *backupScheduler) tick(ctx context.Context) (int, error) {
-	if s.manager == nil || s.manager.backups == nil || s.manager.repo == nil {
-		return 0, fmt.Errorf("databases: backup scheduler is not configured")
+	if s.manager == nil || s.manager.backups == nil {
+		return 0, fmt.Errorf("backups: backup scheduler is not configured")
 	}
 	now := s.now()
 	due, err := s.manager.backups.ListDueBackupSchedules(ctx, now)
@@ -346,20 +346,20 @@ func (s *backupScheduler) tick(ctx context.Context) (int, error) {
 }
 
 func (s *backupScheduler) fire(ctx context.Context, schedule BackupSchedule, now time.Time) int {
-	database, err := s.manager.repo.GetDatabase(ctx, schedule.DatabaseID)
+	resource, source, err := s.manager.resolve(ctx, schedule.ResourceRef)
 	if err != nil {
-		s.logger.Warn("databases: skipping backup schedule, database is gone",
-			"schedule_id", schedule.ID.String(), "database_id", schedule.DatabaseID.String(), "error", err)
+		s.logger.Warn("backups: skipping backup schedule, the resource is gone",
+			"schedule_id", schedule.ID.String(), "resource", schedule.ResourceRef.String(), "error", err)
 		return 0
 	}
 	next, err := nextRunTime(schedule.Cron, schedule.NextRunAt, now, s.loc)
 	if err != nil {
-		s.logger.Error("databases: backup schedule has an invalid cron expression",
+		s.logger.Error("backups: backup schedule has an invalid cron expression",
 			"schedule_id", schedule.ID.String(), "cron", schedule.Cron, "error", err)
 		return 0
 	}
 	if _, err := s.manager.backups.MarkBackupScheduleRun(ctx, schedule.ID, now, next); err != nil {
-		s.logger.Error("databases: could not advance the backup schedule",
+		s.logger.Error("backups: could not advance the backup schedule",
 			"schedule_id", schedule.ID.String(), "error", err)
 		return 0
 	}
@@ -368,19 +368,23 @@ func (s *backupScheduler) fire(ctx context.Context, schedule BackupSchedule, now
 	if schedule.TargetID != uuid.Nil {
 		stored, err := s.manager.backups.GetBackupTarget(ctx, schedule.TargetID)
 		if err != nil {
-			s.logger.Warn("databases: skipping backup schedule, storage target is gone",
+			s.logger.Warn("backups: skipping backup schedule, storage provider is gone",
 				"schedule_id", schedule.ID.String(), "error", err)
 			return 0
 		}
 		target = &stored
+	} else if target, err = s.manager.defaultTarget(ctx, resource.OwnerID); err != nil {
+		s.logger.Error("backups: could not resolve the default storage provider",
+			"schedule_id", schedule.ID.String(), "error", err)
+		return 0
 	}
-	if _, err := s.manager.startRun(ctx, database, target, BackupScheduled, schedule.ID); err != nil {
+	if _, err := s.manager.startRun(ctx, source, resource, target, BackupScheduled, schedule.ID); err != nil {
 		if err != ErrBackupInFlight {
-			s.logger.Error("databases: could not queue the scheduled backup",
-				"schedule_id", schedule.ID.String(), "database_id", database.ID.String(), "error", err)
+			s.logger.Error("backups: could not queue the scheduled backup",
+				"schedule_id", schedule.ID.String(), "resource", resource.Ref().String(), "error", err)
 		} else {
-			s.logger.Info("databases: scheduled backup skipped, the database is busy",
-				"schedule_id", schedule.ID.String(), "database_id", database.ID.String())
+			s.logger.Info("backups: scheduled backup skipped, the resource is busy",
+				"schedule_id", schedule.ID.String(), "resource", resource.Ref().String())
 		}
 		return 0
 	}

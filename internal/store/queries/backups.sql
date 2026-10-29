@@ -1,27 +1,36 @@
 -- name: CreateBackup :one
 INSERT INTO backups (
-    id, database_id, schedule_id, type, status, size, location,
-    target_id, container_id, error, finished_at
+    id, database_id, application_id, service_id, schedule_id, type, status,
+    size, location, target_id, container_id, error, finished_at
 )
-VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11)
+VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13)
 RETURNING *;
 
 -- name: GetBackup :one
-SELECT b.*
-FROM backups b
-    JOIN databases d ON d.id = b.database_id
-WHERE b.id = $1 AND d.deleted_at IS NULL;
+SELECT * FROM backups
+WHERE id = $1;
 
--- name: ListBackupsByDatabase :many
-SELECT b.*
-FROM backups b
-    JOIN databases d ON d.id = b.database_id
-WHERE b.database_id = $1 AND d.deleted_at IS NULL
-ORDER BY b.created_at DESC, b.id DESC
-LIMIT $2;
+-- name: ListBackupsByResource :many
+-- Newest runs of one resource, optionally narrowed by status. Exactly one of
+-- the resource ids is set by the caller.
+SELECT * FROM backups
+WHERE (database_id = sqlc.narg('database_id')::uuid
+    OR application_id = sqlc.narg('application_id')::uuid
+    OR service_id = sqlc.narg('service_id')::uuid)
+  AND (sqlc.narg('status')::text IS NULL OR status = sqlc.narg('status')::text)
+ORDER BY created_at DESC, id DESC
+LIMIT $1;
+
+-- name: ListBackups :many
+-- The Backups page: newest runs across every resource the caller can see. The
+-- HTTP layer filters the result set by project grant for members.
+SELECT * FROM backups
+WHERE (sqlc.narg('status')::text IS NULL OR status = sqlc.narg('status')::text)
+ORDER BY created_at DESC, id DESC
+LIMIT $1;
 
 -- name: HasBackupsForTarget :one
--- A target whose destination changed would strand every backup that records
+-- A provider whose destination changed would strand every backup that records
 -- (or is about to record) a location against the old endpoint/bucket, so the
 -- update path asks this first. A running backup counts: it captured the old
 -- configuration and will finish by recording the old destination.
@@ -51,6 +60,21 @@ INSERT INTO backup_targets (id, user_id, name, kind, endpoint, region, bucket, p
 VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
 RETURNING *;
 
+-- name: EnsureBuiltinBackupTarget :one
+-- Idempotent: created on first start for every owner account, so a fresh
+-- install can back up with no setup. Never turns a user-created provider into
+-- the built-in one (created first wins the unique name).
+INSERT INTO backup_targets (user_id, name, kind, builtin)
+VALUES ($1, 'Local disk', 'local', true)
+ON CONFLICT (user_id, name) DO UPDATE SET builtin = backup_targets.builtin
+RETURNING *;
+
+-- name: GetBuiltinBackupTarget :one
+SELECT * FROM backup_targets
+WHERE user_id = $1 AND builtin
+ORDER BY created_at, id
+LIMIT 1;
+
 -- name: GetBackupTarget :one
 SELECT * FROM backup_targets
 WHERE id = $1;
@@ -73,7 +97,7 @@ FOR UPDATE;
 -- name: ListBackupTargetsByUser :many
 SELECT * FROM backup_targets
 WHERE user_id = $1
-ORDER BY created_at DESC, id DESC;
+ORDER BY builtin DESC, created_at DESC, id DESC;
 
 -- name: UpdateBackupTarget :one
 UPDATE backup_targets
@@ -110,22 +134,27 @@ DO UPDATE SET ciphertext = EXCLUDED.ciphertext
 RETURNING *;
 
 -- name: CreateBackupSchedule :one
-INSERT INTO backup_schedules (id, database_id, cron, target_id, enabled, next_run_at, max_run_seconds)
-VALUES ($1, $2, $3, $4, $5, $6, $7)
+INSERT INTO backup_schedules (
+    id, database_id, application_id, service_id, cron, target_id, enabled,
+    next_run_at, max_run_seconds
+)
+VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)
 RETURNING *;
 
 -- name: GetBackupSchedule :one
-SELECT s.*
-FROM backup_schedules s
-    JOIN databases d ON d.id = s.database_id
-WHERE s.id = $1 AND d.deleted_at IS NULL;
+SELECT * FROM backup_schedules
+WHERE id = $1;
 
--- name: ListBackupSchedulesByDatabase :many
-SELECT s.*
-FROM backup_schedules s
-    JOIN databases d ON d.id = s.database_id
-WHERE s.database_id = $1 AND d.deleted_at IS NULL
-ORDER BY s.created_at DESC, s.id DESC;
+-- name: ListBackupSchedulesByResource :many
+SELECT * FROM backup_schedules
+WHERE database_id = sqlc.narg('database_id')::uuid
+   OR application_id = sqlc.narg('application_id')::uuid
+   OR service_id = sqlc.narg('service_id')::uuid
+ORDER BY created_at DESC, id DESC;
+
+-- name: ListBackupSchedules :many
+SELECT * FROM backup_schedules
+ORDER BY created_at DESC, id DESC;
 
 -- name: UpdateBackupSchedule :one
 UPDATE backup_schedules
@@ -154,10 +183,17 @@ SET target_changed_at = now(),
 WHERE target_id = $1;
 
 -- name: ListDueBackupSchedules :many
+-- Due schedules whose resource still exists; a soft-deleted resource must not
+-- keep producing runs while its grace window ticks down.
 SELECT s.*
 FROM backup_schedules s
-    JOIN databases d ON d.id = s.database_id
-WHERE s.enabled AND s.next_run_at <= $1 AND d.deleted_at IS NULL
+WHERE s.enabled AND s.next_run_at <= $1
+  AND (s.database_id IS NULL OR EXISTS (
+        SELECT 1 FROM databases d WHERE d.id = s.database_id AND d.deleted_at IS NULL))
+  AND (s.application_id IS NULL OR EXISTS (
+        SELECT 1 FROM applications a WHERE a.id = s.application_id))
+  AND (s.service_id IS NULL OR EXISTS (
+        SELECT 1 FROM services v WHERE v.id = s.service_id AND v.deleted_at IS NULL))
 ORDER BY s.next_run_at ASC, s.id ASC;
 
 -- name: MarkBackupScheduleRun :one
@@ -178,14 +214,14 @@ ORDER BY created_at ASC;
 
 -- name: SetBackupWasRunning :exec
 -- Records the pre-job container state as observed by the pause, so the
--- boot-time sweep only restarts a database the job itself stopped.
+-- boot-time sweep only restarts a resource the job itself stopped.
 UPDATE backups
 SET was_running = $2
 WHERE id = $1;
 
 -- name: CreateRestore :one
-INSERT INTO restores (id, database_id, backup_id, status)
-VALUES ($1, $2, $3, $4)
+INSERT INTO restores (id, database_id, application_id, service_id, backup_id, status)
+VALUES ($1, $2, $3, $4, $5, $6)
 RETURNING *;
 
 -- name: FinishRestore :one
@@ -203,12 +239,17 @@ SELECT * FROM restores
 WHERE status = 'running'
 ORDER BY created_at ASC;
 
--- name: ListRestoresByDatabase :many
--- The durable restore history of one live database, newest first. Bounded by
+-- name: ListRestoresByResource :many
+-- The durable restore history of one live resource, newest first. Bounded by
 -- the caller so the table cannot grow an unbounded response.
-SELECT r.*
-FROM restores r
-    JOIN databases d ON d.id = r.database_id
-WHERE r.database_id = $1 AND d.deleted_at IS NULL
-ORDER BY r.created_at DESC, r.id DESC
-LIMIT $2;
+SELECT * FROM restores
+WHERE database_id = sqlc.narg('database_id')::uuid
+   OR application_id = sqlc.narg('application_id')::uuid
+   OR service_id = sqlc.narg('service_id')::uuid
+ORDER BY created_at DESC, id DESC
+LIMIT $1;
+
+-- name: ListRestores :many
+SELECT * FROM restores
+ORDER BY created_at DESC, id DESC
+LIMIT $1;

@@ -24,6 +24,7 @@ import (
 	"github.com/minio/minio-go/v7/pkg/credentials"
 
 	"github.com/justindeelux/gotham/agent"
+	"github.com/justindeelux/gotham/internal/backups"
 	"github.com/justindeelux/gotham/internal/containers"
 	"github.com/justindeelux/gotham/internal/databases"
 	"github.com/justindeelux/gotham/internal/servers"
@@ -341,9 +342,12 @@ func newP5Harness(t *testing.T) *p5Harness {
 		Secret:     p5Secret,
 		Logger:     logger,
 	})
-	backupSvc := databases.NewDefaultBackupService(databases.BackupConfig{
-		Store:            st,
-		Containers:       containersSvc,
+	backupSvc := backups.NewDefaultBackupService(backups.BackupConfig{
+		Store:      st,
+		Containers: containersSvc,
+		Sources: map[backups.ResourceType]backups.Source{
+			backups.ResourceDatabase: databases.NewBackupSource(databaseSvc),
+		},
 		Secret:           p5Secret,
 		Logger:           logger,
 		LocalDir:         localDir,
@@ -360,7 +364,8 @@ func newP5Harness(t *testing.T) *p5Harness {
 	router := chi.NewRouter()
 	router.Route("/api", func(r chi.Router) {
 		databases.Mount(r, requireAuth, requireAuth, userIDFunc, databaseSvc)
-		databases.MountBackups(r, requireAuth, requireAuth, userIDFunc, backupSvc)
+		backups.Mount(r, requireAuth, userIDFunc, backupSvc)
+		backups.MountLegacy(r, requireAuth, requireAuth, userIDFunc, backupSvc)
 	})
 	httpServer := httptest.NewServer(router)
 	t.Cleanup(httpServer.Close)

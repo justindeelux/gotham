@@ -79,6 +79,16 @@ const backups = inject(resourceBackupsKey)!;
                   minutes: Math.round(schedule.max_run_seconds / 60),
                 }) }}
               </span>
+              <span>
+                ·
+                {{
+                  schedule.keep_last == null
+                    ? t("backups.schedules.keepAll")
+                    : t("backups.schedules.keepLast", {
+                        count: schedule.keep_last,
+                      })
+                }}
+              </span>
             </NText>
             <NTag
               v-if="!schedule.pause_during_backup"
@@ -154,6 +164,7 @@ const backups = inject(resourceBackupsKey)!;
           {{ preset }}
         </NButton>
       </NSpace>
+      <NText depth="3">{{ t("backups.schedules.keepLastHint") }}</NText>
       <div class="schedule-form__row">
         <NInput
           v-model:value="backups.scheduleCron.value"
@@ -176,6 +187,14 @@ const backups = inject(resourceBackupsKey)!;
             {{ t("databases.backups.protection.minutesSuffix") }}
           </template>
         </NInputNumber>
+        <NText depth="3">{{ t("backups.schedules.keepLastLabel") }}</NText>
+        <NInputNumber
+          v-model:value="backups.scheduleKeepLast.value"
+          :min="1"
+          :max="365"
+          style="width: 120px"
+          :aria-label="t('backups.schedules.keepLastLabel')"
+        />
         <NSelect
           v-model:value="backups.scheduleProviderId.value"
           :options="backups.scheduleProviderOptions.value"

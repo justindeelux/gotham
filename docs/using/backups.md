@@ -65,7 +65,42 @@ bucket and credentials, or the local directory's writability, and shows the
 result inline.
 
 Deleting a provider does not delete past backups, but they can no longer be read
-back from it, so restores from those runs fail.
+back from it, so restores from those runs fail and the runs stay listed as
+**Provider removed**. A provider still used by a schedule cannot be deleted:
+move or delete those schedules first, so no schedule silently falls back to the
+local disk.
+
+## Retention and cleanup
+
+Each schedule has **Keep the last scheduled backups** (7 for a new schedule).
+After a scheduled run succeeds, older completed runs of that schedule beyond the
+limit are deleted oldest first, artifact included.
+
+What is never deleted automatically:
+
+- manual backups — only you delete those;
+- the newest completed scheduled run;
+- a run that is still executing;
+- failed runs younger than 30 days.
+
+A schedule created before this version keeps every backup until you set a limit;
+the schedule list says **Keeps every scheduled backup** in that case.
+
+If the provider is unreachable while a run is being removed, the run stays in
+**Cleanup pending** with the last error. New backups keep running. The hourly
+sweep retries in the background; **Retry cleanup** attempts immediately and
+**Discard** forgets the row without deleting the artifact.
+
+When an application, service or database is deleted permanently, its backup
+artifacts are queued for deletion before its rows disappear. A database still
+keeps its soft-delete grace window first, so nothing is removed early. The queue
+survives a provider outage and is drained by the same sweeper.
+
+The Storage tab shows, per provider, how many backups it holds and their total
+size, and for Local disk the free space. Before a run goes to Local disk, the
+control plane checks that the free space covers the size of the previous run of
+that resource plus 20% (or 64 MiB when there is no previous run) and refuses the
+run with a plain message instead of filling the disk.
 
 ## Members
 

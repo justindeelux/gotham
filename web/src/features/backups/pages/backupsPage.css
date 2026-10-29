@@ -79,6 +79,16 @@
   text-align: right;
 }
 
+.cleanup-error {
+  display: block;
+  margin-top: var(--space-1);
+  font-size: var(--text-sm);
+  max-width: 32ch;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
 .visually-hidden {
   position: absolute;
   width: 1px;

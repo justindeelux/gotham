@@ -14,4 +14,8 @@ var (
 	ErrBuiltinProvider     = errors.New("backups: the built-in provider cannot be changed or removed")
 	ErrUnsupportedResource = errors.New("backups: this resource type cannot be backed up yet")
 	ErrResourceBusy        = errors.New("backups: a deploy, restart or restore is in progress")
+	ErrProviderInUse       = errors.New("backups: storage provider is still used by schedules")
+	ErrProviderHasBackups  = errors.New("backups: storage provider still holds backups")
+	ErrInsufficientSpace   = errors.New("backups: not enough free space on the backup disk")
+	ErrCleanupFailed       = errors.New("backups: could not delete the backup artifact")
 )

@@ -1,9 +1,10 @@
 -- name: CreateBackup :one
 INSERT INTO backups (
     id, database_id, application_id, service_id, schedule_id, type, status,
-    size, location, target_id, container_id, error, finished_at
+    size, location, target_id, container_id, error, finished_at,
+    pause_during_backup
 )
-VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13)
+VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14)
 RETURNING *;
 
 -- name: GetBackup :one
@@ -148,9 +149,9 @@ RETURNING *;
 -- name: CreateBackupSchedule :one
 INSERT INTO backup_schedules (
     id, database_id, application_id, service_id, cron, target_id, enabled,
-    next_run_at, max_run_seconds, pause_during_backup
+    next_run_at, max_run_seconds, pause_during_backup, keep_last
 )
-VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)
+VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11)
 RETURNING *;
 
 -- name: GetBackupSchedule :one
@@ -187,6 +188,7 @@ SET cron = $2,
     target_changed_at = $7,
     max_run_seconds = $8,
     pause_during_backup = $9,
+    keep_last = $10,
     updated_at = now()
 WHERE id = $1
 RETURNING *;
@@ -239,6 +241,82 @@ ORDER BY created_at ASC;
 -- boot-time sweep only restarts a resource the job itself stopped.
 UPDATE backups
 SET was_running = $2
+WHERE id = $1;
+
+-- name: ListCompletedScheduledBackups :many
+-- Retention only ever considers successful runs of one schedule, newest first.
+-- Manual runs and failed runs are never counted towards keep_last.
+SELECT * FROM backups
+WHERE schedule_id = $1 AND type = 'scheduled' AND status = 'completed'
+ORDER BY created_at DESC, id DESC;
+
+-- name: ListFailedBackupsOlderThan :many
+-- Failed runs carry no useful artifact; they are pruned after a fixed window.
+SELECT * FROM backups
+WHERE status = 'failed' AND created_at <= $1
+ORDER BY created_at ASC;
+
+-- name: SetBackupCleanupPending :one
+UPDATE backups
+SET cleanup_pending = true,
+    cleanup_error = '',
+    cleanup_attempts = 0,
+    cleanup_next_attempt_at = $2
+WHERE id = $1
+RETURNING *;
+
+-- name: SetBackupCleanupError :one
+UPDATE backups
+SET cleanup_error = $2,
+    cleanup_attempts = $3,
+    cleanup_next_attempt_at = $4
+WHERE id = $1
+RETURNING *;
+
+-- name: ListDuePendingCleanups :many
+SELECT * FROM backups
+WHERE cleanup_pending
+  AND (cleanup_next_attempt_at IS NULL OR cleanup_next_attempt_at <= $1)
+ORDER BY cleanup_next_attempt_at ASC NULLS FIRST, created_at ASC;
+
+-- name: MarkBackupsProviderRemoved :exec
+-- A deleted provider keeps its past runs visible as "provider removed" instead
+-- of hiding the fact that an artifact exists somewhere unreachable.
+UPDATE backups
+SET provider_removed = true
+WHERE target_id = $1;
+
+-- name: CountBackupsForTarget :one
+SELECT count(*)::bigint AS backup_count FROM backups WHERE target_id = $1;
+
+-- name: ListBackupScheduleIDsForTarget :many
+SELECT id FROM backup_schedules WHERE target_id = $1 ORDER BY created_at ASC, id ASC;
+
+-- name: BackupUsageByTarget :many
+-- Per-provider usage for the Storage view, from run rows only (no bucket
+-- listing): the number of artifacts and their recorded compressed size.
+SELECT b.target_id, count(*)::bigint AS backup_count,
+    COALESCE(sum(b.size), 0)::bigint AS total_size
+FROM backups b
+    JOIN backup_targets t ON t.id = b.target_id
+WHERE t.user_id = $1
+GROUP BY b.target_id;
+
+-- name: ListDueArtifactCleanups :many
+-- Artifacts queued by a hard-deleted resource, drained by the cleanup sweeper.
+SELECT * FROM backup_artifact_cleanup
+WHERE next_attempt_at <= $1
+ORDER BY next_attempt_at ASC, id ASC;
+
+-- name: SetArtifactCleanupError :exec
+UPDATE backup_artifact_cleanup
+SET attempts = $2,
+    next_attempt_at = $3,
+    last_error = $4
+WHERE id = $1;
+
+-- name: DeleteArtifactCleanup :exec
+DELETE FROM backup_artifact_cleanup
 WHERE id = $1;
 
 -- name: CreateRestore :one

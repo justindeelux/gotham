@@ -95,21 +95,37 @@ type ApplicationWebhook struct {
 }
 
 type Backup struct {
+	ID                   pgtype.UUID        `json:"id"`
+	DatabaseID           pgtype.UUID        `json:"database_id"`
+	ScheduleID           pgtype.UUID        `json:"schedule_id"`
+	Type                 string             `json:"type"`
+	Status               string             `json:"status"`
+	Size                 int64              `json:"size"`
+	Location             string             `json:"location"`
+	TargetID             pgtype.UUID        `json:"target_id"`
+	ContainerID          string             `json:"container_id"`
+	Error                string             `json:"error"`
+	CreatedAt            pgtype.Timestamptz `json:"created_at"`
+	FinishedAt           pgtype.Timestamptz `json:"finished_at"`
+	WasRunning           bool               `json:"was_running"`
+	ApplicationID        pgtype.UUID        `json:"application_id"`
+	ServiceID            pgtype.UUID        `json:"service_id"`
+	CleanupPending       bool               `json:"cleanup_pending"`
+	CleanupError         string             `json:"cleanup_error"`
+	CleanupAttempts      int32              `json:"cleanup_attempts"`
+	CleanupNextAttemptAt pgtype.Timestamptz `json:"cleanup_next_attempt_at"`
+	ProviderRemoved      bool               `json:"provider_removed"`
+	PauseDuringBackup    bool               `json:"pause_during_backup"`
+}
+
+type BackupArtifactCleanup struct {
 	ID            pgtype.UUID        `json:"id"`
-	DatabaseID    pgtype.UUID        `json:"database_id"`
-	ScheduleID    pgtype.UUID        `json:"schedule_id"`
-	Type          string             `json:"type"`
-	Status        string             `json:"status"`
-	Size          int64              `json:"size"`
-	Location      string             `json:"location"`
 	TargetID      pgtype.UUID        `json:"target_id"`
-	ContainerID   string             `json:"container_id"`
-	Error         string             `json:"error"`
+	Location      string             `json:"location"`
+	Attempts      int32              `json:"attempts"`
+	NextAttemptAt pgtype.Timestamptz `json:"next_attempt_at"`
+	LastError     string             `json:"last_error"`
 	CreatedAt     pgtype.Timestamptz `json:"created_at"`
-	FinishedAt    pgtype.Timestamptz `json:"finished_at"`
-	WasRunning    bool               `json:"was_running"`
-	ApplicationID pgtype.UUID        `json:"application_id"`
-	ServiceID     pgtype.UUID        `json:"service_id"`
 }
 
 type BackupSchedule struct {
@@ -127,6 +143,7 @@ type BackupSchedule struct {
 	MaxRunSeconds     int32              `json:"max_run_seconds"`
 	ApplicationID     pgtype.UUID        `json:"application_id"`
 	ServiceID         pgtype.UUID        `json:"service_id"`
+	KeepLast          *int32             `json:"keep_last"`
 	PauseDuringBackup bool               `json:"pause_during_backup"`
 }
 

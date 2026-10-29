@@ -15,7 +15,11 @@ import type {
   ResourceType,
 } from "@/features/backups/api/backups";
 import { CRON_PRESETS } from "@/features/backups/utils/backupStatus";
-import { backupMessages, isCronPresent } from "@/features/backups/schemas/backups";
+import {
+  backupMessages,
+  isCronPresent,
+  isKeepLastValid,
+} from "@/features/backups/schemas/backups";
 import { useBackupsStore } from "@/features/backups/stores/backups";
 import { advanceRestoreStatuses } from "@/features/backups/utils/restoreOutcomes";
 import { useAuthStore } from "@/features/auth";
@@ -52,6 +56,7 @@ export function useResourceBackups(
   const scheduleEnabled = ref(true);
   const scheduleMaxRunMinutes = ref(120);
   const schedulePauseDuringBackup = ref(true);
+  const scheduleKeepLast = ref<number | null>(7);
   const editingScheduleId = ref<string | null>(null);
   const backupContents = ref<BackupContent[]>([]);
 
@@ -100,7 +105,11 @@ export function useResourceBackups(
   function providerLabel(
     providerId: string | undefined,
     runProviderName?: string,
+    providerRemoved = false,
   ): string {
+    if (providerRemoved) {
+      return t("backups.storage.providerRemoved");
+    }
     if (!providerId) {
       return t("databases.backups.targets.localDisk");
     }
@@ -245,6 +254,24 @@ export function useResourceBackups(
     }
   }
 
+  async function handleRetryCleanup(backup: BackupRun): Promise<void> {
+    try {
+      await backupsStore.retryCleanup(backup);
+      message.success(t("backups.runs.cleanupDone"));
+    } catch (error) {
+      message.error(describeBackupError(error));
+    }
+  }
+
+  async function handleDiscardCleanup(backup: BackupRun): Promise<void> {
+    try {
+      await backupsStore.discardCleanup(backup);
+      message.success(t("backups.runs.cleanupDiscarded"));
+    } catch (error) {
+      message.error(describeBackupError(error));
+    }
+  }
+
   function openRestore(backup: BackupRun): void {
     restoreCandidate.value = backup;
     restoreOpen.value = true;
@@ -283,6 +310,7 @@ export function useResourceBackups(
     scheduleEnabled.value = true;
     scheduleMaxRunMinutes.value = 120;
     schedulePauseDuringBackup.value = true;
+    scheduleKeepLast.value = 7;
   }
 
   function openScheduleEdit(schedule: BackupSchedule): void {
@@ -294,6 +322,7 @@ export function useResourceBackups(
     scheduleEnabled.value = schedule.enabled;
     scheduleMaxRunMinutes.value = Math.round(schedule.max_run_seconds / 60);
     schedulePauseDuringBackup.value = schedule.pause_during_backup;
+    scheduleKeepLast.value = schedule.keep_last ?? null;
   }
 
   function validMaxRunMinutes(): boolean {
@@ -311,7 +340,12 @@ export function useResourceBackups(
       message.error(t("databases.backups.protection.maxRunInvalid"));
       return;
     }
+    if (!isKeepLastValid(scheduleKeepLast.value)) {
+      message.error(resolveValidationMessage(backupMessages.keepLastInvalid));
+      return;
+    }
     const maxRunSeconds = Math.round(scheduleMaxRunMinutes.value * 60);
+    const keepLast = scheduleKeepLast.value;
     try {
       if (editingScheduleId.value !== null) {
         await backupsStore.editSchedule(resource.value, editingScheduleId.value, {
@@ -320,6 +354,9 @@ export function useResourceBackups(
           enabled: scheduleEnabled.value,
           max_run_seconds: maxRunSeconds,
           pause_during_backup: schedulePauseDuringBackup.value,
+          // An empty field keeps the stored policy, so editing a legacy
+          // unlimited schedule cannot start deleting backups.
+          ...(keepLast === null ? {} : { keep_last: keepLast }),
         });
         message.success(t("databases.backups.schedules.updated", { cron }));
       } else {
@@ -329,6 +366,7 @@ export function useResourceBackups(
           enabled: scheduleEnabled.value,
           max_run_seconds: maxRunSeconds,
           pause_during_backup: schedulePauseDuringBackup.value,
+          keep_last: keepLast ?? 7,
         });
         message.success(t("databases.backups.schedules.saved", { cron }));
       }
@@ -429,6 +467,7 @@ export function useResourceBackups(
     scheduleEnabled,
     scheduleMaxRunMinutes,
     schedulePauseDuringBackup,
+    scheduleKeepLast,
     editingScheduleId,
     backupContents,
     backups,
@@ -446,6 +485,8 @@ export function useResourceBackups(
     notifyRestoreOutcomes,
     handleBackupNow,
     handleDeleteBackup,
+    handleRetryCleanup,
+    handleDiscardCleanup,
     openRestore,
     handleRestoreConfirm,
     resetScheduleForm,

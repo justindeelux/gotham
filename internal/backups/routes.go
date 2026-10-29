@@ -37,9 +37,15 @@ type backupResponse struct {
 	Size         int64        `json:"size"`
 	Location     string       `json:"location,omitempty"`
 	Error        string       `json:"error,omitempty"`
-	ContainerID  string       `json:"container_id,omitempty"`
-	CreatedAt    time.Time    `json:"created_at"`
-	FinishedAt   *time.Time   `json:"finished_at,omitempty"`
+	// ProviderRemoved means the run's storage provider was deleted, so its
+	// artifact is unreachable but the run stays visible.
+	ProviderRemoved bool `json:"provider_removed,omitempty"`
+	// CleanupPending marks a run whose artifact removal is still outstanding.
+	CleanupPending bool       `json:"cleanup_pending,omitempty"`
+	CleanupError   string     `json:"cleanup_error,omitempty"`
+	ContainerID    string     `json:"container_id,omitempty"`
+	CreatedAt      time.Time  `json:"created_at"`
+	FinishedAt     *time.Time `json:"finished_at,omitempty"`
 }
 
 type backupEnvelope struct {
@@ -81,6 +87,7 @@ type scheduleResponse struct {
 	LastSlotAt        *time.Time   `json:"last_slot_at,omitempty"`
 	MaxRunSeconds     int          `json:"max_run_seconds"`
 	PauseDuringBackup bool         `json:"pause_during_backup"`
+	KeepLast          *int         `json:"keep_last,omitempty"`
 	CreatedAt         time.Time    `json:"created_at"`
 	UpdatedAt         time.Time    `json:"updated_at"`
 }
@@ -103,6 +110,10 @@ type providerResponse struct {
 	Prefix         string     `json:"prefix,omitempty"`
 	Builtin        bool       `json:"builtin"`
 	HasCredentials bool       `json:"has_credentials"`
+	BackupCount    int64      `json:"backup_count"`
+	TotalSize      int64      `json:"total_size"`
+	FreeSpace      int64      `json:"free_space,omitempty"`
+	TotalSpace     int64      `json:"total_space,omitempty"`
 	CreatedAt      time.Time  `json:"created_at"`
 	UpdatedAt      time.Time  `json:"updated_at"`
 }
@@ -134,6 +145,7 @@ type scheduleBody struct {
 	Enabled           *bool   `json:"enabled,omitempty"`
 	MaxRunSeconds     *int    `json:"max_run_seconds,omitempty"`
 	PauseDuringBackup *bool   `json:"pause_during_backup,omitempty"`
+	KeepLast          *int    `json:"keep_last,omitempty"`
 }
 
 type contentResponse struct {
@@ -181,6 +193,7 @@ func Mount(r chi.Router, auth func(http.Handler) http.Handler, userID UserIDFunc
 		protected.Post("/v1/backups/providers/{id}/test", h.testProvider)
 		protected.Get("/v1/backups/{id}", h.getBackup)
 		protected.Delete("/v1/backups/{id}", h.deleteBackup)
+		protected.Post("/v1/backups/{id}/cleanup", h.retryCleanup)
 		protected.Post("/v1/backups/{id}/restore", h.restore)
 	})
 }
@@ -260,7 +273,25 @@ func (h *backupHandler) deleteBackup(w http.ResponseWriter, r *http.Request) {
 	if !ok {
 		return
 	}
-	if err := h.svc.DeleteBackup(r.Context(), userID, backupID); err != nil {
+	var err error
+	if r.URL.Query().Get("discard") == "true" {
+		err = h.svc.DiscardBackup(r.Context(), userID, backupID)
+	} else {
+		err = h.svc.DeleteBackup(r.Context(), userID, backupID)
+	}
+	if err != nil {
+		h.writeError(w, err)
+		return
+	}
+	w.WriteHeader(http.StatusNoContent)
+}
+
+func (h *backupHandler) retryCleanup(w http.ResponseWriter, r *http.Request) {
+	userID, backupID, ok := h.backupParams(w, r)
+	if !ok {
+		return
+	}
+	if err := h.svc.RetryCleanup(r.Context(), userID, backupID); err != nil {
 		h.writeError(w, err)
 		return
 	}
@@ -349,6 +380,7 @@ func (h *backupHandler) createSchedule(w http.ResponseWriter, r *http.Request) {
 		Enabled:           body.Enabled,
 		MaxRunSeconds:     body.MaxRunSeconds,
 		PauseDuringBackup: body.PauseDuringBackup,
+		KeepLast:          body.KeepLast,
 	})
 	if err != nil {
 		h.writeError(w, err)
@@ -376,6 +408,7 @@ func (h *backupHandler) updateSchedule(w http.ResponseWriter, r *http.Request) {
 		Enabled:           body.Enabled,
 		MaxRunSeconds:     body.MaxRunSeconds,
 		PauseDuringBackup: body.PauseDuringBackup,
+		KeepLast:          body.KeepLast,
 	}
 	if strings.TrimSpace(body.ResourceType) != "" || strings.TrimSpace(body.ResourceID) != "" {
 		ref, ok := h.resourceRef(w, body.ResourceType, body.ResourceID)
@@ -472,7 +505,8 @@ func (h *backupHandler) deleteProvider(w http.ResponseWriter, r *http.Request) {
 	if !ok {
 		return
 	}
-	if err := h.svc.DeleteProvider(r.Context(), userID, providerID); err != nil {
+	confirm := r.URL.Query().Get("confirm") == "true"
+	if err := h.svc.DeleteProvider(r.Context(), userID, providerID, confirm); err != nil {
 		h.writeError(w, err)
 		return
 	}
@@ -618,6 +652,12 @@ func (h *backupHandler) writeError(w http.ResponseWriter, err error) {
 		writeJSON(w, http.StatusConflict, errorBody{Message: err.Error()})
 	case errors.Is(err, ErrBuiltinProvider):
 		writeJSON(w, http.StatusConflict, errorBody{Message: err.Error()})
+	case errors.Is(err, ErrProviderInUse), errors.Is(err, ErrProviderHasBackups):
+		writeJSON(w, http.StatusConflict, errorBody{Message: err.Error()})
+	case errors.Is(err, ErrCleanupFailed):
+		writeJSON(w, http.StatusBadGateway, errorBody{Message: err.Error()})
+	case errors.Is(err, ErrInsufficientSpace):
+		writeJSON(w, http.StatusInsufficientStorage, errorBody{Message: err.Error()})
 	case errors.Is(err, ErrConflict):
 		writeJSON(w, http.StatusConflict, errorBody{Message: "a storage provider with that name already exists"})
 	case errors.Is(err, ErrDisabled):
@@ -663,16 +703,19 @@ func optionalLimit(w http.ResponseWriter, r *http.Request) (int, bool) {
 
 func newBackupResponse(backup Backup) backupResponse {
 	response := backupResponse{
-		ID:           backup.ID.String(),
-		ResourceType: backup.ResourceRef.Type,
-		ResourceID:   backup.ResourceRef.ID.String(),
-		Type:         backup.Type,
-		Status:       backup.Status,
-		Size:         backup.Size,
-		Location:     backup.Location,
-		Error:        backup.Error,
-		ContainerID:  backup.ContainerID,
-		CreatedAt:    backup.CreatedAt,
+		ID:              backup.ID.String(),
+		ResourceType:    backup.ResourceRef.Type,
+		ResourceID:      backup.ResourceRef.ID.String(),
+		Type:            backup.Type,
+		Status:          backup.Status,
+		Size:            backup.Size,
+		Location:        backup.Location,
+		Error:           backup.Error,
+		ProviderRemoved: backup.ProviderRemoved,
+		CleanupPending:  backup.CleanupPending,
+		CleanupError:    backup.CleanupError,
+		ContainerID:     backup.ContainerID,
+		CreatedAt:       backup.CreatedAt,
 	}
 	if backup.ScheduleID != uuid.Nil {
 		response.ScheduleID = backup.ScheduleID.String()
@@ -715,6 +758,7 @@ func newScheduleResponse(schedule BackupSchedule) scheduleResponse {
 		NextRunAt:         schedule.NextRunAt,
 		MaxRunSeconds:     schedule.MaxRunSeconds,
 		PauseDuringBackup: schedule.PauseDuringBackup,
+		KeepLast:          schedule.KeepLast,
 		CreatedAt:         schedule.CreatedAt,
 		UpdatedAt:         schedule.UpdatedAt,
 	}
@@ -743,6 +787,10 @@ func newProviderResponse(target BackupTarget) providerResponse {
 		Prefix:         target.Prefix,
 		Builtin:        target.Builtin,
 		HasCredentials: target.Kind == TargetS3,
+		BackupCount:    target.Usage.BackupCount,
+		TotalSize:      target.Usage.TotalSize,
+		FreeSpace:      target.Usage.FreeSpace,
+		TotalSpace:     target.Usage.TotalSpace,
 		CreatedAt:      target.CreatedAt,
 		UpdatedAt:      target.UpdatedAt,
 	}

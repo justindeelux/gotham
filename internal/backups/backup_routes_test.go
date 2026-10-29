@@ -35,6 +35,7 @@ type fakeBackupService struct {
 	backupFilter    BackupFilter
 	restoreFilter   RestoreFilter
 	scheduleRef     ResourceRef
+	deleteConfirm   bool
 }
 
 var _ BackupService = (*fakeBackupService)(nil)
@@ -79,6 +80,16 @@ func (f *fakeBackupService) GetBackup(context.Context, uuid.UUID, uuid.UUID) (Ba
 
 func (f *fakeBackupService) DeleteBackup(context.Context, uuid.UUID, uuid.UUID) error {
 	f.record("deleteBackup")
+	return f.err
+}
+
+func (f *fakeBackupService) RetryCleanup(context.Context, uuid.UUID, uuid.UUID) error {
+	f.record("retryCleanup")
+	return f.err
+}
+
+func (f *fakeBackupService) DiscardBackup(context.Context, uuid.UUID, uuid.UUID) error {
+	f.record("discardBackup")
 	return f.err
 }
 
@@ -157,8 +168,9 @@ func (f *fakeBackupService) UpdateProvider(_ context.Context, _ uuid.UUID, _ uui
 	return f.provider, nil
 }
 
-func (f *fakeBackupService) DeleteProvider(context.Context, uuid.UUID, uuid.UUID) error {
+func (f *fakeBackupService) DeleteProvider(_ context.Context, _ uuid.UUID, _ uuid.UUID, confirm bool) error {
 	f.record("deleteProvider")
+	f.deleteConfirm = confirm
 	return f.err
 }
 
@@ -384,6 +396,14 @@ func TestBackupGetDeleteRestoreRoutes(t *testing.T) {
 	if rec.Code != http.StatusNoContent {
 		t.Fatalf("delete status = %d", rec.Code)
 	}
+	rec = backupRequest(t, handler, http.MethodPost, "/v1/backups/"+backupID.String()+"/cleanup", "")
+	if rec.Code != http.StatusNoContent {
+		t.Fatalf("cleanup status = %d", rec.Code)
+	}
+	rec = backupRequest(t, handler, http.MethodDelete, "/v1/backups/"+backupID.String()+"?discard=true", "")
+	if rec.Code != http.StatusNoContent {
+		t.Fatalf("discard status = %d", rec.Code)
+	}
 	rec = backupRequest(t, handler, http.MethodGet, "/v1/backups/not-a-uuid", "")
 	if rec.Code != http.StatusBadRequest {
 		t.Fatalf("invalid id status = %d", rec.Code)
@@ -426,9 +446,12 @@ func TestProviderRoutes(t *testing.T) {
 	if rec.Code != http.StatusOK || !strings.Contains(rec.Body.String(), `"ok":true`) {
 		t.Fatalf("test status = %d body=%s", rec.Code, rec.Body)
 	}
-	rec = backupRequest(t, handler, http.MethodDelete, "/v1/backups/providers/"+providerID.String(), "")
+	rec = backupRequest(t, handler, http.MethodDelete, "/v1/backups/providers/"+providerID.String()+"?confirm=true", "")
 	if rec.Code != http.StatusNoContent {
 		t.Fatalf("delete status = %d", rec.Code)
+	}
+	if !svc.deleteConfirm {
+		t.Error("the delete route did not forward the confirmation")
 	}
 }
 
@@ -490,6 +513,10 @@ func TestErrorMapping(t *testing.T) {
 		{"not restorable", ErrBackupNotCompleted, http.StatusConflict},
 		{"stranded", ErrTargetStranded, http.StatusConflict},
 		{"builtin", ErrBuiltinProvider, http.StatusConflict},
+		{"provider in use", ErrProviderInUse, http.StatusConflict},
+		{"provider with backups", ErrProviderHasBackups, http.StatusConflict},
+		{"cleanup failed", ErrCleanupFailed, http.StatusBadGateway},
+		{"insufficient space", ErrInsufficientSpace, http.StatusInsufficientStorage},
 		{"conflict", ErrConflict, http.StatusConflict},
 		{"disabled", ErrDisabled, http.StatusServiceUnavailable},
 		{"internal", errors.New("boom"), http.StatusInternalServerError},

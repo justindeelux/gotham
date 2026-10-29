@@ -717,7 +717,7 @@ const vi: ApplicationsMessages = {
   },
   delete: {
     title: "Vùng nguy hiểm",
-    hint: "Xóa sẽ gỡ ứng dụng, các container và cấu hình đã lưu của nó. Thao tác này không thể hoàn tác.",
+    hint: "Xóa sẽ gỡ ứng dụng, các container, cấu hình đã lưu và các bản sao lưu của nó. Thao tác này không thể hoàn tác.",
     button: "Xóa ứng dụng",
     modalTitle: "Xóa ứng dụng",
     modalHint: "Nhập {name} để xác nhận. Thao tác này không thể hoàn tác.",

@@ -140,7 +140,8 @@ const en = {
     controlDeployInProgress: "A deploy is running. Wait for it to finish before using these actions.",
     controlNodeOffline: "The node is offline. Reconnect it before using these actions.",
     delete: "Delete",
-    deleteConfirm: "Delete the service {name}? The project goes down; its named volumes stay on the node.",
+    deleteConfirm:
+      "Delete the service {name}? The project goes down; its named volumes stay on the node. Its backups are deleted with it.",
   },
   overview: {
     title: "Overview",

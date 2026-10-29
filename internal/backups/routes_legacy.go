@@ -416,7 +416,7 @@ func (h *legacyHandler) deleteTarget(w http.ResponseWriter, r *http.Request) {
 	if !ok {
 		return
 	}
-	if err := h.svc.DeleteProvider(r.Context(), userID, targetID); err != nil {
+	if err := h.svc.DeleteProvider(r.Context(), userID, targetID, r.URL.Query().Get("confirm") == "true"); err != nil {
 		h.writeLegacyError(w, err)
 		return
 	}

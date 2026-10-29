@@ -63,7 +63,42 @@ hiện lại; để trống khi sửa sẽ giữ khóa đã lưu. **Kiểm tra**
 tin đăng nhập, hoặc quyền ghi thư mục cục bộ, rồi hiện kết quả ngay tại chỗ.
 
 Xóa nơi lưu trữ không xóa các bản sao cũ, nhưng không thể đọc lại từ đó, nên
-khôi phục từ các lần chạy đó sẽ thất bại.
+khôi phục từ các lần chạy đó sẽ thất bại và các lần chạy vẫn hiện là **Nơi lưu
+trữ đã bị xóa**. Không thể xóa nơi lưu trữ đang được một lịch sử dụng: hãy
+chuyển hoặc xóa các lịch đó trước, để không lịch nào âm thầm quay về đĩa cục
+bộ.
+
+## Giữ lại và dọn dẹp
+
+Mỗi lịch có mục **Giữ số bản sao lưu theo lịch gần nhất** (mặc định 7 với lịch
+mới). Sau khi một lần chạy theo lịch thành công, các lần chạy đã hoàn tất cũ
+hơn của lịch đó vượt quá giới hạn sẽ bị xóa, cũ nhất trước, kể cả tệp lưu.
+
+Những gì không bao giờ bị xóa tự động:
+
+- bản sao lưu thủ công — chỉ bạn mới xóa;
+- lần chạy theo lịch hoàn tất mới nhất;
+- lần chạy đang thực hiện;
+- lần chạy thất bại chưa quá 30 ngày.
+
+Lịch được tạo trước phiên bản này giữ mọi bản sao cho đến khi bạn đặt giới hạn;
+khi đó danh sách lịch hiện **Giữ mọi bản sao lưu theo lịch**.
+
+Nếu nơi lưu trữ không truy cập được trong lúc xóa một lần chạy, lần chạy đó ở
+trạng thái **Đang chờ dọn dẹp** kèm lỗi gần nhất. Sao lưu mới vẫn chạy bình
+thường. Tiến trình dọn dẹp hàng giờ sẽ thử lại; **Thử dọn lại** thử ngay còn
+**Bỏ qua** quên dòng đó mà không xóa tệp.
+
+Khi một ứng dụng, dịch vụ hoặc cơ sở dữ liệu bị xóa vĩnh viễn, các tệp sao lưu
+của nó được xếp vào hàng đợi xóa trước khi các dòng biến mất. Cơ sở dữ liệu vẫn
+giữ thời gian ân hạn xóa mềm trước, nên không có gì bị xóa sớm. Hàng đợi sống
+sót qua sự cố nơi lưu trữ và được dọn bởi cùng tiến trình.
+
+Tab Lưu trữ hiện, theo từng nơi lưu trữ, số bản sao và tổng dung lượng, và với
+Đĩa cục bộ là dung lượng trống. Trước khi chạy vào Đĩa cục bộ, bảng điều khiển
+kiểm tra dung lượng trống đủ cho lần chạy trước của tài nguyên đó cộng 20% (hoặc
+64 MiB khi chưa có lần chạy trước) và từ chối chạy với thông báo dễ hiểu thay vì
+làm đầy đĩa.
 
 ## Thành viên
 

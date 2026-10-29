@@ -25,6 +25,13 @@ type BackupRepository interface {
 	DeleteBackup(ctx context.Context, backupID uuid.UUID) (Backup, error)
 	SetBackupWasRunning(ctx context.Context, backupID uuid.UUID, wasRunning bool) error
 
+	ListCompletedScheduledBackups(ctx context.Context, scheduleID uuid.UUID) ([]Backup, error)
+	ListFailedBackupsOlderThan(ctx context.Context, before time.Time) ([]Backup, error)
+	SetBackupCleanupPending(ctx context.Context, backupID uuid.UUID, next time.Time) (Backup, error)
+	SetBackupCleanupError(ctx context.Context, backupID uuid.UUID, message string, attempts int, next time.Time) (Backup, error)
+	ListDuePendingCleanups(ctx context.Context, now time.Time) ([]Backup, error)
+	MarkBackupsProviderRemoved(ctx context.Context, targetID uuid.UUID) error
+
 	CreateRestore(ctx context.Context, restore Restore) (Restore, error)
 	FinishRestore(ctx context.Context, restore Restore) (Restore, error)
 	ListRunningRestores(ctx context.Context) ([]Restore, error)
@@ -50,6 +57,13 @@ type BackupRepository interface {
 	UpdateBackupTargetWithSecrets(ctx context.Context, target BackupTarget, secrets []TargetSecret) (BackupTarget, error)
 	DeleteBackupTarget(ctx context.Context, targetID, userID uuid.UUID) (BackupTarget, error)
 	HasBackupsForTarget(ctx context.Context, targetID uuid.UUID) (bool, error)
+	CountBackupsForTarget(ctx context.Context, targetID uuid.UUID) (int64, error)
+	ListBackupScheduleIDsForTarget(ctx context.Context, targetID uuid.UUID) ([]uuid.UUID, error)
+	BackupUsageByTarget(ctx context.Context, userID uuid.UUID) (map[uuid.UUID]ProviderUsage, error)
+
+	ListDueArtifactCleanups(ctx context.Context, now time.Time) ([]ArtifactCleanup, error)
+	SetArtifactCleanupError(ctx context.Context, id uuid.UUID, message string, attempts int, next time.Time) error
+	DeleteArtifactCleanup(ctx context.Context, id uuid.UUID) error
 
 	CreateTargetSecret(ctx context.Context, secret TargetSecret) (TargetSecret, error)
 	UpsertTargetSecret(ctx context.Context, secret TargetSecret) (TargetSecret, error)
@@ -191,6 +205,67 @@ func (r *storeBackupRepository) SetBackupWasRunning(ctx context.Context, backupI
 	return nil
 }
 
+func (r *storeBackupRepository) ListCompletedScheduledBackups(ctx context.Context, scheduleID uuid.UUID) ([]Backup, error) {
+	rows, err := r.store.ListCompletedScheduledBackups(ctx, pgUUID(scheduleID))
+	if err != nil {
+		return nil, fmt.Errorf("backups: list scheduled backups: %w", err)
+	}
+	return backupsFromRows(rows), nil
+}
+
+func (r *storeBackupRepository) ListFailedBackupsOlderThan(ctx context.Context, before time.Time) ([]Backup, error) {
+	rows, err := r.store.ListFailedBackupsOlderThan(ctx, timeToPG(before))
+	if err != nil {
+		return nil, fmt.Errorf("backups: list failed backups: %w", err)
+	}
+	return backupsFromRows(rows), nil
+}
+
+func (r *storeBackupRepository) SetBackupCleanupPending(ctx context.Context, backupID uuid.UUID, next time.Time) (Backup, error) {
+	row, err := r.store.SetBackupCleanupPending(ctx, sqlc.SetBackupCleanupPendingParams{
+		ID:                   pgUUID(backupID),
+		CleanupNextAttemptAt: timeToPG(next),
+	})
+	if err != nil {
+		if errors.Is(err, pgx.ErrNoRows) {
+			return Backup{}, ErrNotFound
+		}
+		return Backup{}, fmt.Errorf("backups: mark cleanup pending: %w", err)
+	}
+	return backupFromRow(row), nil
+}
+
+func (r *storeBackupRepository) SetBackupCleanupError(ctx context.Context, backupID uuid.UUID, message string, attempts int, next time.Time) (Backup, error) {
+	row, err := r.store.SetBackupCleanupError(ctx, sqlc.SetBackupCleanupErrorParams{
+		ID:                   pgUUID(backupID),
+		CleanupError:         message,
+		CleanupAttempts:      int32(attempts),
+		CleanupNextAttemptAt: timeToPG(next),
+	})
+	if err != nil {
+		if errors.Is(err, pgx.ErrNoRows) {
+			return Backup{}, ErrNotFound
+		}
+		return Backup{}, fmt.Errorf("backups: record cleanup failure: %w", err)
+	}
+	return backupFromRow(row), nil
+}
+
+func (r *storeBackupRepository) ListDuePendingCleanups(ctx context.Context, now time.Time) ([]Backup, error) {
+	rows, err := r.store.ListDuePendingCleanups(ctx, timeToPG(now))
+	if err != nil {
+		return nil, fmt.Errorf("backups: list pending cleanups: %w", err)
+	}
+	return backupsFromRows(rows), nil
+}
+
+func (r *storeBackupRepository) MarkBackupsProviderRemoved(ctx context.Context, targetID uuid.UUID) error {
+	if err := r.store.MarkBackupsProviderRemoved(ctx, pgUUID(targetID)); err != nil {
+		return fmt.Errorf("backups: record provider removal: %w", err)
+	}
+	return nil
+}
+
 func (r *storeBackupRepository) CreateRestore(ctx context.Context, restore Restore) (Restore, error) {
 	db, app, svc := resourceColumns(restore.ResourceRef)
 	row, err := r.store.CreateRestore(ctx, sqlc.CreateRestoreParams{
@@ -275,6 +350,7 @@ func (r *storeBackupRepository) CreateBackupSchedule(ctx context.Context, schedu
 		NextRunAt:         timeToPG(schedule.NextRunAt),
 		MaxRunSeconds:     int32(maxRunSeconds),
 		PauseDuringBackup: schedule.PauseDuringBackup,
+		KeepLast:          keepLastParam(schedule.KeepLast),
 	})
 	if err != nil {
 		return BackupSchedule{}, fmt.Errorf("backups: create backup schedule: %w", err)
@@ -337,6 +413,7 @@ func (r *storeBackupRepository) UpdateBackupSchedule(ctx context.Context, schedu
 		TargetChangedAt:   timeToPG(schedule.TargetChangedAt),
 		MaxRunSeconds:     int32(maxRunSeconds),
 		PauseDuringBackup: schedule.PauseDuringBackup,
+		KeepLast:          keepLastParam(schedule.KeepLast),
 	})
 	if err != nil {
 		if errors.Is(err, pgx.ErrNoRows) {
@@ -498,6 +575,72 @@ func (r *storeBackupRepository) HasBackupsForTarget(ctx context.Context, targetI
 	return exists, nil
 }
 
+func (r *storeBackupRepository) CountBackupsForTarget(ctx context.Context, targetID uuid.UUID) (int64, error) {
+	count, err := r.store.CountBackupsForTarget(ctx, pgUUID(targetID))
+	if err != nil {
+		return 0, fmt.Errorf("backups: count provider backups: %w", err)
+	}
+	return count, nil
+}
+
+func (r *storeBackupRepository) ListBackupScheduleIDsForTarget(ctx context.Context, targetID uuid.UUID) ([]uuid.UUID, error) {
+	rows, err := r.store.ListBackupScheduleIDsForTarget(ctx, pgUUID(targetID))
+	if err != nil {
+		return nil, fmt.Errorf("backups: list schedules using the provider: %w", err)
+	}
+	ids := make([]uuid.UUID, 0, len(rows))
+	for _, row := range rows {
+		ids = append(ids, uuidFromPG(row))
+	}
+	return ids, nil
+}
+
+func (r *storeBackupRepository) BackupUsageByTarget(ctx context.Context, userID uuid.UUID) (map[uuid.UUID]ProviderUsage, error) {
+	rows, err := r.store.BackupUsageByTarget(ctx, pgUUID(userID))
+	if err != nil {
+		return nil, fmt.Errorf("backups: provider usage: %w", err)
+	}
+	usage := make(map[uuid.UUID]ProviderUsage, len(rows))
+	for _, row := range rows {
+		usage[uuidFromPG(row.TargetID)] = ProviderUsage{
+			BackupCount: row.BackupCount,
+			TotalSize:   row.TotalSize,
+		}
+	}
+	return usage, nil
+}
+
+func (r *storeBackupRepository) ListDueArtifactCleanups(ctx context.Context, now time.Time) ([]ArtifactCleanup, error) {
+	rows, err := r.store.ListDueArtifactCleanups(ctx, timeToPG(now))
+	if err != nil {
+		return nil, fmt.Errorf("backups: list pending artifact cleanups: %w", err)
+	}
+	cleanups := make([]ArtifactCleanup, 0, len(rows))
+	for _, row := range rows {
+		cleanups = append(cleanups, artifactCleanupFromRow(row))
+	}
+	return cleanups, nil
+}
+
+func (r *storeBackupRepository) SetArtifactCleanupError(ctx context.Context, id uuid.UUID, message string, attempts int, next time.Time) error {
+	if err := r.store.SetArtifactCleanupError(ctx, sqlc.SetArtifactCleanupErrorParams{
+		ID:            pgUUID(id),
+		Attempts:      int32(attempts),
+		NextAttemptAt: timeToPG(next),
+		LastError:     message,
+	}); err != nil {
+		return fmt.Errorf("backups: record artifact cleanup failure: %w", err)
+	}
+	return nil
+}
+
+func (r *storeBackupRepository) DeleteArtifactCleanup(ctx context.Context, id uuid.UUID) error {
+	if err := r.store.DeleteArtifactCleanup(ctx, pgUUID(id)); err != nil {
+		return fmt.Errorf("backups: delete artifact cleanup: %w", err)
+	}
+	return nil
+}
+
 func (r *storeBackupRepository) ListServerIDs(ctx context.Context) ([]uuid.UUID, error) {
 	rows, err := r.store.ListServers(ctx)
 	if err != nil {
@@ -589,8 +732,9 @@ func createBackupParams(backup Backup) sqlc.CreateBackupParams {
 		Location:      backup.Location,
 		TargetID:      pgUUID(backup.TargetID),
 		ContainerID:   backup.ContainerID,
-		Error:         backup.Error,
-		FinishedAt:    timeToPG(backup.FinishedAt),
+		Error:             backup.Error,
+		FinishedAt:        timeToPG(backup.FinishedAt),
+		PauseDuringBackup: backup.PauseDuringBackup,
 	}
 }
 
@@ -649,20 +793,46 @@ func restoresFromRows(rows []sqlc.Restore) []Restore {
 
 func backupFromRow(row sqlc.Backup) Backup {
 	return Backup{
-		ID:          uuidFromPG(row.ID),
-		ResourceRef: resourceRef(row.DatabaseID, row.ApplicationID, row.ServiceID),
-		ScheduleID:  uuidFromPG(row.ScheduleID),
-		Type:        BackupType(row.Type),
-		Status:      BackupStatus(row.Status),
-		Size:        row.Size,
-		Location:    row.Location,
-		TargetID:    uuidFromPG(row.TargetID),
-		ContainerID: row.ContainerID,
-		WasRunning:  row.WasRunning,
-		Error:       row.Error,
-		CreatedAt:   timeFromPG(row.CreatedAt),
-		FinishedAt:  timeFromPG(row.FinishedAt),
+		ID:                   uuidFromPG(row.ID),
+		ResourceRef:          resourceRef(row.DatabaseID, row.ApplicationID, row.ServiceID),
+		ScheduleID:           uuidFromPG(row.ScheduleID),
+		Type:                 BackupType(row.Type),
+		Status:               BackupStatus(row.Status),
+		Size:                 row.Size,
+		Location:             row.Location,
+		TargetID:             uuidFromPG(row.TargetID),
+		ContainerID:          row.ContainerID,
+		WasRunning:           row.WasRunning,
+		PauseDuringBackup:    row.PauseDuringBackup,
+		Error:                row.Error,
+		ProviderRemoved:      row.ProviderRemoved,
+		CleanupPending:       row.CleanupPending,
+		CleanupError:         row.CleanupError,
+		CleanupAttempts:      int(row.CleanupAttempts),
+		CleanupNextAttemptAt: timeFromPG(row.CleanupNextAttemptAt),
+		CreatedAt:            timeFromPG(row.CreatedAt),
+		FinishedAt:           timeFromPG(row.FinishedAt),
 	}
+}
+
+func artifactCleanupFromRow(row sqlc.BackupArtifactCleanup) ArtifactCleanup {
+	return ArtifactCleanup{
+		ID:            uuidFromPG(row.ID),
+		TargetID:      uuidFromPG(row.TargetID),
+		Location:      row.Location,
+		Attempts:      int(row.Attempts),
+		NextAttemptAt: timeFromPG(row.NextAttemptAt),
+		LastError:     row.LastError,
+		CreatedAt:     timeFromPG(row.CreatedAt),
+	}
+}
+
+func keepLastParam(keep *int) *int32 {
+	if keep == nil {
+		return nil
+	}
+	value := int32(*keep)
+	return &value
 }
 
 func restoreFromRow(row sqlc.Restore) Restore {
@@ -690,9 +860,18 @@ func scheduleFromRow(row sqlc.BackupSchedule) BackupSchedule {
 		TargetChangedAt:   timeFromPG(row.TargetChangedAt),
 		MaxRunSeconds:     int(row.MaxRunSeconds),
 		PauseDuringBackup: row.PauseDuringBackup,
+		KeepLast:          intPtrFromPG(row.KeepLast),
 		CreatedAt:         timeFromPG(row.CreatedAt),
 		UpdatedAt:         timeFromPG(row.UpdatedAt),
 	}
+}
+
+func intPtrFromPG(value *int32) *int {
+	if value == nil {
+		return nil
+	}
+	parsed := int(*value)
+	return &parsed
 }
 
 func targetFromRow(row sqlc.BackupTarget) BackupTarget {

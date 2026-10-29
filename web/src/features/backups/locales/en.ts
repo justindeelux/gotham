@@ -24,6 +24,13 @@ const en = {
     emptyHint:
       "Queue a backup now, or open a resource and add a schedule so its data is captured automatically.",
     restore: "Restore",
+    cleanupPending: "Cleanup pending",
+    retryCleanup: "Retry cleanup",
+    discardCleanup: "Discard",
+    discardCleanupConfirm:
+      "Forget this row without deleting its artifact? The artifact stays in the provider and cannot be managed from here.",
+    cleanupDone: "Backup cleanup completed.",
+    cleanupDiscarded: "Pending cleanup row discarded.",
     inProgress: "in progress",
     seconds: "{count} s",
     minutes: "{count} min",
@@ -42,6 +49,16 @@ const en = {
     title: "Schedules",
     add: "New schedule",
     empty: "No schedules yet — automatic backups are off",
+    keepLastLabel: "Keep the last scheduled backups",
+    keepLastHint:
+      "Older scheduled backups are deleted automatically. Manual backups are never deleted automatically.",
+    keepAll:
+      "Keeps every scheduled backup — edit the schedule to set a limit",
+    keepLast: "Keeps the last {count} scheduled backups",
+    keepLastInvalid: "Keep the last must be between 1 and 365 backups.",
+  },
+  errors: {
+    noSpace: "Not enough free space on the backup disk",
   },
   backupNow: {
     action: "Backup now",
@@ -77,7 +94,12 @@ const en = {
       "Backups are kept on the control plane disk. Add an S3-compatible provider to keep copies somewhere else.",
     localDisk: "Local disk",
     deletedProvider: "Deleted storage",
+    providerRemoved: "Provider removed",
     unknownProvider: "Storage",
+    usage: "{count} backups · {size}",
+    freeSpace: "{free} free of {total}",
+    deleteConfirm:
+      "Delete {name}? Backups stored there become unreadable and cannot be restored. A provider still used by a schedule cannot be deleted.",
   },
   resourceTypes: {
     application: "Application",

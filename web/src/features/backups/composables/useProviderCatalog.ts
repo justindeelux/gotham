@@ -130,7 +130,10 @@ export function useProviderCatalog() {
 
   async function remove(providerId: string, providerName: string): Promise<void> {
     try {
-      await backupsStore.removeProvider(providerId);
+      // The popconfirm the owner accepts is the confirmation for past backups
+      // becoming unreadable; a provider still used by a schedule is rejected
+      // by the API regardless.
+      await backupsStore.removeProvider(providerId, true);
       delete checks.value[providerId];
       message.success(
         t("databases.backups.targets.deleted", { name: providerName }),

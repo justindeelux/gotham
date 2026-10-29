@@ -7,5 +7,11 @@
 ALTER TABLE backup_schedules
     ADD COLUMN pause_during_backup boolean NOT NULL DEFAULT true;
 
+-- The choice is copied onto the run, so history still labels a run that was
+-- taken live even after its schedule was edited or deleted.
+ALTER TABLE backups
+    ADD COLUMN pause_during_backup boolean NOT NULL DEFAULT false;
+
 -- +goose Down
+ALTER TABLE backups DROP COLUMN IF EXISTS pause_during_backup;
 ALTER TABLE backup_schedules DROP COLUMN IF EXISTS pause_during_backup;

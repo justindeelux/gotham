@@ -93,14 +93,27 @@ const backups = inject(resourceBackupsKey)!;
         >
           <div class="backup-row__main">
             <NSpace align="center" :size="8">
-              <NTag :type="statusTagType(backup.status)" size="small">
+              <NTag
+                v-if="backup.cleanup_pending"
+                type="warning"
+                size="small"
+              >
+                {{ t("backups.runs.cleanupPending") }}
+              </NTag>
+              <NTag v-else :type="statusTagType(backup.status)" size="small">
                 {{ runDisplay("runStatus", backup.status) }}
               </NTag>
               <NTag size="small" :bordered="false">
                 {{ runDisplay("runType", backup.type) }}
               </NTag>
               <NTag size="small" :bordered="false">
-                {{ backups.providerLabel(backup.provider_id, backup.provider_name) }}
+                {{
+                  backups.providerLabel(
+                    backup.provider_id,
+                    backup.provider_name,
+                    backup.provider_removed,
+                  )
+                }}
               </NTag>
               <NText class="mono" depth="3">
                 {{
@@ -120,6 +133,13 @@ const backups = inject(resourceBackupsKey)!;
             >
               {{ backup.error }}
             </NText>
+            <NText
+              v-if="backup.cleanup_pending && backup.cleanup_error"
+              depth="3"
+              class="backup-row__error"
+            >
+              {{ backup.cleanup_error }}
+            </NText>
             <NText depth="3">
               <span :title="backup.created_at">
                 {{ relativeTime(backup.created_at) }}
@@ -130,31 +150,54 @@ const backups = inject(resourceBackupsKey)!;
             </NText>
           </div>
           <NSpace class="backup-row__actions" align="center" :size="8">
-            <NButton
-              size="small"
-              secondary
-              :aria-label="t('databases.backups.runs.restoreAria', { when: relativeTime(backup.created_at) })"
-              :disabled="backup.status !== 'completed'"
-              @click="backups.openRestore(backup)"
-            >
-              {{ t("databases.backups.runs.restore") }}
-            </NButton>
-            <NPopconfirm
-              @positive-click="() => void backups.handleDeleteBackup(backup)"
-            >
-              <template #trigger>
-                <NButton
-                  size="small"
-                  type="error"
-                  ghost
-                  :aria-label="t('databases.backups.runs.deleteAria', { when: relativeTime(backup.created_at) })"
-                  :disabled="backup.status === 'running'"
-                >
-                  {{ t("common.actions.delete") }}
-                </NButton>
-              </template>
-              {{ t("databases.backups.runs.deleteConfirm") }}
-            </NPopconfirm>
+            <template v-if="backup.cleanup_pending">
+              <NButton
+                size="small"
+                secondary
+                @click="() => void backups.handleRetryCleanup(backup)"
+              >
+                {{ t("backups.runs.retryCleanup") }}
+              </NButton>
+              <NPopconfirm
+                @positive-click="
+                  () => void backups.handleDiscardCleanup(backup)
+                "
+              >
+                <template #trigger>
+                  <NButton size="small" type="error" ghost>
+                    {{ t("backups.runs.discardCleanup") }}
+                  </NButton>
+                </template>
+                {{ t("backups.runs.discardCleanupConfirm") }}
+              </NPopconfirm>
+            </template>
+            <template v-else>
+              <NButton
+                size="small"
+                secondary
+                :aria-label="t('databases.backups.runs.restoreAria', { when: relativeTime(backup.created_at) })"
+                :disabled="backup.status !== 'completed'"
+                @click="backups.openRestore(backup)"
+              >
+                {{ t("databases.backups.runs.restore") }}
+              </NButton>
+              <NPopconfirm
+                @positive-click="() => void backups.handleDeleteBackup(backup)"
+              >
+                <template #trigger>
+                  <NButton
+                    size="small"
+                    type="error"
+                    ghost
+                    :aria-label="t('databases.backups.runs.deleteAria', { when: relativeTime(backup.created_at) })"
+                    :disabled="backup.status === 'running'"
+                  >
+                    {{ t("common.actions.delete") }}
+                  </NButton>
+                </template>
+                {{ t("databases.backups.runs.deleteConfirm") }}
+              </NPopconfirm>
+            </template>
           </NSpace>
         </div>
       </NSpace>

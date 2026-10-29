@@ -69,6 +69,7 @@ var projectPolicies = map[string]projectPolicy{
 	"POST /api/v1/backups":                                              {kind: "backup", create: true},
 	"GET /api/v1/backups/{id}":                                          {kind: "backup"},
 	"DELETE /api/v1/backups/{id}":                                       {kind: "backup"},
+	"POST /api/v1/backups/{id}/cleanup":                                 {kind: "backup"},
 	"POST /api/v1/backups/{id}/restore":                                 {kind: "backup"},
 	"GET /api/v1/backups/schedules":                                     {kind: "schedule", listKey: "schedules"},
 	"POST /api/v1/backups/schedules":                                    {kind: "schedule", create: true},

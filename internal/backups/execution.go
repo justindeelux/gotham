@@ -26,6 +26,11 @@ func (m *BackupManager) startRun(
 	if err := m.backupsReady(); err != nil {
 		return Backup{}, err
 	}
+	if target == nil || target.Kind == TargetLocal {
+		if err := m.checkLocalSpace(ctx, resource); err != nil {
+			return Backup{}, err
+		}
+	}
 	backupID := uuid.New()
 	if !m.claimRun(resource.ID, backupID) {
 		return Backup{}, ErrBackupInFlight
@@ -35,8 +40,9 @@ func (m *BackupManager) startRun(
 		ResourceRef: resource.Ref(),
 		ScheduleID:  scheduleID,
 		Type:        typ,
-		Status:      BackupRunning,
-		CreatedAt:   m.now(),
+		Status:            BackupRunning,
+		PauseDuringBackup: pause,
+		CreatedAt:         m.now(),
 	}
 	if target != nil {
 		backup.TargetID = target.ID
@@ -88,6 +94,12 @@ func (m *BackupManager) runBackup(backup Backup, source Source, resource Resourc
 		return
 	}
 	m.notifyBackup(finishCtx, finished, resource)
+	if finished.Status == BackupCompleted && finished.Type == BackupScheduled &&
+		finished.ScheduleID != uuid.Nil {
+		pruneCtx, pruneCancel := context.WithTimeout(context.Background(), 2*time.Minute)
+		defer pruneCancel()
+		m.pruneSchedule(pruneCtx, finished.ScheduleID)
+	}
 }
 
 func (m *BackupManager) runRestore(restore Restore, backup Backup, resource Resource, source Source) {

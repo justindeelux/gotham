@@ -72,6 +72,10 @@ func (m *BackupManager) CreateSchedule(ctx context.Context, userID uuid.UUID, re
 	if req.PauseDuringBackup != nil {
 		pause = *req.PauseDuringBackup
 	}
+	keepLast, err := normalizeKeepLast(req.KeepLast, DefaultKeepLastScheduledBackups)
+	if err != nil {
+		return BackupSchedule{}, err
+	}
 	now := m.now()
 	schedule := BackupSchedule{
 		ID:                uuid.New(),
@@ -82,6 +86,7 @@ func (m *BackupManager) CreateSchedule(ctx context.Context, userID uuid.UUID, re
 		NextRunAt:         next,
 		MaxRunSeconds:     maxRunSeconds,
 		PauseDuringBackup: pause,
+		KeepLast:          keepLast,
 		CreatedAt:         now,
 		UpdatedAt:         now,
 	}
@@ -141,6 +146,13 @@ func (m *BackupManager) UpdateSchedule(ctx context.Context, userID, scheduleID u
 	if req.PauseDuringBackup != nil {
 		schedule.PauseDuringBackup = *req.PauseDuringBackup
 	}
+	keepLast := schedule.KeepLast
+	if req.KeepLast != nil {
+		keepLast, err = normalizeKeepLast(req.KeepLast, 0)
+		if err != nil {
+			return BackupSchedule{}, err
+		}
+	}
 	now := m.now()
 	// An edit never erases a missed slot: keep the due time as observed
 	// scheduling evidence so the protection incident is not resolved by
@@ -157,6 +169,7 @@ func (m *BackupManager) UpdateSchedule(ctx context.Context, userID, scheduleID u
 	schedule.Enabled = enabled
 	schedule.NextRunAt = next
 	schedule.MaxRunSeconds = maxRunSeconds
+	schedule.KeepLast = keepLast
 	schedule.UpdatedAt = now
 	return m.backups.UpdateBackupSchedule(ctx, schedule)
 }

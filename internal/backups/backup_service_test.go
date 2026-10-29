@@ -227,7 +227,7 @@ func TestDeleteProviderRejectsBuiltin(t *testing.T) {
 	if err != nil {
 		t.Fatalf("ListProviders: %v", err)
 	}
-	if err := fixture.manager.DeleteProvider(context.Background(), fixture.userID, providers[0].ID); !errors.Is(err, ErrBuiltinProvider) {
+	if err := fixture.manager.DeleteProvider(context.Background(), fixture.userID, providers[0].ID, false); !errors.Is(err, ErrBuiltinProvider) {
 		t.Fatalf("err = %v, want ErrBuiltinProvider", err)
 	}
 	if _, err := fixture.manager.UpdateProvider(context.Background(), fixture.userID, providers[0].ID, ProviderRequest{
@@ -456,7 +456,7 @@ func TestProviderOwnershipAndValidation(t *testing.T) {
 	if _, err := fixture.manager.UpdateProvider(context.Background(), stranger, target.ID, ProviderRequest{Name: "stolen"}); !errors.Is(err, ErrNotFound) {
 		t.Errorf("foreign update err = %v, want ErrNotFound", err)
 	}
-	if err := fixture.manager.DeleteProvider(context.Background(), stranger, target.ID); !errors.Is(err, ErrNotFound) {
+	if err := fixture.manager.DeleteProvider(context.Background(), stranger, target.ID, false); !errors.Is(err, ErrNotFound) {
 		t.Errorf("foreign delete err = %v, want ErrNotFound", err)
 	}
 }

@@ -8,12 +8,14 @@ import (
 	"os"
 	"regexp"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/google/uuid"
 
 	"github.com/justindeelux/gotham/internal/containers"
 	"github.com/justindeelux/gotham/internal/runtimewatch"
+	"github.com/justindeelux/gotham/internal/services"
 	"github.com/justindeelux/gotham/internal/store"
 )
 
@@ -25,7 +27,13 @@ func Enabled() bool {
 
 const defaultHealthPoll = 500 * time.Millisecond
 
+const defaultProvisionTimeout = 30 * time.Minute
+
 const cleanupTimeout = 30 * time.Second
+
+const statusMessageLimit = 300
+
+const interruptedProvisionMessage = "provisioning was interrupted"
 
 var namePattern = regexp.MustCompile(`^[a-zA-Z0-9][a-zA-Z0-9_.-]{0,62}$`)
 
@@ -64,16 +72,17 @@ type DatabaseService interface {
 }
 
 type Config struct {
-	Store          *store.Store
-	Repository     Repository
-	Containers     containers.ContainerService
-	Secret         string
-	Logger         *slog.Logger
-	HealthTimeout  time.Duration
-	HealthPoll     time.Duration
-	Leases         *JobLeases
-	RuntimeMonitor RuntimeMonitor
-	RuntimeHealth  *runtimewatch.Reader
+	Store            *store.Store
+	Repository       Repository
+	Containers       containers.ContainerService
+	Secret           string
+	Logger           *slog.Logger
+	HealthTimeout    time.Duration
+	HealthPoll       time.Duration
+	ProvisionTimeout time.Duration
+	Leases           *JobLeases
+	RuntimeMonitor   RuntimeMonitor
+	RuntimeHealth    *runtimewatch.Reader
 }
 
 func (c Config) repository() Repository {
@@ -87,15 +96,22 @@ func (c Config) repository() Repository {
 }
 
 type Service struct {
-	repo           Repository
-	containers     containers.ContainerService
-	secret         string
-	logger         *slog.Logger
-	healthTimeout  time.Duration
-	healthPoll     time.Duration
-	leases         *JobLeases
-	runtimeMonitor RuntimeMonitor
-	runtimeHealth  *runtimewatch.Reader
+	repo             Repository
+	containers       containers.ContainerService
+	secret           string
+	logger           *slog.Logger
+	healthTimeout    time.Duration
+	healthPoll       time.Duration
+	provisionTimeout time.Duration
+	leases           *JobLeases
+	runtimeMonitor   RuntimeMonitor
+	runtimeHealth    *runtimewatch.Reader
+
+	provisionCtx     context.Context
+	provisionCancel  context.CancelFunc
+	provisionWG      sync.WaitGroup
+	provisionMu      sync.Mutex
+	provisionCancels map[uuid.UUID]context.CancelFunc
 }
 
 var _ DatabaseService = (*Service)(nil)
@@ -109,16 +125,25 @@ func NewService(cfg Config) *Service {
 	if poll <= 0 {
 		poll = defaultHealthPoll
 	}
+	timeout := cfg.ProvisionTimeout
+	if timeout <= 0 {
+		timeout = defaultProvisionTimeout
+	}
+	provisionCtx, provisionCancel := context.WithCancel(context.Background())
 	return &Service{
-		repo:           cfg.repository(),
-		containers:     cfg.Containers,
-		secret:         cfg.Secret,
-		logger:         logger,
-		healthTimeout:  cfg.HealthTimeout,
-		healthPoll:     poll,
-		leases:         cfg.Leases,
-		runtimeMonitor: cfg.RuntimeMonitor,
-		runtimeHealth:  cfg.RuntimeHealth,
+		repo:             cfg.repository(),
+		containers:       cfg.Containers,
+		secret:           cfg.Secret,
+		logger:           logger,
+		healthTimeout:    cfg.HealthTimeout,
+		healthPoll:       poll,
+		provisionTimeout: timeout,
+		leases:           cfg.Leases,
+		runtimeMonitor:   cfg.RuntimeMonitor,
+		runtimeHealth:    cfg.RuntimeHealth,
+		provisionCtx:     provisionCtx,
+		provisionCancel:  provisionCancel,
+		provisionCancels: make(map[uuid.UUID]context.CancelFunc),
 	}
 }
 
@@ -129,7 +154,21 @@ func NewDefaultService(cfg Config) DatabaseService {
 	if !Enabled() {
 		return nil
 	}
-	return NewService(cfg)
+	svc := NewService(cfg)
+	go svc.recoverInterruptedProvisioning()
+	return svc
+}
+
+// Close cancels in-flight provisions and waits for their cleanup. The server
+// calls it during graceful shutdown so no goroutine outlives the process without
+// the row being marked terminal.
+func (s *Service) Close() error {
+	if s == nil {
+		return nil
+	}
+	s.provisionCancel()
+	s.provisionWG.Wait()
+	return nil
 }
 
 func (s *Service) Create(ctx context.Context, userID uuid.UUID, req CreateRequest) (Database, Credentials, error) {
@@ -205,49 +244,115 @@ func (s *Service) Create(ctx context.Context, userID uuid.UUID, req CreateReques
 	if err != nil {
 		return Database{}, Credentials{}, err
 	}
-	if err := s.ensureImage(ctx, stored, engine.Image(stored.Version)); err != nil {
-		s.markError(ctx, stored, err)
-		return Database{}, Credentials{}, err
-	}
 	secrets, err := s.storeCredentials(ctx, stored.ID, credentials)
 	if err != nil {
 		s.rollbackCredentials(ctx, stored)
-		s.markError(ctx, stored, err)
+		s.markError(ctx, stored, err, credentials)
 		return Database{}, Credentials{}, err
 	}
-	options, err := buildRunOptions(stored, engine, secrets, s.secret)
-	if err != nil {
-		s.rollbackCredentials(ctx, stored)
-		s.markError(ctx, stored, err)
-		return Database{}, Credentials{}, err
-	}
+	s.startProvisioning(stored, engine, credentials, secrets)
+	return stored, credentials, nil
+}
 
-	containerID, err := s.containers.Run(ctx, stored.ServerID, options)
-	if err != nil {
-		s.markError(ctx, stored, err)
-		return Database{}, Credentials{}, mapContainerError(err)
+// startProvisioning finishes image pull, container run and healthcheck on a
+// context detached from the request, so the API can answer 202 immediately.
+func (s *Service) startProvisioning(database Database, engine DatabaseEngine, credentials Credentials, secrets []Secret) {
+	ctx, cancel := context.WithTimeout(s.provisionCtx, s.provisionTimeout)
+	s.provisionMu.Lock()
+	s.provisionCancels[database.ID] = cancel
+	s.provisionMu.Unlock()
+	s.provisionWG.Add(1)
+	go func() {
+		defer s.provisionWG.Done()
+		defer cancel()
+		defer s.forgetProvision(database.ID)
+		s.provision(ctx, database, engine, credentials, secrets)
+	}()
+}
+
+func (s *Service) forgetProvision(databaseID uuid.UUID) {
+	s.provisionMu.Lock()
+	delete(s.provisionCancels, databaseID)
+	s.provisionMu.Unlock()
+}
+
+func (s *Service) cancelProvision(databaseID uuid.UUID) {
+	s.provisionMu.Lock()
+	cancel := s.provisionCancels[databaseID]
+	s.provisionMu.Unlock()
+	if cancel != nil {
+		cancel()
 	}
-	updated, err := s.repo.UpdateDatabaseContainer(ctx, stored.ID, containerID)
-	if err != nil {
-		s.markError(ctx, stored, err)
-		s.removeContainer(ctx, stored.ServerID, containerID)
-		return Database{}, Credentials{}, err
+}
+
+func (s *Service) provision(ctx context.Context, database Database, engine DatabaseEngine, credentials Credentials, secrets []Secret) {
+	if err := s.ensureImage(ctx, database, engine.Image(database.Version)); err != nil {
+		s.failProvision(ctx, database, credentials, err)
+		return
 	}
-	stored = updated
+	options, err := buildRunOptions(database, engine, secrets, s.secret)
+	if err != nil {
+		s.failProvision(ctx, database, credentials, err)
+		return
+	}
+	containerID, err := s.containers.Run(ctx, database.ServerID, options)
+	if err != nil {
+		s.failProvision(ctx, database, credentials, err)
+		return
+	}
+	stored, err := s.repo.UpdateDatabaseContainer(ctx, database.ID, containerID)
+	if err != nil {
+		s.failProvision(ctx, database, credentials, err)
+		s.removeContainer(ctx, database.ServerID, containerID)
+		return
+	}
 	if err := s.waitHealthy(ctx, stored, engine.Healthcheck()); err != nil {
-		s.markError(ctx, stored, err)
-		return Database{}, Credentials{}, err
+		s.failProvision(ctx, stored, credentials, err)
+		s.removeContainer(ctx, stored.ServerID, stored.ContainerID)
+		return
 	}
-	updated, err = s.repo.UpdateDatabaseStatus(ctx, stored.ID, StatusRunning)
-	if err != nil {
+	if _, err := s.repo.UpdateDatabaseStatus(ctx, stored.ID, StatusRunning, ""); err != nil {
 		if errors.Is(err, ErrNotFound) {
 			s.removeContainer(ctx, stored.ServerID, stored.ContainerID)
-			return Database{}, Credentials{}, err
+			return
 		}
-		s.markError(ctx, stored, err)
-		return Database{}, Credentials{}, err
+		s.failProvision(ctx, stored, credentials, err)
 	}
-	return updated, credentials, nil
+}
+
+func (s *Service) failProvision(ctx context.Context, database Database, credentials Credentials, cause error) {
+	s.rollbackCredentials(ctx, database)
+	s.markError(ctx, database, cause, credentials)
+}
+
+// recoverInterruptedProvisioning marks rows a previous control-plane process
+// left in creating, otherwise they would stay creating forever.
+func (s *Service) recoverInterruptedProvisioning() {
+	if s == nil || s.repo == nil {
+		return
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), cleanupTimeout)
+	defer cancel()
+	rows, err := s.repo.ListDatabasesByStatus(ctx, StatusCreating)
+	if err != nil {
+		s.logger.Warn("databases: startup recovery could not list creating databases", "error", err)
+		return
+	}
+	for _, row := range rows {
+		s.provisionMu.Lock()
+		_, owned := s.provisionCancels[row.ID]
+		s.provisionMu.Unlock()
+		if owned {
+			continue
+		}
+		if _, err := s.repo.UpdateDatabaseStatus(ctx, row.ID, StatusError, interruptedProvisionMessage); err != nil {
+			s.logger.Warn("databases: could not mark an interrupted provision as errored",
+				"database_id", row.ID.String(), "error", err)
+			continue
+		}
+		s.logger.Warn("databases: marked an interrupted provision as errored",
+			"database_id", row.ID.String())
+	}
 }
 
 func (s *Service) List(ctx context.Context, userID uuid.UUID, filter DatabaseFilter) ([]Database, error) {
@@ -445,6 +550,8 @@ func (s *Service) Delete(ctx context.Context, userID, databaseID uuid.UUID) erro
 	if err != nil {
 		return err
 	}
+	// A provision still in flight must not run a container after the row is gone.
+	s.cancelProvision(database.ID)
 	removed := ""
 	if database.ContainerID != "" {
 		if err := s.containers.Stop(ctx, database.ServerID, database.ContainerID); err != nil {
@@ -491,7 +598,7 @@ func (s *Service) Start(ctx context.Context, userID, databaseID uuid.UUID) (Data
 	}
 	s.setDesiredState(ctx, database.ID, "running", 0)
 	if err := s.waitHealthy(ctx, database, engine.Healthcheck()); err != nil {
-		s.markError(ctx, database, err)
+		s.markError(ctx, database, err, Credentials{})
 		return Database{}, err
 	}
 	updated, statusErr := s.setStatus(ctx, database, StatusRunning)
@@ -529,7 +636,7 @@ func (s *Service) Restart(ctx context.Context, userID, databaseID uuid.UUID) (Da
 	}
 	s.setDesiredState(ctx, database.ID, "running", 0)
 	if err := s.waitHealthy(ctx, database, engine.Healthcheck()); err != nil {
-		s.markError(ctx, database, err)
+		s.markError(ctx, database, err, Credentials{})
 		return Database{}, err
 	}
 	updated, statusErr := s.setStatus(ctx, database, StatusRunning)
@@ -653,23 +760,50 @@ func (s *Service) containerReady(ctx context.Context, database Database) (bool, 
 }
 
 func (s *Service) setStatus(ctx context.Context, database Database, status Status) (Database, error) {
-	return s.repo.UpdateDatabaseStatus(ctx, database.ID, status)
+	return s.repo.UpdateDatabaseStatus(ctx, database.ID, status, "")
 }
 
 func cleanupContext(ctx context.Context) (context.Context, context.CancelFunc) {
 	return context.WithTimeout(context.WithoutCancel(ctx), cleanupTimeout)
 }
 
-func (s *Service) markError(ctx context.Context, database Database, cause error) {
+func (s *Service) markError(ctx context.Context, database Database, cause error, credentials Credentials) {
 	ctx, cancel := cleanupContext(ctx)
 	defer cancel()
-	if _, err := s.repo.UpdateDatabaseStatus(ctx, database.ID, StatusError); err != nil {
+	message := statusMessageFor(cause, credentials)
+	if _, err := s.repo.UpdateDatabaseStatus(ctx, database.ID, StatusError, message); err != nil {
 		s.logger.Error("databases: could not mark the database as errored",
 			"database_id", database.ID.String(), "error", err)
 		return
 	}
 	s.logger.Warn("databases: operation failed",
 		"database_id", database.ID.String(), "status", StatusError, "error", cause)
+}
+
+// statusMessageFor stores a short reason for the failed create. It redacts the
+// generated credentials and flattens container output to one bounded line.
+func statusMessageFor(cause error, credentials Credentials) string {
+	if cause == nil {
+		return ""
+	}
+	if errors.Is(cause, context.Canceled) {
+		return interruptedProvisionMessage
+	}
+	message := services.Redact(cause.Error(), map[string]string{
+		secretKeyUsername:     credentials.Username,
+		secretKeyPassword:     credentials.Password,
+		secretKeyDatabase:     credentials.Database,
+		secretKeyRootPassword: credentials.RootPassword,
+	})
+	message = strings.Join(strings.Fields(message), " ")
+	if message == "" {
+		message = "provisioning failed"
+	}
+	runes := []rune(message)
+	if len(runes) > statusMessageLimit {
+		message = string(runes[:statusMessageLimit]) + "…"
+	}
+	return message
 }
 
 func (s *Service) ensureImage(ctx context.Context, database Database, image string) error {

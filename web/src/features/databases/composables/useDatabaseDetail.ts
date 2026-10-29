@@ -101,6 +101,16 @@ export function useDatabaseDetail() {
     () => database.value?.status === "running" || database.value?.status === "stopped",
   );
 
+  const isCreating = computed<boolean>(
+    () => database.value?.status === "creating",
+  );
+
+  const provisioningError = computed<string>(() =>
+    database.value?.status === "error"
+      ? (database.value.status_message ?? "")
+      : "",
+  );
+
   const credentials = computed(() =>
     databasesStore.credentialsOf(dbId.value),
   );
@@ -357,9 +367,21 @@ export function useDatabaseDetail() {
     void fetchAll();
   });
 
+  // Poll only while provisioning; the status leaves creating exactly once.
+  watch(
+    isCreating,
+    (creating) => {
+      if (creating) {
+        databasesStore.pollDatabases();
+      } else {
+        databasesStore.stopPolling();
+      }
+    },
+    { immediate: true },
+  );
+
   onMounted(() => {
     void fetchAll();
-    databasesStore.pollDatabases();
   });
 
   onUnmounted(() => {
@@ -380,6 +402,8 @@ export function useDatabaseDetail() {
     canStart,
     canStop,
     canRestart,
+    isCreating,
+    provisioningError,
     credentials,
     revealed,
     renameOpen,

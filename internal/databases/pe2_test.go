@@ -34,12 +34,9 @@ func TestUpdateMovesEnvironment(t *testing.T) {
 	owner := uuid.New()
 	envA, _ := repo.seedEnvironment()
 	envB, _ := repo.seedEnvironment()
-	created, _, err := svc.Create(context.Background(), owner, CreateRequest{
+	created, _ := createDatabaseAndWait(t, svc, owner, CreateRequest{
 		Name: "orders", Engine: EnginePostgres, EnvironmentID: envA, ServerID: repo.seedServer(),
 	})
-	if err != nil {
-		t.Fatalf("Create: %v", err)
-	}
 
 	moved, err := svc.Update(context.Background(), owner, created.ID,
 		UpdateRequest{Name: ptr("orders"), EnvironmentID: &envB})
@@ -50,11 +47,9 @@ func TestUpdateMovesEnvironment(t *testing.T) {
 		t.Fatalf("environment = %s, want %s", moved.EnvironmentID, envB)
 	}
 
-	if _, _, err := svc.Create(context.Background(), owner, CreateRequest{
+	createDatabaseAndWait(t, svc, owner, CreateRequest{
 		Name: "taken", Engine: EnginePostgres, EnvironmentID: envA, ServerID: repo.seedServer(),
-	}); err != nil {
-		t.Fatalf("Create(taken): %v", err)
-	}
+	})
 	if _, err := svc.Update(context.Background(), owner, moved.ID,
 		UpdateRequest{Name: ptr("taken"), EnvironmentID: &envA}); !errors.Is(err, ErrNameConflict) {
 		t.Fatalf("colliding move err = %v, want ErrNameConflict", err)
@@ -97,12 +92,9 @@ func TestUpdateRefusesServerChangeOnceCreated(t *testing.T) {
 	svc := newTestService(repo, &fakeContainers{runID: "container-1"})
 	owner := uuid.New()
 	envID, _ := repo.seedEnvironment()
-	created, _, err := svc.Create(context.Background(), owner, CreateRequest{
+	created, _ := createDatabaseAndWait(t, svc, owner, CreateRequest{
 		Name: "orders", Engine: EnginePostgres, EnvironmentID: envID, ServerID: repo.seedServer(),
 	})
-	if err != nil {
-		t.Fatalf("Create: %v", err)
-	}
 	if created.ContainerID == "" {
 		t.Fatal("provisioned database has no container")
 	}
@@ -190,11 +182,9 @@ func TestListFilters(t *testing.T) {
 		{"a", envA},
 		{"b", envB},
 	} {
-		if _, _, err := svc.Create(context.Background(), owner, CreateRequest{
+		createDatabaseAndWait(t, svc, owner, CreateRequest{
 			Name: tc.name, Engine: EnginePostgres, EnvironmentID: tc.env, ServerID: repo.seedServer(),
-		}); err != nil {
-			t.Fatalf("Create(%s): %v", tc.name, err)
-		}
+		})
 	}
 
 	byEnv, err := svc.List(context.Background(), owner, DatabaseFilter{EnvironmentID: envA})

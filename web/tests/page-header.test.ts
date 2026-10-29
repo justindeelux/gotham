@@ -259,6 +259,7 @@ describe("DatabaseDetailHeader", () => {
       canStart: computed(() => status === "stopped" || status === "error"),
       canStop: computed(() => status === "running"),
       canRestart: computed(() => status === "running" || status === "stopped"),
+      isCreating: computed(() => status === "creating"),
       databasesStore: { acting },
       handleLifecycle: vi.fn(),
       openRename: vi.fn(),
@@ -278,6 +279,13 @@ describe("DatabaseDetailHeader", () => {
     expect(wrapper.find("h1").text()).toBe(longName);
     expect(wrapper.find(".page-head__meta").text()).toBe("db-1");
     expect(wrapper.find(".page-desc").exists()).toBe(false);
+  });
+
+  it("disables lifecycle actions while creating", () => {
+    const wrapper = mountHeader("creating");
+    expect(buttonByText(wrapper, "Start").attributes("disabled")).not.toBeUndefined();
+    expect(buttonByText(wrapper, "Stop").attributes("disabled")).not.toBeUndefined();
+    expect(buttonByText(wrapper, "Restart").attributes("disabled")).not.toBeUndefined();
   });
 
   it("keeps the running lifecycle states", () => {

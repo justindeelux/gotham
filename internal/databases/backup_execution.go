@@ -212,14 +212,14 @@ func (m *BackupManager) restore(ctx context.Context, database Database, backup B
 	}
 
 	if err := m.applyRestore(ctx, database, backup, artifact); err != nil {
-		m.markError(context.Background(), database, err)
+		m.markError(context.Background(), database, err, Credentials{})
 		return err
 	}
 	if wasRunning {
 		if resumeErr := m.resumeDatabase(context.Background(), database); resumeErr != nil {
 			m.logger.Error("databases: could not restart the database after the restore",
 				"database_id", database.ID.String(), "error", resumeErr)
-			m.markError(context.Background(), database, resumeErr)
+			m.markError(context.Background(), database, resumeErr, Credentials{})
 		}
 	}
 	return nil

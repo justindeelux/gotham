@@ -31,6 +31,7 @@ type databaseResponse struct {
 	Engine          string               `json:"engine"`
 	Version         string               `json:"version,omitempty"`
 	Status          Status               `json:"status"`
+	StatusMessage   string               `json:"status_message,omitempty"`
 	ServerID        string               `json:"server_id"`
 	ServerName      string               `json:"server_name"`
 	ContainerID     string               `json:"container_id,omitempty"`
@@ -134,7 +135,7 @@ func (h *handler) create(w http.ResponseWriter, r *http.Request) {
 		h.writeServiceError(w, err)
 		return
 	}
-	writeJSON(w, http.StatusCreated, createDatabaseEnvelope{
+	writeJSON(w, http.StatusAccepted, createDatabaseEnvelope{
 		Database:    newDatabaseResponse(database),
 		Credentials: credentials,
 	})
@@ -355,6 +356,7 @@ func newDatabaseResponse(database Database) databaseResponse {
 		Engine:          database.Engine,
 		Version:         database.Version,
 		Status:          database.Status,
+		StatusMessage:   database.StatusMessage,
 		ServerID:        database.ServerID.String(),
 		ServerName:      database.ServerName,
 		ContainerID:     database.ContainerID,

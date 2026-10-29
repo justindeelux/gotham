@@ -149,9 +149,6 @@ provide(wizardFormKey, wizard.form);
         :image-preview="wizard.imagePreview.value"
         :server-label="wizard.serverLabel.value"
         :engine-port="wizard.selectedEngine.value.port"
-        :created="wizard.created.value"
-        :credential-rows="wizard.created.value === null ? [] : wizard.credentialRows(wizard.created.value.credentials)"
-        @copy="(value, label) => void wizard.copyText(value, label)"
       />
 
       <NSpace justify="end" :size="8">
@@ -159,16 +156,12 @@ provide(wizardFormKey, wizard.form);
           {{ t("databases.wizard.back") }}
         </NButton>
         <NButton
-          v-if="wizard.created.value === null"
           type="primary"
           :disabled="!wizard.canContinue.value"
           :loading="wizard.submitting.value"
           @click="wizard.goNext"
         >
           {{ wizard.step.value === wizardStepNames.length - 1 ? t("databases.wizard.create") : t("databases.wizard.continue") }}
-        </NButton>
-        <NButton v-else type="primary" @click="wizard.handleClose(false)">
-          {{ t("databases.wizard.done") }}
         </NButton>
       </NSpace>
     </NSpace>

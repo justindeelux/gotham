@@ -27,6 +27,7 @@ type Database struct {
 	Engine          string
 	Version         string
 	Status          Status
+	StatusMessage   string
 	ContainerID     string
 	PublicPort      int32
 	StoragePath     string

@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { NAvatar, NButton, NPopconfirm } from "naive-ui";
+import { NAvatar, NButton, NPopconfirm, NTooltip } from "naive-ui";
 import { inject } from "vue";
 
 import DatabaseStatusTag from "@/features/databases/components/DatabaseStatusTag.vue";
@@ -32,27 +32,48 @@ const detail = inject(databaseDetailKey)!;
     </template>
     <template #meta>{{ detail.dbId.value }}</template>
     <template #actions>
-      <NButton
-        :disabled="!detail.canStart.value"
-        :loading="detail.databasesStore.acting"
-        @click="() => void detail.handleLifecycle('start')"
-      >
-        {{ t("databases.detail.actions.start") }}
-      </NButton>
-      <NButton
-        :disabled="!detail.canStop.value"
-        :loading="detail.databasesStore.acting"
-        @click="() => void detail.handleLifecycle('stop')"
-      >
-        {{ t("databases.detail.actions.stop") }}
-      </NButton>
-      <NButton
-        :disabled="!detail.canRestart.value"
-        :loading="detail.databasesStore.acting"
-        @click="() => void detail.handleLifecycle('restart')"
-      >
-        {{ t("databases.detail.actions.restart") }}
-      </NButton>
+      <NTooltip :disabled="!detail.isCreating.value">
+        <template #trigger>
+          <span>
+            <NButton
+              :disabled="!detail.canStart.value"
+              :loading="detail.databasesStore.acting"
+              @click="() => void detail.handleLifecycle('start')"
+            >
+              {{ t("databases.detail.actions.start") }}
+            </NButton>
+          </span>
+        </template>
+        {{ t("databases.detail.creating.actionsDisabled") }}
+      </NTooltip>
+      <NTooltip :disabled="!detail.isCreating.value">
+        <template #trigger>
+          <span>
+            <NButton
+              :disabled="!detail.canStop.value"
+              :loading="detail.databasesStore.acting"
+              @click="() => void detail.handleLifecycle('stop')"
+            >
+              {{ t("databases.detail.actions.stop") }}
+            </NButton>
+          </span>
+        </template>
+        {{ t("databases.detail.creating.actionsDisabled") }}
+      </NTooltip>
+      <NTooltip :disabled="!detail.isCreating.value">
+        <template #trigger>
+          <span>
+            <NButton
+              :disabled="!detail.canRestart.value"
+              :loading="detail.databasesStore.acting"
+              @click="() => void detail.handleLifecycle('restart')"
+            >
+              {{ t("databases.detail.actions.restart") }}
+            </NButton>
+          </span>
+        </template>
+        {{ t("databases.detail.creating.actionsDisabled") }}
+      </NTooltip>
       <NButton :disabled="!detail.database.value" @click="detail.openRename">
         {{ t("databases.detail.actions.rename") }}
       </NButton>

@@ -42,6 +42,13 @@ const en = {
       settings: "Settings",
     },
     noSelection: "No database selected.",
+    creating: {
+      banner:
+        "Setting up the database, this can take a few minutes while the image downloads.",
+      actionsDisabled: "Unavailable while the database is being set up.",
+      backupsDisabled: "Backups are unavailable while the database is being set up.",
+      failedTitle: "Provisioning failed",
+    },
     serverPinnedReason:
       "A database cannot change server once created; only moving it to another environment is possible.",
     actions: {
@@ -290,14 +297,10 @@ const en = {
       publicPort: "Public port · {mapping}",
       publicPortOff: "off · internal network only",
       volume: "Volume · kept 7 days after deletion",
-      successTitle: "Database created",
-      successBody:
-        "Container provisioning started on the node. Save these credentials — they stay available on the database detail page.",
     },
     back: "Back",
     continue: "Continue",
     create: "Create database",
-    done: "Done",
     scopeError: "Select a project and environment first.",
     created: "Database “{name}” created",
   },

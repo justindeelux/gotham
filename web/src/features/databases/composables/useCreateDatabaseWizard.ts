@@ -1,4 +1,3 @@
-import { useCopyText } from "@/shared/composables/useCopyText";
 import { useMessage } from "naive-ui";
 import { computed, reactive, ref, toValue, watch } from "vue";
 import type { InjectionKey, Ref } from "vue";
@@ -13,7 +12,6 @@ import {
 } from "@/features/databases/api/databases";
 import type {
   CreatedDatabase,
-  DatabaseCredentials,
 } from "@/features/databases/api/databases";
 import {
   effectiveVersionFor,
@@ -63,11 +61,9 @@ export function useCreateDatabaseWizard(options: WizardOptions) {
   const authStore = useAuthStore();
   const serversStore = useServersStore();
   const message = useMessage();
-  const { copyText } = useCopyText();
 
   const step = ref(0);
   const submitting = ref(false);
-  const created = ref<CreatedDatabase | null>(null);
 
   type SubmitIssue = { kind: "scope" } | { kind: "failure"; error: unknown };
   const submitIssue = ref<SubmitIssue | null>(null);
@@ -148,41 +144,10 @@ export function useCreateDatabaseWizard(options: WizardOptions) {
     wizardStepKeys.map((key) => String(t(key))),
   );
 
-  function credentialRows(
-    credentials: DatabaseCredentials,
-  ): Array<{ label: string; value: string; secret: boolean }> {
-    const rows: Array<{ label: string; value: string; secret: boolean }> = [
-      {
-        label: String(t("databases.detail.credentials.username")),
-        value: credentials.username,
-        secret: false,
-      },
-      {
-        label: String(t("databases.detail.credentials.password")),
-        value: credentials.password,
-        secret: true,
-      },
-      {
-        label: String(t("databases.detail.credentials.database")),
-        value: credentials.database,
-        secret: false,
-      },
-    ];
-    if (credentials.root_password) {
-      rows.push({
-        label: String(t("databases.detail.credentials.rootPassword")),
-        value: credentials.root_password,
-        secret: true,
-      });
-    }
-    return rows;
-  }
-
   function resetWizard(): void {
     step.value = 0;
     submitting.value = false;
     submitIssue.value = null;
-    created.value = null;
     seedEngine();
     seedScope();
     form.serverId = "";
@@ -225,7 +190,7 @@ export function useCreateDatabaseWizard(options: WizardOptions) {
       return;
     }
     try {
-      created.value = await databasesStore.provision({
+      const created = await databasesStore.provision({
         name: form.name.trim(),
         engine: form.engine,
         version: form.version || undefined,
@@ -235,10 +200,10 @@ export function useCreateDatabaseWizard(options: WizardOptions) {
       });
       message.success(
         t("databases.wizard.created", {
-          name: created.value.database.name,
+          name: created.database.name,
         }),
       );
-      options.onCreated(created.value);
+      options.onCreated(created);
     } catch (error) {
       submitIssue.value = { kind: "failure", error };
     } finally {
@@ -284,7 +249,6 @@ export function useCreateDatabaseWizard(options: WizardOptions) {
     stepNames,
     submitting,
     errorMessage,
-    created,
     form,
     selectedEngine,
     engineLocked,
@@ -296,8 +260,6 @@ export function useCreateDatabaseWizard(options: WizardOptions) {
     engineValid,
     configureValid,
     canContinue,
-    copyText,
-    credentialRows,
     resetWizard,
     goNext,
     goBack,

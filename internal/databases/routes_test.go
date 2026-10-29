@@ -135,6 +135,8 @@ func sampleRow(userID uuid.UUID) Database {
 func TestCreateRouteReturnsRowAndCredentials(t *testing.T) {
 	userID := uuid.New()
 	row := sampleRow(userID)
+	row.Status = StatusCreating
+	row.ContainerID = ""
 	svc := &fakeDatabaseService{
 		create: row,
 		creds:  Credentials{Username: "orders", Password: "pw", Database: "orders"},
@@ -147,14 +149,14 @@ func TestCreateRouteReturnsRowAndCredentials(t *testing.T) {
 	rec := httptest.NewRecorder()
 	srv.ServeHTTP(rec, httptest.NewRequest(http.MethodPost, databasePath(uuid.Nil, ""), strings.NewReader(body)))
 
-	if rec.Code != http.StatusCreated {
-		t.Fatalf("status = %d, want 201 (body %s)", rec.Code, rec.Body.String())
+	if rec.Code != http.StatusAccepted {
+		t.Fatalf("status = %d, want 202 (body %s)", rec.Code, rec.Body.String())
 	}
 	var envelope createDatabaseEnvelope
 	if err := json.Unmarshal(rec.Body.Bytes(), &envelope); err != nil {
 		t.Fatalf("decode: %v", err)
 	}
-	if envelope.Database.ID != row.ID.String() || envelope.Database.Status != StatusRunning {
+	if envelope.Database.ID != row.ID.String() || envelope.Database.Status != StatusCreating {
 		t.Errorf("database = %+v", envelope.Database)
 	}
 	if envelope.Database.Volume != row.StoragePath {
@@ -218,8 +220,8 @@ func TestCreateRouteRejections(t *testing.T) {
 	rec := httptest.NewRecorder()
 	srv.ServeHTTP(rec, httptest.NewRequest(http.MethodPost, databasePath(uuid.Nil, ""),
 		strings.NewReader(`{"name":"db","engine":"postgres","environment_id":"`+uuid.NewString()+`","server_id":"`+serverID.String()+`"}`)))
-	if rec.Code != http.StatusCreated {
-		t.Fatalf("status = %d, want 201 (body %s)", rec.Code, rec.Body.String())
+	if rec.Code != http.StatusAccepted {
+		t.Fatalf("status = %d, want 202 (body %s)", rec.Code, rec.Body.String())
 	}
 	if svc.seenRequest.ServerID != serverID {
 		t.Errorf("server_id = %s, want %s", svc.seenRequest.ServerID, serverID)
@@ -258,7 +260,10 @@ func TestListGetAndCredentialsRoutes(t *testing.T) {
 	})
 
 	t.Run("get", func(t *testing.T) {
-		svc := &fakeDatabaseService{get: sampleRow(userID)}
+		row := sampleRow(userID)
+		row.Status = StatusError
+		row.StatusMessage = "agent unavailable"
+		svc := &fakeDatabaseService{get: row}
 		srv := newRouteServer(svc, alwaysUser(userID))
 		rec := httptest.NewRecorder()
 		srv.ServeHTTP(rec, httptest.NewRequest(http.MethodGet, databasePath(databaseID, ""), nil))
@@ -272,6 +277,9 @@ func TestListGetAndCredentialsRoutes(t *testing.T) {
 		}
 		if envelope.Database.Engine != EnginePostgres || envelope.Database.PublicPort != 5433 {
 			t.Errorf("database = %+v", envelope.Database)
+		}
+		if envelope.Database.StatusMessage != "agent unavailable" {
+			t.Errorf("status_message = %q", envelope.Database.StatusMessage)
 		}
 		if svc.seenUser != userID || svc.seenDatabase != databaseID {
 			t.Errorf("seen = %s/%s, want %s/%s", svc.seenUser, svc.seenDatabase, userID, databaseID)

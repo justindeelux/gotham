@@ -5,12 +5,14 @@ import {
   NSpin,
   NTabPane,
   NTabs,
+  NTooltip,
 } from "naive-ui";
 import { provide, ref, watch } from "vue";
 import { useRoute } from "vue-router";
 
 import DatabaseBackupsTab from "@/features/databases/components/DatabaseBackupsTab.vue";
 import DatabaseDetailHeader from "@/features/databases/components/DatabaseDetailHeader.vue";
+import DatabaseProvisioningBanner from "@/features/databases/components/DatabaseProvisioningBanner.vue";
 import DatabaseOverviewPanel from "@/features/databases/components/DatabaseOverviewPanel.vue";
 import ResourceHistoryPanel from "@/features/monitoring/components/ResourceHistoryPanel.vue";
 import RenameDatabaseDialog from "@/features/databases/components/RenameDatabaseDialog.vue";
@@ -82,6 +84,13 @@ watch(detail.dbId, () => {
 
       <DatabaseDetailHeader />
 
+      <DatabaseProvisioningBanner
+        v-if="detail.database.value"
+        :status="detail.database.value.status"
+        :status-message="detail.database.value.status_message"
+        style="margin-top: 12px"
+      />
+
       <NTabs v-model:value="activeTab" type="line" animated>
         <NTabPane name="overview" :tab="t('databases.detail.tabs.overview')">
           <DatabaseOverviewPanel />
@@ -98,7 +107,15 @@ watch(detail.dbId, () => {
           />
         </NTabPane>
 
-        <NTabPane name="backups" :tab="t('databases.detail.tabs.backups')">
+        <NTabPane name="backups" :disabled="detail.isCreating.value">
+          <template #tab>
+            <NTooltip :disabled="!detail.isCreating.value">
+              <template #trigger>
+                <span>{{ t("databases.detail.tabs.backups") }}</span>
+              </template>
+              {{ t("databases.detail.creating.backupsDisabled") }}
+            </NTooltip>
+          </template>
           <DatabaseBackupsTab />
         </NTabPane>
 

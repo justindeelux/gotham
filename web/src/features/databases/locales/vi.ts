@@ -45,6 +45,13 @@ const vi: typeof en = {
       settings: "Cài đặt",
     },
     noSelection: "Chưa chọn database.",
+    creating: {
+      banner:
+        "Đang thiết lập database, việc này có thể mất vài phút trong lúc tải image.",
+      actionsDisabled: "Không dùng được trong lúc database đang được thiết lập.",
+      backupsDisabled: "Backup không dùng được trong lúc database đang được thiết lập.",
+      failedTitle: "Cấp phát thất bại",
+    },
     serverPinnedReason:
       "Database không thể đổi server sau khi tạo; chỉ có thể chuyển sang environment khác.",
     actions: {
@@ -293,14 +300,10 @@ const vi: typeof en = {
       publicPort: "Cổng public · {mapping}",
       publicPortOff: "tắt · chỉ dùng mạng nội bộ",
       volume: "Volume · giữ 7 ngày sau khi xóa",
-      successTitle: "Đã tạo database",
-      successBody:
-        "Đã bắt đầu cấp phát container trên node. Hãy lưu thông tin đăng nhập này — chúng vẫn có trên trang chi tiết database.",
     },
     back: "Quay lại",
     continue: "Tiếp tục",
     create: "Tạo database",
-    done: "Xong",
     scopeError: "Chọn project và environment trước.",
     created: "Database “{name}” đã được tạo",
   },

@@ -101,9 +101,16 @@ RETURNING *;
 -- name: UpdateDatabaseStatus :one
 UPDATE databases
 SET status = $2,
+    status_message = $3,
     updated_at = now()
 WHERE id = $1 AND deleted_at IS NULL
 RETURNING *;
+
+-- name: ListDatabasesByStatus :many
+-- Startup recovery: rows left creating by a previous control-plane process.
+SELECT * FROM databases
+WHERE status = $1 AND deleted_at IS NULL
+ORDER BY created_at ASC, id ASC;
 
 -- name: PublicPortInUse :one
 SELECT EXISTS (

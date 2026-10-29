@@ -55,6 +55,9 @@ const vi: typeof en = {
     },
     deleteConfirm:
       "Xóa database này? Container sẽ bị gỡ khỏi node, volume {volume} được giữ 7 ngày trước khi xóa vĩnh viễn.",
+    deleteTitle: "Xóa database",
+    deleteHint:
+      "Xóa sẽ gỡ container khỏi node và xóa thông tin đăng nhập khỏi control plane. Volume được giữ 7 ngày.",
     overview: {
       details: "Chi tiết",
       engine: "Engine",

@@ -26,6 +26,7 @@ export interface EnvRow {
 export interface ServiceDetailContext {
   serviceId: ComputedRef<string>;
   service: ComputedRef<Service | null>;
+  loading: Ref<boolean>;
   serverName: ComputedRef<string>;
   envReference: string;
   error: Ref<string | null>;
@@ -92,6 +93,7 @@ export function useServiceDetail(): ServiceDetailContext {
 
   const serviceId = computed<string>(() => String(route.params.id ?? ""));
 
+  const loading = ref(false);
   const loadFailure: Ref<unknown> = ref(null);
   const notFound = ref(false);
 
@@ -189,6 +191,7 @@ export function useServiceDetail(): ServiceDetailContext {
   async function load(): Promise<void> {
     const token = ++loadToken;
     const id = serviceId.value;
+    loading.value = true;
     loadedServiceId.value = "";
     loadFailure.value = null;
     notFound.value = false;
@@ -225,16 +228,19 @@ export function useServiceDetail(): ServiceDetailContext {
       composeYaml.value = fetched.compose_yaml ?? "";
       envDraft.value = envRows(fetched.env ?? {});
       loadedServiceId.value = id;
+      await servicesStore.fetchDeploys(id).catch(() => undefined);
+      void serversStore.fetchServers().catch(() => undefined);
     } catch (err) {
       if (token !== loadToken) {
         return;
       }
       loadFailure.value = err;
       notFound.value = isApiError(err) && err.status === 404;
-      return;
+    } finally {
+      if (token === loadToken) {
+        loading.value = false;
+      }
     }
-    await servicesStore.fetchDeploys(id).catch(() => undefined);
-    void serversStore.fetchServers().catch(() => undefined);
   }
 
   async function retryHistory(): Promise<void> {
@@ -473,6 +479,7 @@ export function useServiceDetail(): ServiceDetailContext {
   return {
     serviceId,
     service,
+    loading,
     serverName,
     envReference,
     error,

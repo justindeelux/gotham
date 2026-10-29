@@ -63,9 +63,6 @@ const vi: typeof en = {
       "Dòng dịch vụ đã tồn tại; chưa có gì chạy. Triển khai sẽ dựng lại tài liệu trên node và ghi một dòng triển khai.",
     open: "Mở chi tiết dịch vụ",
     deployed: "đã triển khai",
-    stubTitle: "Dòng thời gian bước triển khai — chờ backend",
-    stubBody:
-      "API ghi một dòng cho mỗi lần triển khai (trạng thái, lỗi, thời gian) và không có tiến trình từng bước nên không hiển thị dòng thời gian tại đây. Trang chi tiết liệt kê lịch sử.",
   },
   toast: {
     created: "Đã tạo dịch vụ {name}.",

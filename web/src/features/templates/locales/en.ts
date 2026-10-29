@@ -61,9 +61,6 @@ const en = {
       "The service row exists; nothing runs yet. Deploy renders the document again on the node and records one deploy row.",
     open: "Open service detail",
     deployed: "deployed",
-    stubTitle: "Deploy step timeline — backend pending",
-    stubBody:
-      "The API records one row per deploy (state, error, timestamps) and exposes no per-step progress, so no step timeline is shown here. The detail page lists the history instead.",
   },
   toast: {
     created: "Service {name} created.",

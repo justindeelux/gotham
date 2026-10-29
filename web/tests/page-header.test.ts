@@ -285,7 +285,6 @@ describe("DatabaseDetailHeader", () => {
     expect(buttonByText(wrapper, "Start").attributes("disabled")).not.toBeUndefined();
     expect(buttonByText(wrapper, "Stop").attributes("disabled")).toBeUndefined();
     expect(buttonByText(wrapper, "Restart").attributes("disabled")).toBeUndefined();
-    expect(buttonByText(wrapper, "Rename").attributes("disabled")).toBeUndefined();
   });
 
   it("keeps the stopped lifecycle states", () => {
@@ -322,19 +321,21 @@ describe("ServiceDetailHeader", () => {
     const wrapper = await mountHeader();
     expect(wrapper.findAll("h1")).toHaveLength(1);
     expect(wrapper.find("h1").text()).toBe(longName);
+    expect(wrapper.find(".page-head__meta").text()).toBe("svc-1");
     expect(wrapper.find(".page-desc").exists()).toBe(false);
   });
 
   it("keeps the lifecycle states while idle", async () => {
     const wrapper = await mountHeader();
-    for (const label of ["Deploy", "Restart", "Stop", "Delete"]) {
+    for (const label of ["Deploy", "Restart", "Stop"]) {
       expect(buttonByText(wrapper, label).attributes("disabled")).toBeUndefined();
     }
+    expect(wrapper.findAll("button").some((node) => node.text().trim() === "Delete")).toBe(false);
   });
 
   it("disables lifecycle controls while an action runs", async () => {
     const wrapper = await mountHeader("deploy");
-    for (const label of ["Deploy", "Restart", "Stop", "Delete"]) {
+    for (const label of ["Deploy", "Restart", "Stop"]) {
       expect(buttonByText(wrapper, label).attributes("disabled")).not.toBeUndefined();
     }
   });

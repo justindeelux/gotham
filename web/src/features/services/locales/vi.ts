@@ -1,6 +1,15 @@
 import type en from "./en";
 
 const vi: typeof en = {
+  tabs: {
+    overview: "Tổng quan",
+    deployments: "Triển khai",
+    compose: "Compose",
+    env: "Môi trường",
+    containers: "Container",
+    logs: "Nhật ký",
+    settings: "Cài đặt",
+  },
   validation: {
     nameRequired: "Nhập tên dịch vụ.",
     nodeRequired: "Chọn một node.",
@@ -116,7 +125,6 @@ const vi: typeof en = {
       "API không cung cấp nhật ký từng lần triển khai hay dòng thời gian từng bước; nhật ký truyền trực tiếp từ dự án đang chạy.",
   },
   header: {
-    backFallback: "Dự án",
     deploy: "Triển khai",
     restart: "Khởi động lại",
     stop: "Dừng",
@@ -134,9 +142,6 @@ const vi: typeof en = {
     domains: "Tên miền",
     unknownNode: "node không rõ",
     noDomains: "Chưa có tên miền được định tuyến. Một compose service được định tuyến bằng nhãn {label}.",
-    stubTitle: "Dòng thời gian bước triển khai — chờ backend",
-    stubBody:
-      "API ghi một dòng cho mỗi lần triển khai (trạng thái, lỗi, thời gian) và không có tiến trình từng bước, nên lịch sử bên dưới là toàn bộ. Trạng thái TLS/chứng chỉ dịch vụ ngoài phạm vi trang này.",
   },
   logs: {
     title: "Nhật ký dịch vụ",
@@ -168,8 +173,9 @@ const vi: typeof en = {
   detail: {
     notFound: "Dịch vụ này không tồn tại (hoặc thuộc tài khoản khác).",
     backToProjects: "Về dự án",
-    logsTitle: "Nhật ký",
-    logsNote: "docker compose logs -f qua node agent",
+    deleteTitle: "Xóa dịch vụ",
+    deleteHint:
+      "Xóa sẽ gỡ dự án compose trên node và xóa cấu hình dịch vụ. Các volume có tên vẫn giữ trên node.",
     serverPinnedReason:
       "Dịch vụ này đã triển khai nên node bị ghim, không thể đổi. Vẫn có thể chuyển sang môi trường khác.",
   },

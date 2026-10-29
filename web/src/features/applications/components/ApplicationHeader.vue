@@ -2,17 +2,15 @@
 import { NButton, NIcon, NTag, NTooltip } from "naive-ui";
 import { useI18n } from "vue-i18n";
 
-import { BrandIcon } from "@/features/add-resource";
 import type { BrandMark } from "@/features/add-resource";
 import type { Deployment } from "@/features/applications/api/applications";
 import DeploymentStatusTag from "@/features/applications/components/DeploymentStatusTag.vue";
+import ResourceHeader from "@/features/projects/components/ResourceHeader.vue";
 import GothamIcon from "@/shared/ui/GothamIcon.vue";
-import PageHeader from "@/shared/ui/PageHeader.vue";
 
 interface Props {
   displayName: string;
   appId: string;
-  shortId: string;
   brand: BrandMark;
   latest: Deployment | null;
   containerStopped: boolean;
@@ -36,11 +34,11 @@ const { t } = useI18n();
 </script>
 
 <template>
-  <PageHeader>
-    <template #identity>
-      <BrandIcon v-bind="props.brand" size="lg" />
-    </template>
-    <template #title>{{ props.displayName || t("applications.header.fallbackName") }}</template>
+  <ResourceHeader
+    :title="props.displayName || t('applications.header.fallbackName')"
+    :resource-id="props.appId"
+    :brand="props.brand"
+  >
     <template #badges>
       <DeploymentStatusTag
         v-if="props.latest && !props.containerStopped"
@@ -51,7 +49,6 @@ const { t } = useI18n();
         {{ t("applications.header.stopped") }}
       </NTag>
     </template>
-    <template #meta>{{ props.appId }}</template>
     <template #actions>
       <NButton
         type="primary"
@@ -111,5 +108,5 @@ const { t } = useI18n();
         {{ props.controlHint }}
       </NTooltip>
     </template>
-  </PageHeader>
+  </ResourceHeader>
 </template>

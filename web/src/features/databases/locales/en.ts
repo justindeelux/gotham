@@ -52,6 +52,9 @@ const en = {
     },
     deleteConfirm:
       "Delete this database? The container is removed from the node, the volume {volume} is kept for 7 days before permanent removal.",
+    deleteTitle: "Delete database",
+    deleteHint:
+      "Deleting removes the container from the node and the credentials from the control plane. The volume is kept for 7 days.",
     overview: {
       details: "Details",
       engine: "Engine",

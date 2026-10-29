@@ -64,12 +64,6 @@ function t(key: string, params?: Record<string, string | number>): string {
       </RouterLink>
       <NTag v-if="deployed" size="small" type="success">{{ t("templates.created.deployed") }}</NTag>
     </NSpace>
-    <div class="wizard__stub">
-      <h5>{{ t("templates.created.stubTitle") }}</h5>
-      <p>
-        {{ t("templates.created.stubBody") }}
-      </p>
-    </div>
     <ServiceLogs
       v-if="deployed"
       :service-id="created.id"
@@ -92,25 +86,6 @@ function t(key: string, params?: Record<string, string | number>): string {
 
 .wizard__desc {
   margin: 0;
-  font-size: var(--text-xs);
-  color: var(--muted);
-}
-
-.wizard__stub {
-  border-left: 4px solid var(--warn);
-  background: var(--surface);
-  border-radius: var(--radius-sm);
-  padding: var(--space-2) var(--space-3);
-}
-
-.wizard__stub h5 {
-  margin: 0;
-  font-size: var(--text-xs);
-  color: var(--fg-2);
-}
-
-.wizard__stub p {
-  margin: var(--space-1) 0 0;
   font-size: var(--text-xs);
   color: var(--muted);
 }

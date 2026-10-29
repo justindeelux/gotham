@@ -270,7 +270,7 @@ describe("JUS-19 DynamicForm stays two columns", () => {
       },
     });
     const labels = wrapper.findAll(".n-form-item-label").map((node) => node.text());
-    expect(labels).toEqual(["Alpha", "Beta", "Gamma"]);
+    expect(labels).toEqual(["Alpha (optional)", "Beta (optional)", "Gamma (optional)"]);
   });
 });
 

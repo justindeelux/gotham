@@ -17,6 +17,9 @@ const en = {
     notFoundWithDetail: "{detail}",
     disabled: "Services are turned off on this control plane. Ask the owner to enable them.",
   },
+  field: {
+    optionalLabel: "{label} (optional)",
+  },
   wizard: {
     title: "Deploy template {name}",
     steps: {
@@ -67,7 +70,7 @@ const en = {
         "n8n workflow automation with a persistent named volume and a routed domain.",
       fields: {
         domain: {
-          help: "The public host served by the node's Traefik proxy.",
+          help: "Optional. Leave empty to add a domain later from the service page.",
         },
         encryption_key: {
           help: "Encrypts stored credentials; use Generate for a strong value. Losing it locks the credentials.",
@@ -88,7 +91,7 @@ const en = {
         "Nextcloud with PostgreSQL and Redis, persistent named volumes and a routed domain.",
       fields: {
         domain: {
-          help: "The public host served by the node's Traefik proxy.",
+          help: "Required for the first install; the official image only reads its trusted-domain list then. Add more domains from the service page after the install.",
         },
         admin_password: {
           help: "The initial Nextcloud administrator password; use Generate for a strong value.",
@@ -103,7 +106,7 @@ const en = {
         "Uptime Kuma monitoring with a persistent named volume and a routed domain.",
       fields: {
         domain: {
-          help: "The public host served by the node's Traefik proxy.",
+          help: "Optional. Leave empty to add a domain later from the service page.",
         },
         tz: {
           help: "IANA timezone name used by the container clock and notifications.",
@@ -115,7 +118,7 @@ const en = {
         "WordPress with a MySQL database, persistent named volumes and a routed domain.",
       fields: {
         domain: {
-          help: "The public host served by the node's Traefik proxy.",
+          help: "Optional. Leave empty to add a domain later from the service page.",
         },
         db_password: {
           help: "Used by WordPress and MySQL; use Generate for a strong value.",

@@ -65,6 +65,13 @@ function fieldValue(field: TemplateField): string {
   return props.modelValue[field.key] ?? "";
 }
 
+function fieldLabel(field: TemplateField): string {
+  if (field.required) {
+    return field.label;
+  }
+  return t("templates.field.optionalLabel", { label: field.label });
+}
+
 function numberValue(field: TemplateField): number | null {
   const raw = fieldValue(field).trim();
   if (raw === "") {
@@ -130,7 +137,7 @@ async function copyValue(field: TemplateField): Promise<void> {
     <NFormItem
       v-for="field in fields"
       :key="field.key"
-      :label="field.label"
+      :label="fieldLabel(field)"
       :required="field.required"
       :feedback="feedbackText(field)"
       :validation-status="validationStatus(field)"
@@ -142,7 +149,7 @@ async function copyValue(field: TemplateField): Promise<void> {
         :value="fieldValue(field)"
         :placeholder="field.placeholder ?? ''"
         :disabled="disabled"
-        :aria-label="field.label"
+        :aria-label="fieldLabel(field)"
         clearable
         @update:value="(value: string) => setValue(field.key, value)"
       />
@@ -157,7 +164,7 @@ async function copyValue(field: TemplateField): Promise<void> {
             :value="fieldValue(field)"
             :placeholder="field.placeholder ?? ''"
             :disabled="disabled"
-            :aria-label="field.label"
+            :aria-label="fieldLabel(field)"
             @update:value="(value: string) => setValue(field.key, value)"
           />
           <div class="dynamic-form__secret-actions">
@@ -191,7 +198,7 @@ async function copyValue(field: TemplateField): Promise<void> {
           :value="fieldValue(field)"
           :placeholder="field.placeholder ?? ''"
           :disabled="disabled"
-          :aria-label="field.label"
+          :aria-label="fieldLabel(field)"
           @update:value="(value: string) => setValue(field.key, value)"
         />
       </template>
@@ -204,7 +211,7 @@ async function copyValue(field: TemplateField): Promise<void> {
         :show-button="false"
         :placeholder="field.placeholder ?? ''"
         :disabled="disabled"
-        :aria-label="field.label"
+        :aria-label="fieldLabel(field)"
         style="width: 100%"
         @update:value="
           (value: number | null) => setValue(field.key, value === null ? '' : String(value))
@@ -217,7 +224,7 @@ async function copyValue(field: TemplateField): Promise<void> {
         :options="selectOptions[field.key] ?? []"
         :placeholder="field.placeholder ?? ''"
         :disabled="disabled"
-        :aria-label="field.label"
+        :aria-label="fieldLabel(field)"
         @update:value="(value: string) => setValue(field.key, value)"
       />
 
@@ -225,7 +232,7 @@ async function copyValue(field: TemplateField): Promise<void> {
         v-else
         :value="fieldValue(field) === 'true'"
         :disabled="disabled"
-        :aria-label="field.label"
+        :aria-label="fieldLabel(field)"
         @update:value="(value: boolean) => setValue(field.key, String(value))"
       />
     </NFormItem>

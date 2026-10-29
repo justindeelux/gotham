@@ -259,12 +259,14 @@ describe("template overlay falls back to provider metadata", () => {
       required: false,
       help: "Operator help stays untouched.",
     };
-    expect(templateOverlayFieldHelp("n8n", domain)).toBe(domain.help);
+    expect(templateOverlayFieldHelp("n8n", domain)).toBe(
+      "Optional. Leave empty to add a domain later from the service page.",
+    );
     expect(templateOverlayFieldHelp("n8n", custom)).toBe(custom.help);
     expect(templateOverlayFieldHelp("acme-custom", domain)).toBe(domain.help);
     setLocale("vi", null);
     expect(templateOverlayFieldHelp("n8n", domain)).toBe(
-      "Host công khai do Traefik proxy của node phục vụ.",
+      "Không bắt buộc. Để trống để thêm tên miền sau từ trang dịch vụ.",
     );
     expect(templateOverlayFieldHelp("n8n", custom)).toBe(custom.help);
     expect(templateOverlayFieldHelp("acme-custom", domain)).toBe(domain.help);

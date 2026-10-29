@@ -18,6 +18,7 @@ import (
 
 type Repository interface {
 	CreateService(ctx context.Context, service Service) (Service, error)
+	CreateServiceWithDomains(ctx context.Context, service Service, domains []ServiceDomain) (Service, error)
 	GetService(ctx context.Context, serviceID uuid.UUID) (Service, error)
 	ListServices(ctx context.Context, userID uuid.UUID) ([]Service, error)
 	ListServicesByEnvironment(ctx context.Context, environmentID uuid.UUID) ([]Service, error)
@@ -90,6 +91,70 @@ func (r *storeRepository) CreateService(ctx context.Context, service Service) (S
 		return Service{}, err
 	}
 	return enriched[0], nil
+}
+
+func (r *storeRepository) CreateServiceWithDomains(ctx context.Context, service Service, domains []ServiceDomain) (Service, error) {
+	if len(domains) == 0 {
+		return r.CreateService(ctx, service)
+	}
+	env, err := marshalEnv(service.Env)
+	if err != nil {
+		return Service{}, err
+	}
+	params := sqlc.CreateServiceParams{
+		ID:            pgUUID(service.ID),
+		UserID:        pgUUID(service.UserID),
+		ServerID:      pgUUID(service.ServerID),
+		EnvironmentID: pgUUID(service.EnvironmentID),
+		Name:          service.Name,
+		Status:        string(service.Status),
+		ComposeYaml:   service.ComposeYAML,
+		Env:           env,
+		TemplateSlug:  nullableText(service.TemplateSlug),
+	}
+	var createdID uuid.UUID
+	err = r.store.InTx(ctx, func(tx *store.Store) error {
+		row, err := tx.CreateService(ctx, params)
+		if err != nil {
+			if isUniqueViolation(err) {
+				return ErrConflict
+			}
+			if isForeignKeyViolation(err) {
+				return ErrNotFound
+			}
+			return fmt.Errorf("services: create service: %w", err)
+		}
+		stored, convErr := serviceFromRow(row)
+		if convErr != nil {
+			return convErr
+		}
+		createdID = stored.ID
+		for _, domain := range domains {
+			_, err := tx.CreateServiceDomain(ctx, sqlc.CreateServiceDomainParams{
+				ID:             pgUUID(domain.ID),
+				ServiceID:      pgUUID(domain.ServiceID),
+				ComposeService: domain.ComposeService,
+				Port:           domain.Port,
+				Domain:         domain.Domain,
+				Protocol:       domain.Protocol,
+				Disabled:       domain.Disabled,
+			})
+			if err != nil {
+				if isUniqueViolation(err) {
+					return ErrDomainConflict
+				}
+				if isForeignKeyViolation(err) {
+					return ErrNotFound
+				}
+				return fmt.Errorf("services: create service domain: %w", err)
+			}
+		}
+		return nil
+	})
+	if err != nil {
+		return Service{}, err
+	}
+	return r.GetService(ctx, createdID)
 }
 
 func (r *storeRepository) GetService(ctx context.Context, serviceID uuid.UUID) (Service, error) {

@@ -64,10 +64,13 @@ func TestBuiltinRender(t *testing.T) {
 			if err != nil {
 				t.Fatalf("Render: %v", err)
 			}
-			if len(result.Spec.Domains) != 1 {
-				t.Fatalf("domains = %+v, want exactly one route", result.Spec.Domains)
+			if len(result.Domains) != 1 {
+				t.Fatalf("domains = %+v, want exactly one route", result.Domains)
 			}
-			route := result.Spec.Domains[0]
+			if len(result.Spec.Domains) != 0 {
+				t.Errorf("compose labels still declare domains: %+v", result.Spec.Domains)
+			}
+			route := result.Domains[0]
 			if route.Domain != values["domain"] {
 				t.Errorf("route domain = %q, want %v", route.Domain, values["domain"])
 			}
@@ -116,8 +119,11 @@ func TestBuiltinExpectedValues(t *testing.T) {
 		if got := strings.Join(result.Spec.Services, ","); got != "mysql,wordpress" {
 			t.Errorf("services = %s", got)
 		}
-		if route := result.Spec.Domains[0]; route.Service != "wordpress" || route.Port != 80 {
+		if route := result.Domains[0]; route.Service != "wordpress" || route.Port != 80 {
 			t.Errorf("route = %+v", route)
+		}
+		if strings.Contains(result.ComposeYAML, "gotham.domain") {
+			t.Errorf("the rendered document still carries a gotham.domain label:\n%s", result.ComposeYAML)
 		}
 		if got := strings.Join(result.Spec.NamedVolumes, ","); got != "mysql_data,wordpress_data" {
 			t.Errorf("volumes = %s", got)
@@ -169,13 +175,13 @@ func TestBuiltinExpectedValues(t *testing.T) {
 		if err != nil {
 			t.Fatalf("Render: %v", err)
 		}
-		if route := result.Spec.Domains[0]; route.Port != 5678 {
+		if route := result.Domains[0]; route.Port != 5678 {
 			t.Errorf("route = %+v", route)
 		}
 		doc := decodeMap(t, result.ComposeYAML)
 		for key, want := range map[string]string{
-			"N8N_HOST":                "n8n.example.test",
-			"WEBHOOK_URL":             "https://n8n.example.test/",
+			"N8N_HOST":                "${GOTHAM_DOMAIN:-localhost}",
+			"WEBHOOK_URL":             "https://${GOTHAM_DOMAIN:-localhost}/",
 			"N8N_LOG_LEVEL":           "info",
 			"N8N_DIAGNOSTICS_ENABLED": "true",
 			"EXECUTIONS_DATA_MAX_AGE": "336",
@@ -185,6 +191,21 @@ func TestBuiltinExpectedValues(t *testing.T) {
 			if got := envValue(t, doc, "n8n", key); got != want {
 				t.Errorf("%s = %q, want %q", key, got, want)
 			}
+		}
+		env := map[string]string{"GOTHAM_DOMAIN": ""}
+		for key, value := range result.Env {
+			env[key] = value
+		}
+		deployed, err := services.Render(result.ComposeYAML, env)
+		if err != nil {
+			t.Fatalf("services.Render without a domain: %v", err)
+		}
+		final := decodeMap(t, deployed.ComposeYAML)
+		if got := envValue(t, final, "n8n", "N8N_HOST"); got != "localhost" {
+			t.Errorf("N8N_HOST without a domain = %q, want the localhost fallback", got)
+		}
+		if got := envValue(t, final, "n8n", "WEBHOOK_URL"); got != "https://localhost/" {
+			t.Errorf("WEBHOOK_URL without a domain = %q, want the localhost fallback", got)
 		}
 		if got := result.Env["encryption_key"]; got != "enc-secret" {
 			t.Errorf("Env[encryption_key] = %q", got)
@@ -196,12 +217,50 @@ func TestBuiltinExpectedValues(t *testing.T) {
 		if err != nil {
 			t.Fatalf("Render: %v", err)
 		}
-		if route := result.Spec.Domains[0]; route.Service != "uptime-kuma" || route.Port != 3001 {
+		if route := result.Domains[0]; route.Service != "uptime-kuma" || route.Port != 3001 {
 			t.Errorf("route = %+v", route)
 		}
 		doc := decodeMap(t, result.ComposeYAML)
 		if got := envValue(t, doc, "uptime-kuma", "TZ"); got != "UTC" {
 			t.Errorf("TZ = %q", got)
+		}
+	})
+}
+
+func TestBuiltinOptionalDomain(t *testing.T) {
+	catalog, err := Load(builtin.FS)
+	if err != nil {
+		t.Fatalf("Load(builtin.FS): %v", err)
+	}
+	for _, slug := range []string{"wordpress", "n8n", "uptime-kuma"} {
+		t.Run(slug, func(t *testing.T) {
+			values := map[string]any{}
+			for key, value := range builtinSamples[slug] {
+				if key != "domain" {
+					values[key] = value
+				}
+			}
+			result, err := catalog.Render(slug, values)
+			if err != nil {
+				t.Fatalf("Render without a domain: %v", err)
+			}
+			if len(result.Domains) != 0 {
+				t.Errorf("domains = %+v, want none", result.Domains)
+			}
+			if _, err := services.Render(result.ComposeYAML, result.Env); err != nil {
+				t.Fatalf("services.Render: %v", err)
+			}
+		})
+	}
+	t.Run("nextcloud stays required", func(t *testing.T) {
+		values := map[string]any{}
+		for key, value := range builtinSamples["nextcloud"] {
+			if key != "domain" {
+				values[key] = value
+			}
+		}
+		if _, err := catalog.Render("nextcloud", values); err == nil {
+			t.Fatal("Render without a domain succeeded, want a required-field error")
 		}
 	})
 }

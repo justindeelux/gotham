@@ -41,6 +41,7 @@ type CreateRequest struct {
 	ComposeYAML   string
 	Env           map[string]string
 	TemplateSlug  string
+	Domains       []DomainInput
 }
 
 type UpdateRequest struct {
@@ -277,18 +278,6 @@ func (s *service) Create(ctx context.Context, userID uuid.UUID, req CreateReques
 	if err != nil {
 		return Service{}, RedactError(err, req.Env)
 	}
-	releaseDomain, err := s.guardHosts(ctx, hosts)
-	if err != nil {
-		return Service{}, err
-	}
-	defer releaseDomain()
-	exists, err := s.repo.ServerExists(ctx, req.ServerID)
-	if err != nil {
-		return Service{}, err
-	}
-	if !exists {
-		return Service{}, ErrServerNotFound
-	}
 	now := time.Now().UTC()
 	service := Service{
 		ID:            uuid.New(),
@@ -303,7 +292,34 @@ func (s *service) Create(ctx context.Context, userID uuid.UUID, req CreateReques
 		CreatedAt:     now,
 		UpdatedAt:     now,
 	}
-	return s.repo.CreateService(ctx, service)
+	managed := make([]ServiceDomain, 0, len(req.Domains))
+	for _, in := range req.Domains {
+		domain, err := s.normalizeDomain(service, managed, in)
+		if err != nil {
+			return Service{}, err
+		}
+		domain.ID = uuid.New()
+		managed = append(managed, domain)
+		hosts = append(hosts, domain.Domain)
+	}
+	releaseDomain, err := s.guardHosts(ctx, hosts)
+	if err != nil {
+		return Service{}, err
+	}
+	defer releaseDomain()
+	for _, domain := range managed {
+		if err := s.checkDomainClaim(ctx, service.ID, domain.Domain); err != nil {
+			return Service{}, err
+		}
+	}
+	exists, err := s.repo.ServerExists(ctx, req.ServerID)
+	if err != nil {
+		return Service{}, err
+	}
+	if !exists {
+		return Service{}, ErrServerNotFound
+	}
+	return s.repo.CreateServiceWithDomains(ctx, service, managed)
 }
 
 func (s *service) List(ctx context.Context, userID uuid.UUID, filter ServiceFilter) ([]Service, error) {

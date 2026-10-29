@@ -62,7 +62,10 @@ func TestTemplatesRoutesWiring(t *testing.T) {
 	var rendered struct {
 		ComposeYAML string            `json:"compose_yaml"`
 		Env         map[string]string `json:"env"`
-		Spec        struct {
+		Domains     []struct {
+			Domain string `json:"domain"`
+		} `json:"domains"`
+		Spec struct {
 			Domains []struct {
 				Domain string `json:"domain"`
 			} `json:"domains"`
@@ -71,8 +74,11 @@ func TestTemplatesRoutesWiring(t *testing.T) {
 	if err := json.Unmarshal(recorder.Body.Bytes(), &rendered); err != nil {
 		t.Fatalf("decode render: %v", err)
 	}
-	if len(rendered.Spec.Domains) != 1 || rendered.Spec.Domains[0].Domain != "blog.example.test" {
-		t.Fatalf("rendered domains = %+v", rendered.Spec.Domains)
+	if len(rendered.Domains) != 1 || rendered.Domains[0].Domain != "blog.example.test" {
+		t.Fatalf("rendered domains = %+v", rendered.Domains)
+	}
+	if len(rendered.Spec.Domains) != 0 {
+		t.Fatalf("the compose document still declares label routes: %+v", rendered.Spec.Domains)
 	}
 	if got := rendered.Env["db_password"]; got != "wp-secret" {
 		t.Errorf("env[db_password] = %q", got)

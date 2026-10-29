@@ -2,9 +2,6 @@ services:
   wordpress:
     image: wordpress:6-apache
     restart: unless-stopped
-    labels:
-      gotham.domain: "{{ .domain }}"
-      gotham.domain.port: "80"
     ports:
       - "80"
     environment:

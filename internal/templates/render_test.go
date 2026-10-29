@@ -109,6 +109,45 @@ func TestRenderSample(t *testing.T) {
 	}
 }
 
+func TestRenderRoutes(t *testing.T) {
+	files := sampleFiles()
+	files["demo/template.yaml"] = strings.Replace(
+		sampleTemplateYAML,
+		"    required: true\n    pattern: ^[a-z.]+$\n",
+		"    default: \"\"\n    pattern: ^([a-z.]+)?$\n",
+		1,
+	) + "routes:\n  - service: web\n    port: 8080\n    domain_field: domain\n"
+	files["demo/compose.yaml"] = strings.Replace(
+		sampleComposeYAML,
+		"    labels:\n      gotham.domain: \"{{ .domain }}\"\n",
+		"",
+		1,
+	)
+	catalog := mustCatalog(t, files)
+
+	result, err := catalog.Render("demo", map[string]any{"domain": "app.example.com", "password": "secret"})
+	if err != nil {
+		t.Fatalf("Render: %v", err)
+	}
+	if len(result.Domains) != 1 {
+		t.Fatalf("domains = %+v, want one route", result.Domains)
+	}
+	if route := result.Domains[0]; route.Service != "web" || route.Domain != "app.example.com" || route.Port != 8080 {
+		t.Errorf("route = %+v", route)
+	}
+	if strings.Contains(result.ComposeYAML, "gotham.domain") {
+		t.Errorf("the rendered document carries a label:\n%s", result.ComposeYAML)
+	}
+
+	empty, err := catalog.Render("demo", map[string]any{"domain": "", "password": "secret"})
+	if err != nil {
+		t.Fatalf("Render with an empty domain: %v", err)
+	}
+	if len(empty.Domains) != 0 {
+		t.Errorf("domains = %+v, want none", empty.Domains)
+	}
+}
+
 func TestRenderAcceptScalars(t *testing.T) {
 	result := renderDemo(t, map[string]any{
 		"domain":   "app.example.com",

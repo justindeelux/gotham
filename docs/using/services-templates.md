@@ -70,6 +70,12 @@ compose service, the container port and HTTP or HTTPS. Several domains may point
 at the same service, and every row can be disabled. Adding, changing or
 removing a domain resyncs the proxy, so the route appears without a redeploy.
 
+A service created from a template can also start with a domain. The wizard's
+Domain field is optional; a non-empty value is stored as a managed row in the
+same transaction as the service, and an empty value creates the service with no
+route. Templates declare that route themselves, so the stored compose document
+carries no `gotham.domain` label (see [template routes](#template-routes)).
+
 **Declared in compose** labels keep working for imported documents and existing
 services:
 
@@ -194,15 +200,44 @@ optional services to toggle at render time.
 
 | Template | Stack | Required fields |
 | --- | --- | --- |
-| WordPress | `wordpress:6-apache` + `mysql:8.4` | domain, database password, database root password |
+| WordPress | `wordpress:6-apache` + `mysql:8.4` | database password, database root password (domain optional) |
 | Nextcloud | `nextcloud:31-apache` + `postgres:16-alpine` + `redis:7-alpine` | domain, admin password, database password, Redis password |
-| n8n | `n8nio/n8n:1` | domain, encryption key |
-| Uptime Kuma | `louislam/uptime-kuma:1` | domain |
+| n8n | `n8nio/n8n:1` | encryption key (domain optional) |
+| Uptime Kuma | `louislam/uptime-kuma:1` | none (domain optional) |
 
 Each template ships named volumes for the data that must survive a restart.
 Other fields (database name and user, admin user, timezone, log level, n8n
 diagnostics and execution retention, Uptime Kuma timezone) have defaults and can
-be left alone. Every template routes one service on the domain you enter.
+be left alone. Every template declares one route: WordPress and Nextcloud use
+port 80, n8n 5678 and Uptime Kuma 3001. WordPress, n8n and Uptime Kuma accept an
+empty domain, so the service starts with no route and you add one later from the
+Domains tab.
+
+Nextcloud keeps its domain required. The official image only reads
+`NEXTCLOUD_TRUSTED_DOMAINS` on the first install; a host attached to an existing
+install is rejected as untrusted. Add further Nextcloud hosts from the Domains
+tab after the install, not by changing the first one.
+
+### Template routes
+
+A template can declare the route the platform should create, instead of writing
+a `gotham.domain` label into its compose document:
+
+```yaml
+routes:
+  - service: wordpress
+    port: 80
+    domain_field: domain
+```
+
+`service` must be a compose service declared in `compose.yaml`, `port` is the
+container port (1-65535), and `domain_field` must name a `text` field. The field
+may be empty: an empty value produces no route and no error, so the same
+template works with and without a domain. A template without `routes` behaves
+as before and can still use compose labels. Rendering returns one
+`{service, port, domain}` entry per non-empty route, and the wizard sends those
+entries as `domains` on `POST /api/v1/services`; the API inserts them with the
+service in one transaction, so a host already taken fails the whole create.
 
 ### Generating secret values
 
@@ -227,8 +262,10 @@ a Go-template placeholder such as:
 
 placeholders. It produces:
 
-- a **compose YAML** document with every placeholder resolved, and
-- an **env map** holding the values of secret fields.
+- a **compose YAML** document with every placeholder resolved,
+- an **env map** holding the values of secret fields, and
+- a **domains** list with one `{service, port, domain}` entry per non-empty
+  route declared by the template.
 
 Secret fields are never written into the YAML. A secret placeholder becomes a
 `${field}` reference, and its value travels in the env map, so the service

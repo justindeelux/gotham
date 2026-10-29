@@ -465,6 +465,68 @@ func TestRepositoryTemplateSlug(t *testing.T) {
 	}
 }
 
+func TestCreateServiceWithDomainsIsAtomic(t *testing.T) {
+	repo, st := integrationEnv(t)
+	ctx := context.Background()
+	ownerID, serverID := seedUserAndServer(t, st)
+	_, envID := seedProjectEnvironment(t, st)
+	suffix := fmt.Sprintf("%d", time.Now().UnixNano())
+
+	other, err := repo.CreateService(ctx, Service{
+		ID: uuid.New(), UserID: ownerID, ServerID: serverID, EnvironmentID: envID,
+		Name: "taken-" + suffix, Status: StatusRunning,
+		ComposeYAML: "services:\n  web:\n    image: nginx:1.27\n", Env: map[string]string{},
+	})
+	if err != nil {
+		t.Fatalf("CreateService(other): %v", err)
+	}
+	if _, err := repo.CreateServiceDomain(ctx, ServiceDomain{
+		ID: uuid.New(), ServiceID: other.ID, ComposeService: "web", Port: 80,
+		Domain: "taken-" + suffix + ".example.com", Protocol: "http",
+	}); err != nil {
+		t.Fatalf("CreateServiceDomain: %v", err)
+	}
+
+	blocked := Service{
+		ID: uuid.New(), UserID: ownerID, ServerID: serverID, EnvironmentID: envID,
+		Name: "blocked-" + suffix, Status: StatusCreating,
+		ComposeYAML: "services:\n  web:\n    image: nginx:1.27\n", Env: map[string]string{},
+	}
+	if _, err := repo.CreateServiceWithDomains(ctx, blocked, []ServiceDomain{
+		{ID: uuid.New(), ServiceID: blocked.ID, ComposeService: "web", Port: 80,
+			Domain: "free-" + suffix + ".example.com", Protocol: "http"},
+		{ID: uuid.New(), ServiceID: blocked.ID, ComposeService: "web", Port: 80,
+			Domain: "taken-" + suffix + ".example.com", Protocol: "http"},
+	}); !errors.Is(err, ErrDomainConflict) {
+		t.Fatalf("CreateServiceWithDomains err = %v, want ErrDomainConflict", err)
+	}
+	var services, domains int
+	if err := st.DB.QueryRow(ctx, "SELECT count(*) FROM services WHERE id = $1", blocked.ID).Scan(&services); err != nil {
+		t.Fatalf("count services: %v", err)
+	}
+	if services != 0 {
+		t.Fatalf("the service row survived a failed create")
+	}
+	if err := st.DB.QueryRow(ctx, "SELECT count(*) FROM service_domains WHERE service_id = $1", blocked.ID).Scan(&domains); err != nil {
+		t.Fatalf("count domains: %v", err)
+	}
+	if domains != 0 {
+		t.Fatalf("the domain rows survived a failed create")
+	}
+
+	created, err := repo.CreateServiceWithDomains(ctx, blocked, []ServiceDomain{
+		{ID: uuid.New(), ServiceID: blocked.ID, ComposeService: "web", Port: 80,
+			Domain: "free-" + suffix + ".example.com", Protocol: "http"},
+	})
+	if err != nil {
+		t.Fatalf("CreateServiceWithDomains: %v", err)
+	}
+	listed, err := repo.ListServiceDomains(ctx, created.ID)
+	if err != nil || len(listed) != 1 || listed[0].Domain != "free-"+suffix+".example.com" {
+		t.Fatalf("ListServiceDomains = %+v err=%v", listed, err)
+	}
+}
+
 func TestServiceDomainUniquenessAndCascade(t *testing.T) {
 	repo, st := integrationEnv(t)
 	ctx := context.Background()

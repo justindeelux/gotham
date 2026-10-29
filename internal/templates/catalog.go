@@ -100,8 +100,15 @@ func loadTemplate(fsys fs.FS, slug string) (Template, error) {
 	if err := validatePlaceholders(slug, template, node); err != nil {
 		return Template{}, err
 	}
-	if err := validateComposeStructure(slug, node); err != nil {
+	composeServices, err := validateComposeStructure(slug, node)
+	if err != nil {
 		return Template{}, err
+	}
+	for _, route := range template.Routes {
+		if _, ok := composeServices[route.Service]; !ok {
+			return Template{}, fmt.Errorf("%w: template %s: route names compose service %q, which compose.yaml does not declare",
+				ErrValidation, slug, route.Service)
+		}
 	}
 	template.compose = string(compose)
 	return template, nil
@@ -113,6 +120,9 @@ func validatePlaceholders(slug string, template Template, node *yaml.Node) error
 		known[field.Key] = true
 	}
 	used := make(map[string]bool, len(template.Fields))
+	for _, route := range template.Routes {
+		used[route.DomainField] = true
+	}
 	budget := services.MaxComposeYAML
 	err := walkScalars(node, func(value string) (string, error) {
 		if _, err := substitute(value, &budget, func(key string) (string, error) {
@@ -149,37 +159,39 @@ type composeService struct {
 	EnvFile any    `yaml:"env_file"`
 }
 
-func validateComposeStructure(slug string, node *yaml.Node) error {
+func validateComposeStructure(slug string, node *yaml.Node) (map[string]struct{}, error) {
 	var document composeStructure
 	if err := node.Decode(&document); err != nil {
-		return fmt.Errorf("%w: template %s: compose.yaml: %v", ErrValidation, slug, err)
+		return nil, fmt.Errorf("%w: template %s: compose.yaml: %v", ErrValidation, slug, err)
 	}
 	if document.Include != nil {
-		return fmt.Errorf("%w: template %s: include is not supported: the agent only receives this document", ErrValidation, slug)
+		return nil, fmt.Errorf("%w: template %s: include is not supported: the agent only receives this document", ErrValidation, slug)
 	}
 	if len(document.Services) == 0 {
-		return fmt.Errorf("%w: template %s: compose document declares no services", ErrValidation, slug)
+		return nil, fmt.Errorf("%w: template %s: compose document declares no services", ErrValidation, slug)
 	}
 	if len(document.Services) > services.MaxComposeServices {
-		return fmt.Errorf("%w: template %s: compose document declares more than %d services",
+		return nil, fmt.Errorf("%w: template %s: compose document declares more than %d services",
 			ErrValidation, slug, services.MaxComposeServices)
 	}
+	names := make(map[string]struct{}, len(document.Services))
 	for name, service := range document.Services {
 		if service.Build != nil {
-			return fmt.Errorf("%w: template %s: service %q uses build, which needs a build context the control plane cannot ship; push an image instead",
+			return nil, fmt.Errorf("%w: template %s: service %q uses build, which needs a build context the control plane cannot ship; push an image instead",
 				ErrValidation, slug, name)
 		}
 		if service.Extends != nil {
-			return fmt.Errorf("%w: template %s: service %q uses extends, which references a file the node does not have", ErrValidation, slug, name)
+			return nil, fmt.Errorf("%w: template %s: service %q uses extends, which references a file the node does not have", ErrValidation, slug, name)
 		}
 		if service.EnvFile != nil {
-			return fmt.Errorf("%w: template %s: service %q uses env_file, which references a file the node does not have", ErrValidation, slug, name)
+			return nil, fmt.Errorf("%w: template %s: service %q uses env_file, which references a file the node does not have", ErrValidation, slug, name)
 		}
 		if strings.TrimSpace(service.Image) == "" {
-			return fmt.Errorf("%w: template %s: service %q declares no image", ErrValidation, slug, name)
+			return nil, fmt.Errorf("%w: template %s: service %q declares no image", ErrValidation, slug, name)
 		}
+		names[name] = struct{}{}
 	}
-	return nil
+	return names, nil
 }
 
 func (c *Catalog) List() []Template {

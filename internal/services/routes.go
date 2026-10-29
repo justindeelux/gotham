@@ -105,6 +105,7 @@ type createRequest struct {
 	Env           map[string]string `json:"env,omitempty"`
 	Deploy        bool              `json:"deploy,omitempty"`
 	Template      string            `json:"template,omitempty"`
+	Domains       []domainRequest   `json:"domains,omitempty"`
 }
 
 type updateRequest struct {
@@ -167,6 +168,10 @@ func (h *handler) create(w http.ResponseWriter, r *http.Request) {
 	if !ok {
 		return
 	}
+	domains := make([]DomainInput, 0, len(req.Domains))
+	for _, domain := range req.Domains {
+		domains = append(domains, DomainInput(domain))
+	}
 	service, err := h.svc.Create(r.Context(), userID, CreateRequest{
 		Name:          req.Name,
 		EnvironmentID: environmentID,
@@ -174,6 +179,7 @@ func (h *handler) create(w http.ResponseWriter, r *http.Request) {
 		ComposeYAML:   req.ComposeYAML,
 		Env:           req.Env,
 		TemplateSlug:  req.Template,
+		Domains:       domains,
 	})
 	if err != nil {
 		h.writeServiceError(w, err)

@@ -52,6 +52,7 @@ export interface TemplateRender {
   slug: string;
   compose_yaml: string;
   env: Record<string, string>;
+  domains: ServiceDomainRoute[];
   spec: TemplateSpec;
 }
 

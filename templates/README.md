@@ -48,6 +48,10 @@ fields:                         # 1-32 fields
     type: secret
     required: true
     generate: true             # secret only: offer a generated value in the console
+routes:                         # optional; declares the routes the platform creates
+  - service: wordpress          # must exist in compose.yaml
+    port: 80                    # container port, 1-65535
+    domain_field: domain        # must name a text field; empty means no route
 ```
 
 Unknown keys are rejected, so a typo never drops configuration silently.
@@ -65,8 +69,13 @@ Rules the loader enforces:
   `max_length` is set it must be at least 16.
 - `pattern`/`max_length` apply to `text` and `secret`, `min`/`max` to
   `number`, `options` to `select`; anything else is an error.
-- Every declared field must be referenced by `compose.yaml` at least once, and
-  every placeholder must name a declared field.
+- Every declared field must be referenced by `compose.yaml` at least once or
+  used as a route's `domain_field`, and every placeholder must name a declared
+  field.
+- `routes` is optional. A route's `service` must exist in `compose.yaml`, its
+  `port` must be 1-65535, and its `domain_field` must name a `text` field. A
+  compose service may be routed once. A template without `routes` behaves as
+  before and may use the `gotham.domain` labels.
 
 At render time the caller supplies values as JSON scalars (string, whole
 number or boolean). Missing required values, unknown fields, wrong types and
@@ -78,21 +87,30 @@ with a clear error.
 The document uses `{{ .field }}` placeholders and is otherwise a normal
 compose document restricted to the BE-7.1 subset: image-only services, named
 volumes, no `build`/`extends`/`env_file`/`include`. A public host is declared
-with the Gotham label convention and the container port must be published for
-Traefik to reach it:
+in `routes` (see above), the container port must be published for Traefik to
+reach it, and the document itself carries no `gotham.domain` label:
 
 ```yaml
 services:
   app:
     image: nginx:1.27
-    labels:
-      gotham.domain: "{{ .domain }}"
-      gotham.domain.port: "80"
     ports:
       - "80"
 volumes:
   app_data:
 ```
+
+Domain-dependent environment can reference the injected `GOTHAM_DOMAIN` (the
+first enabled host) and `GOTHAM_DOMAINS` (comma list), with a fallback for the
+no-domain case:
+
+```yaml
+    environment:
+      PUBLIC_HOST: "${GOTHAM_DOMAIN:-localhost}"
+      PUBLIC_HOSTS: "${GOTHAM_DOMAINS:-}"
+```
+
+The two names are reserved: users cannot set them in the service environment.
 
 Rendering is strict, non-executing string substitution:
 
@@ -162,24 +180,31 @@ A `secret` field never carries a `default`. `number` fields carry `min`/`max`,
 { "slug": "wordpress",
   "compose_yaml": "services:\n  ...",
   "env": { "db_password": "...", "db_root_password": "..." },
+  "domains": [ { "service": "wordpress", "domain": "blog.example.com", "port": 80 } ],
   "spec": { "services": ["mysql", "wordpress"],
-            "domains": [ { "service": "wordpress", "domain": "blog.example.com", "port": 80 } ],
+            "domains": [],
             "named_volumes": ["mysql_data", "wordpress_data"],
             "mounts": [ { "service": "wordpress", "source": "wordpress_data", "target": "/var/www/html", "named": true } ] } }
 ```
+
+`domains` lists one entry per non-empty `routes` field; an empty route field
+produces no entry and no error. `spec.domains` still reports routes declared
+with `gotham.domain` labels in the document (empty for a `routes` template).
 
 `compose_yaml` references every secret field as `${field}`; `env` carries the
 values, keyed by field key. Validation failures answer `400` with
 `{"message": "..."}`, an over-limit body answers `413`, an unknown slug
 answers `404`.
 
-The gallery flow is: render, then create a service with `compose_yaml` **and
-`env`** through `POST /api/v1/services`, then deploy it through
-`POST /api/v1/services/{id}/deploy`. Pass the render response's `env` through
-unchanged: it is what resolves the secret references, and it is the value set
-the services pipeline redacts from every error and deploy-history row. The
-rendered document has already passed the services schema check, so the create
-cannot fail on the document.
+The gallery flow is: render, then create a service with `compose_yaml`, `env`
+and the render response's `domains` through `POST /api/v1/services`, then deploy
+it through `POST /api/v1/services/{id}/deploy`. Pass `env` through unchanged:
+it is what resolves the secret references, and it is the value set the services
+pipeline redacts from every error and deploy-history row. `domains` entries use
+`{ "domain", "compose_service", "port", "protocol" }`; the API validates and
+inserts them in the same transaction as the service, so a host already in use
+fails the whole create. The rendered document has already passed the services
+schema check, so the create cannot fail on the document.
 
 ## Adding a template
 

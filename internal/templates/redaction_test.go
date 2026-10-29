@@ -36,6 +36,10 @@ func (f *fakeRepository) CreateService(_ context.Context, service services.Servi
 	return service, nil
 }
 
+func (f *fakeRepository) CreateServiceWithDomains(ctx context.Context, service services.Service, _ []services.ServiceDomain) (services.Service, error) {
+	return f.CreateService(ctx, service)
+}
+
 func (f *fakeRepository) GetService(_ context.Context, serviceID uuid.UUID) (services.Service, error) {
 	f.mu.Lock()
 	defer f.mu.Unlock()

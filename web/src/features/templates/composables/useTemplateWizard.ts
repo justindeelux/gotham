@@ -250,6 +250,12 @@ export function useTemplateWizard(
         env: rendered.env,
         deploy: true,
         template: detail.value?.slug,
+        domains: (rendered.domains ?? []).map((route) => ({
+          domain: route.domain,
+          compose_service: route.service,
+          port: route.port,
+          protocol: "http" as const,
+        })),
       });
       message.success(
         String(i18n.global.t("templates.toast.deploying", { name: service.name })),

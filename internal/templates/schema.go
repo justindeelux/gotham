@@ -19,6 +19,7 @@ const (
 	MaxNameLength        = 80
 	MaxDescriptionLength = 280
 	MaxFields            = 32
+	MaxRoutes            = 32
 	MaxFieldValue        = 1024
 	maxLabelLength       = 80
 	maxPlaceholderLength = 200
@@ -63,12 +64,21 @@ type Field struct {
 	compiled *regexp.Regexp
 }
 
+// Route declares that the platform should route a compose service to a
+// container port, using the text field named by DomainField as the host.
+type Route struct {
+	Service     string `json:"service"`
+	Port        int32  `json:"port"`
+	DomainField string `json:"domain_field"`
+}
+
 type Template struct {
 	Slug        string  `json:"slug"`
 	Name        string  `json:"name"`
 	Icon        string  `json:"icon"`
 	Description string  `json:"description"`
 	Fields      []Field `json:"fields"`
+	Routes      []Route `json:"routes,omitempty"`
 
 	compose string
 }
@@ -78,6 +88,13 @@ type templateDocument struct {
 	Icon        string          `yaml:"icon"`
 	Description string          `yaml:"description"`
 	Fields      []fieldDocument `yaml:"fields"`
+	Routes      []routeDocument `yaml:"routes"`
+}
+
+type routeDocument struct {
+	Service     string `yaml:"service"`
+	Port        int    `yaml:"port"`
+	DomainField string `yaml:"domain_field"`
 }
 
 type fieldDocument struct {
@@ -146,7 +163,47 @@ func parseTemplate(slug string, document []byte) (Template, error) {
 		seen[field.Key] = true
 		fields = append(fields, field)
 	}
-	return Template{Slug: slug, Name: name, Icon: icon, Description: description, Fields: fields}, nil
+	if len(raw.Routes) > MaxRoutes {
+		return Template{}, fmt.Errorf("%w: template %s: routes must declare at most %d entries", ErrValidation, slug, MaxRoutes)
+	}
+	routes := make([]Route, 0, len(raw.Routes))
+	seenRoutes := make(map[string]bool, len(raw.Routes))
+	for index, entry := range raw.Routes {
+		route, err := parseRoute(entry, fields, seenRoutes)
+		if err != nil {
+			return Template{}, fmt.Errorf("template %s: route %d: %w", slug, index, err)
+		}
+		seenRoutes[route.Service] = true
+		routes = append(routes, route)
+	}
+	return Template{Slug: slug, Name: name, Icon: icon, Description: description, Fields: fields, Routes: routes}, nil
+}
+
+func parseRoute(raw routeDocument, fields []Field, seen map[string]bool) (Route, error) {
+	service := strings.TrimSpace(raw.Service)
+	if service == "" || service != raw.Service {
+		return Route{}, fmt.Errorf("%w: service must be a non-empty compose service name", ErrValidation)
+	}
+	if seen[service] {
+		return Route{}, fmt.Errorf("%w: duplicate route for compose service %q", ErrValidation, service)
+	}
+	if raw.Port < 1 || raw.Port > 65535 {
+		return Route{}, fmt.Errorf("%w: service %q: port must be between 1 and 65535", ErrValidation, service)
+	}
+	domainField := strings.TrimSpace(raw.DomainField)
+	if domainField == "" || domainField != raw.DomainField || !fieldKeyPattern.MatchString(domainField) {
+		return Route{}, fmt.Errorf("%w: service %q: domain_field must name a field", ErrValidation, service)
+	}
+	for _, field := range fields {
+		if field.Key != domainField {
+			continue
+		}
+		if field.Type != FieldText {
+			return Route{}, fmt.Errorf("%w: service %q: domain_field %q must be a text field", ErrValidation, service, domainField)
+		}
+		return Route{Service: service, Port: int32(raw.Port), DomainField: domainField}, nil
+	}
+	return Route{}, fmt.Errorf("%w: service %q: domain_field %q is not declared", ErrValidation, service, domainField)
 }
 
 func parseField(raw fieldDocument) (Field, error) {

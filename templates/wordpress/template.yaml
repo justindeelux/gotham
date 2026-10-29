@@ -1,14 +1,15 @@
 name: WordPress
 icon: wordpress
-description: WordPress with a MySQL database, persistent named volumes and a routed domain.
+description: WordPress with a MySQL database, persistent named volumes and an optional routed domain.
 fields:
   - key: domain
     label: Domain
     type: text
-    required: true
+    required: false
+    default: ""
     placeholder: blog.example.com
-    help: The public host served by the node's Traefik proxy.
-    pattern: ^[A-Za-z0-9][A-Za-z0-9.-]*$
+    help: Optional. Leave empty to add a domain later from the service page.
+    pattern: ^([A-Za-z0-9][A-Za-z0-9.-]*)?$
     max_length: 253
   - key: db_name
     label: Database name
@@ -33,3 +34,7 @@ fields:
     type: secret
     required: true
     generate: true
+routes:
+  - service: wordpress
+    port: 80
+    domain_field: domain

@@ -69,6 +69,12 @@ compose, cổng container và HTTP hoặc HTTPS. Nhiều tên miền có thể t
 dịch vụ, và mỗi dòng có thể bị tắt. Thêm, sửa hoặc xoá tên miền sẽ đồng bộ lại proxy,
 nên tuyến đường xuất hiện mà không cần triển khai lại.
 
+Một dịch vụ tạo từ template cũng có thể bắt đầu với tên miền. Trường Tên miền trong
+wizard là tùy chọn; giá trị khác rỗng được lưu thành một dòng quản lý trong cùng giao
+dịch với dịch vụ, còn giá trị rỗng tạo dịch vụ không có tuyến đường. Template tự khai
+báo tuyến đường đó, nên tài liệu compose đã lưu không mang nhãn `gotham.domain` (xem
+phần Tuyến đường của template).
+
 **Khai báo trong compose** bằng nhãn vẫn hoạt động với tài liệu đã nhập và dịch vụ
 cũ:
 
@@ -187,16 +193,44 @@ vụ tùy chọn nào để bật tắt lúc dựng.
 
 | Template | Stack | Trường bắt buộc |
 | --- | --- | --- |
-| WordPress | `wordpress:6-apache` + `mysql:8.4` | tên miền, mật khẩu cơ sở dữ liệu, mật khẩu root cơ sở dữ liệu |
+| WordPress | `wordpress:6-apache` + `mysql:8.4` | mật khẩu cơ sở dữ liệu, mật khẩu root cơ sở dữ liệu (tên miền tùy chọn) |
 | Nextcloud | `nextcloud:31-apache` + `postgres:16-alpine` + `redis:7-alpine` | tên miền, mật khẩu quản trị, mật khẩu cơ sở dữ liệu, mật khẩu Redis |
-| n8n | `n8nio/n8n:1` | tên miền, khóa mã hóa |
-| Uptime Kuma | `louislam/uptime-kuma:1` | tên miền |
+| n8n | `n8nio/n8n:1` | khóa mã hóa (tên miền tùy chọn) |
+| Uptime Kuma | `louislam/uptime-kuma:1` | không có (tên miền tùy chọn) |
 
 Mỗi template mang theo các volume có tên cho dữ liệu phải sống qua một lần khởi
 động lại. Các trường khác (tên và người dùng cơ sở dữ liệu, người dùng quản trị,
 múi giờ, mức log, chẩn đoán và thời gian lưu giữ thực thi của n8n, múi giờ của
-Uptime Kuma) có giá trị mặc định và có thể để nguyên. Mọi template định tuyến một
-dịch vụ trên tên miền bạn nhập.
+Uptime Kuma) có giá trị mặc định và có thể để nguyên. Mọi template khai báo một
+tuyến đường: WordPress và Nextcloud dùng cổng 80, n8n 5678 và Uptime Kuma 3001.
+WordPress, n8n và Uptime Kuma chấp nhận tên miền rỗng, nên dịch vụ khởi động không
+có tuyến đường và bạn thêm tên miền sau từ tab Tên miền.
+
+Nextcloud giữ tên miền ở dạng bắt buộc. Image chính thức chỉ đọc
+`NEXTCLOUD_TRUSTED_DOMAINS` trong lần cài đặt đầu; một host gắn vào bản cài đã có sẽ
+bị từ chối là không tin cậy. Hãy thêm các host Nextcloud khác từ tab Tên miền sau khi
+cài đặt, không đổi host đầu tiên.
+
+### Tuyến đường của template
+
+Một template có thể khai báo tuyến đường mà nền tảng nên tạo, thay vì ghi nhãn
+`gotham.domain` vào tài liệu compose:
+
+```yaml
+routes:
+  - service: wordpress
+    port: 80
+    domain_field: domain
+```
+
+`service` phải là một dịch vụ compose được khai báo trong `compose.yaml`, `port` là
+cổng container (1-65535), và `domain_field` phải trỏ tới một trường `text`. Trường
+này có thể rỗng: giá trị rỗng tạo ra không tuyến đường nào và không báo lỗi, nên cùng
+một template dùng được cả khi có và không có tên miền. Template không có `routes`
+hoạt động như trước và vẫn có thể dùng nhãn compose. Việc dựng trả về một mục
+`{service, port, domain}` cho mỗi tuyến không rỗng, và wizard gửi các mục đó dưới
+dạng `domains` tới `POST /api/v1/services`; API chèn chúng cùng dịch vụ trong một
+giao dịch, nên host đã bị chiếm sẽ làm hỏng toàn bộ lần tạo.
 
 ### Tạo giá trị bí mật
 
@@ -222,8 +256,10 @@ một placeholder Go-template như:
 
 placeholder. Nó tạo ra:
 
-- một tài liệu **compose YAML** với mọi placeholder đã được phân giải, và
-- một **bảng biến môi trường** chứa giá trị của các trường bí mật.
+- một tài liệu **compose YAML** với mọi placeholder đã được phân giải,
+- một **bảng biến môi trường** chứa giá trị của các trường bí mật, và
+- một danh sách **domains** với một mục `{service, port, domain}` cho mỗi tuyến
+  không rỗng mà template khai báo.
 
 Các trường bí mật không bao giờ được ghi vào YAML. Một placeholder bí mật trở thành
 tham chiếu `${field}`, và giá trị của nó đi trong bảng biến môi trường, nên pipeline

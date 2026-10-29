@@ -292,6 +292,25 @@ func TestRoutesCreatePassesTemplate(t *testing.T) {
 	}
 }
 
+func TestRoutesCreatePassesDomains(t *testing.T) {
+	service := sampleService()
+	fake := &fakeRouteService{service: service}
+	router := routeTestServer(t, fake, service.UserID)
+
+	body := `{"name":"wordpress","environment_id":"` + service.EnvironmentID.String() + `","server_id":"` + service.ServerID.String() + `","compose_yaml":"services:\n  web:\n    image: nginx\n","domains":[{"domain":"blog.example.com","compose_service":"web","port":80,"protocol":"http"}]}`
+	recorder := httptest.NewRecorder()
+	router.ServeHTTP(recorder, httptest.NewRequest(http.MethodPost, "/v1/services", strings.NewReader(body)))
+	if recorder.Code != http.StatusCreated {
+		t.Fatalf("POST /v1/services = %d: %s", recorder.Code, recorder.Body)
+	}
+	if len(fake.created.Domains) != 1 {
+		t.Fatalf("domains passed to the service = %+v", fake.created.Domains)
+	}
+	if domain := fake.created.Domains[0]; domain.Domain != "blog.example.com" || domain.ComposeService != "web" || domain.Port != 80 {
+		t.Errorf("domain = %+v", domain)
+	}
+}
+
 func TestRoutesCreateAndRead(t *testing.T) {
 	service := sampleService()
 	fake := &fakeRouteService{service: service}

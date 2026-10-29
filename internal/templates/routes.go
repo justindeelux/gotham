@@ -50,10 +50,11 @@ type renderRequest struct {
 }
 
 type renderResponse struct {
-	Slug        string            `json:"slug"`
-	ComposeYAML string            `json:"compose_yaml"`
-	Env         map[string]string `json:"env"`
-	Spec        specResponse      `json:"spec"`
+	Slug        string                 `json:"slug"`
+	ComposeYAML string                 `json:"compose_yaml"`
+	Env         map[string]string      `json:"env"`
+	Domains     []services.DomainRoute `json:"domains"`
+	Spec        specResponse           `json:"spec"`
 }
 
 type errorBody struct {
@@ -137,6 +138,7 @@ func (h *handler) render(w http.ResponseWriter, r *http.Request) {
 		Slug:        slug,
 		ComposeYAML: result.ComposeYAML,
 		Env:         env,
+		Domains:     result.Domains,
 		Spec: specResponse{
 			Services:     result.Spec.Services,
 			Domains:      result.Spec.Domains,

@@ -260,6 +260,7 @@ describe("DatabaseDetailHeader", () => {
       canStop: computed(() => status === "running"),
       canRestart: computed(() => status === "running" || status === "stopped"),
       isCreating: computed(() => status === "creating"),
+      controlHint: computed(() => null),
       databasesStore: { acting },
       handleLifecycle: vi.fn(),
       openRename: vi.fn(),
@@ -303,18 +304,22 @@ describe("DatabaseDetailHeader", () => {
 });
 
 describe("ServiceDetailHeader", () => {
-  async function mountHeader(busy: string | null = null) {
+  async function mountHeader(busy: string | null = null, status = "running") {
     const router = headerRouter();
     await router.push("/projects/proj-1/environments/env-1");
     await router.isReady();
+    const current = { ...service, status };
     const detail = {
-      service: computed(() => service),
+      service: computed(() => current),
       serviceId: computed(() => service.id),
       serverName: computed(() => service.server_name),
       busy: ref(busy),
+      controlHint: computed(() => null),
+      latestDeploy: computed(() => null),
       handleDeploy: vi.fn(),
       handleRestart: vi.fn(),
       handleStop: vi.fn(),
+      handleStart: vi.fn(),
       handleDelete: vi.fn(),
     };
     return mount(ServiceDetailHeader, {
@@ -346,5 +351,14 @@ describe("ServiceDetailHeader", () => {
     for (const label of ["Deploy", "Restart", "Stop"]) {
       expect(buttonByText(wrapper, label).attributes("disabled")).not.toBeUndefined();
     }
+  });
+
+  it("allows Start only while the service is stopped", async () => {
+    const running = await mountHeader();
+    expect(buttonByText(running, "Start").attributes("disabled")).not.toBeUndefined();
+
+    const stopped = await mountHeader(null, "stopped");
+    expect(buttonByText(stopped, "Start").attributes("disabled")).toBeUndefined();
+    expect(buttonByText(stopped, "Stop").attributes("disabled")).not.toBeUndefined();
   });
 });

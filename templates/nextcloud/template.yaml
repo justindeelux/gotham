@@ -20,7 +20,8 @@ fields:
     label: Admin password
     type: secret
     required: true
-    help: The initial Nextcloud administrator password.
+    generate: true
+    help: The initial Nextcloud administrator password; use Generate for a strong value.
   - key: db_name
     label: Database name
     type: text
@@ -37,8 +38,10 @@ fields:
     label: Database password
     type: secret
     required: true
+    generate: true
   - key: redis_password
     label: Redis password
     type: secret
     required: true
-    help: Nextcloud always ships with Redis; this protects the cache instance.
+    generate: true
+    help: Nextcloud always ships with Redis; use Generate to protect the cache instance.

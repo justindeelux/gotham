@@ -34,6 +34,16 @@ const en = {
     create: "Create service",
     deploy: "Deploy now",
   },
+  secret: {
+    generate: "Generate",
+    generateLabel: "Generate {label}",
+    copy: "Copy",
+    copyLabel: "Copy {label}",
+    copied: "{label} copied to clipboard.",
+    copyFailed: "Could not copy {label}; select the value and copy it manually.",
+    generated: "{label} generated.",
+    copiedAnnouncement: "Copied.",
+  },
   preview: {
     servicesOne: "{count} service",
     servicesOther: "{count} services",
@@ -67,7 +77,7 @@ const en = {
           help: "The public host served by the node's Traefik proxy.",
         },
         encryption_key: {
-          help: "Encrypts stored credentials; keep it safe, losing it locks the credentials.",
+          help: "Encrypts stored credentials; use Generate for a strong value. Losing it locks the credentials.",
         },
         timezone: {
           help: "IANA timezone name used for schedules and the container clock.",
@@ -88,10 +98,10 @@ const en = {
           help: "The public host served by the node's Traefik proxy.",
         },
         admin_password: {
-          help: "The initial Nextcloud administrator password.",
+          help: "The initial Nextcloud administrator password; use Generate for a strong value.",
         },
         redis_password: {
-          help: "Nextcloud always ships with Redis; this protects the cache instance.",
+          help: "Nextcloud always ships with Redis; use Generate to protect the cache instance.",
         },
       },
     },
@@ -115,7 +125,7 @@ const en = {
           help: "The public host served by the node's Traefik proxy.",
         },
         db_password: {
-          help: "Used by WordPress and MySQL; choose a strong value.",
+          help: "Used by WordPress and MySQL; use Generate for a strong value.",
         },
       },
     },

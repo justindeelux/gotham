@@ -55,8 +55,6 @@ test.describe("services & templates", () => {
     const nodeName = `ui-e2e-svc-node-${suffix}`;
     const domain = `wp-${suffix}.example.test`;
     const serviceName = `wp-${suffix}`;
-    const dbPassword = `e2e-db-${suffix}-9f2a-secret`;
-    const rootPassword = `e2e-root-${suffix}-4c1b-secret`;
 
     const serverResponse = await request.post("/api/v1/servers", {
       headers,
@@ -103,8 +101,26 @@ test.describe("services & templates", () => {
     await expect(wizard.locator('[data-testid="wizard-step-2"]')).toBeHidden();
 
     await step1.locator(".field-domain input").fill(domain);
-    await step1.locator(".field-db_password input").fill(dbPassword);
-    await step1.locator(".field-db_root_password input").fill(rootPassword);
+
+    const dbInput = step1.locator(".field-db_password input");
+    const rootInput = step1.locator(".field-db_root_password input");
+    const generateDb = step1.getByRole("button", { name: "Generate Database password" });
+    const generateRoot = step1.getByRole("button", { name: "Generate MySQL root password" });
+    await expect(generateDb).toBeVisible();
+    await expect(generateRoot).toBeVisible();
+
+    await generateDb.click();
+    await expect(dbInput).toHaveValue(/^[A-Za-z0-9]{24}$/);
+    const firstDbPassword = await dbInput.inputValue();
+    await generateDb.click();
+    await expect(dbInput).not.toHaveValue(firstDbPassword);
+    const dbPassword = await dbInput.inputValue();
+    await expect(step1.getByRole("button", { name: "Copy Database password" })).toBeVisible();
+
+    await generateRoot.click();
+    await expect(rootInput).toHaveValue(/^[A-Za-z0-9]{24}$/);
+    const rootPassword = await rootInput.inputValue();
+
     await wizard.getByRole("button", { name: "Next" }).click();
 
     const step2 = wizard.locator('[data-testid="wizard-step-2"]');

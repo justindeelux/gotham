@@ -78,8 +78,11 @@ func TestRoutesGet(t *testing.T) {
 		t.Fatalf("template = %+v", detail.Template)
 	}
 	secret := detail.Template.Fields[4]
-	if secret.Key != "password" || secret.Type != FieldSecret || secret.Default != nil || !secret.Required {
+	if secret.Key != "password" || secret.Type != FieldSecret || secret.Default != nil || !secret.Required || !secret.Generate {
 		t.Errorf("secret field = %+v", secret)
+	}
+	if !strings.Contains(recorder.Body.String(), `"generate":true`) {
+		t.Errorf("generate flag is not serialised: %s", recorder.Body)
 	}
 	if !strings.Contains(recorder.Body.String(), `"options":["fast","slow"]`) {
 		t.Errorf("select options are not serialised: %s", recorder.Body)

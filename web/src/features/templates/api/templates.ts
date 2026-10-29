@@ -19,6 +19,7 @@ export interface TemplateField {
   min?: number;
   max?: number;
   options?: string[];
+  generate?: boolean;
 }
 
 export interface TemplateSummary {

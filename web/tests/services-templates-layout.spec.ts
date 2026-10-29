@@ -110,6 +110,7 @@ const n8nDetail = {
       label: "Encryption key",
       type: "secret",
       required: true,
+      generate: true,
     },
   ],
 };
@@ -416,6 +417,60 @@ test("wizard keeps its draft while feedback switches language", async ({ page })
   );
 });
 
+test("generated secret stays fully visible beside its actions", async ({ page }) => {
+  for (const width of [390, 1280] as const) {
+    await page.setViewportSize({ width, height: 900 });
+    await mockApi(page);
+    await openTemplateWizard(page);
+    await page.locator('[data-testid="wizard-step-1"]').waitFor();
+
+    const input = page.locator(".field-encryption_key input");
+    const generate = page.locator(
+      '.field-encryption_key [aria-label="Generate Encryption key"]',
+    );
+    await generate.click();
+    await expect(input).toHaveValue(/^[A-Za-z0-9]{24}$/);
+
+    const metrics = await input.evaluate((element) => {
+      const node = element as unknown as { scrollWidth: number; clientWidth: number };
+      return { scrollWidth: node.scrollWidth, clientWidth: node.clientWidth };
+    });
+    expect(
+      metrics.scrollWidth,
+      `the generated value is clipped at ${width}px`,
+    ).toBeLessThanOrEqual(metrics.clientWidth + 1);
+
+    const inputBox = await input.boundingBox();
+    const buttonBox = await generate.boundingBox();
+    expect(inputBox, "secret input has a box").not.toBeNull();
+    expect(buttonBox, "generate button has a box").not.toBeNull();
+    const stacked = buttonBox!.y >= inputBox!.y + inputBox!.height;
+    if (!stacked) {
+      expect(inputBox!.x + inputBox!.width).toBeLessThanOrEqual(buttonBox!.x + 1);
+    }
+    expect(buttonBox!.x + buttonBox!.width).toBeLessThanOrEqual(width + 1);
+
+    const copy = page.locator(
+      '.field-encryption_key [aria-label="Copy Encryption key"]',
+    );
+    await expect(copy).toBeVisible();
+    const copyBox = await copy.boundingBox();
+    expect(copyBox, "copy button has a box").not.toBeNull();
+    const gap = copyBox!.x - (buttonBox!.x + buttonBox!.width);
+    expect(gap, `actions sit together at ${width}px`).toBeGreaterThanOrEqual(-1);
+    expect(gap, `actions sit together at ${width}px`).toBeLessThanOrEqual(16);
+    expect(
+      Math.abs(copyBox!.y - buttonBox!.y),
+      `actions share a row at ${width}px`,
+    ).toBeLessThanOrEqual(1);
+    await expectNoOverflow(page, width);
+    await page.screenshot({
+      path: test.info().outputPath(`generated-secret-${width}.png`),
+    });
+    await page.unrouteAll({ behavior: "wait" });
+  }
+});
+
 test("service detail renders history at every width, en and vi", async ({ page }) => {
   for (const width of widths) {
     for (const locale of ["en", "vi"] as const) {
@@ -453,7 +508,7 @@ test("service detail renders history at every width, en and vi", async ({ page }
       await expect(page.locator(".service-detail-page")).toContainText("gotham-svc-1");
       await expect(page.locator(".service-detail-page")).toContainText("blog.example.com:80");
       const deploy = page.getByRole("button", {
-        name: locale === "vi" ? "Triển khai" : "Deploy",
+        name: locale === "vi" ? "Triển khai lại" : "Redeploy",
         exact: true,
       });
       await expect(deploy).toBeVisible();

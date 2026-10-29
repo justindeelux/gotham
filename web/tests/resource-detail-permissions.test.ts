@@ -130,6 +130,7 @@ vi.mock("@/features/databases/composables/useDatabaseDetail", async () => {
       pageError: ref(null),
       canWrite: computed(() => state.canWrite),
       isCreating: computed(() => state.database.status === "creating"),
+      controlHint: computed(() => null),
       moveSaving: ref(false),
       moveError: ref(null),
       handleMove: vi.fn(),

@@ -42,6 +42,7 @@ const vi: typeof en = {
     tabs: {
       overview: "Tổng quan",
       backups: "Sao lưu",
+      logs: "Nhật ký",
       settings: "Cài đặt",
     },
     noSelection: "Chưa chọn database.",
@@ -51,6 +52,15 @@ const vi: typeof en = {
       actionsDisabled: "Không dùng được trong lúc database đang được thiết lập.",
       backupsDisabled: "Backup không dùng được trong lúc database đang được thiết lập.",
       failedTitle: "Cấp phát thất bại",
+    },
+    controlReadOnly: "Chỉ chủ sở hữu mới có thể điều khiển database này.",
+    controlInProgress: "Một thao tác đang chạy. Hãy chờ hoàn tất.",
+    controlNodeOffline: "Node đang ngoại tuyến. Hãy kết nối lại trước khi dùng các thao tác này.",
+    logs: {
+      title: "Nhật ký database",
+      empty:
+        "Chưa có nhật ký. Nhật ký xuất hiện khi container database tồn tại và đã khởi động.",
+      stopped: "Container đang dừng. Đây là những dòng cuối cùng nhận được từ container.",
     },
     serverPinnedReason:
       "Database không thể đổi server sau khi tạo; chỉ có thể chuyển sang environment khác.",

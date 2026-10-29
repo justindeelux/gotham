@@ -111,6 +111,34 @@ export function useDatabaseDetail() {
       : "",
   );
 
+  const canWrite = computed<boolean>(() => projectsStore.canWrite);
+
+  const nodeOffline = computed<boolean>(() => {
+    const serverId = database.value?.server_id;
+    if (!serverId) {
+      return false;
+    }
+    return serversStore.servers.some(
+      (server) => server.id === serverId && server.status === "offline",
+    );
+  });
+
+  const controlHint = computed<string | null>(() => {
+    if (isCreating.value) {
+      return t("databases.detail.creating.actionsDisabled");
+    }
+    if (!canWrite.value) {
+      return t("databases.detail.controlReadOnly");
+    }
+    if (databasesStore.acting) {
+      return t("databases.detail.controlInProgress");
+    }
+    if (nodeOffline.value) {
+      return t("databases.detail.controlNodeOffline");
+    }
+    return null;
+  });
+
   const credentials = computed(() =>
     databasesStore.credentialsOf(dbId.value),
   );
@@ -285,8 +313,6 @@ export function useDatabaseDetail() {
     }
   }
 
-  const canWrite = computed<boolean>(() => projectsStore.canWrite);
-
   const moveSaving = ref(false);
   const moveErrorRaw = ref<unknown>(null);
   const moveError = computed<string | null>(() =>
@@ -404,6 +430,7 @@ export function useDatabaseDetail() {
     canRestart,
     isCreating,
     provisioningError,
+    controlHint,
     credentials,
     revealed,
     renameOpen,

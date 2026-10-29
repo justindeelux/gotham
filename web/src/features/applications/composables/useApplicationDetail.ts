@@ -132,6 +132,15 @@ export function useApplicationDetail() {
     if (!hasContainer.value) {
       return tr("applications.detail.controlNoContainer");
     }
+    const serverId = application.value?.server_id;
+    if (
+      serverId &&
+      serversStore.servers.some(
+        (server) => server.id === serverId && server.status === "offline",
+      )
+    ) {
+      return tr("applications.detail.controlNodeOffline");
+    }
     return null;
   });
 

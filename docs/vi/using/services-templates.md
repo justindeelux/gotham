@@ -157,6 +157,19 @@ múi giờ, mức log, chẩn đoán và thời gian lưu giữ thực thi của
 Uptime Kuma) có giá trị mặc định và có thể để nguyên. Mọi template định tuyến một
 dịch vụ trên tên miền bạn nhập.
 
+### Tạo giá trị bí mật
+
+Các trường bí mật được đánh dấu có thể tạo sẽ hiện nút **Tạo ngẫu nhiên** bên cạnh
+ô nhập. Nút này điền một giá trị gồm 24 chữ cái và chữ số, được tạo ngay trong trình
+duyệt; không có gì được gửi đi trước khi bạn tạo dịch vụ. Dùng **Sao chép** để lưu
+giá trị ở nơi an toàn — bí mật chỉ ghi được một lần sau khi tạo — nhưng bạn vẫn có
+thể tự nhập giá trị của mình.
+
+Tác giả template bật tính năng này cho từng trường bằng `generate: true` trên một
+trường `secret`. Trường đó không được khai báo `pattern`, và `max_length` nếu có phải
+lớn hơn hoặc bằng 16. Khai báo `generate` trên bất kỳ loại trường nào khác là lỗi khi
+tải.
+
 ### Việc dựng tạo ra gì
 
 Việc dựng là thay thế chuỗi nghiêm ngặt, không thực thi — mỗi trường của template là

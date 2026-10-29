@@ -5,7 +5,9 @@ import { fileURLToPath } from "node:url";
 
 import { mount } from "@vue/test-utils";
 import type { VueWrapper } from "@vue/test-utils";
+import { NMessageProvider } from "naive-ui";
 import { beforeEach, describe, expect, it } from "vitest";
+import { h } from "vue";
 
 import CertificateForm from "../src/features/domains/components/CertificateForm.vue";
 import domainsEn from "../src/features/domains/locales/en";
@@ -253,15 +255,18 @@ describe("JUS-19 DynamicForm stays two columns", () => {
     expect(source).toMatch(
       /@media\s*\(max-width:\s*720px\)[\s\S]*?\.dynamic-form\s*\{[^}]*grid-template-columns:\s*minmax\(0,\s*1fr\)/,
     );
-    const wrapper = mount(DynamicForm, {
-      props: {
-        fields: [
-          { key: "a", label: "Alpha", type: "text" },
-          { key: "b", label: "Beta", type: "text" },
-          { key: "c", label: "Gamma", type: "text" },
-        ],
-        modelValue: {},
-        errors: {},
+    const wrapper = mountWithI18n(NMessageProvider, {
+      slots: {
+        default: () =>
+          h(DynamicForm, {
+            fields: [
+              { key: "a", label: "Alpha", type: "text" },
+              { key: "b", label: "Beta", type: "text" },
+              { key: "c", label: "Gamma", type: "text" },
+            ],
+            modelValue: {},
+            errors: {},
+          }),
       },
     });
     const labels = wrapper.findAll(".n-form-item-label").map((node) => node.text());

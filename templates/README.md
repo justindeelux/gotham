@@ -47,6 +47,7 @@ fields:                         # 1-32 fields
   - key: db_password
     type: secret
     required: true
+    generate: true             # secret only: offer a generated value in the console
 ```
 
 Unknown keys are rejected, so a typo never drops configuration silently.
@@ -59,6 +60,9 @@ Rules the loader enforces:
   load).
 - `secret` fields must be `required` and must not declare a `default`: a
   password is never baked into a template.
+- `generate: true` is allowed on `secret` fields only and makes the console
+  offer a generated value. A generated field must not declare `pattern`; when
+  `max_length` is set it must be at least 16.
 - `pattern`/`max_length` apply to `text` and `secret`, `min`/`max` to
   `number`, `options` to `select`; anything else is an error.
 - Every declared field must be referenced by `compose.yaml` at least once, and

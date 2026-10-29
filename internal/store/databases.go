@@ -60,6 +60,10 @@ func (s *Store) UpdateDatabaseStatus(ctx context.Context, params sqlc.UpdateData
 	return s.queries.UpdateDatabaseStatus(ctx, params)
 }
 
+func (s *Store) ListDatabasesByStatus(ctx context.Context, status string) ([]sqlc.Database, error) {
+	return s.queries.ListDatabasesByStatus(ctx, status)
+}
+
 func (s *Store) PublicPortInUse(ctx context.Context, params sqlc.PublicPortInUseParams) (bool, error) {
 	return s.queries.PublicPortInUse(ctx, params)
 }

@@ -222,7 +222,20 @@ func (r *fakeRepository) UpdateDatabaseContainer(ctx context.Context, databaseID
 	return stored, nil
 }
 
-func (r *fakeRepository) UpdateDatabaseStatus(ctx context.Context, databaseID uuid.UUID, status Status) (Database, error) {
+func (r *fakeRepository) ListDatabasesByStatus(_ context.Context, status Status) ([]Database, error) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	var rows []Database
+	for _, id := range r.order {
+		database := r.databases[id]
+		if r.live(database) && database.Status == status {
+			rows = append(rows, database)
+		}
+	}
+	return rows, nil
+}
+
+func (r *fakeRepository) UpdateDatabaseStatus(ctx context.Context, databaseID uuid.UUID, status Status, message string) (Database, error) {
 	if err := ctx.Err(); err != nil {
 		return Database{}, err
 	}
@@ -239,6 +252,7 @@ func (r *fakeRepository) UpdateDatabaseStatus(ctx context.Context, databaseID uu
 		return Database{}, ErrNotFound
 	}
 	stored.Status = status
+	stored.StatusMessage = message
 	stored.UpdatedAt = time.Now().UTC()
 	r.databases[databaseID] = stored
 	return stored, nil

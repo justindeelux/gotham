@@ -27,6 +27,7 @@ export interface Database {
   engine: string;
   version: string;
   status: DatabaseStatus;
+  status_message?: string;
   server_id: string;
   server_name: string;
   container_id: string;
@@ -82,8 +83,6 @@ interface CredentialsEnvelope {
   credentials: DatabaseCredentials;
 }
 
-const provisioningTimeoutMs = 120_000;
-
 export interface CreatedDatabase {
   database: Database;
   credentials: DatabaseCredentials;
@@ -125,11 +124,7 @@ export async function createDatabase(
   if (input.public_port && input.public_port > 0) {
     body.public_port = input.public_port;
   }
-  const response = await http.post<CreateDatabaseEnvelope>(
-    "/databases",
-    body,
-    { timeout: provisioningTimeoutMs },
-  );
+  const response = await http.post<CreateDatabaseEnvelope>("/databases", body);
   return {
     database: response.data.database,
     credentials: response.data.credentials,

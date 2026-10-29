@@ -84,6 +84,7 @@ type Server struct {
 	deploy            deploy.DeployService
 	proxy             proxy.ProxyService
 	backups           databases.BackupService
+	databaseSvc       databases.DatabaseService
 	toolchain         toolchain.ToolchainService
 	jobLeases         *databases.JobLeases
 	notify            notifications.NotificationService
@@ -176,6 +177,9 @@ func New(cfg *config.Config, logger *slog.Logger, authService AuthService, oauth
 		}
 		if s.backups != nil {
 			_ = s.backups.Close()
+		}
+		if closer, ok := s.databaseSvc.(interface{ Close() error }); ok {
+			_ = closer.Close()
 		}
 		if s.metrics != nil {
 			s.metrics.Close()
@@ -480,6 +484,7 @@ func (s *Server) routes() (http.Handler, error) {
 		s.webhooks.StartPreviews()
 
 		databaseSvc := s.databaseService(containerService)
+		s.databaseSvc = databaseSvc
 		databases.Mount(api, s.resourceAuth(), RequireScopes(auth.ScopeDeploy), UserIDFromContext, databaseSvc)
 
 		s.backups = s.backupService(containerService)

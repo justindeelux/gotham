@@ -101,6 +101,44 @@ export function useDatabaseDetail() {
     () => database.value?.status === "running" || database.value?.status === "stopped",
   );
 
+  const isCreating = computed<boolean>(
+    () => database.value?.status === "creating",
+  );
+
+  const provisioningError = computed<string>(() =>
+    database.value?.status === "error"
+      ? (database.value.status_message ?? "")
+      : "",
+  );
+
+  const canWrite = computed<boolean>(() => projectsStore.canWrite);
+
+  const nodeOffline = computed<boolean>(() => {
+    const serverId = database.value?.server_id;
+    if (!serverId) {
+      return false;
+    }
+    return serversStore.servers.some(
+      (server) => server.id === serverId && server.status === "offline",
+    );
+  });
+
+  const controlHint = computed<string | null>(() => {
+    if (isCreating.value) {
+      return t("databases.detail.creating.actionsDisabled");
+    }
+    if (!canWrite.value) {
+      return t("databases.detail.controlReadOnly");
+    }
+    if (databasesStore.acting) {
+      return t("databases.detail.controlInProgress");
+    }
+    if (nodeOffline.value) {
+      return t("databases.detail.controlNodeOffline");
+    }
+    return null;
+  });
+
   const credentials = computed(() =>
     databasesStore.credentialsOf(dbId.value),
   );
@@ -275,8 +313,6 @@ export function useDatabaseDetail() {
     }
   }
 
-  const canWrite = computed<boolean>(() => projectsStore.canWrite);
-
   const moveSaving = ref(false);
   const moveErrorRaw = ref<unknown>(null);
   const moveError = computed<string | null>(() =>
@@ -357,9 +393,21 @@ export function useDatabaseDetail() {
     void fetchAll();
   });
 
+  // Poll only while provisioning; the status leaves creating exactly once.
+  watch(
+    isCreating,
+    (creating) => {
+      if (creating) {
+        databasesStore.pollDatabases();
+      } else {
+        databasesStore.stopPolling();
+      }
+    },
+    { immediate: true },
+  );
+
   onMounted(() => {
     void fetchAll();
-    databasesStore.pollDatabases();
   });
 
   onUnmounted(() => {
@@ -380,6 +428,9 @@ export function useDatabaseDetail() {
     canStart,
     canStop,
     canRestart,
+    isCreating,
+    provisioningError,
+    controlHint,
     credentials,
     revealed,
     renameOpen,

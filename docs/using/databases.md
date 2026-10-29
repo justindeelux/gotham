@@ -48,9 +48,18 @@ review.
   client needs it.
 
 Credentials (user, password, database name) are generated server-side; you do
-not choose them. MySQL and MariaDB also get a separate root password. The
-success screen shows them, and they stay available under **Credentials** on the
-database page.
+not choose them. MySQL and MariaDB also get a separate root password. They are
+shown under **Credentials** on the database page.
+
+Creation returns as soon as the database row and its credentials exist; the
+wizard then closes and opens the database page, which shows the status
+**Creating** while the image downloads and the container becomes healthy. This
+can take a few minutes on a node that does not have the image yet. The page
+polls the API and switches to **Running** by itself when the healthcheck
+passes, or to **Error** with a short reason if provisioning fails. The
+underlying contract is `POST /api/v1/databases`, which answers `202 Accepted`
+with the database in `creating` plus its credentials; poll
+`GET /api/v1/databases/{id}` until `status` is `running` or `error`.
 
 Each database gets a named volume (`gotham-db-<id>`) mounted at the engine's
 data directory. The volume is independent of the container: removing the

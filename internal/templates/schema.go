@@ -26,6 +26,7 @@ const (
 	maxPatternLength     = 256
 	maxOptions           = 64
 	maxOptionLength      = 128
+	minGeneratedLength   = 16
 )
 
 var slugPattern = regexp.MustCompile(`^[a-z][a-z0-9-]{0,63}$`)
@@ -57,6 +58,7 @@ type Field struct {
 	Min         *int64    `json:"min,omitempty"`
 	Max         *int64    `json:"max,omitempty"`
 	Options     []string  `json:"options,omitempty"`
+	Generate    bool      `json:"generate,omitempty"`
 
 	compiled *regexp.Regexp
 }
@@ -91,6 +93,7 @@ type fieldDocument struct {
 	Min         *int64   `yaml:"min"`
 	Max         *int64   `yaml:"max"`
 	Options     []string `yaml:"options"`
+	Generate    bool     `yaml:"generate"`
 }
 
 func parseTemplate(slug string, document []byte) (Template, error) {
@@ -164,6 +167,7 @@ func parseField(raw fieldDocument) (Field, error) {
 		MaxLength:   raw.MaxLength,
 		Min:         raw.Min,
 		Max:         raw.Max,
+		Generate:    raw.Generate,
 	}
 	field.Type = FieldType(strings.TrimSpace(raw.Type))
 	if field.Label == "" {
@@ -182,6 +186,17 @@ func parseField(raw fieldDocument) (Field, error) {
 	hasPattern := field.Pattern != ""
 	hasBounds := field.Min != nil || field.Max != nil
 	hasOptions := len(raw.Options) > 0
+	if field.Generate {
+		if field.Type != FieldSecret {
+			return Field{}, fmt.Errorf("%w: field %q: generate applies to secret fields only", ErrValidation, key)
+		}
+		if hasPattern {
+			return Field{}, fmt.Errorf("%w: field %q: generated secrets must not declare a pattern", ErrValidation, key)
+		}
+		if field.MaxLength != 0 && field.MaxLength < minGeneratedLength {
+			return Field{}, fmt.Errorf("%w: field %q: generated secrets need max_length of at least %d", ErrValidation, key, minGeneratedLength)
+		}
+	}
 	switch field.Type {
 	case FieldText, FieldSecret:
 		if hasBounds {

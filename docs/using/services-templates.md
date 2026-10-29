@@ -158,6 +158,18 @@ Other fields (database name and user, admin user, timezone, log level, n8n
 diagnostics and execution retention, Uptime Kuma timezone) have defaults and can
 be left alone. Every template routes one service on the domain you enter.
 
+### Generating secret values
+
+Secret fields marked generatable show a **Generate** button next to the input.
+It fills the field with a fresh 24-character value made of letters and digits,
+generated in the browser; nothing is sent anywhere until you create the service.
+Use **Copy** to store the value somewhere safe — a secret is write-only after
+creation — but you can still type your own value instead.
+
+Template authors opt in per field with `generate: true` on a `secret` field. Such
+a field must not declare `pattern`, and `max_length`, when set, must be at least
+16. Declaring `generate` on any other field type is a load error.
+
 ### What rendering produces
 
 Rendering is strict, non-executing string substitution — every template field is

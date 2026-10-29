@@ -161,6 +161,7 @@ type Database struct {
 	UpdatedAt     pgtype.Timestamptz `json:"updated_at"`
 	DeletedAt     pgtype.Timestamptz `json:"deleted_at"`
 	EnvironmentID pgtype.UUID        `json:"environment_id"`
+	StatusMessage *string            `json:"status_message"`
 }
 
 type DatabaseSecret struct {

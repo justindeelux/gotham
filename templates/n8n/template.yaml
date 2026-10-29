@@ -14,7 +14,8 @@ fields:
     label: Encryption key
     type: secret
     required: true
-    help: Encrypts stored credentials; keep it safe, losing it locks the credentials.
+    generate: true
+    help: Encrypts stored credentials; use Generate for a strong value. Losing it locks the credentials.
   - key: timezone
     label: Timezone
     type: text

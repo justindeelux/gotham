@@ -1,8 +1,7 @@
 <script setup lang="ts">
-import { NAlert, NButton, NText } from "naive-ui";
+import { NText } from "naive-ui";
 import { computed } from "vue";
 
-import type { CreatedDatabase } from "@/features/databases/api/databases";
 import type { WizardForm } from "@/features/databases/composables/useCreateDatabaseWizard";
 
 interface Props {
@@ -10,12 +9,6 @@ interface Props {
   imagePreview: string;
   serverLabel: string;
   enginePort: number;
-  created: CreatedDatabase | null;
-  credentialRows: Array<{ label: string; value: string; secret: boolean }>;
-}
-
-interface Emits {
-  copy: [value: string, label: string];
 }
 
 import { i18n } from "@/shared/i18n";
@@ -25,7 +18,6 @@ function t(key: string, params?: Record<string, string | number>): string {
 }
 
 const props = defineProps<Props>();
-defineEmits<Emits>();
 
 const portMapping = computed<string>(() =>
   props.form.exposePublic
@@ -35,7 +27,7 @@ const portMapping = computed<string>(() =>
 </script>
 
 <template>
-  <div v-if="created === null">
+  <div>
     <NText>{{ t("databases.wizard.review.intro") }}</NText>
     <ul class="review-list mono">
       <li>{{ t("databases.wizard.review.engineImage", { image: imagePreview }) }}</li>
@@ -48,30 +40,6 @@ const portMapping = computed<string>(() =>
       </li>
       <li>{{ t("databases.wizard.review.volume") }}</li>
     </ul>
-  </div>
-  <div v-else class="success-panel">
-    <NAlert
-      type="success"
-      :show-icon="true"
-      :title="t('databases.wizard.review.successTitle')"
-    >
-      {{ t("databases.wizard.review.successBody") }}
-    </NAlert>
-    <div
-      v-for="row in credentialRows"
-      :key="row.label"
-      class="credential-row"
-    >
-      <NText depth="3">{{ row.label }}</NText>
-      <NText class="mono">{{ row.value }}</NText>
-      <NButton
-        size="small"
-        secondary
-        @click="$emit('copy', row.value, row.label)"
-      >
-        {{ t("databases.detail.credentials.copy") }}
-      </NButton>
-    </div>
   </div>
 </template>
 
@@ -90,22 +58,4 @@ const portMapping = computed<string>(() =>
   color: var(--muted);
 }
 
-.success-panel {
-  display: flex;
-  flex-direction: column;
-  gap: var(--space-3);
-}
-
-.credential-row {
-  display: flex;
-  align-items: center;
-  gap: var(--space-3);
-}
-
-.credential-row .mono {
-  flex: 1;
-  min-width: 0;
-  overflow: hidden;
-  text-overflow: ellipsis;
-}
 </style>

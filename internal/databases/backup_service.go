@@ -299,7 +299,7 @@ func (m *BackupManager) reconcileStaleBackups() {
 		if staged, pathErr := stagingPath(database, restore.BackupID); pathErr == nil {
 			m.removeStagedArtifact(database, staged)
 		}
-		m.markError(ctx, database, errors.New("control plane restarted during the restore"))
+		m.markError(ctx, database, errors.New("control plane restarted during the restore"), Credentials{})
 	}
 }
 

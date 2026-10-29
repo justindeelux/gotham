@@ -14,7 +14,7 @@ import (
 	"github.com/justindeelux/gotham/internal/containers"
 )
 
-func newTestService(repo *fakeRepository, cs *fakeContainers) *Service {
+func newTestService(repo *fakeRepository, cs containers.ContainerService) *Service {
 	return NewService(Config{
 		Repository:    repo,
 		Containers:    cs,
@@ -23,6 +23,128 @@ func newTestService(repo *fakeRepository, cs *fakeContainers) *Service {
 		HealthTimeout: 300 * time.Millisecond,
 		HealthPoll:    2 * time.Millisecond,
 	})
+}
+
+// waitForDatabaseStatus polls until the background provision reaches want.
+// Create now returns before the container exists, so tests follow the same
+// poll the API clients do.
+func waitForDatabaseStatus(t *testing.T, svc *Service, owner, databaseID uuid.UUID, want Status) Database {
+	t.Helper()
+	deadline := time.Now().Add(10 * time.Second)
+	var last Database
+	var lastErr error
+	for time.Now().Before(deadline) {
+		last, lastErr = svc.Get(context.Background(), owner, databaseID)
+		if lastErr == nil && last.Status == want {
+			return last
+		}
+		time.Sleep(2 * time.Millisecond)
+	}
+	t.Fatalf("database %s never reached %q: status=%q err=%v",
+		databaseID, want, last.Status, lastErr)
+	return Database{}
+}
+
+func createDatabaseAndWait(t *testing.T, svc *Service, owner uuid.UUID, req CreateRequest) (Database, Credentials) {
+	t.Helper()
+	created, credentials, err := svc.Create(context.Background(), owner, req)
+	if err != nil {
+		t.Fatalf("Create: %v", err)
+	}
+	return waitForDatabaseStatus(t, svc, owner, created.ID, StatusRunning), credentials
+}
+
+func waitForCondition(t *testing.T, description string, check func() bool) {
+	t.Helper()
+	deadline := time.Now().Add(10 * time.Second)
+	for time.Now().Before(deadline) {
+		if check() {
+			return
+		}
+		time.Sleep(2 * time.Millisecond)
+	}
+	t.Fatalf("timed out waiting for %s", description)
+}
+
+// blockingContainers holds the provision inside Run until the provision context
+// is canceled, so a test can observe the row while it is still creating.
+type blockingContainers struct {
+	*fakeContainers
+	entered chan struct{}
+}
+
+func (b *blockingContainers) Run(ctx context.Context, _ uuid.UUID, _ containers.RunOptions) (string, error) {
+	close(b.entered)
+	<-ctx.Done()
+	return "", ctx.Err()
+}
+
+func TestCreateReturnsWhileProvisioning(t *testing.T) {
+	repo := newFakeRepository()
+	serverID := repo.seedServer()
+	envID, _ := repo.seedEnvironment()
+	cs := &blockingContainers{fakeContainers: &fakeContainers{}, entered: make(chan struct{})}
+	svc := newTestService(repo, cs)
+	owner := uuid.New()
+
+	database, credentials, err := svc.Create(context.Background(), owner, CreateRequest{
+		Name: "orders", Engine: EnginePostgres, EnvironmentID: envID, ServerID: serverID,
+	})
+	if err != nil {
+		t.Fatalf("Create: %v", err)
+	}
+	if database.Status != StatusCreating {
+		t.Errorf("status = %q, want creating", database.Status)
+	}
+	if credentials.Password == "" {
+		t.Error("Create returned no credentials")
+	}
+	<-cs.entered
+
+	if err := svc.Close(); err != nil {
+		t.Fatalf("Close: %v", err)
+	}
+	row := waitForDatabaseStatus(t, svc, owner, database.ID, StatusError)
+	if row.StatusMessage != interruptedProvisionMessage {
+		t.Errorf("status_message = %q, want %q", row.StatusMessage, interruptedProvisionMessage)
+	}
+}
+
+func TestStartupRecoveryMarksCreatingAsInterrupted(t *testing.T) {
+	repo := newFakeRepository()
+	svc := newTestService(repo, &fakeContainers{})
+	owner := uuid.New()
+	row := repo.seed(Database{
+		UserID: owner, ServerID: uuid.New(), EnvironmentID: uuid.New(),
+		Name: "stuck", Engine: EnginePostgres, Status: StatusCreating,
+	})
+
+	svc.recoverInterruptedProvisioning()
+
+	got, err := svc.Get(context.Background(), owner, row.ID)
+	if err != nil {
+		t.Fatalf("Get: %v", err)
+	}
+	if got.Status != StatusError || got.StatusMessage != interruptedProvisionMessage {
+		t.Errorf("row = %+v, want error with %q", got, interruptedProvisionMessage)
+	}
+}
+
+func TestStatusMessageRedactsCredentials(t *testing.T) {
+	credentials := Credentials{
+		Username: "orders", Password: "secret-password",
+		Database: "orders", RootPassword: "root-secret",
+	}
+	message := statusMessageFor(
+		errors.New("run failed: PASSWORD=secret-password ROOT=root-secret"),
+		credentials,
+	)
+	if strings.Contains(message, "secret-password") || strings.Contains(message, "root-secret") {
+		t.Fatalf("status message leaks a credential: %q", message)
+	}
+	if !strings.Contains(message, "<redacted>") {
+		t.Errorf("status message = %q, want the redaction marker", message)
+	}
 }
 
 func TestCreateEachEngine(t *testing.T) {
@@ -35,7 +157,7 @@ func TestCreateEachEngine(t *testing.T) {
 			svc := newTestService(repo, cs)
 			userID := uuid.New()
 
-			database, credentials, err := svc.Create(context.Background(), userID, CreateRequest{
+			database, credentials := createDatabaseAndWait(t, svc, userID, CreateRequest{
 				Name:          "db-" + engineName,
 				Engine:        engineName,
 				Version:       "",
@@ -43,9 +165,6 @@ func TestCreateEachEngine(t *testing.T) {
 				ServerID:      serverID,
 				PublicPort:    20000,
 			})
-			if err != nil {
-				t.Fatalf("Create: %v", err)
-			}
 
 			if database.UserID != userID {
 				t.Errorf("user_id = %s, want %s", database.UserID, userID)
@@ -127,14 +246,11 @@ func TestCreateInternalDatabasePublishesNoPort(t *testing.T) {
 	cs := &fakeContainers{}
 	svc := newTestService(repo, cs)
 
-	_, _, err := svc.Create(context.Background(), uuid.New(), CreateRequest{
+	createDatabaseAndWait(t, svc, uuid.New(), CreateRequest{
 		Name:          "cache",
 		Engine:        EngineRedis,
 		EnvironmentID: envID, ServerID: serverID,
 	})
-	if err != nil {
-		t.Fatalf("Create: %v", err)
-	}
 	if ports := cs.lastRun().Ports; len(ports) != 0 {
 		t.Errorf("ports = %v, want none", ports)
 	}
@@ -255,11 +371,9 @@ func TestCreateRejectsDuplicateName(t *testing.T) {
 	svc := newTestService(repo, cs)
 	userID := uuid.New()
 
-	if _, _, err := svc.Create(context.Background(), userID, CreateRequest{
+	createDatabaseAndWait(t, svc, userID, CreateRequest{
 		Name: "orders", Engine: EnginePostgres, EnvironmentID: envID, ServerID: serverID,
-	}); err != nil {
-		t.Fatalf("first Create: %v", err)
-	}
+	})
 	_, _, err := svc.Create(context.Background(), userID, CreateRequest{
 		Name: "orders", Engine: EngineMySQL, EnvironmentID: envID, ServerID: serverID,
 	})
@@ -276,11 +390,18 @@ func TestCreateAgentFailureKeepsAnErrorRow(t *testing.T) {
 	svc := newTestService(repo, cs)
 	userID := uuid.New()
 
-	_, _, err := svc.Create(context.Background(), userID, CreateRequest{
+	created, _, err := svc.Create(context.Background(), userID, CreateRequest{
 		Name: "orders", Engine: EnginePostgres, EnvironmentID: envID, ServerID: serverID,
 	})
-	if !errors.Is(err, ErrAgentUnavailable) {
-		t.Fatalf("Create error = %v, want ErrAgentUnavailable", err)
+	if err != nil {
+		t.Fatalf("Create: %v", err)
+	}
+	row := waitForDatabaseStatus(t, svc, userID, created.ID, StatusError)
+	if row.ContainerID != "" {
+		t.Errorf("container_id = %q, want empty when the run failed", row.ContainerID)
+	}
+	if row.StatusMessage == "" {
+		t.Error("status_message is empty, want a readable reason")
 	}
 
 	list, err := svc.List(context.Background(), userID, DatabaseFilter{})
@@ -293,9 +414,6 @@ func TestCreateAgentFailureKeepsAnErrorRow(t *testing.T) {
 	if list[0].Status != StatusError {
 		t.Errorf("status = %q, want error", list[0].Status)
 	}
-	if list[0].ContainerID != "" {
-		t.Errorf("container_id = %q, want empty when the run failed", list[0].ContainerID)
-	}
 }
 
 func TestCreateHealthcheckTimeout(t *testing.T) {
@@ -306,19 +424,21 @@ func TestCreateHealthcheckTimeout(t *testing.T) {
 	svc := newTestService(repo, cs)
 	userID := uuid.New()
 
-	_, _, err := svc.Create(context.Background(), userID, CreateRequest{
+	created, _, err := svc.Create(context.Background(), userID, CreateRequest{
 		Name: "orders", Engine: EnginePostgres, EnvironmentID: envID, ServerID: serverID,
 	})
-	if !errors.Is(err, ErrHealthcheck) {
-		t.Fatalf("Create error = %v, want ErrHealthcheck", err)
-	}
-	list, err := svc.List(context.Background(), userID, DatabaseFilter{})
 	if err != nil {
-		t.Fatalf("List: %v", err)
+		t.Fatalf("Create: %v", err)
 	}
-	if len(list) != 1 || list[0].Status != StatusError {
-		t.Fatalf("databases = %+v, want one row in the error state", list)
+	row := waitForDatabaseStatus(t, svc, userID, created.ID, StatusError)
+	if !strings.Contains(row.StatusMessage, "did not become ready") {
+		t.Errorf("status_message = %q, want the healthcheck reason", row.StatusMessage)
 	}
+	waitForCondition(t, "the unhealthy container removed", func() bool {
+		cs.mu.Lock()
+		defer cs.mu.Unlock()
+		return len(cs.removes) == 1
+	})
 }
 
 func TestAccessByID(t *testing.T) {
@@ -328,13 +448,9 @@ func TestAccessByID(t *testing.T) {
 	cs := &fakeContainers{runID: "container-1"}
 	svc := newTestService(repo, cs)
 	owner := uuid.New()
-	created, _, err := svc.Create(context.Background(), owner, CreateRequest{
+	created, _ := createDatabaseAndWait(t, svc, owner, CreateRequest{
 		Name: "orders", Engine: EnginePostgres, EnvironmentID: envID, ServerID: serverID,
 	})
-	if err != nil {
-		t.Fatalf("Create: %v", err)
-	}
-	cs.setRunning(created.ContainerID)
 
 	unknown := uuid.New()
 	if _, err := svc.Get(context.Background(), owner, unknown); !errors.Is(err, ErrNotFound) {
@@ -365,17 +481,12 @@ func TestListExcludesOtherUsersAndDeletedRows(t *testing.T) {
 		t.Fatalf("empty list = %#v, want a non-nil empty slice", empty)
 	}
 
-	if _, _, err := svc.Create(context.Background(), stranger, CreateRequest{
+	createDatabaseAndWait(t, svc, stranger, CreateRequest{
 		Name: "theirs", Engine: EngineRedis, EnvironmentID: envID, ServerID: serverID,
-	}); err != nil {
-		t.Fatalf("Create (stranger): %v", err)
-	}
-	mine, _, err := svc.Create(context.Background(), owner, CreateRequest{
+	})
+	mine, _ := createDatabaseAndWait(t, svc, owner, CreateRequest{
 		Name: "mine", Engine: EnginePostgres, EnvironmentID: envID, ServerID: serverID,
 	})
-	if err != nil {
-		t.Fatalf("Create (owner): %v", err)
-	}
 
 	list, err := svc.List(context.Background(), owner, DatabaseFilter{})
 	if err != nil {
@@ -405,12 +516,9 @@ func TestDeleteStopsRemovesAndKeepsTheVolume(t *testing.T) {
 	svc := newTestService(repo, cs)
 	owner := uuid.New()
 
-	created, _, err := svc.Create(context.Background(), owner, CreateRequest{
+	created, _ := createDatabaseAndWait(t, svc, owner, CreateRequest{
 		Name: "orders", Engine: EnginePostgres, EnvironmentID: envID, ServerID: serverID,
 	})
-	if err != nil {
-		t.Fatalf("Create: %v", err)
-	}
 	volume := created.StoragePath
 
 	if err := svc.Delete(context.Background(), owner, created.ID); err != nil {
@@ -455,12 +563,9 @@ func TestDeleteFailsWhenTheAgentCannotRemove(t *testing.T) {
 	svc := newTestService(repo, cs)
 	owner := uuid.New()
 
-	created, _, err := svc.Create(context.Background(), owner, CreateRequest{
+	created, _ := createDatabaseAndWait(t, svc, owner, CreateRequest{
 		Name: "orders", Engine: EnginePostgres, EnvironmentID: envID, ServerID: serverID,
 	})
-	if err != nil {
-		t.Fatalf("Create: %v", err)
-	}
 	if err := svc.Delete(context.Background(), owner, created.ID); err == nil {
 		t.Fatal("Delete should fail when the container cannot be removed")
 	}
@@ -495,12 +600,9 @@ func TestDeleteSucceedsWhenTheServerIsGone(t *testing.T) {
 	svc := newTestService(repo, cs)
 	owner := uuid.New()
 
-	created, _, err := svc.Create(context.Background(), owner, CreateRequest{
+	created, _ := createDatabaseAndWait(t, svc, owner, CreateRequest{
 		Name: "orders", Engine: EnginePostgres, EnvironmentID: envID, ServerID: serverID,
 	})
-	if err != nil {
-		t.Fatalf("Create: %v", err)
-	}
 	cs.removeErr = containers.ErrServerNotFound
 
 	if err := svc.Delete(context.Background(), owner, created.ID); err != nil {
@@ -522,16 +624,15 @@ func TestCreateRemovesContainerWhenTheRowCannotBeUpdated(t *testing.T) {
 	repo.updateErr = errors.New("database is down")
 	if _, _, err := svc.Create(context.Background(), uuid.New(), CreateRequest{
 		Name: "orders", Engine: EnginePostgres, EnvironmentID: envID, ServerID: serverID,
-	}); err == nil {
-		t.Fatal("Create should fail when the row cannot be updated")
+	}); err != nil {
+		t.Fatalf("Create: %v", err)
 	}
 
-	cs.mu.Lock()
-	removes := append([]string(nil), cs.removes...)
-	cs.mu.Unlock()
-	if len(removes) != 1 || removes[0] != "container-1" {
-		t.Fatalf("removes = %v, want the unmanageable container removed", removes)
-	}
+	waitForCondition(t, "the unmanageable container removed", func() bool {
+		cs.mu.Lock()
+		defer cs.mu.Unlock()
+		return len(cs.removes) == 1 && cs.removes[0] == "container-1"
+	})
 }
 
 func TestLifecycleStatuses(t *testing.T) {
@@ -542,13 +643,9 @@ func TestLifecycleStatuses(t *testing.T) {
 	svc := newTestService(repo, cs)
 	owner := uuid.New()
 
-	created, _, err := svc.Create(context.Background(), owner, CreateRequest{
+	created, _ := createDatabaseAndWait(t, svc, owner, CreateRequest{
 		Name: "orders", Engine: EnginePostgres, EnvironmentID: envID, ServerID: serverID,
 	})
-	if err != nil {
-		t.Fatalf("Create: %v", err)
-	}
-	cs.setRunning(created.ContainerID)
 
 	stopped, err := svc.Stop(context.Background(), owner, created.ID)
 	if err != nil {
@@ -587,13 +684,9 @@ func TestLifecycleAgentFailureIsMapped(t *testing.T) {
 	svc := newTestService(repo, cs)
 	owner := uuid.New()
 
-	created, _, err := svc.Create(context.Background(), owner, CreateRequest{
+	created, _ := createDatabaseAndWait(t, svc, owner, CreateRequest{
 		Name: "orders", Engine: EnginePostgres, EnvironmentID: envID, ServerID: serverID,
 	})
-	if err != nil {
-		t.Fatalf("Create: %v", err)
-	}
-	cs.setRunning(created.ContainerID)
 
 	cs.startErr = containers.ErrAgentUnavailable
 	cs.stopErr = containers.ErrAgentUnavailable
@@ -641,12 +734,9 @@ func TestCredentialsRoundTrip(t *testing.T) {
 	svc := newTestService(repo, cs)
 	owner := uuid.New()
 
-	created, credentials, err := svc.Create(context.Background(), owner, CreateRequest{
+	created, credentials := createDatabaseAndWait(t, svc, owner, CreateRequest{
 		Name: "orders", Engine: EngineMySQL, EnvironmentID: envID, ServerID: serverID,
 	})
-	if err != nil {
-		t.Fatalf("Create: %v", err)
-	}
 	opened, err := svc.Credentials(context.Background(), owner, created.ID)
 	if err != nil {
 		t.Fatalf("Credentials: %v", err)
@@ -667,18 +757,12 @@ func TestUpdateRename(t *testing.T) {
 	svc := newTestService(repo, cs)
 	owner := uuid.New()
 
-	first, _, err := svc.Create(context.Background(), owner, CreateRequest{
+	first, _ := createDatabaseAndWait(t, svc, owner, CreateRequest{
 		Name: "orders", Engine: EnginePostgres, EnvironmentID: envID, ServerID: serverID,
 	})
-	if err != nil {
-		t.Fatalf("Create: %v", err)
-	}
-	second, _, err := svc.Create(context.Background(), owner, CreateRequest{
+	second, _ := createDatabaseAndWait(t, svc, owner, CreateRequest{
 		Name: "billing", Engine: EnginePostgres, EnvironmentID: envID, ServerID: serverID,
 	})
-	if err != nil {
-		t.Fatalf("Create: %v", err)
-	}
 
 	renamed, err := svc.Update(context.Background(), owner, first.ID, UpdateRequest{Name: ptr("warehouse")})
 	if err != nil {
@@ -740,11 +824,9 @@ func TestCreatePullsImageBeforeRun(t *testing.T) {
 	cs := &fakeContainers{runID: "container-1"}
 	svc := newTestService(repo, cs)
 
-	if _, _, err := svc.Create(context.Background(), uuid.New(), CreateRequest{
+	createDatabaseAndWait(t, svc, uuid.New(), CreateRequest{
 		Name: "orders", Engine: EnginePostgres, EnvironmentID: envID, ServerID: serverID,
-	}); err != nil {
-		t.Fatalf("Create: %v", err)
-	}
+	})
 	if cs.pulls != 1 {
 		t.Fatalf("pulls = %d, want 1", cs.pulls)
 	}
@@ -770,24 +852,19 @@ func TestCreatePullFailureLeavesTerminalErrorRow(t *testing.T) {
 	svc := newTestService(repo, cs)
 	owner := uuid.New()
 
-	var createdID uuid.UUID
-	repo.afterCreate = func(d Database) { createdID = d.ID }
-
-	_, _, err := svc.Create(context.Background(), owner, CreateRequest{
+	created, _, err := svc.Create(context.Background(), owner, CreateRequest{
 		Name: "orders", Engine: EnginePostgres, EnvironmentID: envID, ServerID: serverID,
 	})
-	if !errors.Is(err, ErrAgentUnavailable) {
-		t.Fatalf("Create error = %v, want ErrAgentUnavailable", err)
+	if err != nil {
+		t.Fatalf("Create: %v", err)
+	}
+	createdID := created.ID
+	row := waitForDatabaseStatus(t, svc, owner, createdID, StatusError)
+	if row.StatusMessage == "" {
+		t.Error("status_message is empty, want the pull failure reason")
 	}
 	if len(cs.runs) != 0 {
 		t.Fatalf("runs = %d, want none after a failed pull", len(cs.runs))
-	}
-	row, err := svc.Get(context.Background(), owner, createdID)
-	if err != nil {
-		t.Fatalf("Get: %v", err)
-	}
-	if row.Status != StatusError {
-		t.Errorf("status = %q, want a terminal error, not creating", row.Status)
 	}
 	repo.mu.Lock()
 	secrets := len(repo.secrets[createdID])
@@ -808,20 +885,16 @@ func TestCreateCleanupUsesRecordedIDs(t *testing.T) {
 	repo.updateErr = errors.New("database is down")
 	if _, _, err := svc.Create(context.Background(), uuid.New(), CreateRequest{
 		Name: "orders", Engine: EnginePostgres, EnvironmentID: envID, ServerID: serverID,
-	}); err == nil {
-		t.Fatal("Create should fail when the row cannot be updated")
+	}); err != nil {
+		t.Fatalf("Create: %v", err)
 	}
 
-	cs.mu.Lock()
-	removes := append([]string(nil), cs.removes...)
-	servers := append([]uuid.UUID(nil), cs.removeServers...)
-	cs.mu.Unlock()
-	if len(removes) != 1 || removes[0] != "container-1" {
-		t.Fatalf("removes = %v, want the unmanageable container removed", removes)
-	}
-	if len(servers) != 1 || servers[0] != serverID {
-		t.Fatalf("remove servers = %v, want the real node %s (a zeroed row = bug)", servers, serverID)
-	}
+	waitForCondition(t, "the unmanageable container removed", func() bool {
+		cs.mu.Lock()
+		defer cs.mu.Unlock()
+		return len(cs.removes) == 1 && cs.removes[0] == "container-1" &&
+			len(cs.removeServers) == 1 && cs.removeServers[0] == serverID
+	})
 }
 
 func TestDeleteDuringProvisionRemovesLateContainer(t *testing.T) {
@@ -843,20 +916,16 @@ func TestDeleteDuringProvisionRemovesLateContainer(t *testing.T) {
 
 	if _, _, err := svc.Create(ctx, owner, CreateRequest{
 		Name: "orders", Engine: EnginePostgres, EnvironmentID: envID, ServerID: serverID,
-	}); err == nil {
-		t.Fatal("Create should fail after delete removed the row")
+	}); err != nil {
+		t.Fatalf("Create: %v", err)
 	}
 
-	cs.mu.Lock()
-	removes := append([]string(nil), cs.removes...)
-	servers := append([]uuid.UUID(nil), cs.removeServers...)
-	cs.mu.Unlock()
-	if len(removes) != 1 || removes[0] != "container-1" {
-		t.Fatalf("removes = %v, want the late container removed", removes)
-	}
-	if len(servers) != 1 || servers[0] != serverID {
-		t.Fatalf("remove servers = %v, want %s", servers, serverID)
-	}
+	waitForCondition(t, "the late container removed", func() bool {
+		cs.mu.Lock()
+		defer cs.mu.Unlock()
+		return len(cs.removes) == 1 && cs.removes[0] == "container-1" &&
+			len(cs.removeServers) == 1 && cs.removeServers[0] == serverID
+	})
 	if _, err := repo.GetDatabase(ctx, databaseID); !errors.Is(err, ErrNotFound) {
 		t.Errorf("row lookup = %v, want the row to stay deleted", err)
 	}
@@ -877,7 +946,7 @@ func TestSoftDeletedRowRejectsProvisioningWrites(t *testing.T) {
 	if _, err := repo.UpdateDatabaseContainer(ctx, row.ID, "late"); !errors.Is(err, ErrNotFound) {
 		t.Errorf("UpdateDatabaseContainer after delete = %v, want ErrNotFound", err)
 	}
-	if _, err := repo.UpdateDatabaseStatus(ctx, row.ID, StatusRunning); !errors.Is(err, ErrNotFound) {
+	if _, err := repo.UpdateDatabaseStatus(ctx, row.ID, StatusRunning, ""); !errors.Is(err, ErrNotFound) {
 		t.Errorf("UpdateDatabaseStatus after delete = %v, want ErrNotFound", err)
 	}
 	if _, err := repo.UpdateDatabaseName(ctx, row.ID, "late"); !errors.Is(err, ErrNotFound) {
@@ -898,13 +967,9 @@ func TestConcurrentRenameAndLifecycleDoNotClobber(t *testing.T) {
 		owner := uuid.New()
 		ctx := context.Background()
 
-		created, _, err := svc.Create(ctx, owner, CreateRequest{
+		created, _ := createDatabaseAndWait(t, svc, owner, CreateRequest{
 			Name: "orders", Engine: EnginePostgres, EnvironmentID: envID, ServerID: serverID,
 		})
-		if err != nil {
-			t.Fatalf("Create: %v", err)
-		}
-		cs.setRunning(created.ContainerID)
 
 		var wg sync.WaitGroup
 		wg.Add(2)
@@ -1013,18 +1078,15 @@ func TestCreateMapsDockerPortConflict(t *testing.T) {
 	svc := newTestService(repo, cs)
 	owner := uuid.New()
 
-	_, _, err := svc.Create(context.Background(), owner, CreateRequest{
+	created, _, err := svc.Create(context.Background(), owner, CreateRequest{
 		Name: "orders", Engine: EnginePostgres, EnvironmentID: envID, ServerID: serverID, PublicPort: 5433,
 	})
-	if !errors.Is(err, ErrPortConflict) {
-		t.Fatalf("Create error = %v, want ErrPortConflict", err)
-	}
-	list, err := svc.List(context.Background(), owner, DatabaseFilter{})
 	if err != nil {
-		t.Fatalf("List: %v", err)
+		t.Fatalf("Create: %v", err)
 	}
-	if len(list) != 1 || list[0].Status != StatusError {
-		t.Fatalf("databases = %+v, want one row in the error state", list)
+	row := waitForDatabaseStatus(t, svc, owner, created.ID, StatusError)
+	if row.Status != StatusError {
+		t.Fatalf("row = %+v, want the error state", row)
 	}
 	if len(cs.removes) != 0 {
 		t.Errorf("removes = %v, want none (the failed run left no container)", cs.removes)
@@ -1046,17 +1108,11 @@ func TestCreateStatusWriteTransientFailureKeepsContainer(t *testing.T) {
 
 	if _, _, err := svc.Create(context.Background(), owner, CreateRequest{
 		Name: "orders", Engine: EnginePostgres, EnvironmentID: envID, ServerID: serverID,
-	}); err == nil {
-		t.Fatal("Create should fail on a transient status write")
+	}); err != nil {
+		t.Fatalf("Create: %v", err)
 	}
 
-	row, err := svc.Get(context.Background(), owner, createdID)
-	if err != nil {
-		t.Fatalf("Get: %v", err)
-	}
-	if row.Status != StatusError {
-		t.Errorf("status = %q, want a terminal error", row.Status)
-	}
+	row := waitForDatabaseStatus(t, svc, owner, createdID, StatusError)
 	if row.ContainerID != "container-1" {
 		t.Errorf("container_id = %q, want the healthy container kept", row.ContainerID)
 	}
@@ -1080,18 +1136,17 @@ func TestCreateStatusWriteFencedByDeleteRemovesContainer(t *testing.T) {
 
 	if _, _, err := svc.Create(context.Background(), uuid.New(), CreateRequest{
 		Name: "orders", Engine: EnginePostgres, EnvironmentID: envID, ServerID: serverID,
-	}); !errors.Is(err, ErrNotFound) {
-		t.Fatalf("Create error = %v, want ErrNotFound", err)
+	}); err != nil {
+		t.Fatalf("Create: %v", err)
 	}
-	cs.mu.Lock()
-	removes := append([]string(nil), cs.removes...)
-	cs.mu.Unlock()
-	if len(removes) != 1 || removes[0] != "container-1" {
-		t.Fatalf("removes = %v, want the fenced container removed", removes)
-	}
+	waitForCondition(t, "the fenced container removed", func() bool {
+		cs.mu.Lock()
+		defer cs.mu.Unlock()
+		return len(cs.removes) == 1 && cs.removes[0] == "container-1"
+	})
 }
 
-func TestCreateCleanupSurvivesRequestCancellation(t *testing.T) {
+func TestProvisionSurvivesRequestCancellation(t *testing.T) {
 	repo := newFakeRepository()
 	serverID := repo.seedServer()
 	envID, _ := repo.seedEnvironment()
@@ -1100,33 +1155,44 @@ func TestCreateCleanupSurvivesRequestCancellation(t *testing.T) {
 	owner := uuid.New()
 
 	ctx, cancel := context.WithCancel(context.Background())
-	defer cancel()
-	var createdID uuid.UUID
-	repo.afterCreate = func(d Database) { createdID = d.ID }
-	cs.afterRun = cancel
-
-	if _, _, err := svc.Create(ctx, owner, CreateRequest{
+	created, _, err := svc.Create(ctx, owner, CreateRequest{
 		Name: "orders", Engine: EnginePostgres, EnvironmentID: envID, ServerID: serverID,
-	}); err == nil {
-		t.Fatal("Create should fail once the request context is canceled")
+	})
+	if err != nil {
+		t.Fatalf("Create: %v", err)
+	}
+	cancel()
+
+	row := waitForDatabaseStatus(t, svc, owner, created.ID, StatusRunning)
+	if row.ContainerID != "container-1" {
+		t.Errorf("container_id = %q, want the provision to finish after the request ends", row.ContainerID)
+	}
+}
+
+func TestCloseCancelsProvisioningAndMarksInterrupted(t *testing.T) {
+	repo := newFakeRepository()
+	serverID := repo.seedServer()
+	envID, _ := repo.seedEnvironment()
+	cs := &fakeContainers{runID: "container-1", suppressRunning: true}
+	svc := newTestService(repo, cs)
+	owner := uuid.New()
+
+	created, _, err := svc.Create(context.Background(), owner, CreateRequest{
+		Name: "orders", Engine: EnginePostgres, EnvironmentID: envID, ServerID: serverID,
+	})
+	if err != nil {
+		t.Fatalf("Create: %v", err)
+	}
+	if err := svc.Close(); err != nil {
+		t.Fatalf("Close: %v", err)
 	}
 
-	row, err := svc.Get(context.Background(), owner, createdID)
+	row, err := svc.Get(context.Background(), owner, created.ID)
 	if err != nil {
 		t.Fatalf("Get: %v", err)
 	}
-	if row.Status != StatusError {
-		t.Errorf("status = %q, want error (cleanup must ignore the cancel)", row.Status)
-	}
-	cs.mu.Lock()
-	removes := append([]string(nil), cs.removes...)
-	servers := append([]uuid.UUID(nil), cs.removeServers...)
-	cs.mu.Unlock()
-	if len(removes) != 1 || removes[0] != "container-1" {
-		t.Errorf("removes = %v, want the started container removed despite the cancel", removes)
-	}
-	if len(servers) != 1 || servers[0] != serverID {
-		t.Errorf("remove servers = %v, want %s", servers, serverID)
+	if row.Status != StatusError || row.StatusMessage != interruptedProvisionMessage {
+		t.Errorf("row = %+v, want error with the interrupted message", row)
 	}
 }
 

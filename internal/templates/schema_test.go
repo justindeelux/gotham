@@ -39,6 +39,7 @@ fields:
     label: Password
     type: secret
     required: true
+    generate: true
   - key: note
     label: Note
     type: text
@@ -115,7 +116,7 @@ func TestLoadSample(t *testing.T) {
 	if field := template.Fields[3]; field.Type != FieldBool || field.Default == nil || *field.Default != "false" {
 		t.Errorf("debug field = %+v", field)
 	}
-	if field := template.Fields[4]; field.Type != FieldSecret || field.Default != nil || !field.Required {
+	if field := template.Fields[4]; field.Type != FieldSecret || field.Default != nil || !field.Required || !field.Generate {
 		t.Errorf("password field = %+v", field)
 	}
 	if _, ok := catalog.Get("nope"); ok {
@@ -187,6 +188,22 @@ func TestLoadRejectsBadDefinitions(t *testing.T) {
 		"secret with default": {
 			files: map[string]string{"demo/template.yaml": strings.Replace(sampleTemplateYAML, "    type: secret\n    required: true\n", "    type: secret\n    required: true\n    default: hunter2\n", 1), "demo/compose.yaml": sampleComposeYAML},
 			want:  "must not declare a default",
+		},
+		"generate on text": {
+			files: map[string]string{"demo/template.yaml": strings.Replace(sampleTemplateYAML, "    type: text\n    required: true\n", "    type: text\n    required: true\n    generate: true\n", 1), "demo/compose.yaml": sampleComposeYAML},
+			want:  "generate applies to secret fields only",
+		},
+		"generate on number": {
+			files: map[string]string{"demo/template.yaml": strings.Replace(sampleTemplateYAML, "    type: number\n", "    type: number\n    generate: true\n", 1), "demo/compose.yaml": sampleComposeYAML},
+			want:  "generate applies to secret fields only",
+		},
+		"generate with pattern": {
+			files: map[string]string{"demo/template.yaml": strings.Replace(sampleTemplateYAML, "    required: true\n    generate: true\n", "    required: true\n    generate: true\n    pattern: ^[a-z]+$\n", 1), "demo/compose.yaml": sampleComposeYAML},
+			want:  "generated secrets must not declare a pattern",
+		},
+		"generate with short max_length": {
+			files: map[string]string{"demo/template.yaml": strings.Replace(sampleTemplateYAML, "    required: true\n    generate: true\n", "    required: true\n    generate: true\n    max_length: 12\n", 1), "demo/compose.yaml": sampleComposeYAML},
+			want:  "generated secrets need max_length of at least 16",
 		},
 		"invalid number default": {
 			files: map[string]string{"demo/template.yaml": strings.Replace(sampleTemplateYAML, "default: 2", "default: two", 1), "demo/compose.yaml": sampleComposeYAML},

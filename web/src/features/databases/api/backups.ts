@@ -64,7 +64,9 @@ export interface BackupProtectionSchedule {
 }
 
 export interface BackupProtectionSummary {
-  database_id: string;
+  resource_type: "application" | "database" | "service";
+  resource_id: string;
+  database_id?: string;
   status: BackupProtectionStatus;
   schedules: BackupProtectionSchedule[];
 }
@@ -331,13 +333,22 @@ export async function testTarget(targetId: string): Promise<TargetCheck> {
   return response.data.check;
 }
 
+export type BackupProtectionResource = "applications" | "databases" | "services";
+
+export async function getResourceBackupProtection(
+  resource: BackupProtectionResource,
+  resourceId: string,
+): Promise<BackupProtectionSummary> {
+  const response = await http.get<BackupProtectionEnvelope>(
+    `/${resource}/${resourceId}/backup-protection`,
+  );
+  return response.data.protection;
+}
+
 export async function getBackupProtection(
   databaseId: string,
 ): Promise<BackupProtectionSummary> {
-  const response = await http.get<BackupProtectionEnvelope>(
-    `/databases/${databaseId}/backup-protection`,
-  );
-  return response.data.protection;
+  return getResourceBackupProtection("databases", databaseId);
 }
 
 export function describeBackupError(error: unknown): string {

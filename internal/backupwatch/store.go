@@ -10,14 +10,18 @@ import (
 	"github.com/jackc/pgx/v5/pgtype"
 
 	"github.com/justindeelux/gotham/internal/store"
-) // Source is the persisted evidence read by the observer and the API.
+	"github.com/justindeelux/gotham/internal/store/sqlc"
+)
+
+// Source is the persisted evidence read by the observer and the API.
 type Source interface {
 	ProtectionSchedules(context.Context) ([]ScheduleEvidence, error)
 	ActiveProtectionIncidents(context.Context) ([]string, error)
-	Database(context.Context, uuid.UUID) (DatabaseInfo, error)
+	Resource(context.Context, string, uuid.UUID) (ResourceInfo, error)
 }
 
-type DatabaseInfo struct {
+type ResourceInfo struct {
+	Type string
 	ID   uuid.UUID
 	Name string
 }
@@ -44,8 +48,9 @@ func (s *storeSource) ProtectionSchedules(ctx context.Context) ([]ScheduleEviden
 	for _, row := range rows {
 		evidence := ScheduleEvidence{
 			ScheduleID:      uuidFromPG(row.ID),
-			DatabaseID:      uuidFromPG(row.DatabaseID),
-			DatabaseName:    row.DatabaseName,
+			ResourceType:    row.ResourceType,
+			ResourceID:      uuidFromPG(row.ResourceID),
+			ResourceName:    row.ResourceName,
 			ProjectID:       uuidFromPG(row.ProjectID),
 			Cron:            row.Cron,
 			TargetID:        uuidFromPG(row.TargetID),
@@ -86,18 +91,35 @@ func (s *storeSource) ActiveProtectionIncidents(ctx context.Context) ([]string, 
 	return identities, nil
 }
 
-func (s *storeSource) Database(ctx context.Context, id uuid.UUID) (DatabaseInfo, error) {
-	row, err := s.st.GetDatabase(ctx, pgUUID(id))
+// Resource resolves a live resource of any supported type. Deleted resources
+// and unknown ids return ErrNotFound.
+func (s *storeSource) Resource(ctx context.Context, resourceType string, id uuid.UUID) (ResourceInfo, error) {
+	pgID := pgUUID(id)
+	var name string
+	var err error
+	switch resourceType {
+	case ResourceDatabase:
+		var row sqlc.Database
+		row, err = s.st.GetDatabase(ctx, pgID)
+		name = row.Name
+	case ResourceApplication:
+		var row sqlc.Application
+		row, err = s.st.GetApplication(ctx, pgID)
+		name = row.Name
+	case ResourceService:
+		var row sqlc.Service
+		row, err = s.st.GetService(ctx, pgID)
+		name = row.Name
+	default:
+		return ResourceInfo{}, ErrNotFound
+	}
 	if err != nil {
 		if errors.Is(err, pgx.ErrNoRows) {
-			return DatabaseInfo{}, ErrNotFound
+			return ResourceInfo{}, ErrNotFound
 		}
-		return DatabaseInfo{}, err
+		return ResourceInfo{}, err
 	}
-	return DatabaseInfo{
-		ID:   uuidFromPG(row.ID),
-		Name: row.Name,
-	}, nil
+	return ResourceInfo{Type: resourceType, ID: id, Name: name}, nil
 }
 
 func uuidFromPG(value pgtype.UUID) uuid.UUID {

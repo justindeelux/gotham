@@ -18,9 +18,13 @@ import (
 // Detector is the stable incident detector key.
 const Detector = "backup_protection"
 
-// ResourceDatabase is the incident resource type shown by the Needs attention
-// surface. ResourceID is the database id so the existing database link works.
-const ResourceDatabase = "database"
+// Incident resource types shown by the Needs attention surface. The id is the
+// resource's own id, so the existing detail-page links work for every type.
+const (
+	ResourceApplication = "application"
+	ResourceDatabase    = "database"
+	ResourceService     = "service"
+)
 
 // Protection statuses shown by the API and UI.
 const (
@@ -61,11 +65,12 @@ const (
 )
 
 // ScheduleEvidence is one persisted schedule plus its newest qualifying
-// success and newest running run for the same database/target.
+// success and newest running run for the same resource/target.
 type ScheduleEvidence struct {
 	ScheduleID      uuid.UUID
-	DatabaseID      uuid.UUID
-	DatabaseName    string
+	ResourceType    string
+	ResourceID      uuid.UUID
+	ResourceName    string
 	ProjectID       uuid.UUID
 	Cron            string
 	TargetID        uuid.UUID
@@ -114,17 +119,23 @@ type ScheduleView struct {
 	MaxRunSeconds   int        `json:"max_run_seconds"`
 }
 
-// Summary is the protection view of one database.
+// Summary is the protection view of one resource.
 type Summary struct {
-	DatabaseID string         `json:"database_id"`
+	ResourceType string `json:"resource_type"`
+	ResourceID   string `json:"resource_id"`
+	// DatabaseID stays for the existing database API consumers; it is empty
+	// for applications and services.
+	DatabaseID string         `json:"database_id,omitempty"`
 	Status     string         `json:"status"`
 	Schedules  []ScheduleView `json:"schedules"`
 }
 
 // Identity is stable per schedule, not per slot: a later missed slot opens a
-// new occurrence only after the previous one resolved.
-func Identity(scheduleID uuid.UUID) string {
-	return incidents.Identity(Detector, ResourceDatabase, scheduleID)
+// new occurrence only after the previous one resolved. Including the resource
+// type keeps application and service schedules from sharing a database's
+// occurrence; the database fingerprint is unchanged.
+func Identity(resourceType string, scheduleID uuid.UUID) string {
+	return incidents.Identity(Detector, resourceType, scheduleID)
 }
 
 // Evaluate applies the persisted deadline rules. It is pure so the observer and
@@ -271,7 +282,7 @@ func OverdueElapsed(now time.Time, deadline time.Time) time.Duration {
 	return elapsed
 }
 
-// Summarize reduces the per-schedule evaluations to one database status. The
+// Summarize reduces the per-schedule evaluations to one resource status. The
 // worst state wins so a protected sibling cannot hide a missed schedule. An
 // open occurrence is evaluated from its original slot even after a target
 // edit, matching the observer.
@@ -290,7 +301,7 @@ func Summarize(sqlcRows []ScheduleEvidence, now time.Time, lease func(uuid.UUID,
 	for _, row := range enabled {
 		state := LeaseUnknown
 		if lease != nil {
-			state = lease(row.DatabaseID, row.RunningID)
+			state = lease(row.ResourceID, row.RunningID)
 		}
 		evaluated := Evaluate(now, row, state)
 		if open != nil && open(row.ScheduleID) {

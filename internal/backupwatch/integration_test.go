@@ -21,10 +21,12 @@ import (
 )
 
 type protectionSeed struct {
-	userID     pgtype.UUID
-	projectID  uuid.UUID
-	databaseID uuid.UUID
-	targetID   uuid.UUID
+	userID        pgtype.UUID
+	projectID     uuid.UUID
+	databaseID    uuid.UUID
+	targetID      uuid.UUID
+	serverID      pgtype.UUID
+	environmentID pgtype.UUID
 }
 
 func seedProtectionDatabase(t *testing.T, st *store.Store) protectionSeed {
@@ -55,6 +57,7 @@ func seedProtectionDatabase(t *testing.T, st *store.Store) protectionSeed {
 	seed := protectionSeed{
 		userID: user.ID, projectID: uuid.UUID(project.ID.Bytes),
 		databaseID: uuid.New(), targetID: uuid.New(),
+		serverID: server.ID, environmentID: environment.ID,
 	}
 	if _, err := st.DB.Exec(ctx, `INSERT INTO backup_targets (id, user_id, name, kind, bucket)
 		VALUES ($1, $2, 'offsite', 's3', 'bucket')`, seed.targetID, seed.userID); err != nil {
@@ -70,18 +73,47 @@ func seedProtectionDatabase(t *testing.T, st *store.Store) protectionSeed {
 
 func insertProtectionSchedule(t *testing.T, st *store.Store, seed protectionSeed, nextRun, lastSlot time.Time) uuid.UUID {
 	t.Helper()
+	return insertResourceSchedule(t, st, "database_id", seed.databaseID, seed.targetID, nextRun, lastSlot)
+}
+
+func insertResourceSchedule(
+	t *testing.T, st *store.Store, column string, resourceID, targetID uuid.UUID, nextRun, lastSlot time.Time,
+) uuid.UUID {
+	t.Helper()
 	scheduleID := uuid.New()
 	var lastSlotArg any
 	if !lastSlot.IsZero() {
 		lastSlotArg = lastSlot
 	}
 	if _, err := st.DB.Exec(context.Background(), `INSERT INTO backup_schedules
-		(id, database_id, cron, target_id, enabled, next_run_at, last_slot_at, max_run_seconds)
+		(id, `+column+`, cron, target_id, enabled, next_run_at, last_slot_at, max_run_seconds)
 		VALUES ($1, $2, '0 2 * * *', $3, true, $4, $5, 7200)`,
-		scheduleID, seed.databaseID, seed.targetID, nextRun, lastSlotArg); err != nil {
+		scheduleID, resourceID, targetID, nextRun, lastSlotArg); err != nil {
 		t.Fatalf("insert schedule: %v", err)
 	}
 	return scheduleID
+}
+
+func seedProtectionApplication(t *testing.T, st *store.Store, seed protectionSeed) uuid.UUID {
+	t.Helper()
+	id := uuid.New()
+	if _, err := st.DB.Exec(context.Background(), `INSERT INTO applications
+		(id, user_id, server_id, environment_id, name)
+		VALUES ($1, $2, $3, $4, 'storefront')`, id, seed.userID, seed.serverID, seed.environmentID); err != nil {
+		t.Fatalf("insert application: %v", err)
+	}
+	return id
+}
+
+func seedProtectionService(t *testing.T, st *store.Store, seed protectionSeed) uuid.UUID {
+	t.Helper()
+	id := uuid.New()
+	if _, err := st.DB.Exec(context.Background(), `INSERT INTO services
+		(id, user_id, server_id, environment_id, name, compose_yaml)
+		VALUES ($1, $2, $3, $4, 'watchtower', 'services: {}')`, id, seed.userID, seed.serverID, seed.environmentID); err != nil {
+		t.Fatalf("insert service: %v", err)
+	}
+	return id
 }
 
 func newProtectionService(t *testing.T, st *store.Store, now func() time.Time) (*Service, *incidents.Service) {
@@ -103,7 +135,7 @@ func newProtectionService(t *testing.T, st *store.Store, now func() time.Time) (
 func openOverdueIncident(t *testing.T, seed protectionSeed, scheduleID uuid.UUID, incidentSvc *incidents.Service, at time.Time) {
 	t.Helper()
 	_, transition, err := incidentSvc.Report(context.Background(), incidents.Observation{
-		Identity:     Identity(scheduleID),
+		Identity:     Identity(ResourceDatabase, scheduleID),
 		Detector:     Detector,
 		ScopeKind:    incidents.ScopeProject,
 		ScopeID:      seed.projectID,
@@ -125,12 +157,12 @@ func openOverdueIncident(t *testing.T, seed protectionSeed, scheduleID uuid.UUID
 	}
 }
 
-func getProtection(t *testing.T, databaseID uuid.UUID, service *Service) (int, Summary) {
+func getProtection(t *testing.T, resource, resourceID string, service *Service) (int, Summary) {
 	t.Helper()
 	router := chi.NewRouter()
 	Mount(router, func(next http.Handler) http.Handler { return next }, service)
 	request := httptest.NewRequest(http.MethodGet,
-		"/v1/databases/"+databaseID.String()+"/backup-protection", nil)
+		"/v1/"+resource+"/"+resourceID+"/backup-protection", nil)
 	recorder := httptest.NewRecorder()
 	router.ServeHTTP(recorder, request)
 	var body struct {
@@ -151,7 +183,7 @@ func TestProtectionHTTPStates(t *testing.T) {
 		st := scratchStore(t)
 		seed := seedProtectionDatabase(t, st)
 		service, _ := newProtectionService(t, st, func() time.Time { return now })
-		code, summary := getProtection(t, seed.databaseID, service)
+		code, summary := getProtection(t, "databases", seed.databaseID.String(), service)
 		if code != http.StatusOK {
 			t.Fatalf("status = %d", code)
 		}
@@ -165,7 +197,7 @@ func TestProtectionHTTPStates(t *testing.T) {
 		seed := seedProtectionDatabase(t, st)
 		insertProtectionSchedule(t, st, seed, now.Add(time.Hour), time.Time{})
 		service, _ := newProtectionService(t, st, func() time.Time { return now })
-		code, summary := getProtection(t, seed.databaseID, service)
+		code, summary := getProtection(t, "databases", seed.databaseID.String(), service)
 		if code != http.StatusOK {
 			t.Fatalf("status = %d", code)
 		}
@@ -182,7 +214,7 @@ func TestProtectionHTTPStates(t *testing.T) {
 		scheduleID := insertProtectionSchedule(t, st, seed, slot, slot)
 		service, incidentSvc := newProtectionService(t, st, func() time.Time { return now })
 		openOverdueIncident(t, seed, scheduleID, incidentSvc, now)
-		code, summary := getProtection(t, seed.databaseID, service)
+		code, summary := getProtection(t, "databases", seed.databaseID.String(), service)
 		if code != http.StatusOK {
 			t.Fatalf("status = %d", code)
 		}
@@ -203,11 +235,12 @@ func TestObserverSweepOpensAndResolvesOverdueIncident(t *testing.T) {
 	service, _ := newProtectionService(t, st, func() time.Time { return now })
 
 	service.tick(ctx)
+	service.tick(ctx)
 	active, err := st.ListActiveBackupProtectionIncidents(ctx)
 	if err != nil {
 		t.Fatalf("list active incidents: %v", err)
 	}
-	if len(active) != 1 || active[0].IdentityKey != Identity(scheduleID) {
+	if len(active) != 1 || active[0].IdentityKey != Identity(ResourceDatabase, scheduleID) {
 		t.Fatalf("active incidents = %+v", active)
 	}
 
@@ -225,5 +258,114 @@ func TestObserverSweepOpensAndResolvesOverdueIncident(t *testing.T) {
 	}
 	if len(active) != 0 {
 		t.Fatalf("incident did not resolve: %+v", active)
+	}
+}
+
+func TestProtectionHTTPRoutesCoverApplicationsAndServices(t *testing.T) {
+	now := time.Now().UTC().Truncate(time.Second)
+	st := scratchStore(t)
+	seed := seedProtectionDatabase(t, st)
+	applicationID := seedProtectionApplication(t, st, seed)
+	serviceID := seedProtectionService(t, st, seed)
+	insertResourceSchedule(t, st, "application_id", applicationID, seed.targetID, now.Add(time.Hour), time.Time{})
+	insertResourceSchedule(t, st, "service_id", serviceID, seed.targetID, now.Add(time.Hour), time.Time{})
+	insertProtectionSchedule(t, st, seed, now.Add(time.Hour), time.Time{})
+	service, _ := newProtectionService(t, st, func() time.Time { return now })
+
+	for _, tc := range []struct {
+		resource string
+		id       uuid.UUID
+		wantType string
+	}{
+		{"applications", applicationID, ResourceApplication},
+		{"services", serviceID, ResourceService},
+		{"databases", seed.databaseID, ResourceDatabase},
+	} {
+		code, summary := getProtection(t, tc.resource, tc.id.String(), service)
+		if code != http.StatusOK {
+			t.Fatalf("%s status = %d", tc.resource, code)
+		}
+		if summary.ResourceType != tc.wantType || summary.ResourceID != tc.id.String() {
+			t.Fatalf("%s summary = %+v", tc.resource, summary)
+		}
+		if len(summary.Schedules) != 1 || summary.Schedules[0].Status != StatusScheduled {
+			t.Fatalf("%s schedules = %+v", tc.resource, summary.Schedules)
+		}
+		if tc.wantType == ResourceDatabase {
+			if summary.DatabaseID != tc.id.String() {
+				t.Fatalf("database_id = %q", summary.DatabaseID)
+			}
+		} else if summary.DatabaseID != "" {
+			t.Fatalf("%s exposed database_id %q", tc.resource, summary.DatabaseID)
+		}
+	}
+
+	code, _ := getProtection(t, "applications", uuid.New().String(), service)
+	if code != http.StatusNotFound {
+		t.Fatalf("unknown application = %d, want 404", code)
+	}
+}
+
+func TestObserverRaisesAndResolvesApplicationAndServiceIncidents(t *testing.T) {
+	ctx := context.Background()
+	st := scratchStore(t)
+	seed := seedProtectionDatabase(t, st)
+	applicationID := seedProtectionApplication(t, st, seed)
+	serviceID := seedProtectionService(t, st, seed)
+	now := time.Now().UTC().Truncate(time.Second)
+	slot := now.Add(-2 * time.Hour)
+	applicationSchedule := insertResourceSchedule(t, st, "application_id", applicationID, seed.targetID, slot, slot)
+	serviceSchedule := insertResourceSchedule(t, st, "service_id", serviceID, seed.targetID, slot, slot)
+	service, _ := newProtectionService(t, st, func() time.Time { return now })
+
+	service.tick(ctx)
+	active, err := st.ListActiveBackupProtectionIncidents(ctx)
+	if err != nil {
+		t.Fatalf("list active incidents: %v", err)
+	}
+	if len(active) != 2 {
+		t.Fatalf("active incidents = %+v", active)
+	}
+	for _, tc := range []struct {
+		scheduleID uuid.UUID
+		wantType   string
+		wantID     uuid.UUID
+		wantName   string
+	}{
+		{applicationSchedule, ResourceApplication, applicationID, "storefront"},
+		{serviceSchedule, ResourceService, serviceID, "watchtower"},
+	} {
+		incident, err := st.GetActiveIncidentByIdentity(ctx, Identity(tc.wantType, tc.scheduleID))
+		if err != nil {
+			t.Fatalf("read %s incident: %v", tc.wantType, err)
+		}
+		if incident.ResourceType != tc.wantType || uuid.UUID(incident.ResourceID.Bytes) != tc.wantID ||
+			incident.ResourceName != tc.wantName {
+			t.Fatalf("%s incident = %+v", tc.wantType, incident)
+		}
+		if uuid.UUID(incident.ProjectID.Bytes) != seed.projectID {
+			t.Fatalf("%s incident project = %s", tc.wantType, uuid.UUID(incident.ProjectID.Bytes))
+		}
+	}
+
+	for _, tc := range []struct {
+		column string
+		id     uuid.UUID
+	}{{"application_id", applicationID}, {"service_id", serviceID}} {
+		if _, err := st.DB.Exec(ctx, `INSERT INTO backups
+			(id, `+tc.column+`, type, status, target_id, created_at, finished_at)
+			VALUES ($1, $2, 'manual', 'completed', $3, $4, $4)`,
+			uuid.New(), tc.id, seed.targetID, now.Add(-time.Hour)); err != nil {
+			t.Fatalf("insert %s backup: %v", tc.column, err)
+		}
+	}
+	now = now.Add(time.Minute)
+	service.tick(ctx)
+	active, err = st.ListActiveBackupProtectionIncidents(ctx)
+	if err != nil {
+		t.Fatalf("list active incidents after success: %v", err)
+	}
+	if len(active) != 0 {
+		t.Fatalf("incidents did not resolve: %+v", active)
 	}
 }

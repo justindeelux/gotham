@@ -184,7 +184,7 @@ func TestBackupProtectionDSTDeadlinesUseCronSlots(t *testing.T) {
 	assertDeadline := func(t *testing.T, slot time.Time) {
 		t.Helper()
 		ev := backupwatch.ScheduleEvidence{
-			ScheduleID: uuid.New(), DatabaseID: uuid.New(), Enabled: true,
+			ScheduleID: uuid.New(), ResourceType: backupwatch.ResourceDatabase, ResourceID: uuid.New(), Enabled: true,
 			NextRunAt: slot, MaxRunSeconds: int(2 * time.Hour / time.Second),
 		}
 		if got := backupwatch.Evaluate(slot.Add(29*time.Minute), ev, backupwatch.LeaseUnknown); got.Status != backupwatch.StatusPending {

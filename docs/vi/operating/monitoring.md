@@ -221,11 +221,12 @@ truy cập control plane đó thấy. Đây không phải SLA toàn Internet và
 nhiều vùng, đội thử bên ngoài, giám sát TCP/UDP tùy ý hay trang trạng thái công
 khai.
 
-## Bảo vệ sao lưu cơ sở dữ liệu
+## Bảo vệ sao lưu
 
 Bảo vệ sao lưu trả lời liệu mỗi **lịch đang bật** có thực sự tạo ra bản sao lưu
-thành công cho kỳ hiện tại hay không. Thành phần này đọc lịch và kết quả sao lưu
-đã lưu mỗi phút một lần trong control plane. Nó không hỏi node để lấy số liệu,
+thành công cho kỳ hiện tại hay không. Nó áp dụng cho bản dump cơ sở dữ liệu,
+lưu trữ của ứng dụng và volume của dịch vụ với cùng một quy tắc. Thành phần này
+đọc lịch và kết quả sao lưu đã lưu mỗi phút một lần trong control plane. Nó không hỏi node để lấy số liệu,
 không khởi động bản sao lưu cạnh tranh và không hủy hay sửa một tác vụ đang chạy;
 thông báo thành công hoặc thất bại của từng lần sao lưu vẫn giữ nguyên.
 
@@ -234,7 +235,7 @@ thông báo thành công hoặc thất bại của từng lần sao lưu vẫn g
 - Kỳ dự kiến là `next_run_at` của lịch khi giá trị này vẫn ở quá khứ, nếu không
   là kỳ gần nhất bộ lập lịch đã đi qua (`last_slot_at`).
 - Một kỳ trở thành **quá hạn 30 phút sau thời điểm đến hạn** khi không có bản sao
-  lưu hoàn tất nào cho cùng cơ sở dữ liệu và đích bắt đầu từ kỳ đó trở đi. Khoảng
+  lưu hoàn tất nào cho cùng tài nguyên và đích bắt đầu từ kỳ đó trở đi. Khoảng
   này cố định và không phụ thuộc tần suất cron, nên lịch ngày, tuần và tháng dùng
   cùng một quy tắc thay vì ngưỡng 24 giờ.
 - Một bản sao lưu đang chạy cho kỳ đó sẽ hoãn hạn. Nó bị **kẹt** khi lease của
@@ -248,15 +249,16 @@ thông báo thành công hoặc thất bại của từng lần sao lưu vẫn g
   lại theo đích mới, nên lịch đã được bảo vệ trên đích cũ không cảnh báo ngay.
   Sự cố đang mở vẫn mở cho tới khi có bản sao lưu đủ điều kiện, và kỳ tiếp theo
   sau thay đổi được đánh giá bình thường.
-- Xóa cơ sở dữ liệu hoặc xóa lịch sẽ đóng sự cố với lý do tài nguyên. Tắt lịch
+- Xóa tài nguyên hoặc xóa lịch sẽ đóng sự cố với lý do tài nguyên. Tắt lịch
   đóng sự cố với lý do chính sách. Cả hai đều không gửi thông báo phục hồi.
-- Cơ sở dữ liệu không có lịch đang bật hiển thị **Chưa cấu hình sao lưu** và
+- Tài nguyên không có lịch đang bật hiển thị **Chưa cấu hình sao lưu** và
   không mở cảnh báo.
 
 Sự cố chỉ được giải quyết khi một bản sao lưu đủ điều kiện thành công. Bằng chứng
 hiển thị lần thành công gần nhất, kỳ dự kiến, đích và thời gian quá hạn. Thẻ
-**Bảo vệ sao lưu** trong tab Backups của cơ sở dữ liệu hiển thị cùng bản tóm tắt,
-và dòng trong Needs attention mở đúng tab đó. Thành phần quan sát chỉ là mô hình
+**Bảo vệ sao lưu** trong tab Backups của tài nguyên hiển thị cùng bản tóm tắt,
+và dòng trong Needs attention mở đúng tab đó cho cả ứng dụng, dịch vụ và cơ sở
+dữ liệu. Thành phần quan sát chỉ là mô hình
 đọc: nó không xác minh bản sao lưu có thể phục hồi, không chạy thử phục hồi và
 không thay thế thông báo của từng lần sao lưu.
 

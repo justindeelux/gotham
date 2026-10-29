@@ -1,6 +1,6 @@
 <script setup lang="ts">
 import { NSpace } from "naive-ui";
-import { inject } from "vue";
+import { computed, inject } from "vue";
 
 import BackupRunsCard from "@/features/databases/components/BackupRunsCard.vue";
 import BackupProtectionCard from "@/features/databases/components/BackupProtectionCard.vue";
@@ -10,11 +10,37 @@ import RestoreHistoryCard from "@/features/databases/components/RestoreHistoryCa
 import { databaseBackupsKey } from "@/features/databases/composables/useDatabaseBackups";
 
 const backups = inject(databaseBackupsKey)!;
+
+const protection = computed(() =>
+  backups.backupsStore.protectionOf(backups.dbId.value),
+);
+
+// A run older than the loaded page has no element to scroll to; fall back to
+// the runs card instead of leaving a dead anchor.
+function runHref(backupId?: string): string {
+  if (!backupId) {
+    return "#backup-runs";
+  }
+  return backups.backups.value.some((item) => item.id === backupId)
+    ? `#backup-run-${backupId}`
+    : "#backup-runs";
+}
+
+function targetHref(targetId: string): string {
+  return `#backup-target-${targetId}`;
+}
 </script>
 
 <template>
   <NSpace vertical :size="16" style="margin-top: 16px">
-    <BackupProtectionCard />
+    <BackupProtectionCard
+      :summary="protection"
+      :loading="backups.backupsStore.protectionLoading"
+      :error="backups.backupsStore.protectionError"
+      :target-label="backups.targetLabel"
+      :target-href="targetHref"
+      :run-href="runHref"
+    />
     <BackupRunsCard />
     <RestoreHistoryCard v-if="backups.restores.value.length > 0" />
     <BackupSchedulesCard />

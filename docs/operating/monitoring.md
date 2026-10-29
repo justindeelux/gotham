@@ -228,11 +228,12 @@ reaching that control plane would see. It is not an Internet-wide SLA and does
 not cover regions, external probe fleets, arbitrary TCP/UDP monitors or public
 status pages.
 
-## Database backup protection
+## Backup protection
 
 Backup protection answers whether each **enabled schedule** has actually
-produced a successful backup for its current slot. It reads the persisted
-schedule and backup rows once per minute in the control plane. It never polls a
+produced a successful backup for its current slot. It covers database dumps,
+application storage and service volumes with the same rules. It reads the
+persisted schedule and backup rows once per minute in the control plane. It never polls a
 node for metrics, never starts a competing backup and never cancels or mutates a
 running job; individual backup success and failure notifications keep their
 existing behaviour.
@@ -242,7 +243,7 @@ existing behaviour.
 - The expected slot is the schedule's `next_run_at` while it is still in the
   past, otherwise the last slot the scheduler advanced past (`last_slot_at`).
 - A slot becomes **overdue 30 minutes after its due time** when no completed
-  backup for the same database and target started at or after the slot. The
+  backup for the same resource and target started at or after the slot. The
   window is fixed and does not depend on the cron cadence, so daily, weekly and
   monthly schedules use the same rule rather than a 24-hour threshold.
 - A running backup for that slot defers the deadline. It is **stuck** when its
@@ -257,16 +258,17 @@ existing behaviour.
   old target does not alert immediately. An already-open incident stays open
   until a qualifying success, and the next slot after the change is evaluated
   normally.
-- Deleting a database or removing a schedule closes the incident with a
+- Deleting a resource or removing a schedule closes the incident with a
   resource reason. Disabling a schedule closes it with a policy reason. Neither
   sends a recovery message.
-- A database with no enabled schedule shows **Backup not configured** and does
+- A resource with no enabled schedule shows **Backup not configured** and does
   not open an alert.
 
 The incident resolves only when a qualifying backup succeeds. Its evidence
 shows the last success, the expected slot, the target and the overdue elapsed
-time. The **Backup protection** card on the database's Backups tab shows the
-same summary, and the Needs attention row opens that tab. The observer is a
+time. The **Backup protection** card on the resource's Backups tab shows the
+same summary, and the Needs attention row opens that tab for applications,
+services and databases alike. The observer is a
 read model: it does not verify that a backup can be restored, does not run
 restore tests and does not replace the per-run backup notification.
 

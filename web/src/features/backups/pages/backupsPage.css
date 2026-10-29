@@ -16,10 +16,6 @@
   margin-bottom: var(--space-3);
 }
 
-.filters__spacer {
-  flex: 1;
-}
-
 .schedules-card {
   margin-top: var(--space-4);
 }
@@ -104,10 +100,6 @@
   .filters :deep(.n-select),
   .filters :deep(.n-button) {
     width: 100%;
-  }
-
-  .filters__spacer {
-    display: none;
   }
 
   .backups-table,

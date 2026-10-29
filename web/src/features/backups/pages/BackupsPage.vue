@@ -111,10 +111,6 @@ function restorePrompt(backup: BackupRun): string {
           >
             {{ t("backups.filters.refresh") }}
           </NButton>
-          <span class="filters__spacer" />
-          <NButton type="primary" @click="overview.openBackupNow()">
-            {{ t("backups.backupNow.action") }}
-          </NButton>
         </div>
 
         <NAlert

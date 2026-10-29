@@ -172,7 +172,20 @@ test.describe("database backups", () => {
     );
 
     await page.goto(nestedURL(projectId, environmentId, "databases", dbId));
+    const runsRequest = page.waitForRequest(
+      (request) =>
+        request.method() === "GET" &&
+        request.url().includes("/api/v1/backups?") &&
+        request.url().includes(`resource_id=${dbId}`),
+    );
+    const schedulesRequest = page.waitForRequest(
+      (request) =>
+        request.method() === "GET" &&
+        request.url().includes("/api/v1/backups/schedules?") &&
+        request.url().includes(`resource_id=${dbId}`),
+    );
     await page.locator(".n-tabs-tab").filter({ hasText: "Backups" }).click();
+    await Promise.all([runsRequest, schedulesRequest]);
   });
 
   test("schedule toggle sends only cron and enabled, even with a deleted provider", async ({

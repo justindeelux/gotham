@@ -36,7 +36,12 @@ const kindOptions = computed(() => [
     style="width: 560px; max-width: 94vw"
     @after-leave="catalog.resetForm()"
   >
-    <NForm label-placement="top" :show-feedback="false" class="provider-form form-container">
+    <NForm
+      label-placement="top"
+      :show-feedback="false"
+      class="provider-form form-container"
+      @submit.prevent="() => void catalog.save()"
+    >
       <div class="form-row">
         <NFormItem :label="t('backups.storage.name')" class="field-name">
           <NInput
@@ -133,6 +138,7 @@ const kindOptions = computed(() => [
         </NButton>
         <NButton
           type="primary"
+          attr-type="submit"
           :loading="catalog.backupsStore.providersActing"
           @click="() => void catalog.save()"
         >

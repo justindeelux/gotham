@@ -359,12 +359,18 @@ export function useResourceBackups(
     }
   });
 
-  watch(active, (isActive) => {
-    if (isActive) {
-      void fetchBackupTab();
-    }
-    syncBackupPolling();
-  });
+  // A tab pane mounts already active, so the first load cannot wait for a
+  // false->true transition.
+  watch(
+    active,
+    (isActive) => {
+      if (isActive) {
+        void fetchBackupTab();
+      }
+      syncBackupPolling();
+    },
+    { immediate: true },
+  );
 
   watch(hasRunningBackup, () => {
     syncBackupPolling();

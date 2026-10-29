@@ -41,6 +41,8 @@ const en = {
     copyLabel: "Copy {label}",
     copied: "{label} copied to clipboard.",
     copyFailed: "Could not copy {label}; select the value and copy it manually.",
+    generated: "{label} generated.",
+    copiedAnnouncement: "Copied.",
   },
   preview: {
     servicesOne: "{count} service",

@@ -10,7 +10,7 @@ import {
   NSwitch,
   useMessage,
 } from "naive-ui";
-import { computed, nextTick } from "vue";
+import { computed, nextTick, ref } from "vue";
 
 import type { TemplateField, TemplateValues } from "@/features/templates/api/templates";
 import { templateOverlayFieldHelp } from "@/features/templates/api/templates";
@@ -41,6 +41,7 @@ const emit = defineEmits<{
 
 const message = useMessage();
 const secretInputs = new Map<string, SecretInput>();
+const announcement = ref("");
 
 function t(key: string, params?: Record<string, string | number>): string {
   void activeLocale.value;
@@ -101,7 +102,9 @@ function setSecretInput(key: string, input: unknown): void {
 }
 
 function fillGenerated(field: TemplateField): void {
-  setValue(field.key, generateSecret());
+  const length = field.max_length ? Math.min(24, field.max_length) : 24;
+  setValue(field.key, generateSecret(length));
+  announcement.value = t("templates.secret.generated", { label: field.label });
   void nextTick(() => {
     const input = secretInputs.get(field.key);
     if (input) {
@@ -113,6 +116,7 @@ function fillGenerated(field: TemplateField): void {
 async function copyValue(field: TemplateField): Promise<void> {
   try {
     await navigator.clipboard.writeText(fieldValue(field));
+    announcement.value = t("templates.secret.copiedAnnouncement");
     message.success(t("templates.secret.copied", { label: field.label }));
   } catch {
     message.warning(t("templates.secret.copyFailed", { label: field.label }));
@@ -122,6 +126,7 @@ async function copyValue(field: TemplateField): Promise<void> {
 
 <template>
   <NForm label-placement="top" class="dynamic-form form--grid">
+    <p class="sr-only" role="status" aria-live="polite">{{ announcement }}</p>
     <NFormItem
       v-for="field in fields"
       :key="field.key"
@@ -143,7 +148,7 @@ async function copyValue(field: TemplateField): Promise<void> {
       />
 
       <template v-else-if="field.type === 'secret'">
-        <NInputGroup v-if="field.generate">
+        <NInputGroup v-if="field.generate" class="dynamic-form__secret-group">
           <NInput
             :ref="(input) => setSecretInput(field.key, input)"
             type="password"
@@ -235,6 +240,43 @@ async function copyValue(field: TemplateField): Promise<void> {
 
 .dynamic-form__item {
   min-width: 0;
+}
+
+.dynamic-form__secret-group {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  justify-content: start;
+  justify-items: start;
+  gap: var(--space-2);
+}
+
+.dynamic-form__secret-group :deep(.n-input) {
+  grid-column: 1 / -1;
+  min-width: 0;
+  border-radius: var(--radius-sm) !important;
+}
+
+.dynamic-form__secret-group :deep(.n-button) {
+  padding-left: var(--space-3);
+  padding-right: var(--space-3);
+  border-radius: var(--radius-sm) !important;
+}
+
+.dynamic-form__secret-group :deep(.n-button .n-button__state-border),
+.dynamic-form__secret-group :deep(.n-button .n-button__border) {
+  border-radius: var(--radius-sm) !important;
+}
+
+.sr-only {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  margin: -1px;
+  padding: 0;
+  overflow: hidden;
+  clip: rect(0, 0, 0, 0);
+  white-space: nowrap;
+  border: 0;
 }
 
 @media (max-width: 720px) {

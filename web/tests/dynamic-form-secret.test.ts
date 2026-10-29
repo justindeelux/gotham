@@ -21,7 +21,7 @@ const fields: TemplateField[] = [
 
 const writeText = vi.fn<() => Promise<void>>().mockResolvedValue(undefined);
 
-function mountForm(values: TemplateValues) {
+function mountForm(values: TemplateValues, formFields: TemplateField[] = fields) {
   return mount(
     defineComponent({
       setup() {
@@ -30,7 +30,7 @@ function mountForm(values: TemplateValues) {
           h(NMessageProvider, null, {
             default: () =>
               h(DynamicForm, {
-                fields,
+                fields: formFields,
                 modelValue: modelValue.value,
                 "onUpdate:modelValue": (next: TemplateValues) => {
                   modelValue.value = next;
@@ -108,6 +108,39 @@ describe("DynamicForm secret generation", () => {
 
     expect(writeText).toHaveBeenCalledWith(generated);
     expect(globalThis.document.body.textContent).toContain("Database password copied to clipboard.");
+    wrapper.unmount();
+  });
+
+  it("announces generation and copy in the live region without the value", async () => {
+    const wrapper = mountForm({ db_password: "", root_password: "", domain: "" });
+    const live = wrapper.find('.dynamic-form [role="status"]');
+    expect(live.text()).toBe("");
+
+    await wrapper.find('[aria-label="Generate Database password"]').trigger("click");
+    await flushPromises();
+    expect(live.text()).toBe("Database password generated.");
+    expect(live.text()).not.toContain(valueOf(wrapper, "db_password"));
+
+    await wrapper.find('[aria-label="Copy Database password"]').trigger("click");
+    await flushPromises();
+    expect(live.text()).toBe("Copied.");
+    wrapper.unmount();
+  });
+
+  it("caps a generated value at the field's max_length", async () => {
+    const wrapper = mountForm({ short: "" }, [
+      {
+        key: "short",
+        label: "Short secret",
+        type: "secret",
+        required: true,
+        generate: true,
+        max_length: 16,
+      },
+    ]);
+    await wrapper.find('[aria-label="Generate Short secret"]').trigger("click");
+    await flushPromises();
+    expect(valueOf(wrapper, "short")).toMatch(/^[A-Za-z0-9]{16}$/);
     wrapper.unmount();
   });
 });

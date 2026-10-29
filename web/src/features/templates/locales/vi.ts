@@ -43,6 +43,8 @@ const vi: typeof en = {
     copyLabel: "Sao chép {label}",
     copied: "Đã sao chép {label} vào bộ nhớ tạm.",
     copyFailed: "Không thể sao chép {label}; hãy chọn giá trị và sao chép thủ công.",
+    generated: "Đã tạo {label}.",
+    copiedAnnouncement: "Đã sao chép.",
   },
   preview: {
     servicesOne: "{count} dịch vụ",

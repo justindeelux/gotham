@@ -173,6 +173,13 @@ function json(status: number, body: unknown) {
   return { status, contentType: "application/json", body: JSON.stringify(body) };
 }
 
+interface ApiOverrides {
+  application?: Record<string, unknown>;
+  database?: Record<string, unknown>;
+  service?: Record<string, unknown>;
+  deploys?: Record<string, unknown>[];
+}
+
 function color(value: string): string {
   return value.replaceAll(" ", "");
 }
@@ -217,7 +224,15 @@ test.afterAll(async () => {
   });
 });
 
-async function mockApi(page: Page, role = "owner"): Promise<void> {
+async function mockApi(
+  page: Page,
+  role = "owner",
+  overrides: ApiOverrides = {},
+): Promise<void> {
+  const app = { ...application, ...overrides.application };
+  const db = { ...database, ...overrides.database };
+  const svc = { ...service, ...overrides.service };
+  const deploys = overrides.deploys ?? [];
   await page.addInitScript((value) => {
     window.localStorage.setItem("gotham.auth.session", value);
   }, JSON.stringify({ ...session, user: { ...session.user, role } }));
@@ -251,15 +266,19 @@ async function mockApi(page: Page, role = "owner"): Promise<void> {
       return;
     }
     if (get && path === "/applications/app-1") {
-      await route.fulfill(json(200, { application }));
+      await route.fulfill(json(200, { application: app }));
       return;
     }
     if (get && path === "/applications/app-1/deployments") {
       await route.fulfill(json(200, { deployments: [] }));
       return;
     }
+    if (get && path === "/databases") {
+      await route.fulfill(json(200, { databases: [db] }));
+      return;
+    }
     if (get && path === "/databases/db-1") {
-      await route.fulfill(json(200, { database }));
+      await route.fulfill(json(200, { database: db }));
       return;
     }
     if (get && path === "/databases/db-1/credentials") {
@@ -271,7 +290,7 @@ async function mockApi(page: Page, role = "owner"): Promise<void> {
       return;
     }
     if (get && path === "/services/svc-1") {
-      await route.fulfill(json(200, { service }));
+      await route.fulfill(json(200, { service: svc }));
       return;
     }
     if (get && path === "/services/svc-1/containers") {
@@ -279,7 +298,7 @@ async function mockApi(page: Page, role = "owner"): Promise<void> {
       return;
     }
     if (get && path === "/services/svc-1/deploys") {
-      await route.fulfill(json(200, { deploys: [] }));
+      await route.fulfill(json(200, { deploys }));
       return;
     }
     await route.fulfill(json(200, {}));
@@ -464,4 +483,184 @@ test("member views keep the same header and lifecycle controls", async ({
       `${route.name} keeps its lifecycle controls for a member`,
     ).toBeGreaterThan(0);
   }
+});
+
+const detailPaths = {
+  application: "/projects/proj-1/environments/env-1/applications/app-1",
+  database: "/projects/proj-1/environments/env-1/databases/db-1",
+  service: "/projects/proj-1/environments/env-1/services/svc-1",
+};
+
+interface BannerCase {
+  name: string;
+  path: string;
+  role?: string;
+  overrides: ApiOverrides;
+  text: string;
+}
+
+const bannerCases: BannerCase[] = [
+  {
+    name: "database provisioning",
+    path: detailPaths.database,
+    overrides: { database: { status: "creating" } },
+    text: "Setting up the database",
+  },
+  {
+    name: "database provisioning error",
+    path: detailPaths.database,
+    overrides: {
+      database: { status: "error", status_message: "Image pull failed" },
+    },
+    text: "Image pull failed",
+  },
+  {
+    name: "service deploying",
+    path: detailPaths.service,
+    overrides: {
+      deploys: [
+        {
+          id: "dep-1",
+          service_id: "svc-1",
+          state: "deploying",
+          created_at: "2026-01-03T00:00:00Z",
+          updated_at: "2026-01-03T00:00:00Z",
+        },
+      ],
+    },
+    text: "The deploy is running in the background",
+  },
+  {
+    name: "application pending changes",
+    path: detailPaths.application,
+    overrides: { application: { pending_changes: ["environment"] } },
+    text: "Redeploy to apply changes",
+  },
+  {
+    name: "application blocked terminal",
+    path: `${detailPaths.application}?tab=terminal`,
+    role: "member",
+    overrides: {},
+    text: "Terminal not available",
+  },
+];
+
+interface BannerLayout {
+  count: number;
+  gaps: number[];
+  bottomGap: number;
+  minSpace: number;
+  bannerBottom: number;
+  actionsTop: number | null;
+}
+
+async function measureBanners(page: Page): Promise<BannerLayout> {
+  return page.evaluate(() => {
+    const container = document.querySelector<HTMLElement>(".page-banners")!;
+    const head = document.querySelector<HTMLElement>(".page-head")!;
+    const alerts = Array.from(
+      container.querySelectorAll<HTMLElement>(".n-alert"),
+    );
+    const rects = alerts.map((alert) => alert.getBoundingClientRect());
+    const gaps: number[] = [];
+    for (let index = 1; index < rects.length; index += 1) {
+      gaps.push(
+        Number((rects[index]!.top - rects[index - 1]!.bottom).toFixed(2)),
+      );
+    }
+    const last = rects[rects.length - 1]!;
+    const actions = head.querySelector<HTMLElement>(".page-actions");
+    return {
+      count: alerts.length,
+      gaps,
+      bottomGap: Number(
+        (head.getBoundingClientRect().top - last.bottom).toFixed(2),
+      ),
+      minSpace: parseFloat(
+        getComputedStyle(document.documentElement).getPropertyValue("--space-3"),
+      ),
+      bannerBottom: last.bottom,
+      actionsTop: actions ? actions.getBoundingClientRect().top : null,
+    };
+  });
+}
+
+const detailViewports = [
+  { width: 1366, height: 900 },
+  { width: 390, height: 844 },
+];
+
+for (const bannerCase of bannerCases) {
+  test(`${bannerCase.name} banner does not touch the page header`, async ({
+    page,
+  }) => {
+    test.setTimeout(120_000);
+    await mockApi(page, bannerCase.role ?? "owner", bannerCase.overrides);
+
+    for (const viewport of detailViewports) {
+      await page.setViewportSize(viewport);
+      await page.goto(`${baseURL}${bannerCase.path}`);
+      await page.locator(".page-head h1").first().waitFor();
+      const banner = page.locator(".page-banners .n-alert").first();
+      await expect(banner).toContainText(bannerCase.text);
+
+      const layout = await measureBanners(page);
+      expect(
+        layout.count,
+        `${bannerCase.name} banner count at ${viewport.width}px`,
+      ).toBe(1);
+      expect(
+        layout.minSpace,
+        `${bannerCase.name} space token resolves`,
+      ).toBe(12);
+      expect(
+        layout.bottomGap,
+        `${bannerCase.name} banner to header gap at ${viewport.width}px`,
+      ).toBeGreaterThanOrEqual(layout.minSpace);
+      for (const gap of layout.gaps) {
+        expect(
+          gap,
+          `${bannerCase.name} banner to banner gap at ${viewport.width}px`,
+        ).toBeGreaterThanOrEqual(layout.minSpace);
+      }
+      expect(
+        layout.actionsTop,
+        `${bannerCase.name} header actions at ${viewport.width}px`,
+      ).not.toBeNull();
+      expect(
+        layout.actionsTop!,
+        `${bannerCase.name} header actions stay below the banner at ${viewport.width}px`,
+      ).toBeGreaterThanOrEqual(layout.bannerBottom);
+    }
+  });
+}
+
+test("a page without banners keeps its header position", async ({ page }) => {
+  await mockApi(page);
+  await page.goto(`${baseURL}${detailPaths.database}`);
+  await page.locator(".page-head h1").first().waitFor();
+
+  const layout = await page.evaluate(() => {
+    const container = document.querySelector<HTMLElement>(".page-banners");
+    const head = document.querySelector<HTMLElement>(".page-head")!;
+    return {
+      containerHeight: container
+        ? container.getBoundingClientRect().height
+        : null,
+      containerMargin: container
+        ? getComputedStyle(container).marginBottom
+        : null,
+      headTop: head.getBoundingClientRect().top,
+      containerBottom: container
+        ? container.getBoundingClientRect().bottom
+        : null,
+    };
+  });
+
+  expect(layout.containerHeight).toBe(0);
+  expect(layout.containerMargin).toBe("0px");
+  expect(
+    Math.abs(layout.headTop - layout.containerBottom!),
+    "header starts right where the empty banner container ends",
+  ).toBeLessThanOrEqual(0.5);
 });

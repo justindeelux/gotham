@@ -65,10 +65,10 @@ const activeTab = ref("overview");
     "
   >
     <template #banner>
-      <NAlert v-if="actionError" type="error" :show-icon="true" class="detail-banner">
+      <NAlert v-if="actionError" type="error" :show-icon="true">
         {{ actionError }}
       </NAlert>
-      <ServiceDeployBanner :is-deploying="isDeploying" class="detail-banner" />
+      <ServiceDeployBanner :is-deploying="isDeploying" />
     </template>
 
     <template #header>
@@ -136,9 +136,3 @@ const activeTab = ref("overview");
     </NTabs>
   </ResourceDetailFrame>
 </template>
-
-<style scoped>
-.detail-banner {
-  margin-bottom: var(--space-3);
-}
-</style>

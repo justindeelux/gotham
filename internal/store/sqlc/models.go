@@ -116,6 +116,8 @@ type Backup struct {
 	CleanupNextAttemptAt pgtype.Timestamptz `json:"cleanup_next_attempt_at"`
 	ProviderRemoved      bool               `json:"provider_removed"`
 	PauseDuringBackup    bool               `json:"pause_during_backup"`
+	ChecksumSha256       *string            `json:"checksum_sha256"`
+	ChecksumAlgo         *string            `json:"checksum_algo"`
 }
 
 type BackupArtifactCleanup struct {

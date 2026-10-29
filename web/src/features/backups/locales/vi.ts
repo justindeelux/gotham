@@ -33,6 +33,8 @@ const vi = {
     cleanupDone: "Đã dọn xong bản sao lưu.",
     cleanupDiscarded: "Đã bỏ dòng chờ dọn dẹp.",
     inProgress: "đang chạy",
+    verified: "Đã xác thực",
+    notVerified: "Chưa xác thực",
     seconds: "{count} giây",
     minutes: "{count} phút",
     minutesSeconds: "{minutes} phút {seconds} giây",
@@ -128,6 +130,10 @@ const vi = {
       "Khôi phục sẽ ghi đè dữ liệu ứng dụng đã lưu. Không thể hoàn tác — hãy sao lưu trước nếu dữ liệu đang chạy vẫn còn quan trọng.",
     warningService:
       "Khôi phục sẽ ghi đè các volume đã lưu của dịch vụ. Không thể hoàn tác — hãy sao lưu trước nếu dữ liệu đang chạy vẫn còn quan trọng.",
+    verifiedCheck:
+      "Mã kiểm tra của bản sao lưu được xác thực trước khi chạm vào tài nguyên. Nếu bản sao lưu bị hỏng, quá trình khôi phục dừng lại và tài nguyên tiếp tục chạy.",
+    noChecksum:
+      "Bản sao lưu này được tạo trước khi có mã kiểm tra. Không thể xác thực và sẽ được khôi phục như trước.",
   },
   resourceTab: {
     storageHint: "Nơi lưu trữ được quản lý tại một chỗ.",

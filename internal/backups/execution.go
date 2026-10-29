@@ -3,16 +3,23 @@ package backups
 import (
 	"compress/gzip"
 	"context"
+	"crypto/sha256"
+	"encoding/hex"
 	"errors"
 	"fmt"
 	"io"
 	"os"
+	"strings"
 	"time"
 
 	"github.com/google/uuid"
 
 	"github.com/justindeelux/gotham/internal/containers"
 )
+
+// ChecksumAlgoSHA256 names the only checksum algorithm in use. It is stored
+// with each run so a future algorithm change stays verifiable.
+const ChecksumAlgoSHA256 = "sha256"
 
 func (m *BackupManager) startRun(
 	ctx context.Context,
@@ -67,7 +74,7 @@ func (m *BackupManager) runBackup(backup Backup, source Source, resource Resourc
 	ctx, cancel := context.WithTimeout(context.Background(), m.jobTimeout)
 	defer cancel()
 
-	location, size, containerID, err := m.capture(ctx, source, resource, target, backup.ID, pause)
+	location, size, checksum, containerID, err := m.capture(ctx, source, resource, target, backup.ID, pause)
 	finished := backup
 	finished.ContainerID = containerID
 	finished.FinishedAt = m.now()
@@ -81,6 +88,8 @@ func (m *BackupManager) runBackup(backup Backup, source Source, resource Resourc
 		finished.Status = BackupCompleted
 		finished.Location = location
 		finished.Size = size
+		finished.ChecksumSHA256 = checksum
+		finished.ChecksumAlgo = ChecksumAlgoSHA256
 		m.logger.Info("backups: backup completed",
 			"backup_id", backup.ID.String(), "resource", resource.Ref().String(),
 			"type", string(backup.Type), "size", size, "location", location)
@@ -139,17 +148,20 @@ func (m *BackupManager) capture(
 	target *BackupTarget,
 	runID uuid.UUID,
 	pause bool,
-) (string, int64, string, error) {
+) (location string, size int64, checksum string, containerID string, err error) {
 	temp, err := os.CreateTemp("", "gotham-backup-*")
 	if err != nil {
-		return "", 0, "", fmt.Errorf("backups: create staging file: %w", err)
+		return "", 0, "", "", fmt.Errorf("backups: create staging file: %w", err)
 	}
 	defer func() {
 		name := temp.Name()
 		_ = temp.Close()
 		_ = os.Remove(name)
 	}()
-	compressor := gzip.NewWriter(temp)
+	// The hash covers exactly the bytes written to the staging file (the
+	// artifact as stored), computed in the same pass as the write.
+	hasher := sha256.New()
+	compressor := gzip.NewWriter(io.MultiWriter(temp, hasher))
 	result, jobErr := source.Capture(ctx, CaptureRequest{
 		Resource: resource,
 		RunID:    runID,
@@ -164,27 +176,38 @@ func (m *BackupManager) capture(
 		jobErr = fmt.Errorf("backups: flush staging file: %w", syncErr)
 	}
 	if jobErr != nil {
-		return "", 0, result.ContainerID, jobErr
+		return "", 0, "", result.ContainerID, jobErr
 	}
 	info, statErr := temp.Stat()
 	if statErr != nil {
-		return "", 0, result.ContainerID, fmt.Errorf("backups: stat staging file: %w", statErr)
+		return "", 0, "", result.ContainerID, fmt.Errorf("backups: stat staging file: %w", statErr)
 	}
-	size := info.Size()
+	size = info.Size()
 	if _, err := temp.Seek(0, io.SeekStart); err != nil {
-		return "", 0, result.ContainerID, fmt.Errorf("backups: rewind staging file: %w", err)
+		return "", 0, "", result.ContainerID, fmt.Errorf("backups: rewind staging file: %w", err)
 	}
 	store, key, err := m.storeAndKey(ctx, target, resource, runID, result.Extension)
 	if err != nil {
-		return "", 0, result.ContainerID, err
+		return "", 0, "", result.ContainerID, err
 	}
-	location, err := store.Put(ctx, key, temp, size)
+	location, err = store.Put(ctx, key, temp, size)
 	if err != nil {
-		return "", 0, result.ContainerID, err
+		return "", 0, "", result.ContainerID, err
 	}
-	return location, size, result.ContainerID, nil
+	stored, err := store.Stat(ctx, location)
+	if err != nil {
+		return "", 0, "", result.ContainerID, fmt.Errorf("backups: verify the stored backup: %w", err)
+	}
+	if stored != size {
+		return "", 0, "", result.ContainerID,
+			fmt.Errorf("backups: the stored backup is %d bytes, expected %d", stored, size)
+	}
+	return location, size, hex.EncodeToString(hasher.Sum(nil)), result.ContainerID, nil
 }
 
+// restore verifies the artifact before the driver touches the resource: a
+// damaged backup must not cost the resource its uptime. A run written before
+// checksums existed restores as before, labelled "not verified".
 func (m *BackupManager) restore(ctx context.Context, source Source, resource Resource, backup Backup) error {
 	store, err := m.storeForLocation(ctx, backup, resource.OwnerID)
 	if err != nil {
@@ -195,11 +218,78 @@ func (m *BackupManager) restore(ctx context.Context, source Source, resource Res
 		return err
 	}
 	defer func() { _ = artifact.Close() }()
+	if backup.ChecksumSHA256 == "" {
+		m.logger.Info("backups: restoring a backup without a checksum",
+			"backup_id", backup.ID.String(), "resource", resource.Ref().String())
+		return source.Restore(ctx, RestoreRequest{
+			Resource: resource,
+			BackupID: backup.ID,
+			Artifact: artifact,
+		})
+	}
+	verified, err := m.stageVerifiedArtifact(backup, artifact)
+	if err != nil {
+		return err
+	}
+	defer func() {
+		name := verified.Name()
+		_ = verified.Close()
+		_ = os.Remove(name)
+	}()
 	return source.Restore(ctx, RestoreRequest{
 		Resource: resource,
 		BackupID: backup.ID,
-		Artifact: artifact,
+		Artifact: verified,
 	})
+}
+
+// stageVerifiedArtifact streams the stored artifact through SHA-256 into a
+// bounded temp file under the control-plane data directory and compares the
+// result with the recorded checksum. The file is removed by the caller on
+// every exit path.
+func (m *BackupManager) stageVerifiedArtifact(backup Backup, artifact io.Reader) (*os.File, error) {
+	if err := os.MkdirAll(m.localDir, 0o750); err != nil {
+		return nil, fmt.Errorf("backups: create the verification directory: %w", err)
+	}
+	if free, err := diskFreeBytes(m.localDir); err == nil && free < backup.Size {
+		return nil, fmt.Errorf("%w: %s free, about %s needed to verify the backup",
+			ErrInsufficientSpace, humanBytes(free), humanBytes(backup.Size))
+	}
+	file, err := os.CreateTemp(m.localDir, ".verify-*")
+	if err != nil {
+		return nil, fmt.Errorf("backups: create a verification file: %w", err)
+	}
+	discard := func() {
+		name := file.Name()
+		_ = file.Close()
+		_ = os.Remove(name)
+	}
+	hasher := sha256.New()
+	written, copyErr := io.Copy(io.MultiWriter(file, hasher), io.LimitReader(artifact, backup.Size+1))
+	if copyErr != nil {
+		discard()
+		return nil, fmt.Errorf("backups: read the backup for verification: %w", copyErr)
+	}
+	if written != backup.Size {
+		discard()
+		return nil, m.damagedBackup(backup, fmt.Sprintf("stored size is %d bytes, recorded %d", written, backup.Size))
+	}
+	if !strings.EqualFold(hex.EncodeToString(hasher.Sum(nil)), backup.ChecksumSHA256) {
+		discard()
+		return nil, m.damagedBackup(backup, "checksum mismatch")
+	}
+	if _, err := file.Seek(0, io.SeekStart); err != nil {
+		discard()
+		return nil, fmt.Errorf("backups: rewind the verification file: %w", err)
+	}
+	return file, nil
+}
+
+func (m *BackupManager) damagedBackup(backup Backup, reason string) error {
+	m.logger.Error("backups: refusing to restore a damaged backup",
+		"backup_id", backup.ID.String(), "reason", reason)
+	return fmt.Errorf("%w: backup %s (%s); the resource was not touched",
+		ErrBackupDamaged, backup.ID, reason)
 }
 
 // runRecorder persists the observations a driver makes while its job runs.

@@ -52,13 +52,17 @@ SELECT EXISTS (
 ) AS has_backups;
 
 -- name: FinishBackup :one
+-- The checksum is known once the artifact is written, so it lands with the
+-- outcome instead of at insert time.
 UPDATE backups
 SET status = $2,
     size = $3,
     location = $4,
     error = $5,
     container_id = $6,
-    finished_at = $7
+    finished_at = $7,
+    checksum_sha256 = $8,
+    checksum_algo = $9
 WHERE id = $1
 RETURNING *;
 

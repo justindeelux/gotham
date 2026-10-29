@@ -167,13 +167,15 @@ func (r *storeBackupRepository) ListRunningBackups(ctx context.Context) ([]Backu
 
 func (r *storeBackupRepository) FinishBackup(ctx context.Context, backup Backup) (Backup, error) {
 	row, err := r.store.FinishBackup(ctx, sqlc.FinishBackupParams{
-		ID:          pgUUID(backup.ID),
-		Status:      string(backup.Status),
-		Size:        backup.Size,
-		Location:    backup.Location,
-		Error:       backup.Error,
-		ContainerID: backup.ContainerID,
-		FinishedAt:  timeToPG(backup.FinishedAt),
+		ID:             pgUUID(backup.ID),
+		Status:         string(backup.Status),
+		Size:           backup.Size,
+		Location:       backup.Location,
+		Error:          backup.Error,
+		ContainerID:    backup.ContainerID,
+		FinishedAt:     timeToPG(backup.FinishedAt),
+		ChecksumSha256: optionalString(backup.ChecksumSHA256),
+		ChecksumAlgo:   optionalString(backup.ChecksumAlgo),
 	})
 	if err != nil {
 		if errors.Is(err, pgx.ErrNoRows) {
@@ -804,6 +806,8 @@ func backupFromRow(row sqlc.Backup) Backup {
 		ContainerID:          row.ContainerID,
 		WasRunning:           row.WasRunning,
 		PauseDuringBackup:    row.PauseDuringBackup,
+		ChecksumSHA256:       stringFromPG(row.ChecksumSha256),
+		ChecksumAlgo:         stringFromPG(row.ChecksumAlgo),
 		Error:                row.Error,
 		ProviderRemoved:      row.ProviderRemoved,
 		CleanupPending:       row.CleanupPending,

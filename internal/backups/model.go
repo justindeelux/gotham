@@ -93,7 +93,12 @@ type Backup struct {
 	// running resource means the archive was taken live and may be
 	// inconsistent; history keeps the label even if the schedule changed.
 	PauseDuringBackup bool
-	Error             string
+	// ChecksumSHA256 is the hash of the stored artifact bytes. Empty on runs
+	// written before integrity checks existed: those still restore, labelled
+	// "not verified".
+	ChecksumSHA256 string
+	ChecksumAlgo   string
+	Error          string
 	// CleanupPending means the row is kept only until its artifact is gone.
 	CleanupPending       bool
 	CleanupError         string

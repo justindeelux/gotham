@@ -66,7 +66,7 @@ INSERT INTO backups (
     pause_during_backup
 )
 VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14)
-RETURNING id, database_id, schedule_id, type, status, size, location, target_id, container_id, error, created_at, finished_at, was_running, application_id, service_id, cleanup_pending, cleanup_error, cleanup_attempts, cleanup_next_attempt_at, provider_removed, pause_during_backup
+RETURNING id, database_id, schedule_id, type, status, size, location, target_id, container_id, error, created_at, finished_at, was_running, application_id, service_id, cleanup_pending, cleanup_error, cleanup_attempts, cleanup_next_attempt_at, provider_removed, pause_during_backup, checksum_sha256, checksum_algo
 `
 
 type CreateBackupParams struct {
@@ -126,6 +126,8 @@ func (q *Queries) CreateBackup(ctx context.Context, arg CreateBackupParams) (Bac
 		&i.CleanupNextAttemptAt,
 		&i.ProviderRemoved,
 		&i.PauseDuringBackup,
+		&i.ChecksumSha256,
+		&i.ChecksumAlgo,
 	)
 	return i, err
 }
@@ -311,7 +313,7 @@ func (q *Queries) DeleteArtifactCleanup(ctx context.Context, id pgtype.UUID) err
 const deleteBackup = `-- name: DeleteBackup :one
 DELETE FROM backups
 WHERE id = $1
-RETURNING id, database_id, schedule_id, type, status, size, location, target_id, container_id, error, created_at, finished_at, was_running, application_id, service_id, cleanup_pending, cleanup_error, cleanup_attempts, cleanup_next_attempt_at, provider_removed, pause_during_backup
+RETURNING id, database_id, schedule_id, type, status, size, location, target_id, container_id, error, created_at, finished_at, was_running, application_id, service_id, cleanup_pending, cleanup_error, cleanup_attempts, cleanup_next_attempt_at, provider_removed, pause_during_backup, checksum_sha256, checksum_algo
 `
 
 func (q *Queries) DeleteBackup(ctx context.Context, id pgtype.UUID) (Backup, error) {
@@ -339,6 +341,8 @@ func (q *Queries) DeleteBackup(ctx context.Context, id pgtype.UUID) (Backup, err
 		&i.CleanupNextAttemptAt,
 		&i.ProviderRemoved,
 		&i.PauseDuringBackup,
+		&i.ChecksumSha256,
+		&i.ChecksumAlgo,
 	)
 	return i, err
 }
@@ -440,21 +444,27 @@ SET status = $2,
     location = $4,
     error = $5,
     container_id = $6,
-    finished_at = $7
+    finished_at = $7,
+    checksum_sha256 = $8,
+    checksum_algo = $9
 WHERE id = $1
-RETURNING id, database_id, schedule_id, type, status, size, location, target_id, container_id, error, created_at, finished_at, was_running, application_id, service_id, cleanup_pending, cleanup_error, cleanup_attempts, cleanup_next_attempt_at, provider_removed, pause_during_backup
+RETURNING id, database_id, schedule_id, type, status, size, location, target_id, container_id, error, created_at, finished_at, was_running, application_id, service_id, cleanup_pending, cleanup_error, cleanup_attempts, cleanup_next_attempt_at, provider_removed, pause_during_backup, checksum_sha256, checksum_algo
 `
 
 type FinishBackupParams struct {
-	ID          pgtype.UUID        `json:"id"`
-	Status      string             `json:"status"`
-	Size        int64              `json:"size"`
-	Location    string             `json:"location"`
-	Error       string             `json:"error"`
-	ContainerID string             `json:"container_id"`
-	FinishedAt  pgtype.Timestamptz `json:"finished_at"`
+	ID             pgtype.UUID        `json:"id"`
+	Status         string             `json:"status"`
+	Size           int64              `json:"size"`
+	Location       string             `json:"location"`
+	Error          string             `json:"error"`
+	ContainerID    string             `json:"container_id"`
+	FinishedAt     pgtype.Timestamptz `json:"finished_at"`
+	ChecksumSha256 *string            `json:"checksum_sha256"`
+	ChecksumAlgo   *string            `json:"checksum_algo"`
 }
 
+// The checksum is known once the artifact is written, so it lands with the
+// outcome instead of at insert time.
 func (q *Queries) FinishBackup(ctx context.Context, arg FinishBackupParams) (Backup, error) {
 	row := q.db.QueryRow(ctx, finishBackup,
 		arg.ID,
@@ -464,6 +474,8 @@ func (q *Queries) FinishBackup(ctx context.Context, arg FinishBackupParams) (Bac
 		arg.Error,
 		arg.ContainerID,
 		arg.FinishedAt,
+		arg.ChecksumSha256,
+		arg.ChecksumAlgo,
 	)
 	var i Backup
 	err := row.Scan(
@@ -488,6 +500,8 @@ func (q *Queries) FinishBackup(ctx context.Context, arg FinishBackupParams) (Bac
 		&i.CleanupNextAttemptAt,
 		&i.ProviderRemoved,
 		&i.PauseDuringBackup,
+		&i.ChecksumSha256,
+		&i.ChecksumAlgo,
 	)
 	return i, err
 }
@@ -531,7 +545,7 @@ func (q *Queries) FinishRestore(ctx context.Context, arg FinishRestoreParams) (R
 }
 
 const getBackup = `-- name: GetBackup :one
-SELECT id, database_id, schedule_id, type, status, size, location, target_id, container_id, error, created_at, finished_at, was_running, application_id, service_id, cleanup_pending, cleanup_error, cleanup_attempts, cleanup_next_attempt_at, provider_removed, pause_during_backup FROM backups
+SELECT id, database_id, schedule_id, type, status, size, location, target_id, container_id, error, created_at, finished_at, was_running, application_id, service_id, cleanup_pending, cleanup_error, cleanup_attempts, cleanup_next_attempt_at, provider_removed, pause_during_backup, checksum_sha256, checksum_algo FROM backups
 WHERE id = $1
 `
 
@@ -560,6 +574,8 @@ func (q *Queries) GetBackup(ctx context.Context, id pgtype.UUID) (Backup, error)
 		&i.CleanupNextAttemptAt,
 		&i.ProviderRemoved,
 		&i.PauseDuringBackup,
+		&i.ChecksumSha256,
+		&i.ChecksumAlgo,
 	)
 	return i, err
 }
@@ -913,7 +929,7 @@ func (q *Queries) ListBackupTargetsByUser(ctx context.Context, userID pgtype.UUI
 }
 
 const listBackups = `-- name: ListBackups :many
-SELECT b.id, b.database_id, b.schedule_id, b.type, b.status, b.size, b.location, b.target_id, b.container_id, b.error, b.created_at, b.finished_at, b.was_running, b.application_id, b.service_id, b.cleanup_pending, b.cleanup_error, b.cleanup_attempts, b.cleanup_next_attempt_at, b.provider_removed, b.pause_during_backup
+SELECT b.id, b.database_id, b.schedule_id, b.type, b.status, b.size, b.location, b.target_id, b.container_id, b.error, b.created_at, b.finished_at, b.was_running, b.application_id, b.service_id, b.cleanup_pending, b.cleanup_error, b.cleanup_attempts, b.cleanup_next_attempt_at, b.provider_removed, b.pause_during_backup, b.checksum_sha256, b.checksum_algo
 FROM backups b
     LEFT JOIN databases d ON d.id = b.database_id
     LEFT JOIN applications a ON a.id = b.application_id
@@ -974,6 +990,8 @@ func (q *Queries) ListBackups(ctx context.Context, arg ListBackupsParams) ([]Bac
 			&i.CleanupNextAttemptAt,
 			&i.ProviderRemoved,
 			&i.PauseDuringBackup,
+			&i.ChecksumSha256,
+			&i.ChecksumAlgo,
 		); err != nil {
 			return nil, err
 		}
@@ -986,7 +1004,7 @@ func (q *Queries) ListBackups(ctx context.Context, arg ListBackupsParams) ([]Bac
 }
 
 const listBackupsByResource = `-- name: ListBackupsByResource :many
-SELECT id, database_id, schedule_id, type, status, size, location, target_id, container_id, error, created_at, finished_at, was_running, application_id, service_id, cleanup_pending, cleanup_error, cleanup_attempts, cleanup_next_attempt_at, provider_removed, pause_during_backup FROM backups
+SELECT id, database_id, schedule_id, type, status, size, location, target_id, container_id, error, created_at, finished_at, was_running, application_id, service_id, cleanup_pending, cleanup_error, cleanup_attempts, cleanup_next_attempt_at, provider_removed, pause_during_backup, checksum_sha256, checksum_algo FROM backups
 WHERE (database_id = $3::uuid
     OR application_id = $4::uuid
     OR service_id = $5::uuid)
@@ -1045,6 +1063,8 @@ func (q *Queries) ListBackupsByResource(ctx context.Context, arg ListBackupsByRe
 			&i.CleanupNextAttemptAt,
 			&i.ProviderRemoved,
 			&i.PauseDuringBackup,
+			&i.ChecksumSha256,
+			&i.ChecksumAlgo,
 		); err != nil {
 			return nil, err
 		}
@@ -1057,7 +1077,7 @@ func (q *Queries) ListBackupsByResource(ctx context.Context, arg ListBackupsByRe
 }
 
 const listCompletedScheduledBackups = `-- name: ListCompletedScheduledBackups :many
-SELECT id, database_id, schedule_id, type, status, size, location, target_id, container_id, error, created_at, finished_at, was_running, application_id, service_id, cleanup_pending, cleanup_error, cleanup_attempts, cleanup_next_attempt_at, provider_removed, pause_during_backup FROM backups
+SELECT id, database_id, schedule_id, type, status, size, location, target_id, container_id, error, created_at, finished_at, was_running, application_id, service_id, cleanup_pending, cleanup_error, cleanup_attempts, cleanup_next_attempt_at, provider_removed, pause_during_backup, checksum_sha256, checksum_algo FROM backups
 WHERE schedule_id = $1 AND type = 'scheduled' AND status = 'completed'
 ORDER BY created_at DESC, id DESC
 `
@@ -1095,6 +1115,8 @@ func (q *Queries) ListCompletedScheduledBackups(ctx context.Context, scheduleID 
 			&i.CleanupNextAttemptAt,
 			&i.ProviderRemoved,
 			&i.PauseDuringBackup,
+			&i.ChecksumSha256,
+			&i.ChecksumAlgo,
 		); err != nil {
 			return nil, err
 		}
@@ -1194,7 +1216,7 @@ func (q *Queries) ListDueBackupSchedules(ctx context.Context, nextRunAt pgtype.T
 }
 
 const listDuePendingCleanups = `-- name: ListDuePendingCleanups :many
-SELECT id, database_id, schedule_id, type, status, size, location, target_id, container_id, error, created_at, finished_at, was_running, application_id, service_id, cleanup_pending, cleanup_error, cleanup_attempts, cleanup_next_attempt_at, provider_removed, pause_during_backup FROM backups
+SELECT id, database_id, schedule_id, type, status, size, location, target_id, container_id, error, created_at, finished_at, was_running, application_id, service_id, cleanup_pending, cleanup_error, cleanup_attempts, cleanup_next_attempt_at, provider_removed, pause_during_backup, checksum_sha256, checksum_algo FROM backups
 WHERE cleanup_pending
   AND (cleanup_next_attempt_at IS NULL OR cleanup_next_attempt_at <= $1)
 ORDER BY cleanup_next_attempt_at ASC NULLS FIRST, created_at ASC
@@ -1231,6 +1253,8 @@ func (q *Queries) ListDuePendingCleanups(ctx context.Context, cleanupNextAttempt
 			&i.CleanupNextAttemptAt,
 			&i.ProviderRemoved,
 			&i.PauseDuringBackup,
+			&i.ChecksumSha256,
+			&i.ChecksumAlgo,
 		); err != nil {
 			return nil, err
 		}
@@ -1243,7 +1267,7 @@ func (q *Queries) ListDuePendingCleanups(ctx context.Context, cleanupNextAttempt
 }
 
 const listFailedBackupsOlderThan = `-- name: ListFailedBackupsOlderThan :many
-SELECT id, database_id, schedule_id, type, status, size, location, target_id, container_id, error, created_at, finished_at, was_running, application_id, service_id, cleanup_pending, cleanup_error, cleanup_attempts, cleanup_next_attempt_at, provider_removed, pause_during_backup FROM backups
+SELECT id, database_id, schedule_id, type, status, size, location, target_id, container_id, error, created_at, finished_at, was_running, application_id, service_id, cleanup_pending, cleanup_error, cleanup_attempts, cleanup_next_attempt_at, provider_removed, pause_during_backup, checksum_sha256, checksum_algo FROM backups
 WHERE status = 'failed' AND created_at <= $1
 ORDER BY created_at ASC
 `
@@ -1280,6 +1304,8 @@ func (q *Queries) ListFailedBackupsOlderThan(ctx context.Context, createdAt pgty
 			&i.CleanupNextAttemptAt,
 			&i.ProviderRemoved,
 			&i.PauseDuringBackup,
+			&i.ChecksumSha256,
+			&i.ChecksumAlgo,
 		); err != nil {
 			return nil, err
 		}
@@ -1399,7 +1425,7 @@ func (q *Queries) ListRestoresByResource(ctx context.Context, arg ListRestoresBy
 }
 
 const listRunningBackups = `-- name: ListRunningBackups :many
-SELECT id, database_id, schedule_id, type, status, size, location, target_id, container_id, error, created_at, finished_at, was_running, application_id, service_id, cleanup_pending, cleanup_error, cleanup_attempts, cleanup_next_attempt_at, provider_removed, pause_during_backup FROM backups
+SELECT id, database_id, schedule_id, type, status, size, location, target_id, container_id, error, created_at, finished_at, was_running, application_id, service_id, cleanup_pending, cleanup_error, cleanup_attempts, cleanup_next_attempt_at, provider_removed, pause_during_backup, checksum_sha256, checksum_algo FROM backups
 WHERE status = 'running'
 ORDER BY created_at ASC
 `
@@ -1437,6 +1463,8 @@ func (q *Queries) ListRunningBackups(ctx context.Context) ([]Backup, error) {
 			&i.CleanupNextAttemptAt,
 			&i.ProviderRemoved,
 			&i.PauseDuringBackup,
+			&i.ChecksumSha256,
+			&i.ChecksumAlgo,
 		); err != nil {
 			return nil, err
 		}
@@ -1584,7 +1612,7 @@ SET cleanup_error = $2,
     cleanup_attempts = $3,
     cleanup_next_attempt_at = $4
 WHERE id = $1
-RETURNING id, database_id, schedule_id, type, status, size, location, target_id, container_id, error, created_at, finished_at, was_running, application_id, service_id, cleanup_pending, cleanup_error, cleanup_attempts, cleanup_next_attempt_at, provider_removed, pause_during_backup
+RETURNING id, database_id, schedule_id, type, status, size, location, target_id, container_id, error, created_at, finished_at, was_running, application_id, service_id, cleanup_pending, cleanup_error, cleanup_attempts, cleanup_next_attempt_at, provider_removed, pause_during_backup, checksum_sha256, checksum_algo
 `
 
 type SetBackupCleanupErrorParams struct {
@@ -1624,6 +1652,8 @@ func (q *Queries) SetBackupCleanupError(ctx context.Context, arg SetBackupCleanu
 		&i.CleanupNextAttemptAt,
 		&i.ProviderRemoved,
 		&i.PauseDuringBackup,
+		&i.ChecksumSha256,
+		&i.ChecksumAlgo,
 	)
 	return i, err
 }
@@ -1635,7 +1665,7 @@ SET cleanup_pending = true,
     cleanup_attempts = 0,
     cleanup_next_attempt_at = $2
 WHERE id = $1
-RETURNING id, database_id, schedule_id, type, status, size, location, target_id, container_id, error, created_at, finished_at, was_running, application_id, service_id, cleanup_pending, cleanup_error, cleanup_attempts, cleanup_next_attempt_at, provider_removed, pause_during_backup
+RETURNING id, database_id, schedule_id, type, status, size, location, target_id, container_id, error, created_at, finished_at, was_running, application_id, service_id, cleanup_pending, cleanup_error, cleanup_attempts, cleanup_next_attempt_at, provider_removed, pause_during_backup, checksum_sha256, checksum_algo
 `
 
 type SetBackupCleanupPendingParams struct {
@@ -1668,6 +1698,8 @@ func (q *Queries) SetBackupCleanupPending(ctx context.Context, arg SetBackupClea
 		&i.CleanupNextAttemptAt,
 		&i.ProviderRemoved,
 		&i.PauseDuringBackup,
+		&i.ChecksumSha256,
+		&i.ChecksumAlgo,
 	)
 	return i, err
 }

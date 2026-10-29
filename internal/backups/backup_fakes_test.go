@@ -322,6 +322,8 @@ func (r *fakeBackupRepository) FinishBackup(_ context.Context, backup Backup) (B
 	stored.Location = backup.Location
 	stored.Error = backup.Error
 	stored.ContainerID = backup.ContainerID
+	stored.ChecksumSHA256 = backup.ChecksumSHA256
+	stored.ChecksumAlgo = backup.ChecksumAlgo
 	stored.FinishedAt = backup.FinishedAt
 	r.backups[backup.ID] = stored
 	return stored, nil
@@ -1196,6 +1198,7 @@ type fakeObjectStore struct {
 	deletes   []string
 	putErr    error
 	getErr    error
+	statErr   error
 	deleteErr error
 }
 
@@ -1250,4 +1253,18 @@ func (f *fakeObjectStore) Delete(_ context.Context, location string) error {
 	delete(f.objects, key)
 	f.deletes = append(f.deletes, location)
 	return nil
+}
+
+func (f *fakeObjectStore) Stat(_ context.Context, location string) (int64, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	if f.statErr != nil {
+		return 0, f.statErr
+	}
+	key := strings.TrimPrefix(location, locationS3Prefix+"bucket/")
+	payload, ok := f.objects[key]
+	if !ok {
+		return 0, fmt.Errorf("%w: object missing", ErrNotFound)
+	}
+	return int64(len(payload)), nil
 }

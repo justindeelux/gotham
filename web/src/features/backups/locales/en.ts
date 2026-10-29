@@ -32,6 +32,8 @@ const en = {
     cleanupDone: "Backup cleanup completed.",
     cleanupDiscarded: "Pending cleanup row discarded.",
     inProgress: "in progress",
+    verified: "Verified",
+    notVerified: "Not verified",
     seconds: "{count} s",
     minutes: "{count} min",
     minutesSeconds: "{minutes} min {seconds} s",
@@ -126,6 +128,10 @@ const en = {
       "The restore overwrites the stored application data. This cannot be undone — back up first if the live data still matters.",
     warningService:
       "The restore overwrites the stored service volumes. This cannot be undone — back up first if the live data still matters.",
+    verifiedCheck:
+      "The backup checksum is verified before the resource is touched. If the backup is damaged, the restore stops and the resource keeps running.",
+    noChecksum:
+      "This backup was made before checksums existed. It cannot be verified and is restored as before.",
   },
   resourceTab: {
     storageHint: "Storage providers are managed in one place.",

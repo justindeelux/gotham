@@ -42,6 +42,14 @@ const restorePrompt = computed<string>(() =>
     size: formatBytes(backups.restoreCandidate.value?.size ?? 0),
   }),
 );
+
+// A backup without a checksum predates integrity checks: it still restores,
+// but the dialog must not promise a verification that will not run.
+const integrityNotice = computed<string>(() =>
+  backups.restoreCandidate.value?.verified
+    ? t("backups.restore.verifiedCheck")
+    : t("backups.restore.noChecksum"),
+);
 </script>
 
 <template>
@@ -54,6 +62,9 @@ const restorePrompt = computed<string>(() =>
   >
     <NSpace vertical :size="12">
       <NText>{{ restorePrompt }}</NText>
+      <NAlert type="info" :show-icon="true">
+        {{ integrityNotice }}
+      </NAlert>
       <NAlert type="warning" :show-icon="true">
         {{
           warningByType[backups.resource.value.resource_type] ??

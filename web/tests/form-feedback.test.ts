@@ -4,7 +4,7 @@ import { dirname, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 
 import { mount } from "@vue/test-utils";
-import { NFormItem, NInput } from "naive-ui";
+import { NFormItem, NInput, NMessageProvider } from "naive-ui";
 import { describe, expect, it } from "vitest";
 import { h } from "vue";
 
@@ -76,8 +76,10 @@ describe("JUS-18 hint hidden while error shown", () => {
   });
 
   it("swaps help for error in DynamicForm's single feedback line", () => {
-    const valid = mount(DynamicForm, {
-      props: { fields, modelValue: {}, errors: {} },
+    const valid = mount(NMessageProvider, {
+      slots: {
+        default: () => h(DynamicForm, { fields, modelValue: {}, errors: {} }),
+      },
     });
     expect(valid.find(".n-form-item-feedback").text()).toContain(
       "Paste the provider token.",
@@ -86,8 +88,15 @@ describe("JUS-18 hint hidden while error shown", () => {
       valid.find(".n-form-item-blank--error").exists(),
     ).toBe(false);
 
-    const invalid = mount(DynamicForm, {
-      props: { fields, modelValue: {}, errors: { token: "Token is required." } },
+    const invalid = mount(NMessageProvider, {
+      slots: {
+        default: () =>
+          h(DynamicForm, {
+            fields,
+            modelValue: {},
+            errors: { token: "Token is required." },
+          }),
+      },
     });
     const feedback = invalid.find(".n-form-item-feedback");
     expect(feedback.text()).toContain("Token is required.");

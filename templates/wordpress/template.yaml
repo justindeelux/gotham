@@ -26,8 +26,10 @@ fields:
     label: Database password
     type: secret
     required: true
-    help: Used by WordPress and MySQL; choose a strong value.
+    generate: true
+    help: Used by WordPress and MySQL; use Generate for a strong value.
   - key: db_root_password
     label: MySQL root password
     type: secret
     required: true
+    generate: true

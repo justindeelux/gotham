@@ -36,6 +36,16 @@ const vi: typeof en = {
     create: "Tạo dịch vụ",
     deploy: "Triển khai ngay",
   },
+  secret: {
+    generate: "Tạo ngẫu nhiên",
+    generateLabel: "Tạo {label}",
+    copy: "Sao chép",
+    copyLabel: "Sao chép {label}",
+    copied: "Đã sao chép {label} vào bộ nhớ tạm.",
+    copyFailed: "Không thể sao chép {label}; hãy chọn giá trị và sao chép thủ công.",
+    generated: "Đã tạo {label}.",
+    copiedAnnouncement: "Đã sao chép.",
+  },
   preview: {
     servicesOne: "{count} dịch vụ",
     servicesOther: "{count} dịch vụ",
@@ -69,7 +79,7 @@ const vi: typeof en = {
           help: "Host công khai do Traefik proxy của node phục vụ.",
         },
         encryption_key: {
-          help: "Mã hóa thông tin đăng nhập đã lưu; giữ cẩn thận, mất khóa sẽ khóa luôn thông tin.",
+          help: "Mã hóa thông tin đăng nhập đã lưu; dùng Tạo ngẫu nhiên để có giá trị mạnh. Mất khóa sẽ khóa luôn thông tin.",
         },
         timezone: {
           help: "Tên múi giờ IANA dùng cho lịch và đồng hồ container.",
@@ -90,10 +100,10 @@ const vi: typeof en = {
           help: "Host công khai do Traefik proxy của node phục vụ.",
         },
         admin_password: {
-          help: "Mật khẩu quản trị Nextcloud ban đầu.",
+          help: "Mật khẩu quản trị Nextcloud ban đầu; dùng Tạo ngẫu nhiên để có giá trị mạnh.",
         },
         redis_password: {
-          help: "Nextcloud luôn kèm Redis; mật khẩu này bảo vệ instance bộ nhớ đệm.",
+          help: "Nextcloud luôn kèm Redis; dùng Tạo ngẫu nhiên để bảo vệ instance bộ nhớ đệm.",
         },
       },
     },
@@ -117,7 +127,7 @@ const vi: typeof en = {
           help: "Host công khai do Traefik proxy của node phục vụ.",
         },
         db_password: {
-          help: "WordPress và MySQL cùng dùng; hãy chọn giá trị mạnh.",
+          help: "WordPress và MySQL cùng dùng; dùng Tạo ngẫu nhiên để có giá trị mạnh.",
         },
       },
     },

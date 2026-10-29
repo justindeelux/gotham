@@ -220,6 +220,20 @@ func TestBuiltinSecretFieldsAreNotBakedIn(t *testing.T) {
 	}
 }
 
+func TestBuiltinGeneratableFieldsAreSecrets(t *testing.T) {
+	catalog, err := Load(builtin.FS)
+	if err != nil {
+		t.Fatalf("Load(builtin.FS): %v", err)
+	}
+	for _, template := range catalog.List() {
+		for _, field := range template.Fields {
+			if field.Generate && field.Type != FieldSecret {
+				t.Errorf("%s: generatable field %q is not a secret", template.Slug, field.Key)
+			}
+		}
+	}
+}
+
 func TestNewDefaultService(t *testing.T) {
 	t.Setenv(services.FeatureEnv, "")
 	svc := NewDefaultService(nil)

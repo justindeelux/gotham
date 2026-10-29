@@ -74,6 +74,15 @@ type mockDockerClient struct {
 	logsChunks       [][]byte
 	logsTerminal     error
 	logsOpenErr      error
+
+	capsResp       *agentv1.VolumeArchiveCapabilitiesResponse
+	capsErr        error
+	archiveOpenErr error
+	archiveChunks  []*agentv1.ArchiveChunk
+	archiveErr     error
+	restoreSent    []*agentv1.RestoreVolumesRequest
+	restoreErr     error
+	restoreResp    *agentv1.RestoreVolumesResponse
 }
 
 func (m *mockDockerClient) ListContainers(context.Context, *agentv1.ListContainersRequest, ...grpc.CallOption) (*agentv1.ListContainersResponse, error) {
@@ -156,6 +165,43 @@ func (m *mockDockerClient) StreamLogs(context.Context, *agentv1.StreamLogsReques
 	return &fakeLogStream{chunks: m.logsChunks, err: m.logsTerminal}, nil
 }
 
+func (m *mockDockerClient) VolumeArchiveCapabilities(context.Context, *agentv1.VolumeArchiveCapabilitiesRequest, ...grpc.CallOption) (*agentv1.VolumeArchiveCapabilitiesResponse, error) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	if m.capsErr != nil {
+		return nil, m.capsErr
+	}
+	if m.capsResp != nil {
+		return m.capsResp, nil
+	}
+	return &agentv1.VolumeArchiveCapabilitiesResponse{
+		Available:    true,
+		Capabilities: []string{VolumeArchiveCapability},
+	}, nil
+}
+
+func (m *mockDockerClient) ArchiveVolumes(context.Context, *agentv1.ArchiveVolumesRequest, ...grpc.CallOption) (grpc.ServerStreamingClient[agentv1.ArchiveChunk], error) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	if m.archiveOpenErr != nil {
+		return nil, m.archiveOpenErr
+	}
+	return &fakeArchiveChunkStream{chunks: m.archiveChunks, err: m.archiveErr}, nil
+}
+
+func (m *mockDockerClient) RestoreVolumes(_ context.Context, _ ...grpc.CallOption) (grpc.ClientStreamingClient[agentv1.RestoreVolumesRequest, agentv1.RestoreVolumesResponse], error) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	if m.restoreErr != nil {
+		return nil, m.restoreErr
+	}
+	response := m.restoreResp
+	if response == nil {
+		response = &agentv1.RestoreVolumesResponse{}
+	}
+	return &fakeRestoreStream{client: m, response: response}, nil
+}
+
 func (m *mockDockerClient) Close() error {
 	m.mu.Lock()
 	defer m.mu.Unlock()
@@ -182,6 +228,41 @@ func (f *fakeLogStream) Recv() (*agentv1.LogChunk, error) {
 		return &agentv1.LogChunk{Data: chunk}, nil
 	}
 	return nil, f.err
+}
+
+type fakeArchiveChunkStream struct {
+	grpc.ClientStream
+	chunks []*agentv1.ArchiveChunk
+	err    error
+}
+
+func (f *fakeArchiveChunkStream) Recv() (*agentv1.ArchiveChunk, error) {
+	if len(f.chunks) > 0 {
+		chunk := f.chunks[0]
+		f.chunks = f.chunks[1:]
+		return chunk, nil
+	}
+	if f.err != nil {
+		return nil, f.err
+	}
+	return nil, io.EOF
+}
+
+type fakeRestoreStream struct {
+	grpc.ClientStream
+	client   *mockDockerClient
+	response *agentv1.RestoreVolumesResponse
+}
+
+func (f *fakeRestoreStream) Send(request *agentv1.RestoreVolumesRequest) error {
+	f.client.mu.Lock()
+	defer f.client.mu.Unlock()
+	f.client.restoreSent = append(f.client.restoreSent, request)
+	return nil
+}
+
+func (f *fakeRestoreStream) CloseAndRecv() (*agentv1.RestoreVolumesResponse, error) {
+	return f.response, nil
 }
 
 func (m *mockDockerClient) counts() (lists, starts, pulls, runs int) {

@@ -308,8 +308,15 @@ export function useServiceDetail(): ServiceDetailContext {
       return;
     }
     const env: Record<string, string> = {};
+    const reservedDomainKey = ["GOTHAM", "DOMAIN"].join("_");
     for (const row of envDraft.value) {
       const key = row.key.trim();
+      if (key === reservedDomainKey || key === `${reservedDomainKey}S`) {
+        message.error(
+          String(i18n.global.t("services.env.reservedKey", { key })),
+        );
+        return;
+      }
       if (key !== "") {
         env[key] = row.value;
       }

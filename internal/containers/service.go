@@ -19,9 +19,10 @@ import (
 )
 
 const (
-	defaultRPCTimeout  = 30 * time.Second
-	defaultPullTimeout = 5 * time.Minute
-	defaultLogTimeout  = 30 * time.Minute
+	defaultRPCTimeout     = 30 * time.Second
+	defaultPullTimeout    = 5 * time.Minute
+	defaultLogTimeout     = 30 * time.Minute
+	defaultArchiveTimeout = 6 * time.Hour
 )
 
 type ContainerService interface {
@@ -37,25 +38,27 @@ type ContainerService interface {
 }
 
 type Config struct {
-	Registry    Registry
-	Dial        DialFunc
-	RedisAddr   string
-	Cache       Cache
-	Logger      *slog.Logger
-	RPCTimeout  time.Duration
-	PullTimeout time.Duration
-	LogTimeout  time.Duration
+	Registry       Registry
+	Dial           DialFunc
+	RedisAddr      string
+	Cache          Cache
+	Logger         *slog.Logger
+	RPCTimeout     time.Duration
+	PullTimeout    time.Duration
+	LogTimeout     time.Duration
+	ArchiveTimeout time.Duration
 }
 
 type Service struct {
-	mu          sync.RWMutex
-	registry    Registry
-	dial        DialFunc
-	cache       Cache
-	logger      *slog.Logger
-	rpcTimeout  time.Duration
-	pullTimeout time.Duration
-	logTimeout  time.Duration
+	mu             sync.RWMutex
+	registry       Registry
+	dial           DialFunc
+	cache          Cache
+	logger         *slog.Logger
+	rpcTimeout     time.Duration
+	pullTimeout    time.Duration
+	logTimeout     time.Duration
+	archiveTimeout time.Duration
 }
 
 func NewService(cfg Config) *Service {
@@ -79,14 +82,19 @@ func NewService(cfg Config) *Service {
 	if logTimeout <= 0 {
 		logTimeout = defaultLogTimeout
 	}
+	archiveTimeout := cfg.ArchiveTimeout
+	if archiveTimeout <= 0 {
+		archiveTimeout = defaultArchiveTimeout
+	}
 	return &Service{
-		registry:    cfg.Registry,
-		dial:        cfg.Dial,
-		cache:       cache,
-		logger:      logger,
-		rpcTimeout:  rpcTimeout,
-		pullTimeout: pullTimeout,
-		logTimeout:  logTimeout,
+		registry:       cfg.Registry,
+		dial:           cfg.Dial,
+		cache:          cache,
+		logger:         logger,
+		rpcTimeout:     rpcTimeout,
+		pullTimeout:    pullTimeout,
+		logTimeout:     logTimeout,
+		archiveTimeout: archiveTimeout,
 	}
 }
 

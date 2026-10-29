@@ -21,6 +21,9 @@ type DockerClient interface {
 	CreateContainer(ctx context.Context, in *agentv1.CreateContainerRequest, opts ...grpc.CallOption) (*agentv1.ContainerActionResponse, error)
 	RunImage(ctx context.Context, in *agentv1.CreateContainerRequest, opts ...grpc.CallOption) (*agentv1.ContainerActionResponse, error)
 	StreamLogs(ctx context.Context, in *agentv1.StreamLogsRequest, opts ...grpc.CallOption) (grpc.ServerStreamingClient[agentv1.LogChunk], error)
+	VolumeArchiveCapabilities(ctx context.Context, in *agentv1.VolumeArchiveCapabilitiesRequest, opts ...grpc.CallOption) (*agentv1.VolumeArchiveCapabilitiesResponse, error)
+	ArchiveVolumes(ctx context.Context, in *agentv1.ArchiveVolumesRequest, opts ...grpc.CallOption) (grpc.ServerStreamingClient[agentv1.ArchiveChunk], error)
+	RestoreVolumes(ctx context.Context, opts ...grpc.CallOption) (grpc.ClientStreamingClient[agentv1.RestoreVolumesRequest, agentv1.RestoreVolumesResponse], error)
 }
 
 var _ DockerClient = agentv1.DockerServiceClient(nil)

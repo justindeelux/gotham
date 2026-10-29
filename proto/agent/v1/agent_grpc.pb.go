@@ -320,16 +320,19 @@ var UpdateService_ServiceDesc = grpc.ServiceDesc{
 }
 
 const (
-	DockerService_ListContainers_FullMethodName   = "/agent.v1.DockerService/ListContainers"
-	DockerService_StartContainer_FullMethodName   = "/agent.v1.DockerService/StartContainer"
-	DockerService_StopContainer_FullMethodName    = "/agent.v1.DockerService/StopContainer"
-	DockerService_RestartContainer_FullMethodName = "/agent.v1.DockerService/RestartContainer"
-	DockerService_RemoveContainer_FullMethodName  = "/agent.v1.DockerService/RemoveContainer"
-	DockerService_RemoveVolume_FullMethodName     = "/agent.v1.DockerService/RemoveVolume"
-	DockerService_PullImage_FullMethodName        = "/agent.v1.DockerService/PullImage"
-	DockerService_CreateContainer_FullMethodName  = "/agent.v1.DockerService/CreateContainer"
-	DockerService_RunImage_FullMethodName         = "/agent.v1.DockerService/RunImage"
-	DockerService_StreamLogs_FullMethodName       = "/agent.v1.DockerService/StreamLogs"
+	DockerService_ListContainers_FullMethodName            = "/agent.v1.DockerService/ListContainers"
+	DockerService_StartContainer_FullMethodName            = "/agent.v1.DockerService/StartContainer"
+	DockerService_StopContainer_FullMethodName             = "/agent.v1.DockerService/StopContainer"
+	DockerService_RestartContainer_FullMethodName          = "/agent.v1.DockerService/RestartContainer"
+	DockerService_RemoveContainer_FullMethodName           = "/agent.v1.DockerService/RemoveContainer"
+	DockerService_RemoveVolume_FullMethodName              = "/agent.v1.DockerService/RemoveVolume"
+	DockerService_PullImage_FullMethodName                 = "/agent.v1.DockerService/PullImage"
+	DockerService_CreateContainer_FullMethodName           = "/agent.v1.DockerService/CreateContainer"
+	DockerService_RunImage_FullMethodName                  = "/agent.v1.DockerService/RunImage"
+	DockerService_StreamLogs_FullMethodName                = "/agent.v1.DockerService/StreamLogs"
+	DockerService_VolumeArchiveCapabilities_FullMethodName = "/agent.v1.DockerService/VolumeArchiveCapabilities"
+	DockerService_ArchiveVolumes_FullMethodName            = "/agent.v1.DockerService/ArchiveVolumes"
+	DockerService_RestoreVolumes_FullMethodName            = "/agent.v1.DockerService/RestoreVolumes"
 )
 
 // DockerServiceClient is the client API for DockerService service.
@@ -361,6 +364,22 @@ type DockerServiceClient interface {
 	// StreamLogs tails container logs; chunks stream until follow ends or the
 	// client cancels.
 	StreamLogs(ctx context.Context, in *StreamLogsRequest, opts ...grpc.CallOption) (grpc.ServerStreamingClient[LogChunk], error)
+	// VolumeArchiveCapabilities reports whether this node can archive volume
+	// data for backups. A node that predates the volume-archive transport answers
+	// codes.Unimplemented; the control plane must treat that as "update the node
+	// agent" and never fall back to a local archive.
+	VolumeArchiveCapabilities(ctx context.Context, in *VolumeArchiveCapabilitiesRequest, opts ...grpc.CallOption) (*VolumeArchiveCapabilitiesResponse, error)
+	// ArchiveVolumes streams a tar.gz of the requested sources to the control
+	// plane. Sources are named Docker volumes or absolute bind paths declared by
+	// the control plane; the agent confines bind paths with a deny list and
+	// rejects any source that fails validation before starting a container. The
+	// caller cancels the stream to stop the archive.
+	ArchiveVolumes(ctx context.Context, in *ArchiveVolumesRequest, opts ...grpc.CallOption) (grpc.ServerStreamingClient[ArchiveChunk], error)
+	// RestoreVolumes streams a tar.gz produced by ArchiveVolumes into the target
+	// sources. The file is validated (manifest, member names, entry types) before
+	// the agent touches a target. The caller cancels the stream to stop the
+	// restore.
+	RestoreVolumes(ctx context.Context, opts ...grpc.CallOption) (grpc.ClientStreamingClient[RestoreVolumesRequest, RestoreVolumesResponse], error)
 }
 
 type dockerServiceClient struct {
@@ -480,6 +499,48 @@ func (c *dockerServiceClient) StreamLogs(ctx context.Context, in *StreamLogsRequ
 // This type alias is provided for backwards compatibility with existing code that references the prior non-generic stream type by name.
 type DockerService_StreamLogsClient = grpc.ServerStreamingClient[LogChunk]
 
+func (c *dockerServiceClient) VolumeArchiveCapabilities(ctx context.Context, in *VolumeArchiveCapabilitiesRequest, opts ...grpc.CallOption) (*VolumeArchiveCapabilitiesResponse, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	out := new(VolumeArchiveCapabilitiesResponse)
+	err := c.cc.Invoke(ctx, DockerService_VolumeArchiveCapabilities_FullMethodName, in, out, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
+func (c *dockerServiceClient) ArchiveVolumes(ctx context.Context, in *ArchiveVolumesRequest, opts ...grpc.CallOption) (grpc.ServerStreamingClient[ArchiveChunk], error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	stream, err := c.cc.NewStream(ctx, &DockerService_ServiceDesc.Streams[1], DockerService_ArchiveVolumes_FullMethodName, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	x := &grpc.GenericClientStream[ArchiveVolumesRequest, ArchiveChunk]{ClientStream: stream}
+	if err := x.ClientStream.SendMsg(in); err != nil {
+		return nil, err
+	}
+	if err := x.ClientStream.CloseSend(); err != nil {
+		return nil, err
+	}
+	return x, nil
+}
+
+// This type alias is provided for backwards compatibility with existing code that references the prior non-generic stream type by name.
+type DockerService_ArchiveVolumesClient = grpc.ServerStreamingClient[ArchiveChunk]
+
+func (c *dockerServiceClient) RestoreVolumes(ctx context.Context, opts ...grpc.CallOption) (grpc.ClientStreamingClient[RestoreVolumesRequest, RestoreVolumesResponse], error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	stream, err := c.cc.NewStream(ctx, &DockerService_ServiceDesc.Streams[2], DockerService_RestoreVolumes_FullMethodName, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	x := &grpc.GenericClientStream[RestoreVolumesRequest, RestoreVolumesResponse]{ClientStream: stream}
+	return x, nil
+}
+
+// This type alias is provided for backwards compatibility with existing code that references the prior non-generic stream type by name.
+type DockerService_RestoreVolumesClient = grpc.ClientStreamingClient[RestoreVolumesRequest, RestoreVolumesResponse]
+
 // DockerServiceServer is the server API for DockerService service.
 // All implementations must embed UnimplementedDockerServiceServer
 // for forward compatibility.
@@ -509,6 +570,22 @@ type DockerServiceServer interface {
 	// StreamLogs tails container logs; chunks stream until follow ends or the
 	// client cancels.
 	StreamLogs(*StreamLogsRequest, grpc.ServerStreamingServer[LogChunk]) error
+	// VolumeArchiveCapabilities reports whether this node can archive volume
+	// data for backups. A node that predates the volume-archive transport answers
+	// codes.Unimplemented; the control plane must treat that as "update the node
+	// agent" and never fall back to a local archive.
+	VolumeArchiveCapabilities(context.Context, *VolumeArchiveCapabilitiesRequest) (*VolumeArchiveCapabilitiesResponse, error)
+	// ArchiveVolumes streams a tar.gz of the requested sources to the control
+	// plane. Sources are named Docker volumes or absolute bind paths declared by
+	// the control plane; the agent confines bind paths with a deny list and
+	// rejects any source that fails validation before starting a container. The
+	// caller cancels the stream to stop the archive.
+	ArchiveVolumes(*ArchiveVolumesRequest, grpc.ServerStreamingServer[ArchiveChunk]) error
+	// RestoreVolumes streams a tar.gz produced by ArchiveVolumes into the target
+	// sources. The file is validated (manifest, member names, entry types) before
+	// the agent touches a target. The caller cancels the stream to stop the
+	// restore.
+	RestoreVolumes(grpc.ClientStreamingServer[RestoreVolumesRequest, RestoreVolumesResponse]) error
 	mustEmbedUnimplementedDockerServiceServer()
 }
 
@@ -548,6 +625,15 @@ func (UnimplementedDockerServiceServer) RunImage(context.Context, *CreateContain
 }
 func (UnimplementedDockerServiceServer) StreamLogs(*StreamLogsRequest, grpc.ServerStreamingServer[LogChunk]) error {
 	return status.Error(codes.Unimplemented, "method StreamLogs not implemented")
+}
+func (UnimplementedDockerServiceServer) VolumeArchiveCapabilities(context.Context, *VolumeArchiveCapabilitiesRequest) (*VolumeArchiveCapabilitiesResponse, error) {
+	return nil, status.Error(codes.Unimplemented, "method VolumeArchiveCapabilities not implemented")
+}
+func (UnimplementedDockerServiceServer) ArchiveVolumes(*ArchiveVolumesRequest, grpc.ServerStreamingServer[ArchiveChunk]) error {
+	return status.Error(codes.Unimplemented, "method ArchiveVolumes not implemented")
+}
+func (UnimplementedDockerServiceServer) RestoreVolumes(grpc.ClientStreamingServer[RestoreVolumesRequest, RestoreVolumesResponse]) error {
+	return status.Error(codes.Unimplemented, "method RestoreVolumes not implemented")
 }
 func (UnimplementedDockerServiceServer) mustEmbedUnimplementedDockerServiceServer() {}
 func (UnimplementedDockerServiceServer) testEmbeddedByValue()                       {}
@@ -743,6 +829,42 @@ func _DockerService_StreamLogs_Handler(srv interface{}, stream grpc.ServerStream
 // This type alias is provided for backwards compatibility with existing code that references the prior non-generic stream type by name.
 type DockerService_StreamLogsServer = grpc.ServerStreamingServer[LogChunk]
 
+func _DockerService_VolumeArchiveCapabilities_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(VolumeArchiveCapabilitiesRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(DockerServiceServer).VolumeArchiveCapabilities(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: DockerService_VolumeArchiveCapabilities_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(DockerServiceServer).VolumeArchiveCapabilities(ctx, req.(*VolumeArchiveCapabilitiesRequest))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
+func _DockerService_ArchiveVolumes_Handler(srv interface{}, stream grpc.ServerStream) error {
+	m := new(ArchiveVolumesRequest)
+	if err := stream.RecvMsg(m); err != nil {
+		return err
+	}
+	return srv.(DockerServiceServer).ArchiveVolumes(m, &grpc.GenericServerStream[ArchiveVolumesRequest, ArchiveChunk]{ServerStream: stream})
+}
+
+// This type alias is provided for backwards compatibility with existing code that references the prior non-generic stream type by name.
+type DockerService_ArchiveVolumesServer = grpc.ServerStreamingServer[ArchiveChunk]
+
+func _DockerService_RestoreVolumes_Handler(srv interface{}, stream grpc.ServerStream) error {
+	return srv.(DockerServiceServer).RestoreVolumes(&grpc.GenericServerStream[RestoreVolumesRequest, RestoreVolumesResponse]{ServerStream: stream})
+}
+
+// This type alias is provided for backwards compatibility with existing code that references the prior non-generic stream type by name.
+type DockerService_RestoreVolumesServer = grpc.ClientStreamingServer[RestoreVolumesRequest, RestoreVolumesResponse]
+
 // DockerService_ServiceDesc is the grpc.ServiceDesc for DockerService service.
 // It's only intended for direct use with grpc.RegisterService,
 // and not to be introspected or modified (even as a copy)
@@ -786,12 +908,26 @@ var DockerService_ServiceDesc = grpc.ServiceDesc{
 			MethodName: "RunImage",
 			Handler:    _DockerService_RunImage_Handler,
 		},
+		{
+			MethodName: "VolumeArchiveCapabilities",
+			Handler:    _DockerService_VolumeArchiveCapabilities_Handler,
+		},
 	},
 	Streams: []grpc.StreamDesc{
 		{
 			StreamName:    "StreamLogs",
 			Handler:       _DockerService_StreamLogs_Handler,
 			ServerStreams: true,
+		},
+		{
+			StreamName:    "ArchiveVolumes",
+			Handler:       _DockerService_ArchiveVolumes_Handler,
+			ServerStreams: true,
+		},
+		{
+			StreamName:    "RestoreVolumes",
+			Handler:       _DockerService_RestoreVolumes_Handler,
+			ClientStreams: true,
 		},
 	},
 	Metadata: "agent/v1/agent.proto",

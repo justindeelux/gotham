@@ -76,6 +76,7 @@ const en = {
     empty: "The environment is empty. Saving an empty environment clears it.",
     add: "Add variable",
     save: "Save environment",
+    reservedKey: "{key} is derived from the service domains and cannot be set here.",
     unavailable: "The environment is unavailable.",
     loading: "Loading the environment…",
   },

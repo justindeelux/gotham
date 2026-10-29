@@ -73,6 +73,10 @@ func WithProxyVolumeRoot(root string) DockerServerOption {
 	return docker.WithProxyVolumeRoot(root)
 }
 
+func WithArchiveDeniedPaths(paths ...string) DockerServerOption {
+	return docker.WithArchiveDeniedPaths(paths...)
+}
+
 func NewBuildServer(client docker.BuildClient, log *slog.Logger, options ...BuildServerOption) *docker.BuildServer {
 	return docker.NewBuildServer(client, log, options...)
 }

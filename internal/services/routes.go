@@ -66,6 +66,37 @@ type containerListEnvelope struct {
 	Containers []composeContainerResponse `json:"containers"`
 }
 
+type serviceDomainResponse struct {
+	ID             string     `json:"id,omitempty"`
+	ServiceID      string     `json:"service_id"`
+	Domain         string     `json:"domain"`
+	ComposeService string     `json:"compose_service"`
+	Port           int32      `json:"port"`
+	Protocol       string     `json:"protocol"`
+	Disabled       bool       `json:"disabled"`
+	Source         string     `json:"source"`
+	Status         string     `json:"status"`
+	Reason         string     `json:"reason,omitempty"`
+	CreatedAt      *time.Time `json:"created_at,omitempty"`
+	UpdatedAt      *time.Time `json:"updated_at,omitempty"`
+}
+
+type domainListEnvelope struct {
+	Domains []serviceDomainResponse `json:"domains"`
+}
+
+type domainEnvelope struct {
+	Domain serviceDomainResponse `json:"domain"`
+}
+
+type domainRequest struct {
+	Domain         string `json:"domain"`
+	ComposeService string `json:"compose_service"`
+	Port           int32  `json:"port"`
+	Protocol       string `json:"protocol"`
+	Disabled       *bool  `json:"disabled,omitempty"`
+}
+
 type createRequest struct {
 	Name          string            `json:"name"`
 	EnvironmentID string            `json:"environment_id"`
@@ -112,6 +143,10 @@ func Mount(r chi.Router, auth func(http.Handler) http.Handler, userID UserIDFunc
 		protected.Get("/v1/services/{id}/deploys", h.deploys)
 		protected.Get("/v1/services/{id}/containers", h.containers)
 		protected.Get("/v1/services/{id}/logs", h.logs)
+		protected.Get("/v1/services/{id}/domains", h.listDomains)
+		protected.Post("/v1/services/{id}/domains", h.addDomain)
+		protected.Put("/v1/services/{id}/domains/{domainId}", h.updateDomain)
+		protected.Delete("/v1/services/{id}/domains/{domainId}", h.removeDomain)
 	})
 }
 
@@ -360,6 +395,115 @@ func (h *handler) logs(w http.ResponseWriter, r *http.Request) {
 	}
 }
 
+func (h *handler) listDomains(w http.ResponseWriter, r *http.Request) {
+	userID, serviceID, ok := h.serviceParams(w, r)
+	if !ok {
+		return
+	}
+	domains, err := h.svc.ListDomains(r.Context(), userID, serviceID)
+	if err != nil {
+		h.writeServiceError(w, err)
+		return
+	}
+	response := make([]serviceDomainResponse, 0, len(domains))
+	for _, domain := range domains {
+		response = append(response, newServiceDomainResponse(domain))
+	}
+	writeJSON(w, http.StatusOK, domainListEnvelope{Domains: response})
+}
+
+func (h *handler) addDomain(w http.ResponseWriter, r *http.Request) {
+	userID, serviceID, ok := h.serviceParams(w, r)
+	if !ok {
+		return
+	}
+	var req domainRequest
+	if !decodeBody(w, r, &req) {
+		return
+	}
+	domain, err := h.svc.AddDomain(r.Context(), userID, serviceID, domainInput(req))
+	if err != nil {
+		h.writeServiceError(w, err)
+		return
+	}
+	writeJSON(w, http.StatusCreated, domainEnvelope{Domain: newServiceDomainResponse(DomainView{
+		ServiceDomain: domain,
+		Source:        SourceManaged,
+	})})
+}
+
+func (h *handler) updateDomain(w http.ResponseWriter, r *http.Request) {
+	userID, serviceID, ok := h.serviceParams(w, r)
+	if !ok {
+		return
+	}
+	domainID, err := uuid.Parse(chi.URLParam(r, "domainId"))
+	if err != nil {
+		writeJSON(w, http.StatusBadRequest, errorBody{Message: "invalid domain id"})
+		return
+	}
+	var req domainRequest
+	if !decodeBody(w, r, &req) {
+		return
+	}
+	domain, err := h.svc.UpdateDomain(r.Context(), userID, serviceID, domainID, domainInput(req))
+	if err != nil {
+		h.writeServiceError(w, err)
+		return
+	}
+	writeJSON(w, http.StatusOK, domainEnvelope{Domain: newServiceDomainResponse(DomainView{
+		ServiceDomain: domain,
+		Source:        SourceManaged,
+	})})
+}
+
+func (h *handler) removeDomain(w http.ResponseWriter, r *http.Request) {
+	userID, serviceID, ok := h.serviceParams(w, r)
+	if !ok {
+		return
+	}
+	domainID, err := uuid.Parse(chi.URLParam(r, "domainId"))
+	if err != nil {
+		writeJSON(w, http.StatusBadRequest, errorBody{Message: "invalid domain id"})
+		return
+	}
+	if err := h.svc.RemoveDomain(r.Context(), userID, serviceID, domainID); err != nil {
+		h.writeServiceError(w, err)
+		return
+	}
+	w.WriteHeader(http.StatusNoContent)
+}
+
+func domainInput(req domainRequest) DomainInput {
+	return DomainInput(req)
+}
+
+func newServiceDomainResponse(view DomainView) serviceDomainResponse {
+	response := serviceDomainResponse{
+		ServiceID:      view.ServiceID.String(),
+		Domain:         view.Domain,
+		ComposeService: view.ComposeService,
+		Port:           view.Port,
+		Protocol:       view.Protocol,
+		Disabled:       view.Disabled,
+		Source:         view.Source,
+		Status:         view.Status,
+		Reason:         view.Reason,
+	}
+	if view.ID != uuid.Nil {
+		response.ID = view.ID.String()
+	}
+	if !view.CreatedAt.IsZero() {
+		created := view.CreatedAt
+		response.CreatedAt = &created
+	}
+	if !view.UpdatedAt.IsZero() {
+		updated := view.UpdatedAt
+		response.UpdatedAt = &updated
+	}
+	return response
+}
+
 func (h *handler) currentUser(w http.ResponseWriter, r *http.Request) (uuid.UUID, bool) {
 	if h.userID == nil {
 		writeJSON(w, http.StatusUnauthorized, errorBody{Message: "unauthorized"})
@@ -421,6 +565,14 @@ func serviceFilter(w http.ResponseWriter, r *http.Request) (ServiceFilter, bool)
 	return filter, true
 }
 
+func domainConflictMessage(err error) string {
+	message := err.Error()
+	if trimmed := strings.TrimPrefix(message, ErrDomainConflict.Error()+": "); trimmed != message {
+		return trimmed
+	}
+	return "domain already in use"
+}
+
 func (h *handler) writeServiceError(w http.ResponseWriter, err error) {
 	switch {
 	case errors.Is(err, ErrNotFound), errors.Is(err, ErrServerNotFound):
@@ -435,6 +587,8 @@ func (h *handler) writeServiceError(w http.ResponseWriter, err error) {
 		writeJSON(w, http.StatusConflict, errorBody{Message: "a deployed service cannot change server"})
 	case errors.Is(err, ErrNameConflict):
 		writeJSON(w, http.StatusConflict, errorBody{Message: err.Error()})
+	case errors.Is(err, ErrDomainConflict):
+		writeJSON(w, http.StatusConflict, errorBody{Message: domainConflictMessage(err)})
 	case errors.Is(err, ErrDisabled):
 		writeJSON(w, http.StatusServiceUnavailable, errorBody{Message: "services are disabled"})
 	case errors.Is(err, ErrAgentUnavailable), errors.Is(err, ErrDeployFailed):

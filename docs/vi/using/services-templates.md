@@ -60,7 +60,17 @@ YAML là nội dung của bạn và không bị biên tập.
 
 ### Tên miền
 
-Một dịch vụ compose được định tuyến bằng nhãn, không bằng một trang tên miền riêng:
+Một dịch vụ có thể được định tuyến theo hai cách.
+
+**Tên miền quản lý** được thêm sau khi dịch vụ đã tồn tại, trong tab Tên miền trên
+trang chi tiết dịch vụ (API: `GET`/`POST /api/v1/services/{id}/domains` và
+`PUT`/`DELETE /api/v1/services/{id}/domains/{domainId}`). Mỗi dòng chọn dịch vụ
+compose, cổng container và HTTP hoặc HTTPS. Nhiều tên miền có thể trỏ tới cùng một
+dịch vụ, và mỗi dòng có thể bị tắt. Thêm, sửa hoặc xoá tên miền sẽ đồng bộ lại proxy,
+nên tuyến đường xuất hiện mà không cần triển khai lại.
+
+**Khai báo trong compose** bằng nhãn vẫn hoạt động với tài liệu đã nhập và dịch vụ
+cũ:
 
 ```yaml
 services:
@@ -73,8 +83,23 @@ services:
 
 `gotham.domain` được kiểm tra theo cùng quy tắc như tên miền của ứng dụng, và
 `gotham.domain.port` mặc định là 80. Bản thân nhãn tên miền có thể là một tham chiếu
-`${VAR}`. Xem [Tên miền và bản xem trước](/vi/using/domains-previews) để biết về DNS
-và chứng chỉ, và [Proxy và DNS](/vi/operating/proxy-dns) cho phía người vận hành.
+`${VAR}`. Tuyến đường từ nhãn được liệt kê chỉ đọc với nguồn `compose`; nếu một nhãn
+và một dòng quản lý cùng một host, cả hai đều bị giữ lại kèm chẩn đoán thay vì chọn
+ngầm một bên.
+
+Khi control plane render tài liệu để triển khai, kiểm tra và proxy, nó chèn
+`GOTHAM_DOMAIN` (host bật đầu tiên) và `GOTHAM_DOMAINS` (danh sách host phân tách
+bằng dấu phẩy). Chúng là chuỗi rỗng khi dịch vụ chưa có tên miền. Template có thể
+tham chiếu chúng; hai tên này được dành riêng và bị từ chối trong môi trường của
+dịch vụ. Thay đổi tên miền đánh dấu dịch vụ `pending_changes: ["domains"]` cho đến
+lần triển khai thành công tiếp theo nhận các biến mới.
+
+Các dòng HTTPS phục vụ qua ACME resolver mặc định và chuyển hướng HTTP sang HTTPS,
+giống hệt tên miền của ứng dụng. Một host được giữ chỗ trên toàn nền tảng: tên miền
+đã dùng bởi ứng dụng, nguồn chuyển hướng, dịch vụ khác hoặc nhãn compose sẽ bị từ
+chối khi ghi với `409`. Xem [Tên miền và bản xem trước](/vi/using/domains-previews)
+để biết về DNS và chứng chỉ, và [Proxy và DNS](/vi/operating/proxy-dns) cho phía
+người vận hành.
 
 ## Tạo dịch vụ
 

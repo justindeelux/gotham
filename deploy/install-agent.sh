@@ -101,6 +101,7 @@ ENV_DIR="/etc/gotham"
 ENV_FILE="${ENV_DIR}/agent.env"
 SERVICE_FILE="/etc/systemd/system/gotham-agent.service"
 STATE_DIR="/var/lib/gotham-agent"
+DOCKER_CONFIG_DIR="${STATE_DIR}/.docker"
 STATUS_DIR="/var/lib/gotham-agent-updater"
 WRAPPER_PATH="/usr/libexec/gotham/gotham-agent-update"
 WRAPPER_CONF="/etc/gotham/agent-updater.conf"
@@ -508,6 +509,14 @@ run mkdir -p "${STATE_DIR}"
 run chmod 0755 "${STATE_DIR}"
 run chown "${SERVICE_USER}:${SERVICE_USER}" "${STATE_DIR}"
 
+# The unit points DOCKER_CONFIG here because ProtectHome hides ~/.docker. The
+# docker CLI skips its compose plugin when it cannot read its config directory,
+# so the directory must exist and belong to the service user on every run.
+log "preparing the docker CLI config directory ${DOCKER_CONFIG_DIR}"
+run mkdir -p "${DOCKER_CONFIG_DIR}"
+run chmod 0700 "${DOCKER_CONFIG_DIR}"
+run chown -R "${SERVICE_USER}:${SERVICE_USER}" "${DOCKER_CONFIG_DIR}"
+
 if [ "${DRY_RUN}" -eq 1 ]; then
     echo "[dry-run] write ${SERVICE_FILE}"
 else
@@ -528,6 +537,7 @@ Group=gotham-agent
 WorkingDirectory=/var/lib/gotham-agent
 Environment=GOTHAM_AGENT_CERT_DIR=/var/lib/gotham-agent
 Environment=GOTHAM_AGENT_BINARY=/var/lib/gotham-agent/bin/gotham-agent
+Environment=DOCKER_CONFIG=/var/lib/gotham-agent/.docker
 EnvironmentFile=-/etc/gotham/agent.env
 ExecStart=/var/lib/gotham-agent/bin/gotham-agent serve
 Restart=always

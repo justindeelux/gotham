@@ -46,6 +46,7 @@ import (
 	"github.com/justindeelux/gotham/internal/terminal"
 	"github.com/justindeelux/gotham/internal/toolchain"
 	"github.com/justindeelux/gotham/internal/updates"
+	"github.com/justindeelux/gotham/internal/volumes"
 	"github.com/justindeelux/gotham/internal/webhooks"
 	"github.com/justindeelux/gotham/updatecore"
 )
@@ -492,15 +493,16 @@ func (s *Server) routes() (http.Handler, error) {
 		s.databaseSvc = databaseSvc
 		databases.Mount(api, s.resourceAuth(), RequireScopes(auth.ScopeDeploy), UserIDFromContext, databaseSvc)
 
-		s.backups = s.backupService(containerService, databaseSvc)
+		templateSvc := templates.NewDefaultService(s.logger)
+		composeSvc := s.composeService(templateSvc)
+		s.composeSvc = composeSvc
+
+		s.backups = s.backupService(containerService, databaseSvc, s.deploy, composeSvc)
 		backups.Mount(api, s.resourceAuth(), UserIDFromContext, s.backups)
 		backups.MountLegacy(api, s.resourceAuth(), s.resourceAuth(), UserIDFromContext, s.backups)
 		s.backupwatch = s.backupwatchService()
 		backupwatch.Mount(api, s.resourceAuth(), s.backupwatch)
 
-		templateSvc := templates.NewDefaultService(s.logger)
-		composeSvc := s.composeService(templateSvc)
-		s.composeSvc = composeSvc
 		services.Mount(api, s.resourceAuth(), UserIDFromContext, composeSvc)
 
 		s.mountProjectMembers(api)
@@ -557,6 +559,7 @@ func (s *Server) deployService(providerSvc providers.ProviderService, proxySvc p
 		GitAllowPrivateHosts: s.cfg.Snapshot().Deploy.GitAllowPrivateHosts,
 		RuntimeMonitor:       s.runtime,
 		RuntimeHealth:        runtimewatch.NewReader(s.persistence),
+		BackupActive:         s.backupJobActive,
 	}
 	cfg.TLSForDomains = s.defaultDomainTLS
 	if githubAppSvc != nil {
@@ -814,13 +817,18 @@ func (s *Server) databaseService(containerService containers.ContainerService) d
 	})
 }
 
-func (s *Server) backupService(containerService containers.ContainerService, databaseSvc databases.DatabaseService) backups.BackupService {
+func (s *Server) backupService(containerService containers.ContainerService, databaseSvc databases.DatabaseService, deploySvc deploy.DeployService, composeSvc services.ServiceService) backups.BackupService {
 	if s.persistence == nil || containerService == nil || databaseSvc == nil {
 		return nil
 	}
 	sources := map[backups.ResourceType]backups.Source{}
 	if concrete, ok := databaseSvc.(*databases.Service); ok {
 		sources[backups.ResourceDatabase] = databases.NewBackupSource(concrete)
+	}
+	if archiver, ok := containerService.(volumes.Archiver); ok && deploySvc != nil && composeSvc != nil {
+		volumeSource := volumes.NewSource(deploySvc, composeSvc, archiver)
+		sources[backups.ResourceApplication] = volumeSource
+		sources[backups.ResourceService] = volumeSource
 	}
 	cfg := backups.BackupConfig{
 		Store:      s.persistence,
@@ -834,6 +842,14 @@ func (s *Server) backupService(containerService containers.ContainerService, dat
 		cfg.Notifier = notifier
 	}
 	return backups.NewDefaultBackupService(cfg)
+}
+
+// backupJobActive tells the deploy and service services whether a backup or
+// restore currently owns the resource. The backup service is created after
+// them, so the guard reads the field at request time.
+func (s *Server) backupJobActive(resourceID uuid.UUID) bool {
+	manager, ok := s.backups.(*backups.BackupManager)
+	return ok && manager.JobActive(resourceID)
 }
 
 func (s *Server) incidentService() *incidents.Service {
@@ -987,6 +1003,7 @@ func (s *Server) composeService(templateSvc templates.Service) services.ServiceS
 		GuardDomains: s.guardDomains,
 		Store:        s.persistence,
 		Logger:       s.logger,
+		BackupActive: s.backupJobActive,
 	}
 	if templateSvc != nil {
 		cfg.TemplateExists = func(slug string) bool {

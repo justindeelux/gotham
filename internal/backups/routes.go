@@ -70,18 +70,19 @@ type restoreListEnvelope struct {
 }
 
 type scheduleResponse struct {
-	ID            string       `json:"id"`
-	ResourceType  ResourceType `json:"resource_type"`
-	ResourceID    string       `json:"resource_id"`
-	Cron          string       `json:"cron"`
-	ProviderID    string       `json:"provider_id,omitempty"`
-	Enabled       bool         `json:"enabled"`
-	NextRunAt     time.Time    `json:"next_run_at"`
-	LastRunAt     *time.Time   `json:"last_run_at,omitempty"`
-	LastSlotAt    *time.Time   `json:"last_slot_at,omitempty"`
-	MaxRunSeconds int          `json:"max_run_seconds"`
-	CreatedAt     time.Time    `json:"created_at"`
-	UpdatedAt     time.Time    `json:"updated_at"`
+	ID                string       `json:"id"`
+	ResourceType      ResourceType `json:"resource_type"`
+	ResourceID        string       `json:"resource_id"`
+	Cron              string       `json:"cron"`
+	ProviderID        string       `json:"provider_id,omitempty"`
+	Enabled           bool         `json:"enabled"`
+	NextRunAt         time.Time    `json:"next_run_at"`
+	LastRunAt         *time.Time   `json:"last_run_at,omitempty"`
+	LastSlotAt        *time.Time   `json:"last_slot_at,omitempty"`
+	MaxRunSeconds     int          `json:"max_run_seconds"`
+	PauseDuringBackup bool         `json:"pause_during_backup"`
+	CreatedAt         time.Time    `json:"created_at"`
+	UpdatedAt         time.Time    `json:"updated_at"`
 }
 
 type scheduleEnvelope struct {
@@ -119,18 +120,30 @@ type providerCheckEnvelope struct {
 }
 
 type createBackupRequest struct {
-	ResourceType string `json:"resource_type"`
-	ResourceID   string `json:"resource_id"`
-	ProviderID   string `json:"provider_id,omitempty"`
+	ResourceType      string `json:"resource_type"`
+	ResourceID        string `json:"resource_id"`
+	ProviderID        string `json:"provider_id,omitempty"`
+	PauseDuringBackup *bool  `json:"pause_during_backup,omitempty"`
 }
 
 type scheduleBody struct {
-	ResourceType  string  `json:"resource_type,omitempty"`
-	ResourceID    string  `json:"resource_id,omitempty"`
-	Cron          string  `json:"cron"`
-	ProviderID    *string `json:"provider_id,omitempty"`
-	Enabled       *bool   `json:"enabled,omitempty"`
-	MaxRunSeconds *int    `json:"max_run_seconds,omitempty"`
+	ResourceType      string  `json:"resource_type,omitempty"`
+	ResourceID        string  `json:"resource_id,omitempty"`
+	Cron              string  `json:"cron"`
+	ProviderID        *string `json:"provider_id,omitempty"`
+	Enabled           *bool   `json:"enabled,omitempty"`
+	MaxRunSeconds     *int    `json:"max_run_seconds,omitempty"`
+	PauseDuringBackup *bool   `json:"pause_during_backup,omitempty"`
+}
+
+type contentResponse struct {
+	Name   string `json:"name"`
+	Kind   string `json:"kind"`
+	Target string `json:"target,omitempty"`
+}
+
+type contentListEnvelope struct {
+	Contents []contentResponse `json:"contents"`
 }
 
 type providerBody = ProviderRequest
@@ -151,6 +164,9 @@ func Mount(r chi.Router, auth func(http.Handler) http.Handler, userID UserIDFunc
 	h := &backupHandler{svc: svc, userID: userID, logger: slog.Default()}
 	r.Group(func(protected chi.Router) {
 		protected.Use(auth)
+		protected.Get("/v1/applications/{id}/backup-contents", h.contents(ResourceApplication))
+		protected.Get("/v1/services/{id}/backup-contents", h.contents(ResourceService))
+		protected.Get("/v1/databases/{id}/backup-contents", h.contents(ResourceDatabase))
 		protected.Get("/v1/backups", h.listBackups)
 		protected.Post("/v1/backups", h.createBackup)
 		protected.Get("/v1/backups/restores", h.listRestores)
@@ -187,8 +203,9 @@ func (h *backupHandler) createBackup(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	backup, err := h.svc.CreateBackup(r.Context(), userID, CreateBackupRequest{
-		Resource: ref,
-		TargetID: providerID,
+		Resource:          ref,
+		TargetID:          providerID,
+		PauseDuringBackup: req.PauseDuringBackup,
 	})
 	if err != nil {
 		h.writeError(w, err)
@@ -326,11 +343,12 @@ func (h *backupHandler) createSchedule(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	schedule, err := h.svc.CreateSchedule(r.Context(), userID, ScheduleRequest{
-		Resource:      ref,
-		Cron:          body.Cron,
-		TargetID:      body.ProviderID,
-		Enabled:       body.Enabled,
-		MaxRunSeconds: body.MaxRunSeconds,
+		Resource:          ref,
+		Cron:              body.Cron,
+		TargetID:          body.ProviderID,
+		Enabled:           body.Enabled,
+		MaxRunSeconds:     body.MaxRunSeconds,
+		PauseDuringBackup: body.PauseDuringBackup,
 	})
 	if err != nil {
 		h.writeError(w, err)
@@ -353,10 +371,11 @@ func (h *backupHandler) updateSchedule(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	req := ScheduleRequest{
-		Cron:          body.Cron,
-		TargetID:      body.ProviderID,
-		Enabled:       body.Enabled,
-		MaxRunSeconds: body.MaxRunSeconds,
+		Cron:              body.Cron,
+		TargetID:          body.ProviderID,
+		Enabled:           body.Enabled,
+		MaxRunSeconds:     body.MaxRunSeconds,
+		PauseDuringBackup: body.PauseDuringBackup,
 	}
 	if strings.TrimSpace(body.ResourceType) != "" || strings.TrimSpace(body.ResourceID) != "" {
 		ref, ok := h.resourceRef(w, body.ResourceType, body.ResourceID)
@@ -477,6 +496,32 @@ func (h *backupHandler) testProvider(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, providerCheckEnvelope{Check: check})
 }
 
+// contents lists what a resource's next run captures. The route stays under
+// the resource path so the central project policy grants a member access the
+// same way it does for the resource itself.
+func (h *backupHandler) contents(kind ResourceType) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		userID, ok := h.currentUser(w, r)
+		if !ok {
+			return
+		}
+		resourceID, ok := h.paramUUID(w, r, "id", "resource id")
+		if !ok {
+			return
+		}
+		contents, err := h.svc.Contents(r.Context(), userID, ResourceRef{Type: kind, ID: resourceID})
+		if err != nil {
+			h.writeError(w, err)
+			return
+		}
+		response := make([]contentResponse, 0, len(contents))
+		for _, item := range contents {
+			response = append(response, contentResponse(item))
+		}
+		writeJSON(w, http.StatusOK, contentListEnvelope{Contents: response})
+	}
+}
+
 func (h *backupHandler) currentUser(w http.ResponseWriter, r *http.Request) (uuid.UUID, bool) {
 	if h.userID == nil {
 		writeJSON(w, http.StatusUnauthorized, errorBody{Message: "unauthorized"})
@@ -565,6 +610,8 @@ func (h *backupHandler) writeError(w http.ResponseWriter, err error) {
 		writeJSON(w, http.StatusBadRequest, errorBody{Message: err.Error()})
 	case errors.Is(err, ErrBackupInFlight):
 		writeJSON(w, http.StatusConflict, errorBody{Message: "a backup or restore is already running for this resource"})
+	case errors.Is(err, ErrResourceBusy):
+		writeJSON(w, http.StatusConflict, errorBody{Message: err.Error()})
 	case errors.Is(err, ErrBackupNotCompleted):
 		writeJSON(w, http.StatusConflict, errorBody{Message: err.Error()})
 	case errors.Is(err, ErrTargetStranded):
@@ -660,15 +707,16 @@ func newRestoreResponse(restore Restore) restoreResponse {
 
 func newScheduleResponse(schedule BackupSchedule) scheduleResponse {
 	response := scheduleResponse{
-		ID:            schedule.ID.String(),
-		ResourceType:  schedule.ResourceRef.Type,
-		ResourceID:    schedule.ResourceRef.ID.String(),
-		Cron:          schedule.Cron,
-		Enabled:       schedule.Enabled,
-		NextRunAt:     schedule.NextRunAt,
-		MaxRunSeconds: schedule.MaxRunSeconds,
-		CreatedAt:     schedule.CreatedAt,
-		UpdatedAt:     schedule.UpdatedAt,
+		ID:                schedule.ID.String(),
+		ResourceType:      schedule.ResourceRef.Type,
+		ResourceID:        schedule.ResourceRef.ID.String(),
+		Cron:              schedule.Cron,
+		Enabled:           schedule.Enabled,
+		NextRunAt:         schedule.NextRunAt,
+		MaxRunSeconds:     schedule.MaxRunSeconds,
+		PauseDuringBackup: schedule.PauseDuringBackup,
+		CreatedAt:         schedule.CreatedAt,
+		UpdatedAt:         schedule.UpdatedAt,
 	}
 	if schedule.TargetID != uuid.Nil {
 		response.ProviderID = schedule.TargetID.String()

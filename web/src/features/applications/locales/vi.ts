@@ -8,6 +8,7 @@ const vi: ApplicationsMessages = {
     env: "Biến môi trường",
     storage: "Lưu trữ",
     domains: "Tên miền",
+    backups: "Bản sao lưu",
     previews: "Bản xem trước ({count})",
     previewsPlain: "Bản xem trước",
     settings: "Cài đặt",

@@ -174,12 +174,36 @@ The **Logs** tab has two panes:
 | **Terminal** | A shell inside a running service container. The owner only; choose the service container when the application runs more than one. |
 | **Storage** | Volumes and their container mounts. Data lives on the node and survives redeploys and rollbacks. |
 | **Domains** | Hostnames, target ports and certificate configuration. See [Domains and previews](/using/domains-previews). |
+| **Backups** | Runs and schedules for the application's persistent data. |
 | **Previews** | Pull-request preview deployments. See [Domains and previews](/using/domains-previews). |
 | **Settings** | Move the application to another environment or node, and the danger zone for deletion. |
 
 The Deployments and Previews tabs show their counts. Storage appears once the
 application has loaded, and Previews when preview deployments are enabled on
 the instance. The Terminal tab is owner-only.
+
+## Backups
+
+The **Backups** tab captures the application's persistent data: its storage
+mappings, or the named volumes of a compose application. The application's code
+and image are rebuilt from source, so they are never part of a backup, and the
+environment and configuration are not exported either.
+
+The tab lists what is included, so a run never looks like it captures more than
+it does. An application with no storage mapping has nothing to capture; add one
+under **Storage** first, or the API refuses the run with a clear validation
+error.
+
+A backup stops the application while the archive is taken, then starts it again
+if it was running. A schedule can choose **Do not stop the resource**: there is
+no downtime, but files written during the archive may be inconsistent. A backup
+is refused while a deploy, rollback, restart or restore of the same application
+is in flight, and a deploy request during a backup is refused the same way.
+
+Restoring stops the application, replaces its stored data with the artifact and
+starts it again. The confirmation states the downtime and that current data is
+replaced. If the import fails, the application stays stopped and the restore
+history shows the error, so nobody serves half-restored data.
 
 ## Environment variables
 

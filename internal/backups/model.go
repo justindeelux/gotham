@@ -110,18 +110,19 @@ type Restore struct {
 }
 
 type BackupSchedule struct {
-	ID              uuid.UUID
-	ResourceRef     ResourceRef
-	Cron            string
-	TargetID        uuid.UUID
-	Enabled         bool
-	LastRunAt       time.Time
-	NextRunAt       time.Time
-	LastSlotAt      time.Time
-	TargetChangedAt time.Time
-	MaxRunSeconds   int
-	CreatedAt       time.Time
-	UpdatedAt       time.Time
+	ID                uuid.UUID
+	ResourceRef       ResourceRef
+	Cron              string
+	TargetID          uuid.UUID
+	Enabled           bool
+	LastRunAt         time.Time
+	NextRunAt         time.Time
+	LastSlotAt        time.Time
+	TargetChangedAt   time.Time
+	MaxRunSeconds     int
+	PauseDuringBackup bool
+	CreatedAt         time.Time
+	UpdatedAt         time.Time
 }
 
 type TargetKind string
@@ -152,6 +153,14 @@ type BackupTarget struct {
 	Builtin   bool
 	CreatedAt time.Time
 	UpdatedAt time.Time
+}
+
+// Content is one item a resource's backup captures. The resource tab lists it
+// so a run never looks like it captures more than it does.
+type Content struct {
+	Name   string `json:"name"`
+	Kind   string `json:"kind"`
+	Target string `json:"target,omitempty"`
 }
 
 type TargetSecret struct {

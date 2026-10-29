@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { NSpace } from "naive-ui";
+import { NAlert, NCard, NSpace, NTag, NText } from "naive-ui";
 import { provide, toRef } from "vue";
 
 import BackupProtectionCard from "@/features/backups/components/BackupProtectionCard.vue";
@@ -48,6 +48,40 @@ function t(key: string): string {
       :target-label="backups.providerLabel"
       :run-href="backups.runHref"
     />
+    <NCard
+      v-if="resourceType !== 'database'"
+      :title="t('backups.resourceTab.contentsTitle')"
+      data-testid="backup-contents"
+    >
+      <NAlert
+        v-if="backups.backupContents.value.length === 0"
+        type="info"
+        :show-icon="true"
+      >
+        {{
+          resourceType === "application"
+            ? t("backups.resourceTab.contentsEmptyApplication")
+            : t("backups.resourceTab.contentsEmptyService")
+        }}
+      </NAlert>
+      <NSpace v-else vertical :size="8">
+        <div
+          v-for="item in backups.backupContents.value"
+          :key="`${item.kind}:${item.name}`"
+          class="content-row"
+        >
+          <NSpace align="center" :size="8">
+            <NText strong>{{ item.name }}</NText>
+            <NTag size="small" :bordered="false">
+              {{ t(`backups.resourceTab.contentsKind.${item.kind}`) }}
+            </NTag>
+          </NSpace>
+          <NText v-if="item.target" depth="3" class="mono">
+            {{ item.target }}
+          </NText>
+        </div>
+      </NSpace>
+    </NCard>
     <BackupRunsCard />
     <RestoreHistoryCard v-if="backups.restores.value.length > 0" />
     <BackupSchedulesCard />
@@ -62,6 +96,12 @@ function t(key: string): string {
 </template>
 
 <style scoped>
+.content-row {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+
 .storage-link {
   color: var(--muted);
   font-size: var(--text-sm);

@@ -791,10 +791,14 @@ func (s *Service) BackupFinished(_ context.Context, result backups.BackupResult)
 // notificationResourceType keeps the channel scope vocabulary of this package;
 // a database-backup notification has always been scoped to a database.
 func notificationResourceType(kind backups.ResourceType) string {
-	if kind == backups.ResourceApplication {
+	switch kind {
+	case backups.ResourceApplication:
 		return ResourceApplication
+	case backups.ResourceService:
+		return ResourceService
+	default:
+		return ResourceDatabase
 	}
-	return ResourceDatabase
 }
 
 func (s *Service) ServerStateChanged(_ context.Context, change servers.StateChange) {

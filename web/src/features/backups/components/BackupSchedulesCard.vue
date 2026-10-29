@@ -80,6 +80,14 @@ const backups = inject(resourceBackupsKey)!;
                 }) }}
               </span>
             </NText>
+            <NTag
+              v-if="!schedule.pause_during_backup"
+              size="small"
+              type="warning"
+              :bordered="false"
+            >
+              {{ t("backups.resourceTab.noPauseTag") }}
+            </NTag>
           </div>
           <NSpace class="backup-row__actions" align="center" :size="8">
             <NSwitch
@@ -199,6 +207,29 @@ const backups = inject(resourceBackupsKey)!;
           {{ t("common.actions.cancel") }}
         </NButton>
       </div>
+      <div
+        v-if="backups.resource.value.resource_type !== 'database'"
+        class="schedule-form__row schedule-pause"
+      >
+        <NSwitch
+          v-model:value="backups.schedulePauseDuringBackup.value"
+          :aria-label="t('backups.resourceTab.pauseDuringBackup')"
+        >
+          <template #checked>
+            {{ t("backups.resourceTab.pauseDuringBackup") }}
+          </template>
+          <template #unchecked>
+            {{ t("backups.resourceTab.noPause") }}
+          </template>
+        </NSwitch>
+        <NText depth="3">
+          {{
+            backups.schedulePauseDuringBackup.value
+              ? t("backups.resourceTab.pauseHelper")
+              : t("backups.resourceTab.noPauseHelper")
+          }}
+        </NText>
+      </div>
     </div>
   </NCard>
 </template>
@@ -221,5 +252,12 @@ const backups = inject(resourceBackupsKey)!;
   align-items: center;
   gap: var(--space-2);
   flex-wrap: wrap;
+}
+
+.schedule-pause {
+  padding: var(--space-2) var(--space-3);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-md);
+  background: var(--surface-2);
 }
 </style>

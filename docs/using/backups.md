@@ -30,16 +30,16 @@ plain language, its resource and storage provider, the last and next run, and an
 enabled switch. **New schedule** picks a resource, a storage provider and one of
 the presets.
 
-Only database backups are available in this release. Application storage and
-service volumes use the same page and the same run list as soon as their drivers
-land; their rows resolve to the matching resource page.
+Applications, services and databases share the same page and run list. A run
+belongs to whichever resource it captured and resolves to that resource's page.
 
 ### Downtime
 
 A database backup stops the database while the dump runs, then starts it again
-if it was running. The same promise applies to volume archives when they land.
-The **Backup now** dialog says so before the run is queued. For a busy database,
-pick a quiet window.
+if it was running. A volume archive does the same for an application or service.
+A schedule can opt out with **Do not stop the resource**: there is no downtime,
+but files written during the archive may be inconsistent, and the history labels
+the run. For a busy resource, pick a quiet window instead.
 
 ### Restoring
 

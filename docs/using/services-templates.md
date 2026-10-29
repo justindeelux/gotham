@@ -156,6 +156,28 @@ optional `"deploy": true` (used by the template wizard) to create and start in
 one call; it answers `201 Created` with the service while the deploy continues
 in the background.
 
+## Backups
+
+The **Backups** tab captures the service's named volumes and bind mounts. Read-only
+mounts and the Docker socket are excluded, and the compose document and
+environment are not exported: a service is rebuilt from compose, so only its
+data is in scope.
+
+The tab lists what is included. A service whose compose document declares no
+writable volume has nothing to capture and the API refuses the run with a clear
+validation error.
+
+A backup stops the compose project while the archive is taken, then starts it
+again if it was running. A schedule can choose **Do not stop the resource**;
+there is no downtime, but files written during the archive may be inconsistent.
+A backup is refused while a deploy, restart or restore of the same service is in
+flight, and a deploy request during a backup is refused the same way.
+
+Restoring stops the project, replaces the contents of the volumes with the
+artifact and starts the project again. If the import fails, the service stays
+stopped and the restore history shows the error. Named volumes are never
+deleted by this flow.
+
 ## Containers and logs
 
 The **Containers** card lists the project's containers as reported by the node

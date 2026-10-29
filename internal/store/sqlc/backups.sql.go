@@ -76,22 +76,23 @@ func (q *Queries) CreateBackup(ctx context.Context, arg CreateBackupParams) (Bac
 const createBackupSchedule = `-- name: CreateBackupSchedule :one
 INSERT INTO backup_schedules (
     id, database_id, application_id, service_id, cron, target_id, enabled,
-    next_run_at, max_run_seconds
+    next_run_at, max_run_seconds, pause_during_backup
 )
-VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)
-RETURNING id, database_id, cron, target_id, enabled, last_run_at, next_run_at, created_at, updated_at, last_slot_at, target_changed_at, max_run_seconds, application_id, service_id
+VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)
+RETURNING id, database_id, cron, target_id, enabled, last_run_at, next_run_at, created_at, updated_at, last_slot_at, target_changed_at, max_run_seconds, application_id, service_id, pause_during_backup
 `
 
 type CreateBackupScheduleParams struct {
-	ID            pgtype.UUID        `json:"id"`
-	DatabaseID    pgtype.UUID        `json:"database_id"`
-	ApplicationID pgtype.UUID        `json:"application_id"`
-	ServiceID     pgtype.UUID        `json:"service_id"`
-	Cron          string             `json:"cron"`
-	TargetID      pgtype.UUID        `json:"target_id"`
-	Enabled       bool               `json:"enabled"`
-	NextRunAt     pgtype.Timestamptz `json:"next_run_at"`
-	MaxRunSeconds int32              `json:"max_run_seconds"`
+	ID                pgtype.UUID        `json:"id"`
+	DatabaseID        pgtype.UUID        `json:"database_id"`
+	ApplicationID     pgtype.UUID        `json:"application_id"`
+	ServiceID         pgtype.UUID        `json:"service_id"`
+	Cron              string             `json:"cron"`
+	TargetID          pgtype.UUID        `json:"target_id"`
+	Enabled           bool               `json:"enabled"`
+	NextRunAt         pgtype.Timestamptz `json:"next_run_at"`
+	MaxRunSeconds     int32              `json:"max_run_seconds"`
+	PauseDuringBackup bool               `json:"pause_during_backup"`
 }
 
 func (q *Queries) CreateBackupSchedule(ctx context.Context, arg CreateBackupScheduleParams) (BackupSchedule, error) {
@@ -105,6 +106,7 @@ func (q *Queries) CreateBackupSchedule(ctx context.Context, arg CreateBackupSche
 		arg.Enabled,
 		arg.NextRunAt,
 		arg.MaxRunSeconds,
+		arg.PauseDuringBackup,
 	)
 	var i BackupSchedule
 	err := row.Scan(
@@ -122,6 +124,7 @@ func (q *Queries) CreateBackupSchedule(ctx context.Context, arg CreateBackupSche
 		&i.MaxRunSeconds,
 		&i.ApplicationID,
 		&i.ServiceID,
+		&i.PauseDuringBackup,
 	)
 	return i, err
 }
@@ -267,7 +270,7 @@ func (q *Queries) DeleteBackup(ctx context.Context, id pgtype.UUID) (Backup, err
 const deleteBackupSchedule = `-- name: DeleteBackupSchedule :one
 DELETE FROM backup_schedules
 WHERE id = $1
-RETURNING id, database_id, cron, target_id, enabled, last_run_at, next_run_at, created_at, updated_at, last_slot_at, target_changed_at, max_run_seconds, application_id, service_id
+RETURNING id, database_id, cron, target_id, enabled, last_run_at, next_run_at, created_at, updated_at, last_slot_at, target_changed_at, max_run_seconds, application_id, service_id, pause_during_backup
 `
 
 func (q *Queries) DeleteBackupSchedule(ctx context.Context, id pgtype.UUID) (BackupSchedule, error) {
@@ -288,6 +291,7 @@ func (q *Queries) DeleteBackupSchedule(ctx context.Context, id pgtype.UUID) (Bac
 		&i.MaxRunSeconds,
 		&i.ApplicationID,
 		&i.ServiceID,
+		&i.PauseDuringBackup,
 	)
 	return i, err
 }
@@ -472,7 +476,7 @@ func (q *Queries) GetBackup(ctx context.Context, id pgtype.UUID) (Backup, error)
 }
 
 const getBackupSchedule = `-- name: GetBackupSchedule :one
-SELECT id, database_id, cron, target_id, enabled, last_run_at, next_run_at, created_at, updated_at, last_slot_at, target_changed_at, max_run_seconds, application_id, service_id FROM backup_schedules
+SELECT id, database_id, cron, target_id, enabled, last_run_at, next_run_at, created_at, updated_at, last_slot_at, target_changed_at, max_run_seconds, application_id, service_id, pause_during_backup FROM backup_schedules
 WHERE id = $1
 `
 
@@ -494,6 +498,7 @@ func (q *Queries) GetBackupSchedule(ctx context.Context, id pgtype.UUID) (Backup
 		&i.MaxRunSeconds,
 		&i.ApplicationID,
 		&i.ServiceID,
+		&i.PauseDuringBackup,
 	)
 	return i, err
 }
@@ -622,7 +627,7 @@ func (q *Queries) HasBackupsForTarget(ctx context.Context, targetID pgtype.UUID)
 }
 
 const listBackupSchedules = `-- name: ListBackupSchedules :many
-SELECT s.id, s.database_id, s.cron, s.target_id, s.enabled, s.last_run_at, s.next_run_at, s.created_at, s.updated_at, s.last_slot_at, s.target_changed_at, s.max_run_seconds, s.application_id, s.service_id
+SELECT s.id, s.database_id, s.cron, s.target_id, s.enabled, s.last_run_at, s.next_run_at, s.created_at, s.updated_at, s.last_slot_at, s.target_changed_at, s.max_run_seconds, s.application_id, s.service_id, s.pause_during_backup
 FROM backup_schedules s
     LEFT JOIN databases d ON d.id = s.database_id
     LEFT JOIN applications a ON a.id = s.application_id
@@ -659,6 +664,7 @@ func (q *Queries) ListBackupSchedules(ctx context.Context, viewerID pgtype.UUID)
 			&i.MaxRunSeconds,
 			&i.ApplicationID,
 			&i.ServiceID,
+			&i.PauseDuringBackup,
 		); err != nil {
 			return nil, err
 		}
@@ -671,7 +677,7 @@ func (q *Queries) ListBackupSchedules(ctx context.Context, viewerID pgtype.UUID)
 }
 
 const listBackupSchedulesByResource = `-- name: ListBackupSchedulesByResource :many
-SELECT id, database_id, cron, target_id, enabled, last_run_at, next_run_at, created_at, updated_at, last_slot_at, target_changed_at, max_run_seconds, application_id, service_id FROM backup_schedules
+SELECT id, database_id, cron, target_id, enabled, last_run_at, next_run_at, created_at, updated_at, last_slot_at, target_changed_at, max_run_seconds, application_id, service_id, pause_during_backup FROM backup_schedules
 WHERE database_id = $1::uuid
    OR application_id = $2::uuid
    OR service_id = $3::uuid
@@ -708,6 +714,7 @@ func (q *Queries) ListBackupSchedulesByResource(ctx context.Context, arg ListBac
 			&i.MaxRunSeconds,
 			&i.ApplicationID,
 			&i.ServiceID,
+			&i.PauseDuringBackup,
 		); err != nil {
 			return nil, err
 		}
@@ -922,7 +929,7 @@ func (q *Queries) ListBackupsByResource(ctx context.Context, arg ListBackupsByRe
 }
 
 const listDueBackupSchedules = `-- name: ListDueBackupSchedules :many
-SELECT s.id, s.database_id, s.cron, s.target_id, s.enabled, s.last_run_at, s.next_run_at, s.created_at, s.updated_at, s.last_slot_at, s.target_changed_at, s.max_run_seconds, s.application_id, s.service_id
+SELECT s.id, s.database_id, s.cron, s.target_id, s.enabled, s.last_run_at, s.next_run_at, s.created_at, s.updated_at, s.last_slot_at, s.target_changed_at, s.max_run_seconds, s.application_id, s.service_id, s.pause_during_backup
 FROM backup_schedules s
 WHERE s.enabled AND s.next_run_at <= $1
   AND (s.database_id IS NULL OR EXISTS (
@@ -960,6 +967,7 @@ func (q *Queries) ListDueBackupSchedules(ctx context.Context, nextRunAt pgtype.T
 			&i.MaxRunSeconds,
 			&i.ApplicationID,
 			&i.ServiceID,
+			&i.PauseDuringBackup,
 		); err != nil {
 			return nil, err
 		}
@@ -1167,7 +1175,7 @@ SET last_slot_at = next_run_at,
     next_run_at = $3,
     updated_at = now()
 WHERE id = $1
-RETURNING id, database_id, cron, target_id, enabled, last_run_at, next_run_at, created_at, updated_at, last_slot_at, target_changed_at, max_run_seconds, application_id, service_id
+RETURNING id, database_id, cron, target_id, enabled, last_run_at, next_run_at, created_at, updated_at, last_slot_at, target_changed_at, max_run_seconds, application_id, service_id, pause_during_backup
 `
 
 type MarkBackupScheduleRunParams struct {
@@ -1194,6 +1202,7 @@ func (q *Queries) MarkBackupScheduleRun(ctx context.Context, arg MarkBackupSched
 		&i.MaxRunSeconds,
 		&i.ApplicationID,
 		&i.ServiceID,
+		&i.PauseDuringBackup,
 	)
 	return i, err
 }
@@ -1239,20 +1248,22 @@ SET cron = $2,
     last_slot_at = $6,
     target_changed_at = $7,
     max_run_seconds = $8,
+    pause_during_backup = $9,
     updated_at = now()
 WHERE id = $1
-RETURNING id, database_id, cron, target_id, enabled, last_run_at, next_run_at, created_at, updated_at, last_slot_at, target_changed_at, max_run_seconds, application_id, service_id
+RETURNING id, database_id, cron, target_id, enabled, last_run_at, next_run_at, created_at, updated_at, last_slot_at, target_changed_at, max_run_seconds, application_id, service_id, pause_during_backup
 `
 
 type UpdateBackupScheduleParams struct {
-	ID              pgtype.UUID        `json:"id"`
-	Cron            string             `json:"cron"`
-	TargetID        pgtype.UUID        `json:"target_id"`
-	Enabled         bool               `json:"enabled"`
-	NextRunAt       pgtype.Timestamptz `json:"next_run_at"`
-	LastSlotAt      pgtype.Timestamptz `json:"last_slot_at"`
-	TargetChangedAt pgtype.Timestamptz `json:"target_changed_at"`
-	MaxRunSeconds   int32              `json:"max_run_seconds"`
+	ID                pgtype.UUID        `json:"id"`
+	Cron              string             `json:"cron"`
+	TargetID          pgtype.UUID        `json:"target_id"`
+	Enabled           bool               `json:"enabled"`
+	NextRunAt         pgtype.Timestamptz `json:"next_run_at"`
+	LastSlotAt        pgtype.Timestamptz `json:"last_slot_at"`
+	TargetChangedAt   pgtype.Timestamptz `json:"target_changed_at"`
+	MaxRunSeconds     int32              `json:"max_run_seconds"`
+	PauseDuringBackup bool               `json:"pause_during_backup"`
 }
 
 func (q *Queries) UpdateBackupSchedule(ctx context.Context, arg UpdateBackupScheduleParams) (BackupSchedule, error) {
@@ -1265,6 +1276,7 @@ func (q *Queries) UpdateBackupSchedule(ctx context.Context, arg UpdateBackupSche
 		arg.LastSlotAt,
 		arg.TargetChangedAt,
 		arg.MaxRunSeconds,
+		arg.PauseDuringBackup,
 	)
 	var i BackupSchedule
 	err := row.Scan(
@@ -1282,6 +1294,7 @@ func (q *Queries) UpdateBackupSchedule(ctx context.Context, arg UpdateBackupSche
 		&i.MaxRunSeconds,
 		&i.ApplicationID,
 		&i.ServiceID,
+		&i.PauseDuringBackup,
 	)
 	return i, err
 }

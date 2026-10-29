@@ -171,6 +171,7 @@ Tab **Nhật ký** có hai khung:
 | **Biến môi trường** | Biến riêng của ứng dụng, với biến dùng chung được kế thừa hiển thị chỉ đọc. |
 | **Terminal** | Một shell bên trong container dịch vụ đang chạy. Chỉ chủ sở hữu; chọn container dịch vụ khi ứng dụng chạy nhiều hơn một. |
 | **Lưu trữ** | Các volume và điểm gắn của chúng trong container. Dữ liệu nằm trên node và tồn tại qua các lần triển khai lại và quay lui. |
+| **Bản sao lưu** | Các lần chạy và lịch trình cho dữ liệu lâu dài của ứng dụng. |
 | **Tên miền** | Hostname, cổng đích và cấu hình chứng chỉ. Xem [Tên miền và bản xem trước](/vi/using/domains-previews). |
 | **Bản xem trước** | Các bản triển khai xem trước theo pull request. Xem [Tên miền và bản xem trước](/vi/using/domains-previews). |
 | **Cài đặt** | Chuyển ứng dụng sang môi trường hoặc node khác, và vùng nguy hiểm để xóa. |
@@ -178,6 +179,29 @@ Tab **Nhật ký** có hai khung:
 Các tab Đợt triển khai và Bản xem trước hiển thị số lượng của chúng. Lưu trữ xuất
 hiện khi ứng dụng đã tải xong, Bản xem trước khi bản xem trước được bật trên
 instance. Tab Terminal chỉ dành cho chủ sở hữu.
+
+## Bản sao lưu
+
+Tab **Bản sao lưu** ghi lại dữ liệu lâu dài của ứng dụng: các ánh xạ lưu trữ,
+hoặc volume có tên của ứng dụng compose. Mã và image của ứng dụng được dựng lại
+từ nguồn nên không nằm trong bản sao lưu, và biến môi trường cùng cấu hình cũng
+không được xuất.
+
+Tab liệt kê nội dung được sao lưu để một lần chạy không trông như thể ghi nhiều
+hơn thực tế. Ứng dụng không có ánh xạ lưu trữ thì không có gì để ghi; hãy thêm
+ánh xạ trong **Lưu trữ** trước, nếu không API sẽ từ chối với lỗi xác thực rõ
+ràng.
+
+Bản sao lưu dừng ứng dụng trong khi tạo kho lưu, rồi khởi động lại nếu ứng dụng
+đang chạy. Lịch trình có thể chọn **Không dừng tài nguyên**: không có thời gian
+chết, nhưng tệp được ghi trong lúc lưu có thể không nhất quán. Bản sao lưu bị
+từ chối khi ứng dụng đang triển khai, rollback, khởi động lại hoặc khôi phục, và
+yêu cầu triển khai trong lúc sao lưu cũng bị từ chối tương tự.
+
+Khôi phục sẽ dừng ứng dụng, thay dữ liệu đã lưu bằng kho lưu rồi khởi động lại.
+Hộp xác nhận nêu rõ thời gian chết và việc dữ liệu hiện tại bị thay thế. Nếu
+việc nhập thất bại, ứng dụng vẫn dừng và lịch sử khôi phục hiển thị lỗi, để
+không ai phục vụ dữ liệu khôi phục dở dang.
 
 ## Biến môi trường
 

@@ -37,9 +37,14 @@ func (m *BackupManager) ListSchedules(ctx context.Context, userID uuid.UUID, ref
 }
 
 func (m *BackupManager) CreateSchedule(ctx context.Context, userID uuid.UUID, req ScheduleRequest) (BackupSchedule, error) {
-	resource, _, err := m.resolve(ctx, req.Resource)
+	resource, source, err := m.resolve(ctx, req.Resource)
 	if err != nil {
 		return BackupSchedule{}, err
+	}
+	if validator, ok := source.(Validator); ok {
+		if err := validator.Validate(ctx, resource); err != nil {
+			return BackupSchedule{}, err
+		}
 	}
 	cron := strings.TrimSpace(req.Cron)
 	next, err := nextCronTime(cron, m.now(), time.Local)
@@ -63,17 +68,22 @@ func (m *BackupManager) CreateSchedule(ctx context.Context, userID uuid.UUID, re
 	if err != nil {
 		return BackupSchedule{}, err
 	}
+	pause := true
+	if req.PauseDuringBackup != nil {
+		pause = *req.PauseDuringBackup
+	}
 	now := m.now()
 	schedule := BackupSchedule{
-		ID:            uuid.New(),
-		ResourceRef:   resource.Ref(),
-		Cron:          cron,
-		TargetID:      targetID,
-		Enabled:       enabled,
-		NextRunAt:     next,
-		MaxRunSeconds: maxRunSeconds,
-		CreatedAt:     now,
-		UpdatedAt:     now,
+		ID:                uuid.New(),
+		ResourceRef:       resource.Ref(),
+		Cron:              cron,
+		TargetID:          targetID,
+		Enabled:           enabled,
+		NextRunAt:         next,
+		MaxRunSeconds:     maxRunSeconds,
+		PauseDuringBackup: pause,
+		CreatedAt:         now,
+		UpdatedAt:         now,
 	}
 	created, err := m.backups.CreateBackupSchedule(ctx, schedule)
 	if err != nil {
@@ -93,9 +103,14 @@ func (m *BackupManager) UpdateSchedule(ctx context.Context, userID, scheduleID u
 	if req.Resource.Valid() && req.Resource != schedule.ResourceRef {
 		return BackupSchedule{}, ErrNotFound
 	}
-	resource, _, err := m.resolve(ctx, schedule.ResourceRef)
+	resource, source, err := m.resolve(ctx, schedule.ResourceRef)
 	if err != nil {
 		return BackupSchedule{}, err
+	}
+	if validator, ok := source.(Validator); ok {
+		if err := validator.Validate(ctx, resource); err != nil {
+			return BackupSchedule{}, err
+		}
 	}
 	cron := strings.TrimSpace(req.Cron)
 	next, err := nextCronTime(cron, m.now(), time.Local)
@@ -122,6 +137,9 @@ func (m *BackupManager) UpdateSchedule(ctx context.Context, userID, scheduleID u
 	maxRunSeconds, err := normalizeMaxRunSeconds(req.MaxRunSeconds, schedule.MaxRunSeconds)
 	if err != nil {
 		return BackupSchedule{}, err
+	}
+	if req.PauseDuringBackup != nil {
+		schedule.PauseDuringBackup = *req.PauseDuringBackup
 	}
 	now := m.now()
 	// An edit never erases a missed slot: keep the due time as observed

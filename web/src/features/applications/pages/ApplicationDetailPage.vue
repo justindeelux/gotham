@@ -3,6 +3,7 @@ import { NAlert, NButton, NCard, NEmpty, NSpace, NTabPane, NTabs } from "naive-u
 import { computed } from "vue";
 import { useI18n } from "vue-i18n";
 
+import ResourceBackupsTab from "@/features/backups/components/ResourceBackupsTab.vue";
 import ApplicationDeleteDialog from "@/features/applications/components/ApplicationDeleteDialog.vue";
 import ApplicationDeploymentsTab from "@/features/applications/components/ApplicationDeploymentsTab.vue";
 import ApplicationEnvTab from "@/features/applications/components/ApplicationEnvTab.vue";
@@ -274,6 +275,20 @@ const activeTab = computed<string>({
             <NEmpty :description="t('applications.page.loadingApp')" />
           </NCard>
         </div>
+      </NTabPane>
+
+      <NTabPane
+        v-if="detail.application.value"
+        name="backups"
+        :tab="t('applications.tabs.backups')"
+      >
+        <ResourceBackupsTab
+          v-if="detail.application.value"
+          resource-type="application"
+          :resource-id="detail.application.value.id"
+          :resource-label="detail.application.value.name"
+          :active="activeTab === 'backups'"
+        />
       </NTabPane>
 
       <NTabPane

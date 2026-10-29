@@ -206,10 +206,11 @@ export const useBackupsStore = defineStore("backups", () => {
   async function backupNow(
     ref: ResourceRef,
     providerId?: string,
+    pauseDuringBackup?: boolean,
   ): Promise<BackupRun> {
     backupsActing.value = true;
     try {
-      const backup = await createBackup(ref, providerId);
+      const backup = await createBackup(ref, providerId, pauseDuringBackup);
       const key = resourceKey(ref);
       backupsByResource.value[key] = [
         backup,

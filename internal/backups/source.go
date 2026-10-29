@@ -30,6 +30,17 @@ type Source interface {
 	Recover(ctx context.Context, req RecoverRequest) error
 }
 
+// Validator is implemented by a source that can refuse a run before it is
+// queued, for example a resource with no persistent data to capture.
+type Validator interface {
+	Validate(ctx context.Context, resource Resource) error
+}
+
+// ContentLister is implemented by a source that can name what a run captures.
+type ContentLister interface {
+	Contents(ctx context.Context, resource Resource) ([]Content, error)
+}
+
 // RunRecorder lets a source record observations the core must persist while the
 // run is still in flight, so a crash leaves enough evidence to recover.
 type RunRecorder interface {
@@ -41,6 +52,10 @@ type CaptureRequest struct {
 	RunID    uuid.UUID
 	Sink     io.Writer
 	Recorder RunRecorder
+	// Pause asks the source to stop the resource while it reads, when the
+	// source has a stop policy at all. A false value is the explicit
+	// "do not stop, files may be inconsistent" choice.
+	Pause bool
 }
 
 type CaptureResult struct {

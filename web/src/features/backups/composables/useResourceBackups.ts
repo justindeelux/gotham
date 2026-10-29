@@ -3,8 +3,12 @@ import type { SelectOption } from "naive-ui";
 import { computed, onUnmounted, ref, watch } from "vue";
 import type { InjectionKey, Ref } from "vue";
 
-import { describeBackupError } from "@/features/backups/api/backups";
+import {
+  describeBackupError,
+  getBackupContents,
+} from "@/features/backups/api/backups";
 import type {
+  BackupContent,
   BackupRun,
   BackupSchedule,
   ResourceRef,
@@ -38,6 +42,7 @@ export function useResourceBackups(
   }));
 
   const backupProviderId = ref("");
+  const backupPauseDuringBackup = ref(true);
   const restoreOpen = ref(false);
   const restoreCandidate = ref<BackupRun | null>(null);
   const restoring = ref(false);
@@ -46,7 +51,9 @@ export function useResourceBackups(
   const scheduleProviderId = ref("");
   const scheduleEnabled = ref(true);
   const scheduleMaxRunMinutes = ref(120);
+  const schedulePauseDuringBackup = ref(true);
   const editingScheduleId = ref<string | null>(null);
+  const backupContents = ref<BackupContent[]>([]);
 
   let backupPollTimer: ReturnType<typeof setInterval> | null = null;
 
@@ -125,9 +132,25 @@ export function useResourceBackups(
       backupsStore.fetchRestores(ref),
       backupsStore.fetchSchedules(ref),
       backupsStore.fetchProtection(ref),
+      fetchContents(ref),
       authStore.isOwner ? backupsStore.fetchProviders() : Promise.resolve(),
     ]);
     notifyRestoreOutcomes();
+  }
+
+  async function fetchContents(ref: ResourceRef): Promise<void> {
+    if (ref.resource_type === "database") {
+      backupContents.value = [];
+      return;
+    }
+    try {
+      backupContents.value = await getBackupContents(
+        ref.resource_type,
+        ref.resource_id,
+      );
+    } catch {
+      backupContents.value = [];
+    }
   }
 
   function stopBackupPolling(): void {
@@ -202,7 +225,11 @@ export function useResourceBackups(
 
   async function handleBackupNow(): Promise<void> {
     try {
-      await backupsStore.backupNow(resource.value, backupProviderId.value);
+      await backupsStore.backupNow(
+        resource.value,
+        backupProviderId.value,
+        backupPauseDuringBackup.value,
+      );
       message.success(t("databases.backups.runs.queued"));
     } catch (error) {
       message.error(describeBackupError(error));
@@ -255,6 +282,7 @@ export function useResourceBackups(
     scheduleProviderId.value = "";
     scheduleEnabled.value = true;
     scheduleMaxRunMinutes.value = 120;
+    schedulePauseDuringBackup.value = true;
   }
 
   function openScheduleEdit(schedule: BackupSchedule): void {
@@ -265,6 +293,7 @@ export function useResourceBackups(
       : "";
     scheduleEnabled.value = schedule.enabled;
     scheduleMaxRunMinutes.value = Math.round(schedule.max_run_seconds / 60);
+    schedulePauseDuringBackup.value = schedule.pause_during_backup;
   }
 
   function validMaxRunMinutes(): boolean {
@@ -290,6 +319,7 @@ export function useResourceBackups(
           provider_id: scheduleProviderId.value,
           enabled: scheduleEnabled.value,
           max_run_seconds: maxRunSeconds,
+          pause_during_backup: schedulePauseDuringBackup.value,
         });
         message.success(t("databases.backups.schedules.updated", { cron }));
       } else {
@@ -298,6 +328,7 @@ export function useResourceBackups(
           provider_id: scheduleProviderId.value,
           enabled: scheduleEnabled.value,
           max_run_seconds: maxRunSeconds,
+          pause_during_backup: schedulePauseDuringBackup.value,
         });
         message.success(t("databases.backups.schedules.saved", { cron }));
       }
@@ -389,6 +420,7 @@ export function useResourceBackups(
     resourceId,
     active,
     backupProviderId,
+    backupPauseDuringBackup,
     restoreOpen,
     restoreCandidate,
     restoring,
@@ -396,7 +428,9 @@ export function useResourceBackups(
     scheduleProviderId,
     scheduleEnabled,
     scheduleMaxRunMinutes,
+    schedulePauseDuringBackup,
     editingScheduleId,
+    backupContents,
     backups,
     restores,
     hasRunningBackup,

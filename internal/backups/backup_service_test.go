@@ -3,6 +3,7 @@ package backups
 import (
 	"context"
 	"errors"
+	"fmt"
 	"os"
 	"strings"
 	"testing"
@@ -87,6 +88,43 @@ func TestCreateBackupRejectsUnsupportedResource(t *testing.T) {
 	})
 	if !errors.Is(err, ErrUnsupportedResource) {
 		t.Fatalf("err = %v, want ErrUnsupportedResource", err)
+	}
+}
+
+func TestCreateBackupPassesThePauseChoice(t *testing.T) {
+	for name, request := range map[string]*bool{
+		"default": nil,
+		"pause":   boolPointer(true),
+		"no stop": boolPointer(false),
+	} {
+		t.Run(name, func(t *testing.T) {
+			fixture := newBackupFixture(t)
+			queued, err := fixture.manager.CreateBackup(context.Background(), fixture.userID, CreateBackupRequest{
+				Resource:          databaseRef(fixture.databaseID),
+				PauseDuringBackup: request,
+			})
+			if err != nil {
+				t.Fatalf("CreateBackup: %v", err)
+			}
+			fixture.waitBackup(t, queued.ID)
+			if got := fixture.source.captures[0].Pause; got != (request == nil || *request) {
+				t.Fatalf("pause = %v, want %v", got, request == nil || *request)
+			}
+		})
+	}
+}
+
+func TestCreateBackupValidatesTheResourceBeforeQueueing(t *testing.T) {
+	fixture := newBackupFixture(t)
+	fixture.source.validateErr = fmt.Errorf("%w: this application has no persistent storage", ErrValidation)
+	_, err := fixture.manager.CreateBackup(context.Background(), fixture.userID, CreateBackupRequest{
+		Resource: databaseRef(fixture.databaseID),
+	})
+	if !errors.Is(err, ErrValidation) {
+		t.Fatalf("err = %v, want ErrValidation", err)
+	}
+	if fixture.backups.countBackups() != 0 {
+		t.Fatal("a rejected run must not leave a backup row")
 	}
 }
 

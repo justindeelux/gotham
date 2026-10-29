@@ -27,6 +27,7 @@ func Enabled() bool {
 const (
 	ResourceApplication = "application"
 	ResourceDatabase    = "database"
+	ResourceService     = "service"
 )
 
 const maxNameLength = 100

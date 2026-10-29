@@ -8,6 +8,7 @@ import {
   NSelect,
   NSpace,
   NSpin,
+  NSwitch,
   NTag,
   NText,
 } from "naive-ui";
@@ -38,6 +39,15 @@ const backups = inject(resourceBackupsKey)!;
           :aria-label="t('databases.backups.runs.destinationAria')"
           style="width: 220px"
         />
+        <NSwitch
+          v-if="backups.resource.value.resource_type !== 'database'"
+          v-model:value="backups.backupPauseDuringBackup.value"
+          size="small"
+          :aria-label="t('backups.resourceTab.pauseDuringBackup')"
+        >
+          <template #checked>{{ t("backups.resourceTab.pauseDuringBackup") }}</template>
+          <template #unchecked>{{ t("backups.resourceTab.noPause") }}</template>
+        </NSwitch>
         <NButton
           size="small"
           secondary

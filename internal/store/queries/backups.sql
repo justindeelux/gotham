@@ -148,9 +148,9 @@ RETURNING *;
 -- name: CreateBackupSchedule :one
 INSERT INTO backup_schedules (
     id, database_id, application_id, service_id, cron, target_id, enabled,
-    next_run_at, max_run_seconds
+    next_run_at, max_run_seconds, pause_during_backup
 )
-VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)
+VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)
 RETURNING *;
 
 -- name: GetBackupSchedule :one
@@ -186,6 +186,7 @@ SET cron = $2,
     last_slot_at = $6,
     target_changed_at = $7,
     max_run_seconds = $8,
+    pause_during_backup = $9,
     updated_at = now()
 WHERE id = $1
 RETURNING *;

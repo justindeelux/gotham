@@ -314,3 +314,31 @@ func TestSchedulerFallBackRecoveryAdvancesFromServedSlot(t *testing.T) {
 		t.Errorf("next_run_at = %v, want %v (the repeated slot must not fire twice)", advanced.NextRunAt, want)
 	}
 }
+
+func TestSchedulerPassesTheSchedulePauseChoice(t *testing.T) {
+	fixture := newBackupFixture(t)
+	now := time.Now().UTC()
+	schedule := fixture.backups.seedSchedule(BackupSchedule{
+		ResourceRef:       databaseRef(fixture.databaseID),
+		Cron:              "0 2 * * *",
+		NextRunAt:         now.Add(-time.Minute),
+		PauseDuringBackup: false,
+	})
+	if started := fixture.manager.scheduler.fire(context.Background(), schedule, now); started != 1 {
+		t.Fatalf("fire started %d, want 1", started)
+	}
+	deadline := time.Now().Add(5 * time.Second)
+	for time.Now().Before(deadline) {
+		fixture.source.mu.Lock()
+		captures := append([]CaptureRequest(nil), fixture.source.captures...)
+		fixture.source.mu.Unlock()
+		if len(captures) > 0 {
+			if captures[0].Pause {
+				t.Fatal("capture paused although the schedule opted out")
+			}
+			return
+		}
+		time.Sleep(5 * time.Millisecond)
+	}
+	t.Fatal("the scheduled run never captured")
+}

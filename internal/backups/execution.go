@@ -21,6 +21,7 @@ func (m *BackupManager) startRun(
 	target *BackupTarget,
 	typ BackupType,
 	scheduleID uuid.UUID,
+	pause bool,
 ) (Backup, error) {
 	if err := m.backupsReady(); err != nil {
 		return Backup{}, err
@@ -50,17 +51,17 @@ func (m *BackupManager) startRun(
 		m.release(resource.ID)
 		return Backup{}, err
 	}
-	go m.runBackup(stored, source, resource, liveTarget)
+	go m.runBackup(stored, source, resource, liveTarget, pause)
 	return stored, nil
 }
 
-func (m *BackupManager) runBackup(backup Backup, source Source, resource Resource, target *BackupTarget) {
+func (m *BackupManager) runBackup(backup Backup, source Source, resource Resource, target *BackupTarget, pause bool) {
 	defer m.release(resource.ID)
 
 	ctx, cancel := context.WithTimeout(context.Background(), m.jobTimeout)
 	defer cancel()
 
-	location, size, containerID, err := m.capture(ctx, source, resource, target, backup.ID)
+	location, size, containerID, err := m.capture(ctx, source, resource, target, backup.ID, pause)
 	finished := backup
 	finished.ContainerID = containerID
 	finished.FinishedAt = m.now()
@@ -125,6 +126,7 @@ func (m *BackupManager) capture(
 	resource Resource,
 	target *BackupTarget,
 	runID uuid.UUID,
+	pause bool,
 ) (string, int64, string, error) {
 	temp, err := os.CreateTemp("", "gotham-backup-*")
 	if err != nil {
@@ -141,6 +143,7 @@ func (m *BackupManager) capture(
 		RunID:    runID,
 		Sink:     compressor,
 		Recorder: runRecorder{repo: m.backups},
+		Pause:    pause,
 	})
 	if closeErr := compressor.Close(); closeErr != nil && jobErr == nil {
 		jobErr = fmt.Errorf("backups: finish compression: %w", closeErr)

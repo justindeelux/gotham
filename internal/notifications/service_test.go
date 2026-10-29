@@ -481,7 +481,7 @@ func TestCreateChannelValidation(t *testing.T) {
 		"email without recipients": {Name: "x", Kind: KindEmail, Config: ChannelConfig{
 			Host: "smtp.example.com", From: "ops@example.com"}},
 		"unknown resource type": {Name: "x", Kind: KindDiscord, Config: validDiscord,
-			ResourceType: ptr("service"), ResourceID: ptr(uuid.New().String())},
+			ResourceType: ptr("project"), ResourceID: ptr(uuid.New().String())},
 		"resource id alone": {Name: "x", Kind: KindDiscord, Config: validDiscord,
 			ResourceID: ptr(uuid.New().String())},
 		"empty events": {Name: "x", Kind: KindDiscord, Config: validDiscord, Events: []EventKey{}},

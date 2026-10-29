@@ -8,6 +8,7 @@ const vi: typeof en = {
     env: "Môi trường",
     containers: "Container",
     domains: "Tên miền",
+    backups: "Bản sao lưu",
     logs: "Nhật ký",
     settings: "Cài đặt",
   },

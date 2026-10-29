@@ -22,6 +22,8 @@ const testSecret = "0123456789abcdef0123456789abcdef"
 
 func strPtr(s string) *string { return &s }
 
+func boolPointer(value bool) *bool { return &value }
+
 func databaseRef(id uuid.UUID) ResourceRef {
 	return ResourceRef{Type: ResourceDatabase, ID: id}
 }
@@ -846,6 +848,7 @@ type fakeSource struct {
 	restoreErr  error
 	recoverErr  error
 	resolveErr  error
+	validateErr error
 	wasRunning  bool
 	containerID string
 }
@@ -864,6 +867,10 @@ func (s *fakeSource) Resolve(_ context.Context, ref ResourceRef) (Resource, erro
 		return Resource{}, s.resolveErr
 	}
 	return Resource{Type: ref.Type, ID: ref.ID, OwnerID: s.owner, Name: "test-" + string(ref.Type)}, nil
+}
+
+func (s *fakeSource) Validate(context.Context, Resource) error {
+	return s.validateErr
 }
 
 func (s *fakeSource) Describe(context.Context, ResourceRef) (string, error) {

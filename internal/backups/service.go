@@ -62,6 +62,7 @@ type BackupService interface {
 	DeleteBackup(ctx context.Context, userID, backupID uuid.UUID) error
 	RestoreBackup(ctx context.Context, userID, backupID uuid.UUID) (RestoreResult, error)
 	ListRestores(ctx context.Context, userID uuid.UUID, filter RestoreFilter) ([]Restore, error)
+	Contents(ctx context.Context, userID uuid.UUID, ref ResourceRef) ([]Content, error)
 
 	ListSchedules(ctx context.Context, userID uuid.UUID, ref ResourceRef) ([]BackupSchedule, error)
 	CreateSchedule(ctx context.Context, userID uuid.UUID, req ScheduleRequest) (BackupSchedule, error)
@@ -78,9 +79,10 @@ type BackupService interface {
 }
 
 type CreateBackupRequest struct {
-	Resource   ResourceRef
-	TargetID   uuid.UUID
-	ScheduleID uuid.UUID
+	Resource          ResourceRef
+	TargetID          uuid.UUID
+	ScheduleID        uuid.UUID
+	PauseDuringBackup *bool
 }
 
 type BackupFilter struct {
@@ -105,11 +107,12 @@ type RestoreResult struct {
 }
 
 type ScheduleRequest struct {
-	Resource      ResourceRef `json:"resource"`
-	Cron          string      `json:"cron"`
-	TargetID      *string     `json:"provider_id,omitempty"`
-	Enabled       *bool       `json:"enabled,omitempty"`
-	MaxRunSeconds *int        `json:"max_run_seconds,omitempty"`
+	Resource          ResourceRef `json:"resource"`
+	Cron              string      `json:"cron"`
+	TargetID          *string     `json:"provider_id,omitempty"`
+	Enabled           *bool       `json:"enabled,omitempty"`
+	MaxRunSeconds     *int        `json:"max_run_seconds,omitempty"`
+	PauseDuringBackup *bool       `json:"pause_during_backup,omitempty"`
 }
 
 type ProviderRequest struct {
@@ -231,6 +234,13 @@ func (m *BackupManager) BackupRunActive(databaseID, backupID uuid.UUID) bool {
 	return m != nil && backupID != uuid.Nil &&
 		m.leases.Held(databaseID) == JobLeaseBackup &&
 		m.leases.Run(databaseID) == backupID
+}
+
+// JobActive reports whether this control plane holds any backup or restore
+// lease for the resource, so a lifecycle action can be refused instead of
+// racing the job that is reading the same data.
+func (m *BackupManager) JobActive(resourceID uuid.UUID) bool {
+	return m != nil && m.leases.Held(resourceID) != ""
 }
 
 func normalizeMaxRunSeconds(value *int, fallback int) (int, error) {
@@ -398,6 +408,11 @@ func (m *BackupManager) CreateBackup(ctx context.Context, userID uuid.UUID, req 
 	if err != nil {
 		return Backup{}, err
 	}
+	if validator, ok := source.(Validator); ok {
+		if err := validator.Validate(ctx, resource); err != nil {
+			return Backup{}, err
+		}
+	}
 	target, err := m.ownedTarget(ctx, userID, req.TargetID)
 	if err != nil {
 		return Backup{}, err
@@ -407,7 +422,32 @@ func (m *BackupManager) CreateBackup(ctx context.Context, userID uuid.UUID, req 
 			return Backup{}, err
 		}
 	}
-	return m.startRun(ctx, source, resource, target, BackupManual, req.ScheduleID)
+	pause := true
+	if req.PauseDuringBackup != nil {
+		pause = *req.PauseDuringBackup
+	}
+	return m.startRun(ctx, source, resource, target, BackupManual, req.ScheduleID, pause)
+}
+
+// Contents lists what a resource's next run captures. A source without a
+// driver-specific list answers with nothing.
+func (m *BackupManager) Contents(ctx context.Context, userID uuid.UUID, ref ResourceRef) ([]Content, error) {
+	resource, source, err := m.resolve(ctx, ref)
+	if err != nil {
+		return nil, err
+	}
+	lister, ok := source.(ContentLister)
+	if !ok {
+		return []Content{}, nil
+	}
+	contents, err := lister.Contents(ctx, resource)
+	if err != nil {
+		return nil, err
+	}
+	if contents == nil {
+		return []Content{}, nil
+	}
+	return contents, nil
 }
 
 func (m *BackupManager) ListBackups(ctx context.Context, userID uuid.UUID, filter BackupFilter) ([]Backup, error) {
@@ -577,6 +617,11 @@ func (m *BackupManager) RestoreBackup(ctx context.Context, userID, backupID uuid
 	}
 	if backup.Status != BackupCompleted {
 		return RestoreResult{}, fmt.Errorf("%w: only a completed backup can be restored", ErrBackupNotCompleted)
+	}
+	if validator, ok := source.(Validator); ok {
+		if err := validator.Validate(ctx, resource); err != nil {
+			return RestoreResult{}, err
+		}
 	}
 	if !m.claimRestore(resource.ID) {
 		return RestoreResult{}, ErrBackupInFlight

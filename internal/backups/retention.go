@@ -208,8 +208,12 @@ func (m *BackupManager) deleteQueuedArtifact(ctx context.Context, item ArtifactC
 
 func (m *BackupManager) queueArtifactError(ctx context.Context, item ArtifactCleanup, cause error) error {
 	attempts := item.Attempts + 1
-	return m.backups.SetArtifactCleanupError(ctx, item.ID,
-		boundedDiag(cause.Error()), attempts, m.now().Add(cleanupBackoff(attempts)))
+	if err := m.backups.SetArtifactCleanupError(ctx, item.ID,
+		boundedDiag(cause.Error()), attempts, m.now().Add(cleanupBackoff(attempts))); err != nil {
+		return err
+	}
+	// The artifact is still stored, so callers must not count it as removed.
+	return fmt.Errorf("%w: %v", ErrCleanupFailed, cause)
 }
 
 func (m *BackupManager) storeForCleanupLocation(ctx context.Context, item ArtifactCleanup) (ObjectStore, error) {

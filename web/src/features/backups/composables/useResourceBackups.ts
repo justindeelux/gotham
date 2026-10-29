@@ -316,7 +316,7 @@ export function useResourceBackups(
       return;
     }
     const maxRunSeconds = Math.round(scheduleMaxRunMinutes.value * 60);
-    const keepLast = scheduleKeepLast.value ?? 7;
+    const keepLast = scheduleKeepLast.value;
     try {
       if (editingScheduleId.value !== null) {
         await backupsStore.editSchedule(resource.value, editingScheduleId.value, {
@@ -324,7 +324,9 @@ export function useResourceBackups(
           provider_id: scheduleProviderId.value,
           enabled: scheduleEnabled.value,
           max_run_seconds: maxRunSeconds,
-          keep_last: keepLast,
+          // An empty field keeps the stored policy, so editing a legacy
+          // unlimited schedule cannot start deleting backups.
+          ...(keepLast === null ? {} : { keep_last: keepLast }),
         });
         message.success(t("databases.backups.schedules.updated", { cron }));
       } else {
@@ -333,7 +335,7 @@ export function useResourceBackups(
           provider_id: scheduleProviderId.value,
           enabled: scheduleEnabled.value,
           max_run_seconds: maxRunSeconds,
-          keep_last: keepLast,
+          keep_last: keepLast ?? 7,
         });
         message.success(t("databases.backups.schedules.saved", { cron }));
       }

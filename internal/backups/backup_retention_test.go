@@ -165,6 +165,51 @@ func TestCleanupPendingSurvivesAProviderOutageAndRetries(t *testing.T) {
 	}
 }
 
+func TestSweepDoesNotCountAFailedOrphanCleanupAsRemoved(t *testing.T) {
+	fixture := newBackupFixture(t)
+	ctx := context.Background()
+	objects := newFakeObjectStore()
+	objects.deleteErr = errors.New("provider offline")
+	fixture.manager.objects = objects
+	fixture.backups.mu.Lock()
+	fixture.backups.artifacts = []ArtifactCleanup{{
+		ID:            uuid.New(),
+		Location:      locationS3Prefix + "bucket/orphan.gz",
+		NextAttemptAt: time.Now().UTC().Add(-time.Minute),
+	}}
+	fixture.backups.mu.Unlock()
+
+	removed, err := fixture.manager.SweepCleanup(ctx)
+	if err != nil {
+		t.Fatalf("SweepCleanup: %v", err)
+	}
+	if removed != 0 {
+		t.Fatalf("removed = %d, want 0 while the artifact is still stored", removed)
+	}
+	fixture.backups.mu.Lock()
+	queued := len(fixture.backups.artifacts)
+	lastError := ""
+	if queued == 1 {
+		lastError = fixture.backups.artifacts[0].LastError
+	}
+	fixture.backups.mu.Unlock()
+	if queued != 1 || lastError == "" {
+		t.Fatalf("queued artifacts = %d (last error %q), want the entry kept with its error", queued, lastError)
+	}
+
+	objects.deleteErr = nil
+	fixture.backups.mu.Lock()
+	fixture.backups.artifacts[0].NextAttemptAt = time.Now().UTC().Add(-time.Minute)
+	fixture.backups.mu.Unlock()
+	removed, err = fixture.manager.SweepCleanup(ctx)
+	if err != nil {
+		t.Fatalf("SweepCleanup after the outage: %v", err)
+	}
+	if removed != 1 {
+		t.Fatalf("removed = %d, want 1 once the delete succeeds", removed)
+	}
+}
+
 func TestSweepPrunesFailedRunsAfterTheRetentionWindow(t *testing.T) {
 	fixture := newBackupFixture(t)
 	ctx := context.Background()

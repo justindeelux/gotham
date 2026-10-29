@@ -132,6 +132,7 @@ const vi: typeof en = {
     start: "Khởi động",
     controlReadOnly: "Chỉ chủ sở hữu mới có thể điều khiển dịch vụ này.",
     controlInProgress: "Một thao tác đang chạy. Hãy chờ hoàn tất.",
+    controlDeployInProgress: "Đang triển khai. Hãy chờ hoàn tất trước khi dùng các thao tác này.",
     controlNodeOffline: "Node đang ngoại tuyến. Hãy kết nối lại trước khi dùng các thao tác này.",
     delete: "Xóa",
     deleteConfirm: "Xóa dịch vụ {name}? Dự án sẽ dừng; các volume có tên vẫn giữ trên node.",
@@ -183,13 +184,16 @@ const vi: typeof en = {
       "Xóa sẽ gỡ dự án compose trên node và xóa cấu hình dịch vụ. Các volume có tên vẫn giữ trên node.",
     serverPinnedReason:
       "Dịch vụ này đã triển khai nên node bị ghim, không thể đổi. Vẫn có thể chuyển sang môi trường khác.",
+    deployFailedTitle: "Triển khai thất bại",
+    deployingBanner:
+      "Quá trình triển khai đang chạy nền. Trang này theo dõi và dừng khi hoàn tất.",
   },
   toast: {
     created: "Đã tạo dịch vụ {name}.",
     composeSaved: "Đã lưu tài liệu compose. Triển khai để áp dụng trên node.",
     envSaved: "Đã lưu môi trường. Áp dụng từ lần triển khai tiếp theo.",
     locationSaved: "Đã lưu vị trí",
-    deployState: "Triển khai {state}.",
+    deployStarted: "Đã bắt đầu triển khai ({state}).",
     stopped: "Đã dừng dịch vụ. Các volume có tên được giữ lại.",
     restartSent: "Đã gửi lệnh khởi động lại tới node agent.",
     started: "Đã gửi lệnh khởi động tới node agent.",

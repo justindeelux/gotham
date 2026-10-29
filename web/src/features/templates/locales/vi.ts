@@ -33,8 +33,7 @@ const vi: typeof en = {
     back: "Quay lại",
     next: "Tiếp tục",
     close: "Đóng",
-    create: "Tạo dịch vụ",
-    deploy: "Triển khai ngay",
+    createAndDeploy: "Tạo và triển khai",
   },
   secret: {
     generate: "Tạo ngẫu nhiên",
@@ -61,14 +60,8 @@ const vi: typeof en = {
     nameLabel: "Tên dịch vụ",
     scopeError: "Chọn dự án và môi trường.",
   },
-  created: {
-    title: "Đã tạo {name}",
-    open: "Mở chi tiết dịch vụ",
-    deployed: "đã triển khai",
-  },
   toast: {
-    created: "Đã tạo dịch vụ {name}.",
-    deployed: "Triển khai xong.",
+    deploying: "Đã tạo dịch vụ {name}. Quá trình triển khai đang chạy nền.",
   },
   overlay: {
     n8n: {

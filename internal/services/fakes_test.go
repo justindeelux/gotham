@@ -209,6 +209,24 @@ func (r *fakeRepository) ListServiceDeploys(_ context.Context, serviceID uuid.UU
 	return append([]Deploy{}, deploys...), nil
 }
 
+func (r *fakeRepository) ListServiceDeploysByState(_ context.Context, state DeployState) ([]Deploy, error) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	deploys := []Deploy{}
+	for _, serviceID := range r.order {
+		service, ok := r.services[serviceID]
+		if !ok || !r.live(service) {
+			continue
+		}
+		for _, deploy := range r.deploys[serviceID] {
+			if deploy.State == state {
+				deploys = append(deploys, deploy)
+			}
+		}
+	}
+	return deploys, nil
+}
+
 func (r *fakeRepository) ServerExists(_ context.Context, serverID uuid.UUID) (bool, error) {
 	r.mu.Lock()
 	defer r.mu.Unlock()
@@ -373,26 +391,34 @@ func (a *fakeAgent) Validate(_ context.Context, project string, composeYAML []by
 	return a.services, nil
 }
 
-func (a *fakeAgent) Up(_ context.Context, project string, composeYAML []byte, restart bool) error {
+func (a *fakeAgent) Up(ctx context.Context, project string, composeYAML []byte, restart bool) error {
 	a.mu.Lock()
 	a.ups = append(a.ups, fakeUp{project: project, yaml: string(composeYAML), restart: restart})
 	gate := a.upGate
 	err := a.upErr
 	a.mu.Unlock()
 	if gate != nil {
-		<-gate
+		select {
+		case <-gate:
+		case <-ctx.Done():
+			return ctx.Err()
+		}
 	}
 	return err
 }
 
-func (a *fakeAgent) Down(_ context.Context, project string, composeYAML []byte) error {
+func (a *fakeAgent) Down(ctx context.Context, project string, composeYAML []byte) error {
 	a.mu.Lock()
 	a.downs = append(a.downs, fakeDown{project: project, yaml: string(composeYAML)})
 	gate := a.downGate
 	err := a.downErr
 	a.mu.Unlock()
 	if gate != nil {
-		<-gate
+		select {
+		case <-gate:
+		case <-ctx.Done():
+			return ctx.Err()
+		}
 	}
 	return err
 }

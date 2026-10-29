@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { NCard, NDescriptions, NDescriptionsItem, NText } from "naive-ui";
+import { NAlert, NCard, NDescriptions, NDescriptionsItem, NText } from "naive-ui";
 
 import { serviceStatusLabel } from "@/features/services/api/services";
 import { useServiceDetailContext } from "@/features/services/composables/useServiceDetail";
@@ -11,11 +11,21 @@ function t(key: string, params?: Record<string, string | number>): string {
   return String(i18n.global.t(key, params ?? {}));
 }
 
-const { service, serverName } = useServiceDetailContext();
+const { service, serverName, failedDeploy } = useServiceDetailContext();
 </script>
 
 <template>
   <NCard :title="t('services.overview.title')">
+    <NAlert
+      v-if="failedDeploy"
+      type="error"
+      :show-icon="true"
+      :title="t('services.detail.deployFailedTitle')"
+      class="deploy-failure"
+      data-testid="overview-deploy-failed"
+    >
+      {{ failedDeploy.error }}
+    </NAlert>
     <NDescriptions :column="2" label-placement="top" bordered size="small">
       <NDescriptionsItem :label="t('services.overview.node')">{{ serverName }}</NDescriptionsItem>
       <NDescriptionsItem :label="t('services.overview.status')">
@@ -52,6 +62,10 @@ const { service, serverName } = useServiceDetailContext();
 </template>
 
 <style scoped>
+.deploy-failure {
+  margin-bottom: var(--space-3);
+}
+
 .domain-chip {
   display: inline-block;
   margin-right: var(--space-3);

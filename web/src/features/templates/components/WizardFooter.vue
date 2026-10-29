@@ -7,10 +7,7 @@ interface Props {
   step: number;
   renderLoading: boolean;
   hasRender: boolean;
-  created: boolean;
   creating: boolean;
-  deploying: boolean;
-  deployed: boolean;
 }
 
 defineProps<Props>();
@@ -25,14 +22,13 @@ const emit = defineEmits<{
   next: [];
   close: [];
   create: [];
-  deploy: [];
 }>();
 </script>
 
 <template>
   <div class="wizard__foot">
     <NButton
-      v-if="step > 1 && !created"
+      v-if="step > 1"
       size="small"
       @click="emit('back')"
     >
@@ -53,23 +49,14 @@ const emit = defineEmits<{
       {{ t("templates.wizard.next") }}
     </NButton>
     <NButton
-      v-else-if="!created"
+      v-else
       size="small"
       type="primary"
       :loading="creating"
       :disabled="renderLoading || !hasRender"
       @click="emit('create')"
     >
-      {{ t("templates.wizard.create") }}
-    </NButton>
-    <NButton
-      v-else-if="!deployed"
-      size="small"
-      type="primary"
-      :loading="deploying"
-      @click="emit('deploy')"
-    >
-      {{ t("templates.wizard.deploy") }}
+      {{ t("templates.wizard.createAndDeploy") }}
     </NButton>
   </div>
 </template>

@@ -72,6 +72,7 @@ type createRequest struct {
 	ServerID      string            `json:"server_id"`
 	ComposeYAML   string            `json:"compose_yaml"`
 	Env           map[string]string `json:"env,omitempty"`
+	Deploy        bool              `json:"deploy,omitempty"`
 	Template      string            `json:"template,omitempty"`
 }
 
@@ -142,6 +143,12 @@ func (h *handler) create(w http.ResponseWriter, r *http.Request) {
 	if err != nil {
 		h.writeServiceError(w, err)
 		return
+	}
+	if req.Deploy {
+		if _, _, err := h.svc.Deploy(r.Context(), userID, service.ID); err != nil {
+			h.writeServiceError(w, err)
+			return
+		}
 	}
 	writeJSON(w, http.StatusCreated, serviceEnvelope{Service: h.newServiceResponse(service, true)})
 }
@@ -240,7 +247,7 @@ func (h *handler) deploy(w http.ResponseWriter, r *http.Request) {
 		h.writeServiceError(w, err)
 		return
 	}
-	writeJSON(w, http.StatusOK, deployEnvelope{Service: h.newServiceResponse(service, true), Deploy: newDeployResponse(deploy)})
+	writeJSON(w, http.StatusAccepted, deployEnvelope{Service: h.newServiceResponse(service, true), Deploy: newDeployResponse(deploy)})
 }
 
 func (h *handler) stop(w http.ResponseWriter, r *http.Request) {

@@ -90,10 +90,18 @@ compose không gửi `template` và đọc về giá trị rỗng.
 Việc lưu kiểm tra tài liệu với môi trường. Một thay đổi chỉ cập nhật tài liệu đã lưu
 — dự án đang chạy vẫn chạy cho đến lần triển khai tiếp theo.
 
+Tạo từ template là một thao tác: **Tạo và triển khai** lưu dịch vụ và bắt đầu
+triển khai trong nền, đóng wizard rồi mở trang chi tiết dịch vụ; trang này theo dõi
+lần triển khai cho tới khi `running` hoặc `failed`. Nhập tệp compose chỉ tạo dịch vụ;
+hãy triển khai từ trang chi tiết.
+
 ## Triển khai, khởi động lại, dừng, xóa
 
 - **Triển khai** dựng tài liệu đã lưu, để node kiểm tra nó bằng
-  `docker compose config`, khởi động dự án và ghi một dòng triển khai.
+  `docker compose config`, khởi động dự án và ghi một dòng triển khai. API nhận
+  lệnh với `202` và chạy nền, nên phản hồi không chờ tải image: dòng triển khai đi
+  từ `deploying` sang `running` hoặc `failed`, và trang chi tiết dịch vụ tự đọc lại
+  cho tới trạng thái cuối.
 - **Khởi động lại** khởi động lại một dự án đang chạy tại chỗ và khởi động một dự
   án đã dừng.
 - **Dừng** đưa dự án xuống bằng `compose down`. Volume có tên giữ nguyên từng byte,
@@ -101,9 +109,17 @@ Việc lưu kiểm tra tài liệu với môi trường. Một thay đổi chỉ
   khởi động lại.
 - **Xóa** dừng dự án và xóa mềm dịch vụ. Volume có tên vẫn ở trên node.
 
-Các thao tác vòng đời trên một dịch vụ chạy lần lượt từng cái, nên một lệnh khởi
-động lại phát ra trong lúc đang triển khai hoặc xóa sẽ tác động lên trạng thái mà
-thao tác trước đó để lại.
+Một thao tác vòng đời phát ra khi lần triển khai còn chạy sẽ bị từ chối với xung
+đột (`409`) thay vì chờ triển khai xong. Nếu control plane khởi động lại giữa lúc
+triển khai, lần triển khai dang dở được ghi là thất bại ("interrupted") khi khởi
+động và dịch vụ còn `creating` được chuyển sang `error`, nên không có gì kẹt mãi.
+
+Hợp đồng API khớp với giao diện: `POST /api/v1/services/{id}/deploy` trả `202
+Accepted` kèm dịch vụ và dòng triển khai mới; client polling
+`GET /api/v1/services/{id}` và `GET /api/v1/services/{id}/deploys` cho tới khi lần
+triển khai mới nhất là `running` hoặc `failed`. `POST /api/v1/services` nhận tùy
+chọn `"deploy": true` (wizard template dùng nó) để tạo và bắt đầu trong một lần
+gọi; API trả `201 Created` kèm dịch vụ trong khi triển khai tiếp tục ở nền.
 
 ## Container và nhật ký
 
@@ -192,9 +208,9 @@ dùng làm tên dịch vụ hoặc nhãn tên miền sẽ bị từ chối.
 
 Kết quả dựng được kiểm tra bằng cùng bộ phân tích mà đường triển khai dùng, nên một
 tài liệu đã dựng là triển khai được. Bản thân việc dựng không thực thi gì phía máy
-chủ: tạo một dịch vụ từ template ghi dòng dịch vụ và môi trường của nó, và stack chỉ
-khởi động khi bạn triển khai. Bước xem trước trong wizard hiển thị tài liệu, số dịch
-vụ và volume của nó, cùng mọi tuyến tên miền.
+chủ: tạo một dịch vụ từ template ghi dòng dịch vụ và môi trường của nó, rồi bắt đầu
+triển khai trong nền. Bước xem trước trong wizard hiển thị tài liệu, số dịch vụ và
+volume của nó, cùng mọi tuyến tên miền.
 
 ## Chọn loại cần tạo
 

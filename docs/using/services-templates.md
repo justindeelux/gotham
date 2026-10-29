@@ -91,18 +91,39 @@ compose import sends no `template` and reads back empty.
 Saving validates the document against the environment. A change only updates
 the stored document — the running project keeps running until the next deploy.
 
+Creating from a template is one action: **Create and deploy** stores the
+service and starts the deploy in the background, closes the wizard and opens the
+service detail page, which follows the deploy until it is `running` or `failed`.
+Importing a compose file creates the service only; deploy it from the detail
+page.
+
 ## Deploy, restart, stop, delete
 
 - **Deploy** renders the stored document, has the node validate it with
-  `docker compose config`, starts the project, and records one deploy row.
+  `docker compose config`, starts the project, and records one deploy row. The
+  API accepts the deploy with `202` and runs it in the background, so the
+  response does not wait for images to pull: the deploy row moves from
+  `deploying` to `running` or `failed`, and the service detail page polls until
+  it reaches that state.
 - **Restart** restarts a running project in place and starts a stopped one.
 - **Stop** takes the project down with `compose down`. Named volumes keep every
   byte, so a stopped service is fully recoverable by a deploy or restart.
 - **Delete** stops the project and soft-deletes the service. Named volumes stay
   on the node.
 
-Lifecycle actions on one service run one at a time, so a restart issued during
-a deploy or delete acts on the state the earlier action left behind.
+A lifecycle action issued while a deploy is still running is refused with a
+conflict (`409`) instead of waiting for the deploy to finish. If the control
+plane restarts mid-deploy, the leftover deploy is recorded as failed
+("interrupted") on startup and a service still `creating` is moved to `error`,
+so nothing stays pending forever.
+
+The API contract matches the console: `POST /api/v1/services/{id}/deploy`
+answers `202 Accepted` with the service and the new deploy row, and the client
+polls `GET /api/v1/services/{id}` and `GET /api/v1/services/{id}/deploys` until
+the newest deploy is `running` or `failed`. `POST /api/v1/services` accepts an
+optional `"deploy": true` (used by the template wizard) to create and start in
+one call; it answers `201 Created` with the service while the deploy continues
+in the background.
 
 ## Containers and logs
 
@@ -193,8 +214,8 @@ arguments); a secret used as a service name or domain label is rejected.
 The render is validated with the same parser the deploy path uses, so a
 rendered document is deployable. Rendering itself executes nothing server-side:
 creating a service from a template writes the service row and its environment,
-and the stack starts only when you deploy it. The preview step in the wizard
-shows the document, its service and volume counts, and any domain routes.
+then starts the deploy in the background. The preview step in the wizard shows
+the document, its service and volume counts, and any domain routes.
 
 ## Choosing what to create
 

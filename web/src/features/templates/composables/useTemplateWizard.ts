@@ -1,9 +1,9 @@
 import { useMessage } from "naive-ui";
 import { computed, ref, toValue, watch } from "vue";
 import type { Ref } from "vue";
+import { useRouter } from "vue-router";
 
 import { describeServiceError } from "@/features/services";
-import type { Service } from "@/features/services";
 import {
   buildTemplateRenderValues,
   describeTemplateError,
@@ -30,6 +30,7 @@ export function useTemplateWizard(
     projectId: "",
     environmentId: "",
   },
+  onClose: () => void = () => undefined,
 ): {
   step: Ref<number>;
   detail: Ref<TemplateDetail | null>;
@@ -47,10 +48,6 @@ export function useTemplateWizard(
   createAttempted: Ref<boolean>;
   creating: Ref<boolean>;
   createError: Ref<string | null>;
-  created: Ref<Service | null>;
-  deploying: Ref<boolean>;
-  deployError: Ref<string | null>;
-  deployed: Ref<boolean>;
   fields: Ref<TemplateField[]>;
   allErrors: Ref<Record<string, string>>;
   formErrors: Ref<Record<string, string>>;
@@ -61,13 +58,13 @@ export function useTemplateWizard(
   scopeValid: Ref<boolean>;
   next: () => void;
   handleCreate: () => Promise<void>;
-  handleDeploy: () => Promise<void>;
   reset: () => void;
 } {
   const templatesStore = useTemplatesStore();
   const servicesStore = useServicesStore();
   const serversStore = useServersStore();
   const message = useMessage();
+  const router = useRouter();
 
   const step = ref(1);
   const detail = ref<TemplateDetail | null>(null);
@@ -90,12 +87,6 @@ export function useTemplateWizard(
   const creating = ref(false);
   const createFailure: Ref<unknown> = ref(null);
   const createError = retained(createFailure, describeServiceError);
-  const created = ref<Service | null>(null);
-
-  const deploying = ref(false);
-  const deployFailure: Ref<unknown> = ref(null);
-  const deployError = retained(deployFailure, describeServiceError);
-  const deployed = ref(false);
 
   let renderToken = 0;
 
@@ -177,10 +168,6 @@ export function useTemplateWizard(
     createAttempted.value = false;
     creating.value = false;
     createFailure.value = null;
-    created.value = null;
-    deploying.value = false;
-    deployFailure.value = null;
-    deployed.value = false;
   }
 
   function seedScope(): void {
@@ -255,37 +242,31 @@ export function useTemplateWizard(
     creating.value = true;
     createFailure.value = null;
     try {
-      created.value = await servicesStore.create({
+      const service = await servicesStore.create({
         name: name.value.trim(),
         environment_id: scopeEnvironmentId.value,
         server_id: serverId.value,
         compose_yaml: rendered.compose_yaml,
         env: rendered.env,
+        deploy: true,
         template: detail.value?.slug,
       });
-      message.success(String(i18n.global.t("templates.toast.created", { name: created.value.name })));
+      message.success(
+        String(i18n.global.t("templates.toast.deploying", { name: service.name })),
+      );
+      onClose();
+      await router?.push({
+        name: "service-detail",
+        params: {
+          projectId: service.project_id,
+          environmentId: service.environment_id,
+          id: service.id,
+        },
+      });
     } catch (error) {
       createFailure.value = error;
     } finally {
       creating.value = false;
-    }
-  }
-
-  async function handleDeploy(): Promise<void> {
-    const service = created.value;
-    if (service === null) {
-      return;
-    }
-    deploying.value = true;
-    deployFailure.value = null;
-    try {
-      await servicesStore.deploy(service.id);
-      deployed.value = true;
-      message.success(String(i18n.global.t("templates.toast.deployed")));
-    } catch (error) {
-      deployFailure.value = error;
-    } finally {
-      deploying.value = false;
     }
   }
 
@@ -330,10 +311,6 @@ export function useTemplateWizard(
     createAttempted,
     creating,
     createError,
-    created,
-    deploying,
-    deployError,
-    deployed,
     fields,
     allErrors,
     formErrors,
@@ -344,7 +321,6 @@ export function useTemplateWizard(
     scopeValid,
     next,
     handleCreate,
-    handleDeploy,
     reset,
   };
 }

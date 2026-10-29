@@ -4,6 +4,8 @@ import { createPinia, setActivePinia } from "pinia";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { defineComponent, h, ref } from "vue";
 import type { Ref } from "vue";
+import { createMemoryHistory, createRouter } from "vue-router";
+import type { Router } from "vue-router";
 
 import type { Service } from "../src/features/services";
 import * as servicesApi from "../src/features/services/api/services";
@@ -14,12 +16,16 @@ import { useTemplateWizard } from "../src/features/templates/composables/useTemp
 type Wizard = ReturnType<typeof useTemplateWizard>;
 
 let wizard: Wizard | null = null;
+let closed = 0;
+let router: Router;
 const showRef: Ref<boolean> = ref(false);
 const slugRef: Ref<string> = ref("redis");
 
 const Harness = defineComponent({
   setup() {
-    wizard = useTemplateWizard(showRef, slugRef);
+    wizard = useTemplateWizard(showRef, slugRef, undefined, () => {
+      closed += 1;
+    });
     return () => h("div");
   },
 });
@@ -27,12 +33,26 @@ const Harness = defineComponent({
 let wrapper: ReturnType<typeof mount> | null = null;
 
 function harness(): void {
-  wrapper = mount({
-    render: () =>
-      h(NMessageProvider, null, {
-        default: () => h(Harness),
-      }),
+  router = createRouter({
+    history: createMemoryHistory(),
+    routes: [
+      { path: "/", name: "home", component: { template: "<div />" } },
+      {
+        path: "/projects/:projectId/environments/:environmentId/services/:id",
+        name: "service-detail",
+        component: { template: "<div />" },
+      },
+    ],
   });
+  wrapper = mount(
+    {
+      render: () =>
+        h(NMessageProvider, null, {
+          default: () => h(Harness),
+        }),
+    },
+    { global: { plugins: [router] } },
+  );
 }
 
 const detail = {
@@ -75,6 +95,7 @@ beforeEach(() => {
   showRef.value = false;
   slugRef.value = "redis";
   wizard = null;
+  closed = 0;
   vi.restoreAllMocks();
 });
 
@@ -135,7 +156,7 @@ describe("step gating", () => {
 });
 
 describe("create and deploy", () => {
-  it("creates with the rendered document plus secret env, then deploys", async () => {
+  it("creates with the rendered document plus secret env, then deploys in one call", async () => {
     await openWizard();
     if (wizard) {
       wizard.values.value = { password: "hunter2", port: "6379" };
@@ -147,10 +168,8 @@ describe("create and deploy", () => {
     const createService = vi
       .spyOn(servicesApi, "createService")
       .mockResolvedValue(globalThis.structuredClone(createdService));
-    const deployService = vi.spyOn(servicesApi, "deployService").mockResolvedValue({
-      service: globalThis.structuredClone(createdService),
-      deploy: { id: "dep-1" },
-    } as never);
+    const deployService = vi.spyOn(servicesApi, "deployService");
+    const push = vi.spyOn(router, "push").mockResolvedValue(undefined as never);
     if (wizard) {
       wizard.name.value = "redis";
       wizard.serverId.value = "srv-1";
@@ -163,12 +182,15 @@ describe("create and deploy", () => {
       server_id: "srv-1",
       compose_yaml: "services:\n  redis: {}",
       env: { REDIS_PASSWORD: "secret" },
+      deploy: true,
       template: "redis",
     });
-    expect(wizard?.created.value?.id).toBe("svc-1");
-    await wizard?.handleDeploy();
-    expect(deployService).toHaveBeenCalledWith("svc-1");
-    expect(wizard?.deployed.value).toBe(true);
+    expect(deployService).not.toHaveBeenCalled();
+    expect(closed).toBe(1);
+    expect(push).toHaveBeenCalledWith({
+      name: "service-detail",
+      params: { projectId: "proj-1", environmentId: "env-1", id: "svc-1" },
+    });
   });
 
   it("blocks create without a name, node or scope", async () => {

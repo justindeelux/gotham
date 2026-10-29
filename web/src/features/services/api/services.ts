@@ -63,6 +63,7 @@ export interface CreateServiceInput {
   server_id: string;
   compose_yaml: string;
   env?: Record<string, string>;
+  deploy?: boolean;
   template?: string;
 }
 
@@ -142,11 +143,9 @@ export async function deleteService(id: string): Promise<void> {
 }
 
 export async function deployService(id: string): Promise<DeployOutcome> {
-  const response = await http.post<DeployEnvelope>(
-    `/services/${id}/deploy`,
-    {},
-    { timeout: lifecycleTimeoutMs },
-  );
+  // The control plane answers 202 and finishes the deploy in the background;
+  // the detail page follows it through polling.
+  const response = await http.post<DeployEnvelope>(`/services/${id}/deploy`, {});
   return { service: response.data.service, deploy: response.data.deploy };
 }
 

@@ -10,7 +10,9 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"strings"
+	"sync"
 	"testing"
+	"time"
 
 	"github.com/go-chi/chi/v5"
 	"github.com/google/uuid"
@@ -20,6 +22,7 @@ import (
 )
 
 type fakeRepository struct {
+	mu      sync.Mutex
 	service services.Service
 	deploys []services.Deploy
 }
@@ -27,11 +30,15 @@ type fakeRepository struct {
 var _ services.Repository = (*fakeRepository)(nil)
 
 func (f *fakeRepository) CreateService(_ context.Context, service services.Service) (services.Service, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
 	f.service = service
 	return service, nil
 }
 
 func (f *fakeRepository) GetService(_ context.Context, serviceID uuid.UUID) (services.Service, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
 	if f.service.ID != serviceID {
 		return services.Service{}, services.ErrNotFound
 	}
@@ -39,30 +46,42 @@ func (f *fakeRepository) GetService(_ context.Context, serviceID uuid.UUID) (ser
 }
 
 func (f *fakeRepository) ListServices(_ context.Context, _ uuid.UUID) ([]services.Service, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
 	return []services.Service{f.service}, nil
 }
 
 func (f *fakeRepository) UpdateServiceConfig(_ context.Context, service services.Service) (services.Service, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
 	f.service = service
 	return service, nil
 }
 
 func (f *fakeRepository) UpdateServiceStatus(_ context.Context, _ uuid.UUID, status services.Status) (services.Service, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
 	f.service.Status = status
 	return f.service, nil
 }
 
 func (f *fakeRepository) SoftDeleteService(_ context.Context, _ uuid.UUID) (services.Service, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
 	f.service.Status = services.StatusDeleting
 	return f.service, nil
 }
 
 func (f *fakeRepository) CreateServiceDeploy(_ context.Context, deploy services.Deploy) (services.Deploy, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
 	f.deploys = append([]services.Deploy{deploy}, f.deploys...)
 	return deploy, nil
 }
 
 func (f *fakeRepository) UpdateServiceDeploy(_ context.Context, deploy services.Deploy) (services.Deploy, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
 	for i := range f.deploys {
 		if f.deploys[i].ID == deploy.ID {
 			f.deploys[i] = deploy
@@ -73,7 +92,15 @@ func (f *fakeRepository) UpdateServiceDeploy(_ context.Context, deploy services.
 }
 
 func (f *fakeRepository) ListServiceDeploys(_ context.Context, _ uuid.UUID, _ int32) ([]services.Deploy, error) {
-	return f.deploys, nil
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	return append([]services.Deploy{}, f.deploys...), nil
+}
+
+func (f *fakeRepository) ListServiceDeploysByState(_ context.Context, _ services.DeployState) ([]services.Deploy, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	return append([]services.Deploy{}, f.deploys...), nil
 }
 
 func (f *fakeRepository) ServerExists(_ context.Context, _ uuid.UUID) (bool, error) {
@@ -81,10 +108,14 @@ func (f *fakeRepository) ServerExists(_ context.Context, _ uuid.UUID) (bool, err
 }
 
 func (f *fakeRepository) ListServicesByEnvironment(_ context.Context, _ uuid.UUID) ([]services.Service, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
 	return []services.Service{f.service}, nil
 }
 
 func (f *fakeRepository) ListServicesByProject(_ context.Context, _ uuid.UUID) ([]services.Service, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
 	return []services.Service{f.service}, nil
 }
 
@@ -101,11 +132,20 @@ func (f *fakeRepository) ResolveProject(_ context.Context, projectID uuid.UUID) 
 }
 
 func (f *fakeRepository) HasActiveDeploy(_ context.Context, _ uuid.UUID) (bool, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	for _, deploy := range f.deploys {
+		if deploy.State == services.DeployDeploying {
+			return true, nil
+		}
+	}
 	return false, nil
 }
 
 func (f *fakeRepository) HasDeploys(_ context.Context, _ uuid.UUID) (bool, error) {
-	return false, nil
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	return len(f.deploys) > 0, nil
 }
 
 type failingAgent struct {
@@ -194,23 +234,26 @@ func TestRenderDeployRedactionBoundary(t *testing.T) {
 		t.Fatalf("created Env = %v, want both secrets", created.Env)
 	}
 
-	_, _, deployErr := svc.Deploy(ctx, userID, created.ID)
-	if deployErr == nil {
-		t.Fatal("Deploy succeeded, want the agent failure")
-	}
-	if !errors.Is(deployErr, services.ErrDeployFailed) {
-		t.Errorf("Deploy error = %v, want ErrDeployFailed in the chain", deployErr)
-	}
-	if strings.Contains(deployErr.Error(), secret) || strings.Contains(deployErr.Error(), escapedSecret) {
-		t.Fatalf("the returned error leaked the secret: %v", deployErr)
-	}
-	if !strings.Contains(deployErr.Error(), "<redacted>") {
-		t.Fatalf("the returned error is not redacted: %v", deployErr)
-	}
+	t.Cleanup(func() {
+		if closer, ok := svc.(interface{ Close() error }); ok {
+			_ = closer.Close()
+		}
+	})
 
-	deploys, err := svc.Deploys(ctx, userID, created.ID)
-	if err != nil {
-		t.Fatalf("Deploys: %v", err)
+	if _, _, deployErr := svc.Deploy(ctx, userID, created.ID); deployErr != nil {
+		t.Fatalf("Deploy must accept the attempt and fail in the background: %v", deployErr)
+	}
+	var deploys []services.Deploy
+	deadline := time.Now().Add(10 * time.Second)
+	for time.Now().Before(deadline) {
+		deploys, err = svc.Deploys(ctx, userID, created.ID)
+		if err != nil {
+			t.Fatalf("Deploys: %v", err)
+		}
+		if len(deploys) > 0 && deploys[0].State != services.DeployDeploying {
+			break
+		}
+		time.Sleep(10 * time.Millisecond)
 	}
 	if len(deploys) != 1 || deploys[0].State != services.DeployFailed {
 		t.Fatalf("deploys = %+v", deploys)
@@ -229,21 +272,23 @@ func TestRenderDeployRedactionBoundary(t *testing.T) {
 	recorder := httptest.NewRecorder()
 	router.ServeHTTP(recorder, httptest.NewRequest(http.MethodPost,
 		"/v1/services/"+created.ID.String()+"/deploy", nil))
-	if recorder.Code != http.StatusBadGateway {
-		t.Fatalf("deploy status = %d, want 502: %s", recorder.Code, recorder.Body)
-	}
-	body := recorder.Body.String()
-	if strings.Contains(body, secret) || strings.Contains(body, escapedSecret) {
-		t.Fatalf("the HTTP response leaked the secret: %s", body)
+	if recorder.Code != http.StatusAccepted {
+		t.Fatalf("deploy status = %d, want 202: %s", recorder.Code, recorder.Body)
 	}
 	var payload struct {
-		Message string `json:"message"`
+		Deploy struct {
+			State string `json:"state"`
+			Error string `json:"error"`
+		} `json:"deploy"`
 	}
 	if err := json.Unmarshal(recorder.Body.Bytes(), &payload); err != nil {
-		t.Fatalf("decode the error body: %v", err)
+		t.Fatalf("decode the deploy response: %v", err)
 	}
-	if !strings.Contains(payload.Message, "<redacted>") {
-		t.Fatalf("the HTTP response is not redacted: %q", payload.Message)
+	if payload.Deploy.State != string(services.DeployDeploying) || payload.Deploy.Error != "" {
+		t.Fatalf("deploy payload = %+v, want a pending deploy without an error", payload.Deploy)
+	}
+	if strings.Contains(payload.Deploy.Error, secret) || strings.Contains(payload.Deploy.Error, escapedSecret) {
+		t.Fatalf("the deploy error leaked the secret: %q", payload.Deploy.Error)
 	}
 
 	if strings.Contains(logged.String(), secret) || strings.Contains(logged.String(), escapedSecret) {

@@ -11,7 +11,6 @@ import { toRef } from "vue";
 import { useTemplateWizard } from "@/features/templates/composables/useTemplateWizard";
 import { activeLocale, i18n } from "@/shared/i18n";
 import WizardConfigureStep from "./WizardConfigureStep.vue";
-import WizardCreatedPanel from "./WizardCreatedPanel.vue";
 import WizardFooter from "./WizardFooter.vue";
 import WizardPreviewStep from "./WizardPreviewStep.vue";
 import WizardTargetForm from "./WizardTargetForm.vue";
@@ -32,7 +31,7 @@ const emit = defineEmits<{
 const wizard = useTemplateWizard(toRef(props, "show"), toRef(props, "slug"), {
   projectId: toRef(props, "projectId"),
   environmentId: toRef(props, "environmentId"),
-});
+}, () => emit("update:show", false));
 
 function close(): void {
   emit("update:show", false);
@@ -50,8 +49,8 @@ function t(key: string, params?: Record<string, string | number>): string {
     preset="card"
     class="template-wizard"
     style="width: 780px; max-width: 96vw"
-    :closable="!wizard.creating.value && !wizard.deploying.value"
-    :mask-closable="!wizard.creating.value && !wizard.deploying.value"
+    :closable="!wizard.creating.value"
+    :mask-closable="!wizard.creating.value"
     @update:show="(value: boolean) => emit('update:show', value)"
     @after-leave="wizard.reset"
   >
@@ -90,7 +89,6 @@ function t(key: string, params?: Record<string, string | number>): string {
 
         <section v-else class="wizard__step" data-testid="wizard-step-3">
           <WizardTargetForm
-            v-if="wizard.created.value === null"
             :name="wizard.name.value"
             :project-id="wizard.scopeProjectId.value"
             :environment-id="wizard.scopeEnvironmentId.value"
@@ -104,31 +102,17 @@ function t(key: string, params?: Record<string, string | number>): string {
             @update:environment-id="(next) => (wizard.scopeEnvironmentId.value = next)"
             @update:server-id="(next) => (wizard.serverId.value = next)"
           />
-
-          <WizardCreatedPanel
-            v-else
-            :created="wizard.created.value"
-            :deployed="wizard.deployed.value"
-            :deploy-error="wizard.deployError.value"
-            :log-services="wizard.render.value?.spec.services ?? []"
-            :log-title="`${wizard.created.value.name} logs`"
-            @close="close"
-          />
         </section>
 
         <WizardFooter
           :step="wizard.step.value"
           :render-loading="wizard.renderLoading.value"
           :has-render="wizard.render.value !== null"
-          :created="wizard.created.value !== null"
           :creating="wizard.creating.value"
-          :deploying="wizard.deploying.value"
-          :deployed="wizard.deployed.value"
           @back="wizard.step.value -= 1"
           @next="wizard.next()"
           @close="close"
           @create="wizard.handleCreate()"
-          @deploy="wizard.handleDeploy()"
         />
       </div>
     </NSpin>

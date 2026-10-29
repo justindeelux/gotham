@@ -31,8 +31,7 @@ const en = {
     back: "Back",
     next: "Next",
     close: "Close",
-    create: "Create service",
-    deploy: "Deploy now",
+    createAndDeploy: "Create and deploy",
   },
   secret: {
     generate: "Generate",
@@ -59,14 +58,8 @@ const en = {
     nameLabel: "Service name",
     scopeError: "Select a project and environment.",
   },
-  created: {
-    title: "{name} created",
-    open: "Open service detail",
-    deployed: "deployed",
-  },
   toast: {
-    created: "Service {name} created.",
-    deployed: "Deploy finished.",
+    deploying: "Service {name} created. The deploy is running in the background.",
   },
   overlay: {
     n8n: {

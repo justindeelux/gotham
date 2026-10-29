@@ -36,7 +36,7 @@ func newTestService(t *testing.T, repo *fakeRepository, agent *fakeAgent) Servic
 	if repo == nil {
 		repo = newFakeRepository()
 	}
-	return NewService(Config{
+	svc := NewService(Config{
 		Repository:    repo,
 		Logger:        discardLogger(),
 		DeployTimeout: 5 * time.Second,
@@ -44,6 +44,35 @@ func newTestService(t *testing.T, repo *fakeRepository, agent *fakeAgent) Servic
 			return agent, nil
 		},
 	})
+	t.Cleanup(func() { closeTestService(t, svc) })
+	return svc
+}
+
+func closeTestService(t *testing.T, svc ServiceService) {
+	t.Helper()
+	if closer, ok := svc.(interface{ Close() error }); ok {
+		if err := closer.Close(); err != nil {
+			t.Errorf("Close: %v", err)
+		}
+	}
+}
+
+// waitForDeploy waits for the newest deploy of a service to leave deploying.
+func waitForDeploy(t *testing.T, svc ServiceService, userID, serviceID uuid.UUID) Deploy {
+	t.Helper()
+	deadline := time.Now().Add(10 * time.Second)
+	for time.Now().Before(deadline) {
+		deploys, err := svc.Deploys(context.Background(), userID, serviceID)
+		if err != nil {
+			t.Fatalf("Deploys: %v", err)
+		}
+		if len(deploys) > 0 && deploys[0].State != DeployDeploying {
+			return deploys[0]
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+	t.Fatal("the deploy never reached a terminal state")
+	return Deploy{}
 }
 
 func createService(t *testing.T, svc ServiceService, repo *fakeRepository, userID uuid.UUID) Service {
@@ -171,22 +200,33 @@ func TestDeployRendersAndRecords(t *testing.T) {
 	userID := uuid.New()
 	created := createService(t, svc, repo, userID)
 
-	deployed, deploy, err := svc.Deploy(context.Background(), userID, created.ID)
+	started, deploy, err := svc.Deploy(context.Background(), userID, created.ID)
 	if err != nil {
 		t.Fatalf("Deploy: %v", err)
+	}
+	if started.Status != StatusCreating {
+		t.Errorf("status right after 202 = %q, want the unchanged creating", started.Status)
+	}
+	if deploy.State != DeployDeploying || !deploy.FinishedAt.IsZero() {
+		t.Errorf("deploy = %+v, want a pending deploy", deploy)
+	}
+	finished := waitForDeploy(t, svc, userID, created.ID)
+	if finished.State != DeployRunning || finished.FinishedAt.IsZero() {
+		t.Errorf("deploy = %+v", finished)
+	}
+	deployed, err := svc.Get(context.Background(), userID, created.ID)
+	if err != nil {
+		t.Fatalf("Get: %v", err)
 	}
 	if deployed.Status != StatusRunning {
 		t.Errorf("status = %q, want running", deployed.Status)
 	}
-	if deploy.State != DeployRunning || deploy.FinishedAt.IsZero() {
-		t.Errorf("deploy = %+v", deploy)
-	}
 	project := ProjectName(created.ID)
-	if deploy.ComposeYAML == "" || strings.Contains(deploy.ComposeYAML, "${") {
-		t.Errorf("deploy snapshot is not rendered:\n%s", deploy.ComposeYAML)
+	if finished.ComposeYAML == "" || strings.Contains(finished.ComposeYAML, "${") {
+		t.Errorf("deploy snapshot is not rendered:\n%s", finished.ComposeYAML)
 	}
-	if !strings.Contains(deploy.ComposeYAML, "app.example.com") || !strings.Contains(deploy.ComposeYAML, "hunter2-secret") {
-		t.Errorf("deploy snapshot lost the rendered values:\n%s", deploy.ComposeYAML)
+	if !strings.Contains(finished.ComposeYAML, "app.example.com") || !strings.Contains(finished.ComposeYAML, "hunter2-secret") {
+		t.Errorf("deploy snapshot lost the rendered values:\n%s", finished.ComposeYAML)
 	}
 	if len(agent.validated) != 1 || agent.validated[0] != project {
 		t.Errorf("validated = %v, want %s", agent.validated, project)
@@ -195,7 +235,7 @@ func TestDeployRendersAndRecords(t *testing.T) {
 	if up.project != project || up.restart {
 		t.Errorf("up = %+v", up)
 	}
-	if up.yaml != deploy.ComposeYAML {
+	if up.yaml != finished.ComposeYAML {
 		t.Errorf("the node ran a different document than the recorded snapshot")
 	}
 
@@ -215,33 +255,37 @@ func TestDeployFailureRedactsEnvironment(t *testing.T) {
 	userID := uuid.New()
 	created := createService(t, svc, repo, userID)
 
-	_, _, err := svc.Deploy(context.Background(), userID, created.ID)
-	if !errors.Is(err, ErrValidation) {
-		t.Fatalf("Deploy = %v, want ErrValidation", err)
+	if _, _, err := svc.Deploy(context.Background(), userID, created.ID); err != nil {
+		t.Fatalf("Deploy must accept the attempt and fail in the background: %v", err)
+	}
+	failed := waitForDeploy(t, svc, userID, created.ID)
+	if failed.State != DeployFailed {
+		t.Fatalf("deploy = %+v, want failed", failed)
+	}
+	if !strings.Contains(failed.Error, "cannot resolve") {
+		t.Fatalf("stored deploy error = %q, want the validation reason", failed.Error)
 	}
 	after, err := svc.Get(context.Background(), userID, created.ID)
 	if err != nil {
 		t.Fatalf("Get: %v", err)
 	}
-	if after.Status != StatusCreating {
-		t.Errorf("a validation failure before any node change must keep the status, got %q", after.Status)
-	}
-	deploys, err := svc.Deploys(context.Background(), userID, created.ID)
-	if err != nil {
-		t.Fatalf("Deploys: %v", err)
-	}
-	if len(deploys) != 1 || deploys[0].State != DeployFailed {
-		t.Fatalf("deploys = %+v", deploys)
+	if after.Status != StatusError {
+		t.Errorf("status after a failed validate = %q, want error", after.Status)
 	}
 
+	agent.mu.Lock()
 	agent.validateErr = nil
 	agent.upErr = fmt.Errorf("%w: up: invalid value hunter2-secret", ErrDeployFailed)
-	_, _, err = svc.Deploy(context.Background(), userID, created.ID)
-	if !errors.Is(err, ErrDeployFailed) {
-		t.Fatalf("Deploy(up) = %v, want ErrDeployFailed", err)
+	agent.mu.Unlock()
+	if _, _, err := svc.Deploy(context.Background(), userID, created.ID); err != nil {
+		t.Fatalf("Deploy(up): %v", err)
 	}
-	if strings.Contains(err.Error(), "hunter2-secret") {
-		t.Fatalf("returned error leaked the value: %v", err)
+	failed = waitForDeploy(t, svc, userID, created.ID)
+	if failed.State != DeployFailed {
+		t.Fatalf("deploy = %+v, want failed", failed)
+	}
+	if !strings.Contains(failed.Error, "<redacted>") || strings.Contains(failed.Error, "hunter2-secret") {
+		t.Fatalf("stored deploy error = %q, want the value redacted", failed.Error)
 	}
 	after, err = svc.Get(context.Background(), userID, created.ID)
 	if err != nil {
@@ -249,10 +293,6 @@ func TestDeployFailureRedactsEnvironment(t *testing.T) {
 	}
 	if after.Status != StatusError {
 		t.Errorf("status after a failed up = %q, want error", after.Status)
-	}
-	deploys, _ = svc.Deploys(context.Background(), userID, created.ID)
-	if strings.Contains(deploys[0].Error, "hunter2-secret") || !strings.Contains(deploys[0].Error, "<redacted>") {
-		t.Errorf("stored deploy error = %q, want the value redacted", deploys[0].Error)
 	}
 }
 
@@ -362,11 +402,9 @@ func TestDeployDoesNotClobberConcurrentEdit(t *testing.T) {
 	userID := uuid.New()
 	created := createService(t, svc, repo, userID)
 
-	deployDone := make(chan error, 1)
-	go func() {
-		_, _, err := svc.Deploy(context.Background(), userID, created.ID)
-		deployDone <- err
-	}()
+	if _, _, err := svc.Deploy(context.Background(), userID, created.ID); err != nil {
+		t.Fatalf("Deploy: %v", err)
+	}
 	waitForUp(t, agent)
 
 	updateDone := make(chan error, 1)
@@ -381,8 +419,8 @@ func TestDeployDoesNotClobberConcurrentEdit(t *testing.T) {
 	case <-time.After(200 * time.Millisecond):
 	}
 	close(gate)
-	if err := <-deployDone; err != nil {
-		t.Fatalf("Deploy: %v", err)
+	if deploy := waitForDeploy(t, svc, userID, created.ID); deploy.State != DeployRunning {
+		t.Fatalf("deploy = %+v, want running", deploy)
 	}
 	if err := <-updateDone; err != nil {
 		t.Fatalf("Update after deploy: %v", err)
@@ -400,7 +438,7 @@ func TestDeployDoesNotClobberConcurrentEdit(t *testing.T) {
 	}
 }
 
-func TestConcurrentLifecycleOpsSerialize(t *testing.T) {
+func TestCloseRecordsAnInFlightDeployAsFailed(t *testing.T) {
 	repo := newFakeRepository()
 	gate := make(chan struct{})
 	agent := &fakeAgent{upGate: gate}
@@ -408,39 +446,119 @@ func TestConcurrentLifecycleOpsSerialize(t *testing.T) {
 	userID := uuid.New()
 	created := createService(t, svc, repo, userID)
 
-	deployDone := make(chan error, 1)
-	go func() {
-		_, _, err := svc.Deploy(context.Background(), userID, created.ID)
-		deployDone <- err
-	}()
-	waitForUp(t, agent)
-
-	stopDone := make(chan error, 1)
-	go func() {
-		_, err := svc.Stop(context.Background(), userID, created.ID)
-		stopDone <- err
-	}()
-
-	time.Sleep(300 * time.Millisecond)
-	select {
-	case err := <-stopDone:
-		t.Fatalf("a stop completed while a deploy was in flight: %v", err)
-	default:
-	}
-	close(gate)
-	if err := <-deployDone; err != nil {
+	if _, _, err := svc.Deploy(context.Background(), userID, created.ID); err != nil {
 		t.Fatalf("Deploy: %v", err)
 	}
-	if err := <-stopDone; err != nil {
-		t.Fatalf("Stop: %v", err)
+	waitForUp(t, agent)
+	closeTestService(t, svc)
+
+	deploys, err := svc.Deploys(context.Background(), userID, created.ID)
+	if err != nil {
+		t.Fatalf("Deploys: %v", err)
 	}
+	if len(deploys) != 1 || deploys[0].State != DeployFailed {
+		t.Fatalf("deploys = %+v, want a failed row after shutdown", deploys)
+	}
+	after, err := svc.Get(context.Background(), userID, created.ID)
+	if err != nil {
+		t.Fatalf("Get: %v", err)
+	}
+	if after.Status != StatusError {
+		t.Fatalf("status = %q, want error", after.Status)
+	}
+}
+
+func TestLifecycleActionsConflictWhileDeploying(t *testing.T) {
+	repo := newFakeRepository()
+	gate := make(chan struct{})
+	agent := &fakeAgent{upGate: gate}
+	svc := newTestService(t, repo, agent)
+	userID := uuid.New()
+	created := createService(t, svc, repo, userID)
+
+	if _, _, err := svc.Deploy(context.Background(), userID, created.ID); err != nil {
+		t.Fatalf("Deploy: %v", err)
+	}
+	waitForUp(t, agent)
+
+	if _, err := svc.Stop(context.Background(), userID, created.ID); !errors.Is(err, ErrDeployInFlight) {
+		t.Errorf("Stop during a deploy = %v, want ErrDeployInFlight", err)
+	}
+	if _, err := svc.Restart(context.Background(), userID, created.ID); !errors.Is(err, ErrDeployInFlight) {
+		t.Errorf("Restart during a deploy = %v, want ErrDeployInFlight", err)
+	}
+	if err := svc.Delete(context.Background(), userID, created.ID); !errors.Is(err, ErrDeployInFlight) {
+		t.Errorf("Delete during a deploy = %v, want ErrDeployInFlight", err)
+	}
+
+	close(gate)
+	if deploy := waitForDeploy(t, svc, userID, created.ID); deploy.State != DeployRunning {
+		t.Fatalf("deploy = %+v, want running", deploy)
+	}
+	after, err := svc.Get(context.Background(), userID, created.ID)
+	if err != nil {
+		t.Fatalf("Get: %v", err)
+	}
+	if after.Status != StatusRunning {
+		t.Fatalf("final status = %q, want running", after.Status)
+	}
+}
+
+func TestRecoverInterruptedDeploys(t *testing.T) {
+	repo := newFakeRepository()
+	svc := newTestService(t, repo, &fakeAgent{}).(*service)
+	userID := uuid.New()
+	created := createService(t, svc, repo, userID)
+	if _, err := repo.CreateServiceDeploy(context.Background(), Deploy{
+		ID: uuid.New(), ServiceID: created.ID, State: DeployDeploying, ComposeYAML: "services: {}",
+	}); err != nil {
+		t.Fatalf("CreateServiceDeploy: %v", err)
+	}
+
+	svc.recoverInterruptedDeploys()
+
+	deploys, err := svc.Deploys(context.Background(), userID, created.ID)
+	if err != nil {
+		t.Fatalf("Deploys: %v", err)
+	}
+	if len(deploys) != 1 || deploys[0].State != DeployFailed || deploys[0].Error != interruptedDeployMessage {
+		t.Fatalf("deploys = %+v, want one interrupted failure", deploys)
+	}
+	after, err := svc.Get(context.Background(), userID, created.ID)
+	if err != nil {
+		t.Fatalf("Get: %v", err)
+	}
+	if after.Status != StatusError {
+		t.Fatalf("status = %q, want error", after.Status)
+	}
+}
+
+func TestRecoverKeepsARunningStatusWhenAnInterruptedDeployWasARedeploy(t *testing.T) {
+	repo := newFakeRepository()
+	svc := newTestService(t, repo, &fakeAgent{}).(*service)
+	userID := uuid.New()
+	created := createService(t, svc, repo, userID)
+	if _, err := repo.UpdateServiceStatus(context.Background(), created.ID, StatusRunning); err != nil {
+		t.Fatalf("UpdateServiceStatus: %v", err)
+	}
+	if _, err := repo.CreateServiceDeploy(context.Background(), Deploy{
+		ID: uuid.New(), ServiceID: created.ID, State: DeployDeploying, ComposeYAML: "services: {}",
+	}); err != nil {
+		t.Fatalf("CreateServiceDeploy: %v", err)
+	}
+
+	svc.recoverInterruptedDeploys()
 
 	after, err := svc.Get(context.Background(), userID, created.ID)
 	if err != nil {
 		t.Fatalf("Get: %v", err)
 	}
-	if after.Status != StatusStopped {
-		t.Fatalf("final status = %q, want the last action's stopped", after.Status)
+	if after.Status != StatusRunning {
+		t.Fatalf("status = %q, want the running project left alone", after.Status)
+	}
+	deploys, _ := svc.Deploys(context.Background(), userID, created.ID)
+	if deploys[0].State != DeployFailed {
+		t.Fatalf("deploy = %+v, want failed", deploys[0])
 	}
 }
 
@@ -531,40 +649,6 @@ func TestQueuedDeployAfterDeleteDoesNotResurrect(t *testing.T) {
 	}
 	if len(deploys) != 0 {
 		t.Fatalf("the queued deploy recorded attempts for a deleted service: %+v", deploys)
-	}
-}
-
-func TestQueuedRestartUsesThePostDeployState(t *testing.T) {
-	repo := newFakeRepository()
-	gate := make(chan struct{})
-	agent := &fakeAgent{upGate: gate}
-	svc := newTestService(t, repo, agent)
-	userID := uuid.New()
-	created := createService(t, svc, repo, userID)
-
-	deployDone := make(chan error, 1)
-	go func() {
-		_, _, err := svc.Deploy(context.Background(), userID, created.ID)
-		deployDone <- err
-	}()
-	waitForUp(t, agent)
-
-	restartDone := make(chan error, 1)
-	go func() {
-		_, err := svc.Restart(context.Background(), userID, created.ID)
-		restartDone <- err
-	}()
-	time.Sleep(200 * time.Millisecond)
-	close(gate)
-
-	if err := <-deployDone; err != nil {
-		t.Fatalf("Deploy: %v", err)
-	}
-	if err := <-restartDone; err != nil {
-		t.Fatalf("Restart: %v", err)
-	}
-	if !agent.lastUp(t).restart {
-		t.Fatal("a restart queued behind a deploy must restart the now-running project, not start it again")
 	}
 }
 
@@ -728,6 +812,7 @@ func TestAgentConnectionsAreClosed(t *testing.T) {
 			if _, _, err := svc.Deploy(context.Background(), userID, id); err != nil {
 				t.Fatalf("Deploy: %v", err)
 			}
+			waitForDeploy(t, svc, userID, id)
 		}},
 		{"stop", func(t *testing.T, svc ServiceService, userID, id uuid.UUID) {
 			if _, err := svc.Stop(context.Background(), userID, id); err != nil {
@@ -799,14 +884,21 @@ func TestLifecycleChangesResyncTheProxy(t *testing.T) {
 	})
 	userID := uuid.New()
 	created := createService(t, svc, repo, userID)
+	t.Cleanup(func() { closeTestService(t, svc) })
 
 	for _, step := range []struct {
 		name string
 		call func() error
 	}{
 		{"deploy", func() error {
-			_, _, err := svc.Deploy(context.Background(), userID, created.ID)
-			return err
+			if _, _, err := svc.Deploy(context.Background(), userID, created.ID); err != nil {
+				return err
+			}
+			waitForDeploy(t, svc, userID, created.ID)
+			for i := 0; i < 100 && len(proxySync.calls()) == 0; i++ {
+				time.Sleep(10 * time.Millisecond)
+			}
+			return nil
 		}},
 		{"stop", func() error {
 			_, err := svc.Stop(context.Background(), userID, created.ID)
@@ -841,6 +933,7 @@ func TestLifecycleChangesResyncTheProxy(t *testing.T) {
 		Proxy:      proxySync,
 	})
 	second := createService(t, svc2, repo2, userID)
+	t.Cleanup(func() { closeTestService(t, svc2) })
 	if _, _, err := svc2.Deploy(context.Background(), userID, second.ID); err != nil {
 		t.Fatalf("a failed resync must not fail the deploy: %v", err)
 	}

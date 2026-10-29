@@ -6,12 +6,12 @@ import { ref } from "vue";
 import type {
   BackupProtectionSchedule,
   BackupProtectionSummary,
-} from "@/features/databases/api/backups";
-import BackupProtectionCard from "@/features/databases/components/BackupProtectionCard.vue";
+} from "@/features/backups/api/backups";
+import BackupProtectionCard from "@/features/backups/components/BackupProtectionCard.vue";
 import {
-  databaseBackupsKey,
-  type DatabaseBackups,
-} from "@/features/databases/composables/useDatabaseBackups";
+  resourceBackupsKey,
+  type ResourceBackups,
+} from "@/features/backups/composables/useResourceBackups";
 import {
   registerDiscoveredCatalogs,
   resetLocaleState,
@@ -45,20 +45,22 @@ function mountCard(
   loadedBackupIds: string[] = ["backup-1"],
 ) {
   const backups = {
-    dbId: databaseId,
+    resource: {
+      value: { resource_type: "database", resource_id: databaseId.value },
+    },
     backups: {
       value: loadedBackupIds.map((id) => ({ id })),
     },
     backupsStore: {
       protectionLoading: false,
       protectionError: null,
-      protectionOf: () => summary,
     },
-    targetLabel: (targetId?: string) => (targetId ? "offsite" : "local disk"),
-  } as unknown as DatabaseBackups;
+    protection: { value: summary },
+    providerLabel: (targetId?: string) => (targetId ? "offsite" : "local disk"),
+  } as unknown as ResourceBackups;
   return mount(BackupProtectionCard, {
     global: {
-      provide: { [databaseBackupsKey as symbol]: backups },
+      provide: { [resourceBackupsKey as symbol]: backups },
     },
   });
 }
@@ -70,7 +72,7 @@ beforeEach(() => {
 });
 
 describe("backup protection card", () => {
-  it("shows a healthy schedule and links its success and target", () => {
+  it("shows a healthy schedule and links its success and storage name", () => {
     const wrapper = mountCard({
       database_id: "db-1",
       status: "protected",
@@ -79,9 +81,7 @@ describe("backup protection card", () => {
     try {
       expect(wrapper.text()).toContain("Protected");
       expect(wrapper.find('a[href="#backup-run-backup-1"]').exists()).toBe(true);
-      expect(wrapper.find('a[href="#backup-target-target-1"]').exists()).toBe(
-        true,
-      );
+      expect(wrapper.text()).toContain("offsite");
     } finally {
       wrapper.unmount();
     }

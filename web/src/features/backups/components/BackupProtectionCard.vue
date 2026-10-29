@@ -1,9 +1,9 @@
 <script setup lang="ts">
 import { NAlert, NCard, NEmpty, NSpace, NSpin, NTag, NText } from "naive-ui";
-import { computed, inject } from "vue";
+import { inject } from "vue";
 
-import type { BackupProtectionStatus } from "@/features/databases/api/backups";
-import { databaseBackupsKey } from "@/features/databases/composables/useDatabaseBackups";
+import type { BackupProtectionStatus } from "@/features/backups/api/backups";
+import { resourceBackupsKey } from "@/features/backups/composables/useResourceBackups";
 import { relativeTime } from "@/shared/utils/format";
 
 import { i18n } from "@/shared/i18n";
@@ -12,11 +12,7 @@ function t(key: string, params?: Record<string, string | number>): string {
   return String(i18n.global.t(key, params ?? {}));
 }
 
-const backups = inject(databaseBackupsKey)!;
-
-const protection = computed(() =>
-  backups.backupsStore.protectionOf(backups.dbId.value),
-);
+const backups = inject(resourceBackupsKey)!;
 
 function statusType(
   status: BackupProtectionStatus,
@@ -87,7 +83,7 @@ function runHref(backupId?: string): string {
       <NAlert
         v-if="
           !backups.backupsStore.protectionError &&
-          (protection?.status ?? 'not_configured') === 'not_configured'
+          (backups.protection.value?.status ?? 'not_configured') === 'not_configured'
         "
         type="info"
         :show-icon="false"
@@ -95,12 +91,12 @@ function runHref(backupId?: string): string {
         {{ t("databases.backups.protection.notConfigured") }}
       </NAlert>
       <NEmpty
-        v-else-if="protection && protection.schedules.length === 0"
+        v-else-if="backups.protection.value && backups.protection.value.schedules.length === 0"
         :description="t('databases.backups.protection.notConfigured')"
       />
-      <NSpace v-else-if="protection" vertical :size="12" style="width: 100%">
+      <NSpace v-else-if="backups.protection.value" vertical :size="12" style="width: 100%">
         <div
-          v-for="item in protection.schedules"
+          v-for="item in backups.protection.value.schedules"
           :key="item.schedule_id"
           class="backup-row"
         >
@@ -112,15 +108,8 @@ function runHref(backupId?: string): string {
                 }}
               </NTag>
               <NText class="mono" strong>{{ item.cron }}</NText>
-              <a
-                v-if="item.target_id"
-                class="protection-link"
-                :href="`#backup-target-${item.target_id}`"
-              >
-                {{ backups.targetLabel(item.target_id) }}
-              </a>
-              <NTag v-else size="small" :bordered="false">
-                {{ backups.targetLabel(item.target_id) }}
+              <NTag size="small" :bordered="false">
+                {{ backups.providerLabel(item.target_id) }}
               </NTag>
             </NSpace>
             <NText depth="3">

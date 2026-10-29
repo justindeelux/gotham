@@ -3,16 +3,15 @@ import { mount } from "@vue/test-utils";
 import { beforeEach, describe, expect, it } from "vitest";
 import { nextTick, reactive } from "vue";
 
-import { describeBackupError } from "@/features/databases/api/backups";
+import { describeBackupError } from "@/features/backups/api/backups";
 import {
   databaseEmptyDescription,
   databaseEmptyHint,
   describeDatabaseError,
 } from "@/features/databases/api/databases";
 import WizardConfigureStep from "@/features/databases/components/WizardConfigureStep.vue";
-import RestoreConfirmDialog from "@/features/databases/components/RestoreConfirmDialog.vue";
-import { databaseBackupsKey } from "@/features/databases/composables/useDatabaseBackups";
-import { databaseDetailKey } from "@/features/databases/composables/useDatabaseDetail";
+import BackupRestoreDialog from "@/features/backups/components/BackupRestoreDialog.vue";
+import { resourceBackupsKey } from "@/features/backups/composables/useResourceBackups";
 import {
   wizardFormKey,
   type WizardForm,
@@ -20,7 +19,7 @@ import {
 import en from "@/features/databases/locales/en";
 import vi from "@/features/databases/locales/vi";
 import { maskConnectionPassword } from "@/features/databases/utils/databaseConnection";
-import { runDisplay } from "@/features/databases/utils/backupStatus";
+import { runDisplay } from "@/features/backups/utils/backupStatus";
 import { checkCatalogParity, leafEntries, pluralSegments } from "@/shared/i18n/catalog";
 import {
   i18n,
@@ -280,22 +279,21 @@ describe("runDisplay keeps the English baseline and raw unknowns", () => {
 
 describe("restore confirmation keeps backup identity without a location", () => {
   function mountRestoreDialog(candidate: Record<string, unknown>) {
-    const detail = {
-      database: { value: { name: "pg-orders" } },
-      shortId: { value: "abc12345" },
-    };
     const backups = {
+      resource: {
+        value: { resource_type: "database", resource_id: "db-1" },
+      },
       restoreOpen: { value: true },
       restoreCandidate: { value: candidate },
       restoring: { value: false },
       handleRestoreConfirm: () => undefined,
     };
-    return mount(RestoreConfirmDialog, {
+    return mount(BackupRestoreDialog, {
       attachTo: document.body,
+      props: { resourceLabel: "pg-orders" },
       global: {
         provide: {
-          [databaseDetailKey as symbol]: detail,
-          [databaseBackupsKey as symbol]: backups,
+          [resourceBackupsKey as symbol]: backups,
         },
       },
     });

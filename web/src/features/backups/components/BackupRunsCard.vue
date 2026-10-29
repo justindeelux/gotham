@@ -13,9 +13,9 @@ import {
 } from "naive-ui";
 import { inject } from "vue";
 
-import type { DatabaseBackup } from "@/features/databases/api/backups";
-import { databaseBackupsKey } from "@/features/databases/composables/useDatabaseBackups";
-import { runDisplay, statusTagType } from "@/features/databases/utils/backupStatus";
+import type { BackupRun } from "@/features/backups/api/backups";
+import { resourceBackupsKey } from "@/features/backups/composables/useResourceBackups";
+import { runDisplay, statusTagType } from "@/features/backups/utils/backupStatus";
 import { formatBytes, relativeTime } from "@/shared/utils/format";
 
 import { i18n } from "@/shared/i18n";
@@ -24,7 +24,7 @@ function t(key: string, params?: Record<string, string | number>): string {
   return String(i18n.global.t(key, params ?? {}));
 }
 
-const backups = inject(databaseBackupsKey)!;
+const backups = inject(resourceBackupsKey)!;
 </script>
 
 <template>
@@ -32,8 +32,8 @@ const backups = inject(databaseBackupsKey)!;
     <template #header-extra>
       <NSpace align="center" :size="8">
         <NSelect
-          v-model:value="backups.backupTargetId.value"
-          :options="backups.backupTargetOptions.value"
+          v-model:value="backups.backupProviderId.value"
+          :options="backups.backupProviderOptions.value"
           :placeholder="t('databases.backups.runs.destination')"
           :aria-label="t('databases.backups.runs.destinationAria')"
           style="width: 220px"
@@ -68,14 +68,6 @@ const backups = inject(databaseBackupsKey)!;
     >
       {{ backups.backupsStore.backupsError }}
     </NAlert>
-    <NAlert
-      v-if="backups.backupsStore.targets.length === 0"
-      type="info"
-      :show-icon="false"
-      style="margin-bottom: 12px"
-    >
-      {{ t("databases.backups.runs.noTarget") }}
-    </NAlert>
     <NSpin :show="backups.backupsStore.backupsLoading">
       <NSpace
         v-if="backups.backups.value.length > 0"
@@ -84,7 +76,7 @@ const backups = inject(databaseBackupsKey)!;
         style="width: 100%"
       >
         <div
-          v-for="backup in (backups.backups.value as DatabaseBackup[])"
+          v-for="backup in (backups.backups.value as BackupRun[])"
           :id="`backup-run-${backup.id}`"
           :key="backup.id"
           class="backup-row"
@@ -96,6 +88,9 @@ const backups = inject(databaseBackupsKey)!;
               </NTag>
               <NTag size="small" :bordered="false">
                 {{ runDisplay("runType", backup.type) }}
+              </NTag>
+              <NTag size="small" :bordered="false">
+                {{ backups.providerLabel(backup.provider_id, backup.provider_name) }}
               </NTag>
               <NText class="mono" depth="3">
                 {{
@@ -135,7 +130,7 @@ const backups = inject(databaseBackupsKey)!;
               {{ t("databases.backups.runs.restore") }}
             </NButton>
             <NPopconfirm
-              @positive-click="() => void backups.handleDeleteBackup(backup.id)"
+              @positive-click="() => void backups.handleDeleteBackup(backup)"
             >
               <template #trigger>
                 <NButton

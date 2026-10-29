@@ -3,24 +3,19 @@ import { NButton, NCard, NSpace, NTabPane, NTabs, NTooltip } from "naive-ui";
 import { provide, ref, watch } from "vue";
 import { useRoute } from "vue-router";
 
-import DatabaseBackupsTab from "@/features/databases/components/DatabaseBackupsTab.vue";
+import ResourceBackupsTab from "@/features/backups/components/ResourceBackupsTab.vue";
 import DatabaseDetailHeader from "@/features/databases/components/DatabaseDetailHeader.vue";
 import DatabaseLogsTab from "@/features/databases/components/DatabaseLogsTab.vue";
 import DatabaseProvisioningBanner from "@/features/databases/components/DatabaseProvisioningBanner.vue";
 import DatabaseOverviewPanel from "@/features/databases/components/DatabaseOverviewPanel.vue";
 import ResourceHistoryPanel from "@/features/monitoring/components/ResourceHistoryPanel.vue";
 import RenameDatabaseDialog from "@/features/databases/components/RenameDatabaseDialog.vue";
-import RestoreConfirmDialog from "@/features/databases/components/RestoreConfirmDialog.vue";
 import ResourceDetailFrame from "@/features/projects/components/ResourceDetailFrame.vue";
 import ResourceSettingsTab from "@/features/projects/components/ResourceSettingsTab.vue";
 import {
   databaseDetailKey,
   useDatabaseDetail,
 } from "@/features/databases/composables/useDatabaseDetail";
-import {
-  databaseBackupsKey,
-  useDatabaseBackups,
-} from "@/features/databases/composables/useDatabaseBackups";
 
 import { i18n } from "@/shared/i18n";
 
@@ -34,10 +29,8 @@ const activeTab = ref(
 );
 
 const detail = useDatabaseDetail();
-const backups = useDatabaseBackups(detail.dbId, activeTab);
 
 provide(databaseDetailKey, detail);
-provide(databaseBackupsKey, backups);
 
 watch(detail.dbId, () => {
   activeTab.value = route.query.tab === "backups" ? "backups" : "overview";
@@ -101,7 +94,13 @@ watch(detail.dbId, () => {
             {{ t("databases.detail.creating.backupsDisabled") }}
           </NTooltip>
         </template>
-        <DatabaseBackupsTab />
+        <ResourceBackupsTab
+          v-if="detail.database.value"
+          resource-type="database"
+          :resource-id="detail.database.value.id"
+          :resource-label="detail.database.value.name"
+          :active="activeTab === 'backups'"
+        />
       </NTabPane>
 
       <NTabPane
@@ -149,5 +148,4 @@ watch(detail.dbId, () => {
   </ResourceDetailFrame>
 
   <RenameDatabaseDialog />
-  <RestoreConfirmDialog />
 </template>

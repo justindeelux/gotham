@@ -49,12 +49,6 @@ vi.mock("@/features/databases/composables/useDatabaseDetail", async () => {
   };
 });
 
-vi.mock("@/features/databases/composables/useDatabaseBackups", () => ({
-  CRON_PRESETS: [],
-  databaseBackupsKey: Symbol("database-backups"),
-  useDatabaseBackups: () => ({}),
-}));
-
 beforeEach(() => {
   state.database = {
     id: "db-1",
@@ -101,9 +95,9 @@ async function mountPage() {
       stubs: {
         DatabaseDetailHeader: true,
         DatabaseOverviewPanel: true,
-        DatabaseBackupsTab: true,
+        ResourceBackupsTab: true,
         RenameDatabaseDialog: true,
-        RestoreConfirmDialog: true,
+        BackupRestoreDialog: true,
         ResourceHistoryPanel: true,
         LogViewer: true,
       },

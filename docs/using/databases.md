@@ -93,8 +93,9 @@ The connection string depends on how the database is exposed:
 
 ## Backups
 
-Open the **Backups** tab of a database to manage runs, schedules and storage
-providers. A backup is an engine dump taken by a temporary container on the same
+Open the **Backups** tab of a database to manage runs and schedules. Storage
+providers are managed once for the whole product in **Backups → Storage**; see
+[Backups](/using/backups) for the shared page. A backup is an engine dump taken by a temporary container on the same
 node; the artifact is compressed and stored in the selected destination. Runs
 are listed with type (`manual` or `scheduled`), status, size, destination and
 timestamps. A failed run keeps its row and error text, so you can see what went

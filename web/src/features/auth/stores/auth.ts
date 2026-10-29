@@ -18,7 +18,7 @@ import {
 } from "@/shared/api/token";
 import { useApplicationsStore, useGitHubAppStore, useProvidersStore } from "@/features/applications";
 import { useRecentDeploymentsStore } from "@/features/dashboard";
-import { useBackupsStore } from "@/features/databases";
+import { useBackupsStore } from "@/features/backups/stores/backups";
 import { useDatabasesStore } from "@/features/databases";
 import { useFilesStore } from "@/features/files";
 import { useEditorStore } from "@/features/files/stores/editor";

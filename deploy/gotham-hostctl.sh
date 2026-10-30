@@ -6,7 +6,8 @@
 # through the sudoers drop-in written by gotham-hostbootstrap.sh, which grants
 # the gotham service user exactly these verbs (one rule each, no wildcards):
 #
-#   status | apply-network | confirm-network | revert-network | apply-system
+#   status | apply-network | confirm-network | revert-network | apply-system |
+#   cleanup-status | cleanup-journal | cleanup-package-cache
 #
 # Values arrive on stdin as key=value lines. Only whitelisted keys are accepted
 # and every value is re-validated here with strict anchored patterns before it
@@ -93,7 +94,7 @@ VERB="$1"
 # Skip the read-only verbs and any invocation that already runs inside the
 # transient unit. stdin, stdout and the exit code pass through --pipe --wait.
 case "${VERB}" in
-    apply-network | revert-network | apply-system) WRITE=1 ;;
+    apply-network | revert-network | apply-system | cleanup-journal | cleanup-package-cache) WRITE=1 ;;
     *) WRITE=0 ;;
 esac
 case "${SELF_RUN}" in /*) SELF_OK=1 ;; *) SELF_OK=0 ;; esac
@@ -179,6 +180,71 @@ default_iface() {
         echo "${GOTHAM_HOSTCTL_IFACE}"; return
     fi
     ip -o route show default 2>/dev/null | sed -n 's/.* dev \([A-Za-z0-9_.:-]*\).*/\1/p' | head -n 1
+}
+
+# ---- cleanup probes --------------------------------------------------------
+# The two root-only cleanup categories this helper owns: the systemd journal
+# and the distribution package cache. `cleanup-status` only reads; the two
+# write verbs re-exec out of the service sandbox like the other root writes.
+
+# journal_supported: a real journald owns the journal, not just journalctl.
+journal_supported() {
+    command -v journalctl >/dev/null 2>&1 && active systemd-journald
+}
+
+# journal_bytes: current journal size from journalctl's human output, or from
+# du when a host has no readable journal. Empty when neither can tell.
+journal_bytes() {
+    if journal_supported; then
+        out="$(LC_ALL=C journalctl --disk-usage 2>/dev/null)" || out=""
+        bytes="$(printf '%s\n' "${out}" | awk '
+            {
+                for (i = 1; i <= NF; i++) {
+                    t = $i
+                    if (substr(t, length(t), 1) == "B") t = substr(t, 1, length(t) - 1)
+                    if (t ~ /^[0-9]+(\.[0-9]+)?$/) { printf "%.0f", t; exit }
+                    if (t ~ /^[0-9]+(\.[0-9]+)?[KMGT]$/) {
+                        n = substr(t, 1, length(t) - 1); u = substr(t, length(t), 1)
+                        m = (u == "K") ? 1024 : (u == "M") ? 1048576 : (u == "G") ? 1073741824 : 1099511627776
+                        printf "%.0f", n * m; exit
+                    }
+                }
+            }')"
+        [ -n "${bytes}" ] && { printf '%s' "${bytes}"; return 0; }
+    fi
+    du -sb "${ROOT}/var/log/journal" 2>/dev/null | awk '{ print $1; exit }'
+}
+
+# apt_cache_bytes: only the .deb files and the partial download directory,
+# which is exactly what `apt-get clean` removes.
+apt_cache_bytes() {
+    dir="${ROOT}/var/cache/apt/archives"
+    [ -d "${dir}" ] || { printf '0'; return 0; }
+    total=0
+    for path in "${dir}"/*.deb "${dir}/partial"; do
+        [ -e "${path}" ] || continue
+        bytes="$(du -sb "${path}" 2>/dev/null | awk '{ print $1; exit }')"
+        case "${bytes}" in "" | *[!0-9]*) bytes=0 ;; esac
+        total=$((total + bytes))
+    done
+    printf '%s' "${total}"
+}
+
+dnf_cache_bytes() {
+    du -sb "${ROOT}/var/cache/dnf" 2>/dev/null | awk '{ print $1; exit }'
+}
+
+# pkg_manager: apt or dnf, only when the tool and its cache directory exist.
+pkg_manager() {
+    if command -v apt-get >/dev/null 2>&1 && [ -d "${ROOT}/var/cache/apt" ]; then
+        printf 'apt'
+    elif command -v dnf >/dev/null 2>&1 && [ -d "${ROOT}/var/cache/dnf" ]; then
+        printf 'dnf'
+    fi
+}
+
+size_or_zero() {
+    case "${1:-}" in "" | *[!0-9]*) printf '0' ;; *) printf '%s' "$1" ;; esac
 }
 
 mkdir -p "${STATE}" 2>/dev/null
@@ -344,7 +410,7 @@ status)
     sys_ok && s=true
     hn="null"
     [ "${n}" = "true" ] && hn="$(host_network_json)"
-    printf '{"network":%s,"system":%s,"host_network":%s,"hostname":%s,"ntp_enabled":%s,"ntp_servers":[%s],"timezone":%s}\n' \
+    printf '{"network":%s,"system":%s,"host_network":%s,"hostname":%s,"ntp_enabled":%s,"ntp_servers":[%s],"timezone":%s,"cleanup":true}\n' \
         "${n}" "${s}" "${hn}" "$(jstr "$(host_name)")" "$(ntp_state)" \
         "$(jstrs "$(ntp_list)")" "$(jstr "$(current_tz)")"
     ;;
@@ -535,6 +601,52 @@ apply-system)
     run timedatectl set-ntp "${K_ntp_enabled}" || die "timedatectl failed"
     run systemctl restart systemd-timesyncd 2>/dev/null
     if [ -n "${K_timezone}" ]; then run timedatectl set-timezone "${K_timezone}" || die "timedatectl failed"; fi
+    ;;
+
+cleanup-status)
+    journal=false; jbytes=0
+    if journal_supported; then
+        journal=true; jbytes="$(journal_bytes)"
+    fi
+    pm="$(pkg_manager)"; pkg=false; pbytes=0
+    if [ -n "${pm}" ]; then
+        pkg=true
+        if [ "${pm}" = "apt" ]; then pbytes="$(apt_cache_bytes)"; else pbytes="$(dnf_cache_bytes)"; fi
+    fi
+    printf '{"journal":{"supported":%s,"bytes":%s},"package_cache":{"supported":%s,"manager":"%s","bytes":%s}}\n' \
+        "${journal}" "$(size_or_zero "${jbytes}")" "${pkg}" "${pm}" "$(size_or_zero "${pbytes}")"
+    ;;
+
+cleanup-journal)
+    journal_supported || die "unsupported" 3
+    K_min_age_seconds=""
+    read_kv "min_age_seconds"
+    case "${K_min_age_seconds}" in
+        "" | *[!0-9]*) die "invalid min_age_seconds" 2 ;;
+    esac
+    # Bound the digits so the arithmetic below stays inside the shell's range.
+    [ "${#K_min_age_seconds}" -le 10 ] || die "invalid min_age_seconds" 2
+    [ "${K_min_age_seconds}" -ge 86400 ] || K_min_age_seconds=86400
+    before="$(size_or_zero "$(journal_bytes)")"
+    run journalctl --vacuum-time="${K_min_age_seconds}s" >/dev/null || die "journalctl failed"
+    after="$(size_or_zero "$(journal_bytes)")"
+    printf '{"before":%s,"after":%s}\n' "${before}" "${after}"
+    ;;
+
+cleanup-package-cache)
+    pm="$(pkg_manager)"
+    [ -n "${pm}" ] || die "unsupported" 3
+    read_kv ""
+    if [ "${pm}" = "apt" ]; then
+        before="$(size_or_zero "$(apt_cache_bytes)")"
+        run apt-get clean >/dev/null || die "apt-get clean failed"
+        after="$(size_or_zero "$(apt_cache_bytes)")"
+    else
+        before="$(size_or_zero "$(dnf_cache_bytes)")"
+        run dnf clean packages >/dev/null || die "dnf clean failed"
+        after="$(size_or_zero "$(dnf_cache_bytes)")"
+    fi
+    printf '{"before":%s,"after":%s}\n' "${before}" "${after}"
     ;;
 
 *)

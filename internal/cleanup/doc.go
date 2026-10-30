@@ -1,6 +1,7 @@
-// Package cleanup scans nodes for reclaimable Docker objects and removes the
-// ones an operator selected. Categories are the stable keys the HTTP API and
-// the UI reuse.
+// Package cleanup scans nodes for reclaimable Docker objects and root-only
+// host data (the systemd journal and the package cache) and removes the ones
+// an operator selected. Categories are the stable keys the HTTP API and the UI
+// reuse.
 package cleanup
 
 const (
@@ -9,6 +10,8 @@ const (
 	CategoryStoppedContainers = "stopped_containers"
 	CategoryUnusedImages      = "unused_images"
 	CategoryOrphanedVolumes   = "orphaned_volumes"
+	CategoryJournal           = "journal"
+	CategoryPackageCache      = "package_cache"
 )
 
 const (
@@ -18,9 +21,11 @@ const (
 )
 
 const (
-	ReasonOffline     = "offline"
-	ReasonBusy        = "busy"
-	ReasonUnsupported = "unsupported"
+	ReasonOffline        = "offline"
+	ReasonBusy           = "busy"
+	ReasonUnsupported    = "unsupported"
+	ReasonHelperOutdated = "helper_outdated"
+	ReasonAgentOutdated  = "agent_outdated"
 )
 
 const (
@@ -37,5 +42,6 @@ const (
 	idImagePrefix     = "image:"
 	idContainerPrefix = "container:"
 	idVolumePrefix    = "volume:"
+	idHostPrefix      = "host:"
 	idBuildCache      = "build-cache"
 )

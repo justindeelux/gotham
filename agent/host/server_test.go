@@ -20,16 +20,20 @@ type call struct {
 }
 
 type fakeRunner struct {
-	mu    sync.Mutex
-	calls []call
-	out   string
-	err   error
+	mu      sync.Mutex
+	calls   []call
+	out     string
+	outputs map[string]string
+	err     error
 }
 
 func (r *fakeRunner) Run(_ context.Context, verb, stdin string) (string, error) {
 	r.mu.Lock()
 	r.calls = append(r.calls, call{verb: verb, stdin: stdin})
 	out, err := r.out, r.err
+	if text, ok := r.outputs[verb]; ok {
+		out = text
+	}
 	r.mu.Unlock()
 	return out, err
 }
@@ -253,6 +257,100 @@ func TestHelperReasonLineKeepsOnlyFixedDiagnostics(t *testing.T) {
 	long := "gotham-hostctl: " + strings.Repeat("x", 400)
 	if got := helperReasonLine(long); len(got) != 300 {
 		t.Fatalf("reason not bounded: %d", len(got))
+	}
+}
+
+func TestCleanupStatusReportsCategories(t *testing.T) {
+	dir := t.TempDir()
+	helper := filepath.Join(dir, "gotham-hostctl")
+	if err := os.WriteFile(helper, []byte("x"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	runner := &fakeRunner{outputs: map[string]string{
+		"status":         `{"network":true,"system":true,"timezone":"UTC","cleanup":true}`,
+		"cleanup-status": `{"journal":{"supported":true,"bytes":100},"package_cache":{"supported":true,"manager":"apt","bytes":50}}`,
+	}}
+	server := NewServer(WithHelper(helper), withRunner(runner))
+	response, err := server.CleanupStatus(context.Background(), &agentv1.HostCleanupStatusRequest{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if response.GetCapability() != agentv1.HostCapability_HOST_CAPABILITY_READY {
+		t.Fatalf("capability = %v, want ready", response.GetCapability())
+	}
+	if !response.GetJournal().GetSupported() || response.GetJournal().GetBytes() != 100 {
+		t.Fatalf("journal = %+v", response.GetJournal())
+	}
+	if !response.GetPackageCache().GetSupported() || response.GetPackageCache().GetManager() != "apt" ||
+		response.GetPackageCache().GetBytes() != 50 {
+		t.Fatalf("package cache = %+v", response.GetPackageCache())
+	}
+
+	// A helper that predates the cleanup verbs has no cleanup key in status.
+	old := &fakeRunner{out: `{"network":true,"system":true,"timezone":"UTC"}`}
+	response, err = NewServer(WithHelper(helper), withRunner(old)).CleanupStatus(
+		context.Background(), &agentv1.HostCleanupStatusRequest{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if response.GetCapability() != agentv1.HostCapability_HOST_CAPABILITY_HELPER_OUTDATED {
+		t.Fatalf("capability = %v, want helper outdated", response.GetCapability())
+	}
+	if old.count() != 1 {
+		t.Fatal("an outdated helper must not be asked for cleanup-status")
+	}
+
+	missing := NewServer(WithHelper(filepath.Join(dir, "absent")), withRunner(&fakeRunner{}))
+	response, err = missing.CleanupStatus(context.Background(), &agentv1.HostCleanupStatusRequest{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if response.GetCapability() != agentv1.HostCapability_HOST_CAPABILITY_HELPER_MISSING {
+		t.Fatalf("capability = %v, want helper missing", response.GetCapability())
+	}
+}
+
+func TestCleanupHostMapsCategoriesAndErrors(t *testing.T) {
+	runner := &fakeRunner{out: `{"before":100,"after":40}`}
+	server := NewServer(withRunner(runner))
+
+	result, err := server.CleanupHost(context.Background(), &agentv1.HostCleanupRequest{
+		Category: "journal", MinAgeSeconds: 3600,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if result.GetReclaimedBytes() != 60 {
+		t.Fatalf("reclaimed = %d, want 60", result.GetReclaimedBytes())
+	}
+	if last := runner.last(); last.verb != "cleanup-journal" || last.stdin != "min_age_seconds=3600\n" {
+		t.Fatalf("journal call = %q %q", last.verb, last.stdin)
+	}
+
+	result, err = server.CleanupHost(context.Background(), &agentv1.HostCleanupRequest{Category: "package_cache"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if result.GetReclaimedBytes() != 60 {
+		t.Fatalf("reclaimed = %d, want 60", result.GetReclaimedBytes())
+	}
+	if last := runner.last(); last.verb != "cleanup-package-cache" || last.stdin != "" {
+		t.Fatalf("package cache call = %q %q", last.verb, last.stdin)
+	}
+
+	if _, err := server.CleanupHost(context.Background(), &agentv1.HostCleanupRequest{Category: "other"}); status.Code(err) != codes.InvalidArgument {
+		t.Fatalf("unknown category = %v, want InvalidArgument", err)
+	}
+
+	unsupported := NewServer(withRunner(&fakeRunner{err: &runError{verb: "cleanup-journal", code: 3}}))
+	_, err = unsupported.CleanupHost(context.Background(), &agentv1.HostCleanupRequest{Category: "journal"})
+	if status.Code(err) != codes.FailedPrecondition || status.Convert(err).Message() != "unsupported" {
+		t.Fatalf("unsupported = %v/%q, want FailedPrecondition unsupported", status.Code(err), status.Convert(err).Message())
+	}
+
+	broken := NewServer(withRunner(&fakeRunner{out: "not json"}))
+	if _, err := broken.CleanupHost(context.Background(), &agentv1.HostCleanupRequest{Category: "journal"}); status.Code(err) != codes.Internal {
+		t.Fatalf("unreadable result = %v, want Internal", err)
 	}
 }
 

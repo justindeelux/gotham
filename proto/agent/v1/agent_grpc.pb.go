@@ -3046,6 +3046,8 @@ const (
 	HostService_ConfirmNetwork_FullMethodName = "/agent.v1.HostService/ConfirmNetwork"
 	HostService_RevertNetwork_FullMethodName  = "/agent.v1.HostService/RevertNetwork"
 	HostService_ApplySystem_FullMethodName    = "/agent.v1.HostService/ApplySystem"
+	HostService_CleanupStatus_FullMethodName  = "/agent.v1.HostService/CleanupStatus"
+	HostService_CleanupHost_FullMethodName    = "/agent.v1.HostService/CleanupHost"
 )
 
 // HostServiceClient is the client API for HostService service.
@@ -3074,6 +3076,12 @@ type HostServiceClient interface {
 	// ApplySystem applies the hostname, NTP and timezone. An empty hostname or
 	// timezone leaves that value unchanged.
 	ApplySystem(ctx context.Context, in *HostApplySystemRequest, opts ...grpc.CallOption) (*HostApplySystemResponse, error)
+	// CleanupStatus reports which root-only cleanup categories this host
+	// supports and how many bytes each currently holds.
+	CleanupStatus(ctx context.Context, in *HostCleanupStatusRequest, opts ...grpc.CallOption) (*HostCleanupStatus, error)
+	// CleanupHost reclaims one root-only cleanup category (the systemd journal
+	// or the package cache) and reports the size it released.
+	CleanupHost(ctx context.Context, in *HostCleanupRequest, opts ...grpc.CallOption) (*HostCleanupResult, error)
 }
 
 type hostServiceClient struct {
@@ -3134,6 +3142,26 @@ func (c *hostServiceClient) ApplySystem(ctx context.Context, in *HostApplySystem
 	return out, nil
 }
 
+func (c *hostServiceClient) CleanupStatus(ctx context.Context, in *HostCleanupStatusRequest, opts ...grpc.CallOption) (*HostCleanupStatus, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	out := new(HostCleanupStatus)
+	err := c.cc.Invoke(ctx, HostService_CleanupStatus_FullMethodName, in, out, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
+func (c *hostServiceClient) CleanupHost(ctx context.Context, in *HostCleanupRequest, opts ...grpc.CallOption) (*HostCleanupResult, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	out := new(HostCleanupResult)
+	err := c.cc.Invoke(ctx, HostService_CleanupHost_FullMethodName, in, out, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
 // HostServiceServer is the server API for HostService service.
 // All implementations must embed UnimplementedHostServiceServer
 // for forward compatibility.
@@ -3160,6 +3188,12 @@ type HostServiceServer interface {
 	// ApplySystem applies the hostname, NTP and timezone. An empty hostname or
 	// timezone leaves that value unchanged.
 	ApplySystem(context.Context, *HostApplySystemRequest) (*HostApplySystemResponse, error)
+	// CleanupStatus reports which root-only cleanup categories this host
+	// supports and how many bytes each currently holds.
+	CleanupStatus(context.Context, *HostCleanupStatusRequest) (*HostCleanupStatus, error)
+	// CleanupHost reclaims one root-only cleanup category (the systemd journal
+	// or the package cache) and reports the size it released.
+	CleanupHost(context.Context, *HostCleanupRequest) (*HostCleanupResult, error)
 	mustEmbedUnimplementedHostServiceServer()
 }
 
@@ -3184,6 +3218,12 @@ func (UnimplementedHostServiceServer) RevertNetwork(context.Context, *HostRevert
 }
 func (UnimplementedHostServiceServer) ApplySystem(context.Context, *HostApplySystemRequest) (*HostApplySystemResponse, error) {
 	return nil, status.Error(codes.Unimplemented, "method ApplySystem not implemented")
+}
+func (UnimplementedHostServiceServer) CleanupStatus(context.Context, *HostCleanupStatusRequest) (*HostCleanupStatus, error) {
+	return nil, status.Error(codes.Unimplemented, "method CleanupStatus not implemented")
+}
+func (UnimplementedHostServiceServer) CleanupHost(context.Context, *HostCleanupRequest) (*HostCleanupResult, error) {
+	return nil, status.Error(codes.Unimplemented, "method CleanupHost not implemented")
 }
 func (UnimplementedHostServiceServer) mustEmbedUnimplementedHostServiceServer() {}
 func (UnimplementedHostServiceServer) testEmbeddedByValue()                     {}
@@ -3296,6 +3336,42 @@ func _HostService_ApplySystem_Handler(srv interface{}, ctx context.Context, dec 
 	return interceptor(ctx, in, info, handler)
 }
 
+func _HostService_CleanupStatus_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(HostCleanupStatusRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(HostServiceServer).CleanupStatus(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: HostService_CleanupStatus_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(HostServiceServer).CleanupStatus(ctx, req.(*HostCleanupStatusRequest))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
+func _HostService_CleanupHost_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(HostCleanupRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(HostServiceServer).CleanupHost(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: HostService_CleanupHost_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(HostServiceServer).CleanupHost(ctx, req.(*HostCleanupRequest))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
 // HostService_ServiceDesc is the grpc.ServiceDesc for HostService service.
 // It's only intended for direct use with grpc.RegisterService,
 // and not to be introspected or modified (even as a copy)
@@ -3322,6 +3398,14 @@ var HostService_ServiceDesc = grpc.ServiceDesc{
 		{
 			MethodName: "ApplySystem",
 			Handler:    _HostService_ApplySystem_Handler,
+		},
+		{
+			MethodName: "CleanupStatus",
+			Handler:    _HostService_CleanupStatus_Handler,
+		},
+		{
+			MethodName: "CleanupHost",
+			Handler:    _HostService_CleanupHost_Handler,
 		},
 	},
 	Streams:  []grpc.StreamDesc{},

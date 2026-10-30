@@ -32,6 +32,11 @@ type fakeHost struct {
 	reverts    int
 	dnsOnlys   []bool
 	lastSystem System
+
+	cleanupStatus HostCleanupStatus
+	cleanupErr    error
+	reclaimed     int64
+	cleaned       []string
 }
 
 func (h *fakeHost) Status(context.Context) (HostStatus, error) {
@@ -61,6 +66,15 @@ func (h *fakeHost) RevertNetwork(context.Context) error  { h.reverts++; return n
 func (h *fakeHost) ApplySystem(_ context.Context, in System) error {
 	h.lastSystem = in
 	return h.applyErr
+}
+
+func (h *fakeHost) CleanupStatus(context.Context) (HostCleanupStatus, error) {
+	return h.cleanupStatus, h.cleanupErr
+}
+
+func (h *fakeHost) CleanupHost(_ context.Context, category string, _ time.Duration) (int64, error) {
+	h.cleaned = append(h.cleaned, category)
+	return h.reclaimed, h.cleanupErr
 }
 
 type fakeNodeRepo struct {

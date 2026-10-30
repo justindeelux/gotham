@@ -87,6 +87,22 @@ func (f *fakeVolumes) RemoveOrphanedVolume(_ context.Context, _ uuid.UUID, name 
 	return nil
 }
 
+type fakeHost struct {
+	status    HostCleanupStatus
+	err       error
+	reclaimed int64
+	cleaned   []string
+}
+
+func (f *fakeHost) CleanupStatus(context.Context, uuid.UUID) (HostCleanupStatus, error) {
+	return f.status, f.err
+}
+
+func (f *fakeHost) CleanupHost(_ context.Context, _ uuid.UUID, category string, _ time.Duration) (int64, error) {
+	f.cleaned = append(f.cleaned, category)
+	return f.reclaimed, f.err
+}
+
 type fakeStore struct {
 	active  int64
 	err     error
@@ -122,6 +138,145 @@ func testService(t *testing.T, agent *fakeAgent, volumes containers.VolumeServic
 		Timeout: 5 * time.Second,
 	})
 	return svc, server.ID
+}
+
+func testHostService(t *testing.T, host HostCleaner, st Store) (*Service, uuid.UUID) {
+	t.Helper()
+	server := &servers.Server{ID: uuid.New(), Name: "node", Status: servers.StatusReady}
+	svc := NewService(Config{
+		Registry: &fakeRegistry{server: server},
+		Dial: func(context.Context, *servers.Server) (DockerClient, error) {
+			return &fakeAgent{}, nil
+		},
+		Host:    host,
+		Store:   st,
+		Timeout: 5 * time.Second,
+	})
+	return svc, server.ID
+}
+
+func TestScanAddsHostCategories(t *testing.T) {
+	host := &fakeHost{status: HostCleanupStatus{
+		Journal:      HostCleanupCategory{Supported: true, Bytes: 100},
+		PackageCache: HostCleanupCategory{Supported: true, Manager: "apt", Bytes: 50},
+	}}
+	svc, serverID := testHostService(t, host, &fakeStore{})
+
+	scans := svc.Scan(context.Background(), []string{serverID.String()}, 0)
+	if len(scans) != 1 || scans[0].Status != StatusOK || len(scans[0].Notices) != 0 {
+		t.Fatalf("scan = %+v; want one ok host scan without notices", scans)
+	}
+	byCategory := map[string]Item{}
+	for _, item := range scans[0].Items {
+		byCategory[item.Category] = item
+	}
+	if byCategory[CategoryJournal].SizeBytes != 100 || byCategory[CategoryJournal].ID != "host:journal" {
+		t.Fatalf("journal item = %+v", byCategory[CategoryJournal])
+	}
+	if byCategory[CategoryPackageCache].SizeBytes != 50 || byCategory[CategoryPackageCache].ID != "host:package_cache" {
+		t.Fatalf("package cache item = %+v", byCategory[CategoryPackageCache])
+	}
+}
+
+func TestScanEmitsHostNotices(t *testing.T) {
+	host := &fakeHost{status: HostCleanupStatus{
+		Journal:      HostCleanupCategory{Supported: false},
+		PackageCache: HostCleanupCategory{Supported: true, Bytes: 0},
+	}}
+	svc, serverID := testHostService(t, host, &fakeStore{})
+
+	scans := svc.Scan(context.Background(), []string{serverID.String()}, 0)
+	if len(scans) != 1 || scans[0].Status != StatusOK {
+		t.Fatalf("scan = %+v; the node must stay ok", scans)
+	}
+	if len(scans[0].Items) != 0 {
+		t.Fatalf("items = %+v; an empty cache is not offered", scans[0].Items)
+	}
+	if len(scans[0].Notices) != 1 || scans[0].Notices[0].Category != CategoryJournal ||
+		scans[0].Notices[0].Reason != ReasonUnsupported {
+		t.Fatalf("notices = %+v; want one unsupported journal notice", scans[0].Notices)
+	}
+
+	for err, reason := range map[error]string{
+		ErrHostHelperOutdated: ReasonHelperOutdated,
+		ErrHostAgentOutdated:  ReasonAgentOutdated,
+		ErrHostUnsupported:    ReasonUnsupported,
+	} {
+		noticed := &fakeHost{err: err}
+		svc, serverID := testHostService(t, noticed, &fakeStore{})
+		scans := svc.Scan(context.Background(), []string{serverID.String()}, 0)
+		if len(scans) != 1 || scans[0].Status != StatusOK || len(scans[0].Notices) != 2 {
+			t.Fatalf("%v: scan = %+v; want two notices on an ok node", err, scans)
+		}
+		for _, notice := range scans[0].Notices {
+			if notice.Reason != reason {
+				t.Fatalf("%v: notice = %+v; want reason %s", err, notice, reason)
+			}
+		}
+	}
+}
+
+func TestCleanRoutesHostCategoriesAndRecordsRun(t *testing.T) {
+	host := &fakeHost{reclaimed: 40}
+	st := &fakeStore{}
+	svc, serverID := testHostService(t, host, st)
+
+	result := svc.Clean(context.Background(), uuid.New(), TriggerSchedule, serverID.String(),
+		[]string{"host:journal", "host:package_cache"}, 0)
+	if result.Status != StatusOK || len(result.Items) != 2 {
+		t.Fatalf("clean = %+v; want two results", result)
+	}
+	for _, item := range result.Items {
+		if item.Status != statusRemoved || item.ReclaimedBytes != 40 {
+			t.Fatalf("item = %+v; want removed with 40 reclaimed", item)
+		}
+	}
+	if len(host.cleaned) != 2 || host.cleaned[0] != CategoryJournal || host.cleaned[1] != CategoryPackageCache {
+		t.Fatalf("cleaned = %v; want both host categories", host.cleaned)
+	}
+	if len(st.runs) != 1 || st.runs[0].ReclaimedBytes != 80 || st.runs[0].Trigger != TriggerSchedule {
+		t.Fatalf("runs = %+v; want one recorded schedule run with 80 bytes", st.runs)
+	}
+}
+
+func TestCleanSkipsUnavailableHostCategories(t *testing.T) {
+	cases := map[error]string{
+		ErrHostUnsupported:    "unsupported",
+		ErrHostHelperOutdated: "helper outdated",
+		ErrHostAgentOutdated:  "agent outdated",
+	}
+	for err, message := range cases {
+		host := &fakeHost{err: err}
+		st := &fakeStore{}
+		svc, serverID := testHostService(t, host, st)
+
+		result := svc.Clean(context.Background(), uuid.New(), TriggerManual, serverID.String(),
+			[]string{"host:journal"}, 0)
+		if result.Status != StatusOK || len(result.Items) != 1 {
+			t.Fatalf("%v: clean = %+v", err, result)
+		}
+		if item := result.Items[0]; item.Status != StatusSkipped || item.Message != message {
+			t.Fatalf("%v: item = %+v; want skipped %q", err, item, message)
+		}
+		if len(st.runs) != 1 || len(st.items[0]) != 1 {
+			t.Fatalf("%v: the skipped attempt must be recorded", err)
+		}
+	}
+}
+
+func TestHostFeatureAbsentWhenNoCleaner(t *testing.T) {
+	svc, serverID := testService(t, &fakeAgent{}, nil, &fakeStore{})
+
+	scans := svc.Scan(context.Background(), []string{serverID.String()}, 0)
+	if len(scans) != 1 || len(scans[0].Items) != 0 || len(scans[0].Notices) != 0 {
+		t.Fatalf("scan = %+v; nil host cleaner must offer nothing", scans)
+	}
+	result := svc.Clean(context.Background(), uuid.New(), TriggerManual, serverID.String(),
+		[]string{"host:journal"}, 0)
+	if len(result.Items) != 1 || result.Items[0].Status != StatusSkipped ||
+		result.Items[0].Message != ReasonUnsupported {
+		t.Fatalf("clean = %+v; want a skipped unsupported item", result)
+	}
 }
 
 func TestScanReportsOfflineAsSkipped(t *testing.T) {

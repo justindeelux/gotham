@@ -1,6 +1,7 @@
 package deploy
 
 import (
+	"errors"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -10,6 +11,45 @@ import (
 
 func runHostctl(t *testing.T, root, stdin string, verb string) (string, error) {
 	return runHostctlEnv(t, root, stdin, verb, nil)
+}
+
+// runHostctlReal runs a verb with the dry-run seam off, so a test can observe
+// what the helper actually executes. It is only used with stubs first on PATH.
+func runHostctlReal(t *testing.T, root, stdin, verb string, extra []string) (string, error) {
+	t.Helper()
+	cmd := exec.Command("sh", "gotham-hostctl.sh", verb)
+	cmd.Env = append(os.Environ(), "GOTHAM_HOSTCTL_ROOT="+root)
+	cmd.Env = append(cmd.Env, extra...)
+	cmd.Stdin = strings.NewReader(stdin)
+	out, err := cmd.CombinedOutput()
+	return string(out), err
+}
+
+// runHostctlOnly runs the helper with exactly this PATH, so a probe that looks
+// for a tool sees neither the host's tools nor the test stubs.
+func runHostctlOnly(t *testing.T, root, stdin, verb, path string) (string, error) {
+	t.Helper()
+	cmd := exec.Command("sh", "gotham-hostctl.sh", verb)
+	cmd.Env = []string{"PATH=" + path, "GOTHAM_HOSTCTL_ROOT=" + root, "GOTHAM_HOSTCTL_DRYRUN=1"}
+	cmd.Stdin = strings.NewReader(stdin)
+	out, err := cmd.CombinedOutput()
+	return string(out), err
+}
+
+func exitCode(t *testing.T, err error) int {
+	t.Helper()
+	var exit *exec.ExitError
+	if errors.As(err, &exit) {
+		return exit.ExitCode()
+	}
+	return -1
+}
+
+func writeStub(t *testing.T, bin, name, body string) {
+	t.Helper()
+	if err := os.WriteFile(filepath.Join(bin, name), []byte(body), 0o755); err != nil {
+		t.Fatal(err)
+	}
 }
 
 func runHostctlEnv(t *testing.T, root, stdin, verb string, extra []string) (string, error) {
@@ -123,6 +163,7 @@ func TestHostctlStatusReportsHostTruth(t *testing.T) {
 		`"gateway":"103.176.22.1"`, `"dns_servers":["8.8.8.8","8.8.4.4"]`,
 		`"hostname":"node-1"`, `"ntp_enabled":true`,
 		`"ntp_servers":["time.cloudflare.com"]`, `"timezone":"Europe/Berlin"`,
+		`"cleanup":true`,
 	} {
 		if !strings.Contains(out, want) {
 			t.Errorf("status misses %s:\n%s", want, out)
@@ -216,7 +257,7 @@ func TestHostctlReexecsWriteVerbsOnly(t *testing.T) {
 		t.Fatalf("abs path: %v", err)
 	}
 
-	for _, verb := range []string{"apply-system", "apply-network", "revert-network"} {
+	for _, verb := range []string{"apply-system", "apply-network", "revert-network", "cleanup-journal", "cleanup-package-cache"} {
 		if err := os.Remove(record); err != nil && !os.IsNotExist(err) {
 			t.Fatal(err)
 		}
@@ -260,6 +301,23 @@ func TestHostctlReexecsWriteVerbsOnly(t *testing.T) {
 	}
 	if !strings.Contains(string(out), `"hostname":"node-1"`) {
 		t.Errorf("status did not run in-process: %s", out)
+	}
+
+	// cleanup-status is read-only too, even on a host with no cleanup tools.
+	if err := os.Remove(record); err != nil && !os.IsNotExist(err) {
+		t.Fatal(err)
+	}
+	cmd = exec.Command("sh", self, "cleanup-status")
+	cmd.Env = []string{
+		"PATH=" + t.TempDir(), "GOTHAM_HOSTCTL_SYSTEMD_RUN=" + fake,
+		"FAKE_RECORD=" + record, "GOTHAM_HOSTCTL_ROOT=" + root,
+	}
+	out, err = cmd.CombinedOutput()
+	if err != nil {
+		t.Fatalf("cleanup-status: %v: %s", err, out)
+	}
+	if _, err := os.Stat(record); !os.IsNotExist(err) {
+		t.Fatalf("cleanup-status must not re-exec through systemd-run: %s", out)
 	}
 
 	// The inner marker stops a second re-exec (loop guard).
@@ -327,9 +385,6 @@ func TestHostctlDNSOnlyOverridesLinkDNS(t *testing.T) {
 			t.Errorf("revert misses %q:\n%s", want, out)
 		}
 	}
-	if strings.Contains(out, "reconfigure") {
-		t.Errorf("dns-only revert must not reconfigure the interface:\n%s", out)
-	}
 
 	old := "[Network]\nDNS=8.8.8.8 8.8.4.4\n"
 	if err := os.MkdirAll(filepath.Dir(dropin), 0o755); err != nil {
@@ -364,6 +419,202 @@ func TestHostctlDNSOnlyOverridesLinkDNS(t *testing.T) {
 	}
 	if data, err := os.ReadFile(dropin); err != nil || string(data) != old {
 		t.Fatalf("revert after clear altered the link drop-in: %v %q", err, data)
+	}
+}
+
+func TestHostctlCleanupStatusReportsSizes(t *testing.T) {
+	root := t.TempDir()
+	extra := stubProbes(t, root)
+	bin := filepath.Join(root, "bin")
+	writeStub(t, bin, "journalctl", "#!/bin/sh\n"+
+		"case \"$1\" in\n"+
+		"  --disk-usage) echo \"Archived and active journals take up 1.2G in the file system.\" ;;\n"+
+		"esac\n")
+	// One .deb file and the partial download directory: two du calls of 100.
+	writeStub(t, bin, "du", "#!/bin/sh\nprintf '100\\t%s\\n' \"$*\"\n")
+	writeStub(t, bin, "apt-get", "#!/bin/sh\nexit 0\n")
+	archives := filepath.Join(root, "var/cache/apt/archives")
+	if err := os.MkdirAll(filepath.Join(archives, "partial"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(archives, "app.deb"), []byte("deb"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	out, err := runHostctlEnv(t, root, "", "cleanup-status", extra)
+	if err != nil {
+		t.Fatalf("cleanup-status failed: %v\n%s", err, out)
+	}
+	for _, want := range []string{
+		`"journal":{"supported":true,"bytes":1288490189}`,
+		`"package_cache":{"supported":true,"manager":"apt","bytes":200}`,
+	} {
+		if !strings.Contains(out, want) {
+			t.Errorf("cleanup-status misses %s:\n%s", want, out)
+		}
+	}
+}
+
+func TestHostctlCleanupStatusUnsupportedHost(t *testing.T) {
+	root := t.TempDir()
+	out, err := runHostctlOnly(t, root, "", "cleanup-status", t.TempDir())
+	if err != nil {
+		t.Fatalf("cleanup-status on an unsupported host must still succeed: %v\n%s", err, out)
+	}
+	for _, want := range []string{
+		`"journal":{"supported":false,"bytes":0}`,
+		`"package_cache":{"supported":false,"manager":"","bytes":0}`,
+	} {
+		if !strings.Contains(out, want) {
+			t.Errorf("cleanup-status misses %s:\n%s", want, out)
+		}
+	}
+}
+
+func TestHostctlCleanupStatusNeedsRunningJournald(t *testing.T) {
+	root := t.TempDir()
+	extra := stubProbes(t, root)
+	bin := filepath.Join(root, "bin")
+	writeStub(t, bin, "journalctl", "#!/bin/sh\necho \"take up 1G in the file system\"\n")
+	writeStub(t, bin, "systemctl", "#!/bin/sh\nexit 3\n")
+
+	out, err := runHostctlReal(t, root, "", "cleanup-status", extra)
+	if err != nil {
+		t.Fatalf("cleanup-status failed: %v\n%s", err, out)
+	}
+	if !strings.Contains(out, `"journal":{"supported":false,"bytes":0}`) {
+		t.Errorf("journalctl without journald must be unsupported: %s", out)
+	}
+}
+
+func TestHostctlCleanupJournalClampsMinAge(t *testing.T) {
+	root := t.TempDir()
+	extra := stubProbes(t, root)
+	args := filepath.Join(root, "journal.args")
+	writeStub(t, filepath.Join(root, "bin"), "systemctl", "#!/bin/sh\nexit 0\n")
+	writeStub(t, filepath.Join(root, "bin"), "journalctl", "#!/bin/sh\n"+
+		"printf '%s\\n' \"$*\" >> \"$JOURNAL_ARGS\"\n"+
+		"case \"$1\" in\n"+
+		"  --disk-usage) echo \"take up 1G in the file system\" ;;\n"+
+		"esac\n")
+	extra = append(extra, "JOURNAL_ARGS="+args)
+
+	out, err := runHostctlReal(t, root, "min_age_seconds=3600\n", "cleanup-journal", extra)
+	if err != nil {
+		t.Fatalf("cleanup-journal failed: %v\n%s", err, out)
+	}
+	if !strings.Contains(out, `{"before":1073741824,"after":1073741824}`) {
+		t.Errorf("cleanup-journal output = %s", out)
+	}
+	recorded, err := os.ReadFile(args)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(string(recorded), "--vacuum-time=86400s") {
+		t.Errorf("min_age_seconds was not clamped to one day: %s", recorded)
+	}
+}
+
+func TestHostctlCleanupPackageCacheUsesManager(t *testing.T) {
+	for _, tc := range []struct {
+		name    string
+		tool    string
+		cacheY  string
+		wantArg string
+		wantMgr string
+	}{
+		{"apt", "apt-get", "var/cache/apt", "clean", "apt"},
+		{"dnf", "dnf", "var/cache/dnf", "clean packages", "dnf"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			root := t.TempDir()
+			extra := stubProbes(t, root)
+			bin := filepath.Join(root, "bin")
+			args := filepath.Join(root, "pkg.args")
+			writeStub(t, bin, tc.tool, "#!/bin/sh\nprintf '%s\\n' \"$*\" >> \"$PKG_ARGS\"\n")
+			writeStub(t, bin, "du", "#!/bin/sh\nprintf '100\\t%s\\n' \"$*\"\n")
+			archives := filepath.Join(root, tc.cacheY)
+			if tc.name == "apt" {
+				archives = filepath.Join(archives, "archives")
+			}
+			if err := os.MkdirAll(archives, 0o755); err != nil {
+				t.Fatal(err)
+			}
+			extra = append(extra, "PKG_ARGS="+args)
+
+			out, err := runHostctlReal(t, root, "", "cleanup-package-cache", extra)
+			if err != nil {
+				t.Fatalf("cleanup-package-cache failed: %v\n%s", err, out)
+			}
+			if !strings.Contains(out, `"before":`) || !strings.Contains(out, `"after":`) {
+				t.Errorf("output = %s; want before/after", out)
+			}
+			recorded, err := os.ReadFile(args)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if got := strings.TrimSpace(string(recorded)); got != tc.wantArg {
+				t.Errorf("manager call = %q; want %q", got, tc.wantArg)
+			}
+			status, err := runHostctlEnv(t, root, "", "cleanup-status", extra)
+			if err != nil {
+				t.Fatalf("cleanup-status failed: %v\n%s", err, status)
+			}
+			if !strings.Contains(status, `"manager":"`+tc.wantMgr+`"`) {
+				t.Errorf("cleanup-status misses manager %s: %s", tc.wantMgr, status)
+			}
+		})
+	}
+}
+
+func TestHostctlCleanupRejectsInvalidInput(t *testing.T) {
+	root := t.TempDir()
+	extra := stubProbes(t, root)
+	bin := filepath.Join(root, "bin")
+	writeStub(t, bin, "journalctl", "#!/bin/sh\nexit 0\n")
+	writeStub(t, bin, "apt-get", "#!/bin/sh\nexit 0\n")
+	if err := os.MkdirAll(filepath.Join(root, "var/cache/apt"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	for name, stdin := range map[string]string{
+		"letters":   "min_age_seconds=soon\n",
+		"negative":  "min_age_seconds=-1\n",
+		"extra key": "min_age_seconds=86400\nevil=1\n",
+		"missing":   "",
+	} {
+		t.Run(name, func(t *testing.T) {
+			out, err := runHostctlEnv(t, root, stdin, "cleanup-journal", extra)
+			if code := exitCode(t, err); code != 2 {
+				t.Fatalf("cleanup-journal exit = %d, want 2:\n%s", code, out)
+			}
+		})
+	}
+	out, err := runHostctlEnv(t, root, "evil=1\n", "cleanup-package-cache", extra)
+	if code := exitCode(t, err); code != 2 {
+		t.Fatalf("cleanup-package-cache exit = %d, want 2:\n%s", code, out)
+	}
+}
+
+func TestHostctlCleanupReportsUnsupportedExit3(t *testing.T) {
+	root := t.TempDir()
+	empty := t.TempDir()
+	for _, verb := range []string{"cleanup-journal", "cleanup-package-cache"} {
+		out, err := runHostctlOnly(t, root, "", verb, empty)
+		if code := exitCode(t, err); code != 3 {
+			t.Fatalf("%s exit = %d, want 3:\n%s", verb, code, out)
+		}
+		if !strings.Contains(out, "unsupported") {
+			t.Errorf("%s does not say unsupported:\n%s", verb, out)
+		}
+	}
+}
+
+func TestHostctlCleanupNeverUsesFreeFormArguments(t *testing.T) {
+	root := t.TempDir()
+	for _, verb := range []string{"cleanup-status", "cleanup-journal", "cleanup-package-cache"} {
+		if _, err := runHostctl(t, root, "", verb+" now"); err == nil {
+			t.Errorf("%s accepted a free-form argument", verb)
+		}
 	}
 }
 

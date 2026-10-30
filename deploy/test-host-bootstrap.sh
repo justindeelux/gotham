@@ -68,20 +68,20 @@ grep -q "gotham ALL=(root)" "${SCRATCH}/root-custom/etc/sudoers.d/gotham-hostctl
 pass "a custom control-plane user is used instead of the default"
 
 # ---- create-agent adds the node agent grantee without dropping the CP one ---
-# The agent gets exactly the five host-control verbs; the pinned tool-installer
+# The agent gets exactly the fixed host-control verbs; the pinned tool-installer
 # repair verb stays with the control-plane user.
 ROOTA="$(root_for "${SCRATCH}/root-agent")"
 GOTHAM_HOST_BOOTSTRAP_ROOT="${ROOTA}" sh "${BOOTSTRAP}" create-agent gotham-agent v9.0.0 >/dev/null
 DROPIN_A="${ROOTA}/etc/sudoers.d/gotham-hostctl"
-[ "$(grep -c '^gotham-agent ALL=(root) NOPASSWD: /usr/libexec/gotham/gotham-hostctl ' "${DROPIN_A}")" = "5" ] \
-    || fail "the agent drop-in does not carry exactly the five host-control verbs"
+[ "$(grep -c '^gotham-agent ALL=(root) NOPASSWD: /usr/libexec/gotham/gotham-hostctl ' "${DROPIN_A}")" = "8" ] \
+    || fail "the agent drop-in does not carry exactly the eight host-control verbs"
 grep -q '^gotham-agent ALL=(root) NOPASSWD: /usr/libexec/gotham/gotham-toolctl' "${DROPIN_A}" \
     && fail "the agent must not get the tool-installer repair verb"
 [ -f "${ROOTA}/usr/libexec/gotham/hostbootstrap/cp-user" ] \
     && fail "an agent-only install must not record a control-plane user"
 grep -qx 'gotham-agent' "${ROOTA}/usr/libexec/gotham/hostbootstrap/agent-user" \
     || fail "create-agent did not record the agent user"
-pass "create-agent installs the helper with exactly five verbs and no repair grant"
+pass "create-agent installs the helper with exactly the fixed verbs and no repair grant"
 
 # Control-plane machine: both users keep their own rules, in either order.
 ROOTB="$(root_for "${SCRATCH}/root-both")"
@@ -89,7 +89,7 @@ GOTHAM_HOST_BOOTSTRAP_ROOT="${ROOTB}" sh "${BOOTSTRAP}" create alice v9.0.0 >/de
 GOTHAM_HOST_BOOTSTRAP_ROOT="${ROOTB}" sh "${BOOTSTRAP}" create-agent gotham-agent v9.0.0 >/dev/null
 DROPIN_B="${ROOTB}/etc/sudoers.d/gotham-hostctl"
 for user in alice gotham-agent; do
-    [ "$(grep -c "^${user} ALL=(root) NOPASSWD: /usr/libexec/gotham/gotham-hostctl " "${DROPIN_B}")" = "5" ] \
+    [ "$(grep -c "^${user} ALL=(root) NOPASSWD: /usr/libexec/gotham/gotham-hostctl " "${DROPIN_B}")" = "8" ] \
         || fail "${user} lost a host-control verb when both users were installed"
 done
 [ "$(grep -c 'gotham-toolctl install-tool gotham-hostctl' "${DROPIN_B}")" = "1" ] \
@@ -111,7 +111,7 @@ ROOTC="$(root_for "${SCRATCH}/root-prerecord")"
 LEGACY_PAYLOAD="${ROOTC}/usr/libexec/gotham/hostbootstrap"
 mkdir -p "${LEGACY_PAYLOAD}"
 {
-    for verb in status apply-network confirm-network revert-network apply-system; do
+    for verb in status apply-network confirm-network revert-network apply-system cleanup-status cleanup-journal cleanup-package-cache; do
         echo "legacycp ALL=(root) NOPASSWD: /usr/libexec/gotham/gotham-hostctl ${verb}"
     done
     echo "legacycp ALL=(root) NOPASSWD: /usr/libexec/gotham/gotham-toolctl install-tool gotham-hostctl"
@@ -119,11 +119,11 @@ mkdir -p "${LEGACY_PAYLOAD}"
 GOTHAM_HOST_BOOTSTRAP_ROOT="${ROOTC}" sh "${BOOTSTRAP}" create-agent gotham-agent v9.0.0 >/dev/null \
     || fail "create-agent failed on a payload that predates the cp-user record"
 DROPIN_C="${ROOTC}/etc/sudoers.d/gotham-hostctl"
-[ "$(grep -c '^legacycp ALL=(root) NOPASSWD: /usr/libexec/gotham/gotham-hostctl ' "${DROPIN_C}")" = "5" ] \
+[ "$(grep -c '^legacycp ALL=(root) NOPASSWD: /usr/libexec/gotham/gotham-hostctl ' "${DROPIN_C}")" = "8" ] \
     || fail "create-agent dropped the pre-record control-plane grantee"
 grep -q '^legacycp ALL=(root) NOPASSWD: /usr/libexec/gotham/gotham-toolctl install-tool gotham-hostctl$' "${DROPIN_C}" \
     || fail "create-agent dropped the pre-record control-plane repair verb"
-[ "$(grep -c '^gotham-agent ALL=(root) NOPASSWD: /usr/libexec/gotham/gotham-hostctl ' "${DROPIN_C}")" = "5" ] \
+[ "$(grep -c '^gotham-agent ALL=(root) NOPASSWD: /usr/libexec/gotham/gotham-hostctl ' "${DROPIN_C}")" = "8" ] \
     || fail "create-agent did not grant the agent on a pre-record payload"
 pass "create-agent keeps a pre-record control-plane grantee"
 

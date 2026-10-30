@@ -26,6 +26,8 @@ type cleanupFake struct {
 	removedImages      []string
 	imageDeleteQueries []string
 	imageDeleteStatus  int
+	imageTags          map[string][]string
+	imageInUse         map[string]bool
 	removedContainers  []string
 	containerQueries   []string
 	pruneFilters       string
@@ -58,6 +60,10 @@ func (f *cleanupFake) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 			_, _ = w.Write([]byte(`{"message":"conflict: image is being used by stopped container c1"}`))
 			return
 		}
+		if f.imageTags != nil {
+			f.serveTaggedImageDelete(w, strings.TrimPrefix(r.URL.Path, "/images/"))
+			return
+		}
 		_, _ = w.Write([]byte(`[{"Deleted":"sha256:removed"}]`))
 	case r.Method == http.MethodDelete && strings.HasPrefix(r.URL.Path, "/containers/"):
 		f.removedContainers = append(f.removedContainers, r.URL.Path)
@@ -79,6 +85,57 @@ func (f *cleanupFake) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	default:
 		http.NotFound(w, r)
 	}
+}
+
+// serveTaggedImageDelete models the engine: an id delete is refused while the
+// image keeps tags, and deleting the last tag removes the image.
+func (f *cleanupFake) serveTaggedImageDelete(w http.ResponseWriter, ref string) {
+	id, ok := f.imageIDForRef(ref)
+	if !ok {
+		w.WriteHeader(http.StatusNotFound)
+		return
+	}
+	if f.imageInUse[id] {
+		w.WriteHeader(http.StatusConflict)
+		_, _ = w.Write([]byte(`{"message":"conflict: image is being used by stopped container c1"}`))
+		return
+	}
+	if ref == id {
+		if len(f.imageTags[id]) > 0 {
+			w.WriteHeader(http.StatusConflict)
+			_, _ = w.Write([]byte(`{"message":"conflict: image is referenced in multiple repositories"}`))
+			return
+		}
+		delete(f.imageTags, id)
+		_, _ = w.Write([]byte(`[{"Deleted":"` + id + `"}]`))
+		return
+	}
+	remaining := make([]string, 0, len(f.imageTags[id]))
+	for _, tag := range f.imageTags[id] {
+		if tag != ref {
+			remaining = append(remaining, tag)
+		}
+	}
+	if len(remaining) == 0 {
+		delete(f.imageTags, id)
+	} else {
+		f.imageTags[id] = remaining
+	}
+	_, _ = w.Write([]byte(`[{"Untagged":"` + ref + `"}]`))
+}
+
+func (f *cleanupFake) imageIDForRef(ref string) (string, bool) {
+	if _, ok := f.imageTags[ref]; ok {
+		return ref, true
+	}
+	for id, tags := range f.imageTags {
+		for _, tag := range tags {
+			if tag == ref {
+				return id, true
+			}
+		}
+	}
+	return "", false
 }
 
 func rfc3339(unix int64) string {
@@ -322,11 +379,13 @@ func TestCleanRemovesOnlySelectedItems(t *testing.T) {
 			t.Fatalf("result = %+v; want removed", result)
 		}
 	}
-	if len(fake.removedImages) != 1 || fake.removedImages[0] != "sha256:ext" {
-		t.Errorf("removed images = %v; want only the selected image once (deduplicated)", fake.removedImages)
+	if len(fake.removedImages) != 2 || fake.removedImages[0] != "library/alpine:3.20" || fake.removedImages[1] != "sha256:ext" {
+		t.Errorf("removed images = %v; want the tag then the id once (deduplicated)", fake.removedImages)
 	}
-	if len(fake.imageDeleteQueries) != 1 || strings.Contains(fake.imageDeleteQueries[0], "force=1") {
-		t.Errorf("image delete queries = %v; want one unforced cleanup delete", fake.imageDeleteQueries)
+	for _, query := range fake.imageDeleteQueries {
+		if strings.Contains(query, "force=1") {
+			t.Errorf("image delete query %q must be unforced", query)
+		}
 	}
 	if len(fake.removedContainers) != 1 {
 		t.Fatalf("removed containers = %v; want one", fake.removedContainers)
@@ -422,5 +481,95 @@ func TestCleanMapsImageConflictToSkipped(t *testing.T) {
 	}
 	if len(fake.imageDeleteQueries) != 1 || strings.Contains(fake.imageDeleteQueries[0], "force=1") {
 		t.Fatalf("image delete queries = %v; want one unforced cleanup delete", fake.imageDeleteQueries)
+	}
+}
+
+func multiTagAppFixture(inUse bool) (*cleanupFake, string, []string) {
+	now := time.Now().Unix()
+	appID := "33333333-3333-3333-3333-333333333333"
+	target := "sha256:multi"
+	var targetTags []string
+	fake := &cleanupFake{}
+	for i := 4; i >= 1; i-- {
+		id := fmt.Sprintf("sha256:img-%d", i)
+		tags := []string{fmt.Sprintf("gotham/%s:dep-%d", appID, i)}
+		if i == 1 {
+			id = target
+			tags = []string{
+				fmt.Sprintf("registry.local:5000/gotham/%s:dep-1", appID),
+				fmt.Sprintf("gotham/%s:dep-1", appID),
+			}
+			targetTags = tags
+		}
+		fake.images = append(fake.images, imageSummary(id, tags, now-int64(5-i)*1000, 42))
+	}
+	fake.imageTags = map[string][]string{target: append([]string(nil), targetTags...)}
+	fake.imageInUse = map[string]bool{target: inUse}
+	if inUse {
+		fake.containers = append(fake.containers,
+			containerSummary("c1", "stopped-app", "exited", now-2000, 10, nil, target))
+	}
+	return fake, target, targetTags
+}
+
+func TestCleanRemovesMultiTagUnusedImage(t *testing.T) {
+	fake, target, tags := multiTagAppFixture(false)
+	client := cleanupFixture(t, fake)
+
+	items, err := client.ScanCleanup(context.Background(), 0)
+	if err != nil {
+		t.Fatalf("ScanCleanup: %v", err)
+	}
+	listed := false
+	for _, item := range items {
+		if item.GetId() == "image:"+target {
+			listed = true
+			if item.GetCategory() != cleanupCategoryUnusedImages {
+				t.Fatalf("category = %q; want unused_images", item.GetCategory())
+			}
+		}
+	}
+	if !listed {
+		t.Fatalf("multi-tag image %s was not listed", target)
+	}
+
+	results, err := client.Clean(context.Background(), []string{"image:" + target}, 0)
+	if err != nil {
+		t.Fatalf("Clean: %v", err)
+	}
+	if len(results) != 1 || results[0].GetStatus() != cleanupStatusRemoved || results[0].GetReclaimedBytes() != 42 {
+		t.Fatalf("result = %+v deletes=%v queries=%v state=%v; want removed with 42 bytes", results, fake.removedImages, fake.imageDeleteQueries, fake.imageTags)
+	}
+	if _, still := fake.imageTags[target]; still {
+		t.Fatalf("image %s still has tags; want it removed", target)
+	}
+	if len(fake.removedImages) != len(tags)+1 {
+		t.Fatalf("delete attempts = %v; want each tag then the id", fake.removedImages)
+	}
+}
+
+func TestCleanSkipsMultiTagImageUsedByStoppedContainer(t *testing.T) {
+	fake, target, _ := multiTagAppFixture(true)
+	client := cleanupFixture(t, fake)
+
+	items, err := client.ScanCleanup(context.Background(), 0)
+	if err != nil {
+		t.Fatalf("ScanCleanup: %v", err)
+	}
+	for _, item := range items {
+		if item.GetId() == "image:"+target {
+			t.Fatalf("in-use multi-tag image was listed: %+v", item)
+		}
+	}
+
+	results, err := client.Clean(context.Background(), []string{"image:" + target}, 0)
+	if err != nil {
+		t.Fatalf("Clean: %v", err)
+	}
+	if len(results) != 1 || results[0].GetStatus() != cleanupStatusSkipped || results[0].GetMessage() != "in use" {
+		t.Fatalf("result = %+v; want skipped in use", results)
+	}
+	if len(fake.removedImages) != 0 {
+		t.Fatalf("delete attempts = %v; nothing must be deleted while a container uses the image", fake.removedImages)
 	}
 }

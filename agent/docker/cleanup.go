@@ -40,6 +40,9 @@ type cleanupCandidate struct {
 	// ref is what the engine removes: an image ID, a container ID or the
 	// aggregate build-cache handle.
 	ref string
+	// tags are the repository tags an unused image currently carries. The
+	// engine refuses an id delete while several remain.
+	tags []string
 }
 
 type cleanupScan struct {
@@ -120,10 +123,22 @@ func (c *DockerClient) cleanOne(ctx context.Context, id string, scan *cleanupSca
 			return result
 		}
 		result.ReclaimedBytes = reclaimed
-	case cleanupCategoryDanglingImages, cleanupCategoryUnusedImages:
+	case cleanupCategoryDanglingImages:
 		// Cleanup deletions are unforced: the engine refuses an image a
 		// container still references, which is reported as skipped.
 		err := c.removeImageUnforced(ctx, candidate.ref)
+		switch {
+		case errors.Is(err, ErrDockerImageInUse):
+			result.Status = cleanupStatusSkipped
+			result.Message = "in use"
+			result.ReclaimedBytes = 0
+		case err != nil:
+			result.Status = cleanupStatusFailed
+			result.Message = err.Error()
+			result.ReclaimedBytes = 0
+		}
+	case cleanupCategoryUnusedImages:
+		err := c.removeUnusedImage(ctx, candidate)
 		switch {
 		case errors.Is(err, ErrDockerImageInUse):
 			result.Status = cleanupStatusSkipped
@@ -148,6 +163,18 @@ func (c *DockerClient) cleanOne(ctx context.Context, id string, scan *cleanupSca
 		result.ReclaimedBytes = 0
 	}
 	return result
+}
+
+// removeUnusedImage untags an image before deleting the id. Docker refuses an
+// unforced id delete while the image keeps several repository tags, which is the
+// normal state of a Gotham-built image (registry-qualified and local tag).
+func (c *DockerClient) removeUnusedImage(ctx context.Context, candidate cleanupCandidate) error {
+	for _, tag := range candidate.tags {
+		if err := c.removeImageUnforced(ctx, tag); err != nil {
+			return err
+		}
+	}
+	return c.removeImageUnforced(ctx, candidate.ref)
 }
 
 func (c *DockerClient) scanCleanup(ctx context.Context, minAge time.Duration) (*cleanupScan, error) {
@@ -320,18 +347,20 @@ func (c *DockerClient) scanUnusedImages(
 	}
 
 	sizes := make(map[string]int64, len(images))
+	tags := make(map[string][]string, len(images))
 	for _, image := range images {
 		sizes[image.ID] = image.Size
+		tags[image.ID] = image.RepoTags
 	}
 
 	for _, group := range appGroups {
 		for _, stale := range selectStaleImages(group, "", active, rollbackImageKeep) {
-			addUnusedImage(scan, stale, sizes, cutoff)
+			addUnusedImage(scan, stale, sizes, tags, cutoff)
 		}
 		recordUnlistedImages(scan, group, active)
 	}
 	for _, stale := range selectStaleImages(external, "", active, 0) {
-		addUnusedImage(scan, stale, sizes, cutoff)
+		addUnusedImage(scan, stale, sizes, tags, cutoff)
 	}
 	recordUnlistedImages(scan, external, active)
 	return nil
@@ -355,7 +384,9 @@ func recordUnlistedImages(scan *cleanupScan, images []appImage, active map[strin
 	}
 }
 
-func addUnusedImage(scan *cleanupScan, image appImage, sizes map[string]int64, cutoff int64) {
+func addUnusedImage(
+	scan *cleanupScan, image appImage, sizes map[string]int64, tags map[string][]string, cutoff int64,
+) {
 	id := cleanupIDImagePrefix + image.ID
 	if _, exists := scan.candidates[id]; exists {
 		return
@@ -373,7 +404,7 @@ func addUnusedImage(scan *cleanupScan, image appImage, sizes map[string]int64, c
 		Reason:      "not used by any container",
 	}
 	scan.items = append(scan.items, item)
-	scan.candidates[id] = cleanupCandidate{item: item, ref: image.ID}
+	scan.candidates[id] = cleanupCandidate{item: item, ref: image.ID, tags: tags[image.ID]}
 }
 
 // appImageRef returns the Gotham app id and the tag to display for one image.

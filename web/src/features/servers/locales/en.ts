@@ -104,14 +104,6 @@ const en = {
     deleteConfirm: "Delete server {name}?",
   },
   settings: {
-    title: "Node settings",
-    identityNote: "Identity recorded by the control plane. Edit it with the node's edit action.",
-    name: "Name",
-    address: "Address",
-    sshUser: "SSH user",
-    credential: "Credential",
-    registered: "Registered",
-    updated: "Updated",
     host: {
       forbidden: "Only the owner can view or change this node's host settings.",
       helper: {

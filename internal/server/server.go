@@ -21,6 +21,7 @@ import (
 	"github.com/justindeelux/gotham/internal/auth"
 	"github.com/justindeelux/gotham/internal/backups"
 	"github.com/justindeelux/gotham/internal/backupwatch"
+	"github.com/justindeelux/gotham/internal/cleanup"
 	"github.com/justindeelux/gotham/internal/clientip"
 	"github.com/justindeelux/gotham/internal/config"
 	"github.com/justindeelux/gotham/internal/containers"
@@ -363,9 +364,11 @@ func (s *Server) routes() (http.Handler, error) {
 		}
 		containerService := s.containerService()
 		containers.Mount(api, s.resourceAuth(), containerService)
-		if volumeService, ok := containerService.(containers.VolumeService); ok {
+		volumeService, _ := containerService.(containers.VolumeService)
+		if volumeService != nil {
 			containers.MountVolumes(api, platformOnly, volumeService)
 		}
+		cleanup.Mount(api, platformOnly, UserIDFromContext, s.cleanupService(volumeService))
 
 		filesAuth := s.resourceAuth()
 		files.Mount(api, filesAuth, files.TransferAuthorizerFunc(s.authorizeFileTransfer), s.fileService(), s.logger)
@@ -724,6 +727,30 @@ func (s *Server) containerService() containers.ContainerService {
 	}
 	service.SetVolumeOwners(s.volumeOwners)
 	return service
+}
+
+func (s *Server) cleanupService(volumes containers.VolumeService) cleanup.CleanupService {
+	if s.servers == nil || s.persistence == nil {
+		return nil
+	}
+	var dial cleanup.DialFunc
+	if dialer, ok := s.servers.(containerDialer); ok {
+		dial = func(ctx context.Context, server *servers.Server) (cleanup.DockerClient, error) {
+			return dialer.DialDockerClient(ctx, server.ID)
+		}
+	}
+	var host cleanup.HostCleaner
+	if dialer, ok := s.servers.(hostDialer); ok {
+		host = cleanupHost{nodes: nodeHostResolver{nodes: s.servers, dialer: dialer}}
+	}
+	return cleanup.NewService(cleanup.Config{
+		Registry: s.servers,
+		Dial:     dial,
+		Volumes:  volumes,
+		Host:     host,
+		Store:    s.persistence,
+		Logger:   s.logger,
+	})
 }
 
 func (s *Server) volumeOwners(ctx context.Context) (containers.VolumeOwners, error) {

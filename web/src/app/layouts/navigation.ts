@@ -58,6 +58,7 @@ export const navSections: NavSection[] = [
     items: [
       { key: "instance", label: "Settings", labelKey: "nav.items.settings", icon: "gear", to: "instance", ownerOnly: true },
       { key: "monitoring", label: "Monitoring", labelKey: "nav.items.monitoring", icon: "history", to: "monitoring", ownerOnly: true },
+      { key: "cleanup", label: "Cleanup", labelKey: "nav.items.cleanup", icon: "trash", to: "cleanup", ownerOnly: true },
       { key: "updates", label: "Updates", labelKey: "nav.items.updates", icon: "gear", to: "updates", ownerOnly: true },
     ],
   },

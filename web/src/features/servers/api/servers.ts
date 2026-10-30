@@ -212,6 +212,7 @@ const errorPrefixPackages = new Set([
   "backups",
   "backupwatch",
   "builds",
+  "cleanup",
   "containers",
   "databases",
   "deploy",

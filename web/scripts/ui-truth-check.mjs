@@ -661,8 +661,8 @@ async function main() {
       "ws strips",
     );
     assert(
-      stripErrorPrefix("cleanup: retention failed") === "cleanup: retention failed",
-      "cleanup is test-only and stays (round 2)",
+      stripErrorPrefix("cleanup: retention failed") === "retention failed",
+      "cleanup strips",
     );
     assert(
       stripErrorPrefix("Update: available") === "Update: available",
@@ -715,7 +715,7 @@ async function main() {
       );
     }
     for (const prefix of [
-      "cleanup", "cloudflare", "rpc", "dial", "hijack", "fake",
+      "cloudflare", "rpc", "dial", "hijack", "fake",
       "disconnected", "agent", "stats", "sudo",
     ]) {
       assert(

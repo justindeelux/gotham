@@ -123,6 +123,7 @@ type CleanResult struct {
 	ServerID string
 	Status   string
 	Reason   string
+	RunID    string
 	Items    []ItemResult
 }
 
@@ -329,7 +330,9 @@ func (s *Service) Clean(
 	// Every accepted Clean writes one history run, including a skipped attempt:
 	// the audit shows what was asked of the node, not only what was removed.
 	defer func() {
-		s.record(ctx, actor, trigger, serverID, startedAt, result.Items)
+		if runID := s.record(ctx, actor, trigger, serverID, startedAt, result.Items); runID != uuid.Nil {
+			result.RunID = runID.String()
+		}
 	}()
 	ids = dedupeIDs(ids)
 
@@ -574,16 +577,17 @@ func splitIDs(ids []string) (agentIDs, volumeIDs, hostIDs []string) {
 func (s *Service) record(
 	ctx context.Context, actor uuid.UUID, trigger string, serverID uuid.UUID,
 	startedAt time.Time, items []ItemResult,
-) {
+) uuid.UUID {
 	if s.store == nil {
-		return
+		return uuid.Nil
 	}
+	runID := uuid.New()
 	reclaimed := int64(0)
 	for _, item := range items {
 		reclaimed += item.ReclaimedBytes
 	}
 	run := store.CleanupRun{
-		ID:             uuid.New(),
+		ID:             runID,
 		ServerID:       serverID,
 		Trigger:        trigger,
 		StartedAt:      startedAt,
@@ -608,6 +612,7 @@ func (s *Service) record(
 	if err := s.store.RecordCleanupRun(context.WithoutCancel(ctx), run, history); err != nil {
 		s.logger.Warn("cleanup: recording the run failed", "server_id", serverID.String(), "error", err)
 	}
+	return runID
 }
 
 func (s *Service) scanAgent(ctx context.Context, serverID uuid.UUID, minAge time.Duration) ([]*agentv1.CleanupItem, error) {

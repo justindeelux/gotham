@@ -41,6 +41,7 @@ func Mount(r chi.Router, admin func(http.Handler) http.Handler, userID UserIDFun
 		g.Use(admin)
 		g.Get("/v1/instance/settings", h.get)
 		g.Put("/v1/instance/settings/general", h.putGeneral)
+		g.Put("/v1/instance/settings/cleanup", h.putCleanup)
 		g.Post("/v1/instance/settings/control-plane-url/confirm", h.confirmControlPlaneURL)
 		g.Post("/v1/instance/settings/control-plane-url/revert", h.revertControlPlaneURL)
 	})
@@ -62,6 +63,15 @@ func (h *handler) putGeneral(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	st, err := h.svc.UpdateGeneral(r.Context(), h.actor(r), in)
+	h.reply(w, st, err)
+}
+
+func (h *handler) putCleanup(w http.ResponseWriter, r *http.Request) {
+	var in RetentionInput
+	if !decode(w, r, &in) {
+		return
+	}
+	st, err := h.svc.UpdateCleanupRetention(r.Context(), h.actor(r), in)
 	h.reply(w, st, err)
 }
 

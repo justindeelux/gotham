@@ -893,6 +893,10 @@ func (stubInstanceRepo) Save(context.Context, uuid.UUID, string, instance.Stored
 	return nil
 }
 
+func (stubInstanceRepo) SaveCleanup(context.Context, uuid.UUID, instance.Stored, any) error {
+	return nil
+}
+
 func TestOAuthRedirectBaseControlPlaneURL(t *testing.T) {
 	newServerWithInstance := func(t *testing.T, redirectURL string) *Server {
 		t.Helper()

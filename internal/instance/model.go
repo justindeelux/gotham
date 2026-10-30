@@ -157,6 +157,40 @@ type NodeState struct {
 type State struct {
 	PendingControlPlaneURL *PendingControlPlaneURL `json:"pending_control_plane_url"`
 	General                General                 `json:"general"`
+	Cleanup                Retention               `json:"cleanup"`
+}
+
+// Retention is how long Gotham keeps its own leftovers before the cleanup
+// center may offer them. It is read at scan and clean time, so a change needs
+// no restart.
+type Retention struct {
+	HistoryDays          int `json:"history_days"`
+	BackupFileMinAgeDays int `json:"backup_file_min_age_days"`
+}
+
+type RetentionInput struct {
+	HistoryDays          int `json:"history_days"`
+	BackupFileMinAgeDays int `json:"backup_file_min_age_days"`
+}
+
+const (
+	DefaultCleanupHistoryDays   = 90
+	MinCleanupHistoryDays       = 7
+	MaxCleanupHistoryDays       = 3650
+	DefaultCleanupBackupFileAge = 7
+	MinCleanupBackupFileAge     = 1
+	MaxCleanupBackupFileAge     = 365
+)
+
+func defaultRetention() Retention {
+	return Retention{
+		HistoryDays:          DefaultCleanupHistoryDays,
+		BackupFileMinAgeDays: DefaultCleanupBackupFileAge,
+	}
+}
+
+func retentionFrom(historyDays int32, backupAge int32) Retention {
+	return Retention{HistoryDays: int(historyDays), BackupFileMinAgeDays: int(backupAge)}
 }
 
 type Stored struct {
@@ -164,6 +198,7 @@ type Stored struct {
 	ControlPlaneURL        *string
 	InstanceName           *string
 	Timezone               *string
+	Retention              Retention
 }
 
 const (

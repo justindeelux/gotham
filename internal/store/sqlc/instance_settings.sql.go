@@ -12,7 +12,7 @@ import (
 )
 
 const getInstanceSettings = `-- name: GetInstanceSettings :one
-SELECT id, control_plane_url, instance_name, timezone, dns_servers, ipv4_mode, ipv4_address, ipv4_gateway, ipv6_enabled, ipv6_mode, ipv6_address, ipv6_gateway, hostname, ntp_enabled, ntp_servers, pending_network, pending_deadline, updated_at, pending_control_plane_url FROM instance_settings WHERE id = 1
+SELECT id, control_plane_url, instance_name, timezone, dns_servers, ipv4_mode, ipv4_address, ipv4_gateway, ipv6_enabled, ipv6_mode, ipv6_address, ipv6_gateway, hostname, ntp_enabled, ntp_servers, pending_network, pending_deadline, updated_at, pending_control_plane_url, cleanup_history_retention_days, cleanup_backup_file_min_age_days FROM instance_settings WHERE id = 1
 `
 
 func (q *Queries) GetInstanceSettings(ctx context.Context) (InstanceSetting, error) {
@@ -38,6 +38,8 @@ func (q *Queries) GetInstanceSettings(ctx context.Context) (InstanceSetting, err
 		&i.PendingDeadline,
 		&i.UpdatedAt,
 		&i.PendingControlPlaneUrl,
+		&i.CleanupHistoryRetentionDays,
+		&i.CleanupBackupFileMinAgeDays,
 	)
 	return i, err
 }
@@ -57,12 +59,55 @@ func (q *Queries) InsertInstanceAudit(ctx context.Context, arg InsertInstanceAud
 	return err
 }
 
+const updateInstanceCleanup = `-- name: UpdateInstanceCleanup :one
+UPDATE instance_settings
+SET cleanup_history_retention_days = $1,
+    cleanup_backup_file_min_age_days = $2,
+    updated_at = now()
+WHERE id = 1
+RETURNING id, control_plane_url, instance_name, timezone, dns_servers, ipv4_mode, ipv4_address, ipv4_gateway, ipv6_enabled, ipv6_mode, ipv6_address, ipv6_gateway, hostname, ntp_enabled, ntp_servers, pending_network, pending_deadline, updated_at, pending_control_plane_url, cleanup_history_retention_days, cleanup_backup_file_min_age_days
+`
+
+type UpdateInstanceCleanupParams struct {
+	CleanupHistoryRetentionDays int32 `json:"cleanup_history_retention_days"`
+	CleanupBackupFileMinAgeDays int32 `json:"cleanup_backup_file_min_age_days"`
+}
+
+func (q *Queries) UpdateInstanceCleanup(ctx context.Context, arg UpdateInstanceCleanupParams) (InstanceSetting, error) {
+	row := q.db.QueryRow(ctx, updateInstanceCleanup, arg.CleanupHistoryRetentionDays, arg.CleanupBackupFileMinAgeDays)
+	var i InstanceSetting
+	err := row.Scan(
+		&i.ID,
+		&i.ControlPlaneUrl,
+		&i.InstanceName,
+		&i.Timezone,
+		&i.DnsServers,
+		&i.Ipv4Mode,
+		&i.Ipv4Address,
+		&i.Ipv4Gateway,
+		&i.Ipv6Enabled,
+		&i.Ipv6Mode,
+		&i.Ipv6Address,
+		&i.Ipv6Gateway,
+		&i.Hostname,
+		&i.NtpEnabled,
+		&i.NtpServers,
+		&i.PendingNetwork,
+		&i.PendingDeadline,
+		&i.UpdatedAt,
+		&i.PendingControlPlaneUrl,
+		&i.CleanupHistoryRetentionDays,
+		&i.CleanupBackupFileMinAgeDays,
+	)
+	return i, err
+}
+
 const updateInstanceGeneral = `-- name: UpdateInstanceGeneral :one
 UPDATE instance_settings
 SET control_plane_url = $1, instance_name = $2, timezone = $3,
     pending_control_plane_url = $4, updated_at = now()
 WHERE id = 1
-RETURNING id, control_plane_url, instance_name, timezone, dns_servers, ipv4_mode, ipv4_address, ipv4_gateway, ipv6_enabled, ipv6_mode, ipv6_address, ipv6_gateway, hostname, ntp_enabled, ntp_servers, pending_network, pending_deadline, updated_at, pending_control_plane_url
+RETURNING id, control_plane_url, instance_name, timezone, dns_servers, ipv4_mode, ipv4_address, ipv4_gateway, ipv6_enabled, ipv6_mode, ipv6_address, ipv6_gateway, hostname, ntp_enabled, ntp_servers, pending_network, pending_deadline, updated_at, pending_control_plane_url, cleanup_history_retention_days, cleanup_backup_file_min_age_days
 `
 
 type UpdateInstanceGeneralParams struct {
@@ -100,6 +145,8 @@ func (q *Queries) UpdateInstanceGeneral(ctx context.Context, arg UpdateInstanceG
 		&i.PendingDeadline,
 		&i.UpdatedAt,
 		&i.PendingControlPlaneUrl,
+		&i.CleanupHistoryRetentionDays,
+		&i.CleanupBackupFileMinAgeDays,
 	)
 	return i, err
 }
@@ -112,7 +159,7 @@ SET dns_servers = $1,
     pending_network = $9, pending_deadline = $10,
     updated_at = now()
 WHERE id = 1
-RETURNING id, control_plane_url, instance_name, timezone, dns_servers, ipv4_mode, ipv4_address, ipv4_gateway, ipv6_enabled, ipv6_mode, ipv6_address, ipv6_gateway, hostname, ntp_enabled, ntp_servers, pending_network, pending_deadline, updated_at, pending_control_plane_url
+RETURNING id, control_plane_url, instance_name, timezone, dns_servers, ipv4_mode, ipv4_address, ipv4_gateway, ipv6_enabled, ipv6_mode, ipv6_address, ipv6_gateway, hostname, ntp_enabled, ntp_servers, pending_network, pending_deadline, updated_at, pending_control_plane_url, cleanup_history_retention_days, cleanup_backup_file_min_age_days
 `
 
 type UpdateInstanceNetworkParams struct {
@@ -162,6 +209,8 @@ func (q *Queries) UpdateInstanceNetwork(ctx context.Context, arg UpdateInstanceN
 		&i.PendingDeadline,
 		&i.UpdatedAt,
 		&i.PendingControlPlaneUrl,
+		&i.CleanupHistoryRetentionDays,
+		&i.CleanupBackupFileMinAgeDays,
 	)
 	return i, err
 }
@@ -170,7 +219,7 @@ const updateInstanceSystem = `-- name: UpdateInstanceSystem :one
 UPDATE instance_settings
 SET hostname = $1, ntp_enabled = $2, ntp_servers = $3, updated_at = now()
 WHERE id = 1
-RETURNING id, control_plane_url, instance_name, timezone, dns_servers, ipv4_mode, ipv4_address, ipv4_gateway, ipv6_enabled, ipv6_mode, ipv6_address, ipv6_gateway, hostname, ntp_enabled, ntp_servers, pending_network, pending_deadline, updated_at, pending_control_plane_url
+RETURNING id, control_plane_url, instance_name, timezone, dns_servers, ipv4_mode, ipv4_address, ipv4_gateway, ipv6_enabled, ipv6_mode, ipv6_address, ipv6_gateway, hostname, ntp_enabled, ntp_servers, pending_network, pending_deadline, updated_at, pending_control_plane_url, cleanup_history_retention_days, cleanup_backup_file_min_age_days
 `
 
 type UpdateInstanceSystemParams struct {
@@ -202,6 +251,8 @@ func (q *Queries) UpdateInstanceSystem(ctx context.Context, arg UpdateInstanceSy
 		&i.PendingDeadline,
 		&i.UpdatedAt,
 		&i.PendingControlPlaneUrl,
+		&i.CleanupHistoryRetentionDays,
+		&i.CleanupBackupFileMinAgeDays,
 	)
 	return i, err
 }

@@ -712,6 +712,10 @@ func (m *BackupManager) release(databaseID uuid.UUID) {
 	m.leases.Release(databaseID)
 }
 
+// LocalBackupDir resolves the local artifact directory the same way the backup
+// service does, so another component can look at the same files.
+func LocalBackupDir(dir string) string { return resolveLocalBackupDir(dir) }
+
 func resolveLocalBackupDir(dir string) string {
 	if trimmed := strings.TrimSpace(dir); trimmed != "" {
 		return trimmed

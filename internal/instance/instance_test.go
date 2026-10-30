@@ -26,6 +26,12 @@ func (f *fakeRepo) Save(_ context.Context, _ uuid.UUID, section string, rec Stor
 	return nil
 }
 
+func (f *fakeRepo) SaveCleanup(_ context.Context, _ uuid.UUID, rec Stored, _ any) error {
+	f.rec = rec
+	f.sections = append(f.sections, SectionCleanup)
+	return nil
+}
+
 func quietLogger() *slog.Logger { return slog.New(slog.NewTextHandler(io.Discard, nil)) }
 
 func TestValidation(t *testing.T) {
@@ -65,6 +71,50 @@ func TestValidation(t *testing.T) {
 	}
 	if _, errs := normalizeSystem(System{Hostname: "gotham-1", NTPEnabled: true, Timezone: "Europe/Berlin"}); errs != nil {
 		t.Fatalf("good system rejected: %v", errs)
+	}
+}
+
+func TestCleanupRetentionBoundsAndAudit(t *testing.T) {
+	repo := &fakeRepo{}
+	svc := NewService(repo, quietLogger())
+	svc.lookup = func(string) string { return "" }
+	ctx := context.Background()
+
+	state, err := svc.Get(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if state.Cleanup != (Retention{HistoryDays: 90, BackupFileMinAgeDays: 7}) {
+		t.Fatalf("defaults = %+v; want 90/7", state.Cleanup)
+	}
+
+	_, err = svc.UpdateCleanupRetention(ctx, uuid.Nil, RetentionInput{HistoryDays: 6, BackupFileMinAgeDays: 0})
+	var fieldErrs FieldErrors
+	if !errors.As(err, &fieldErrs) {
+		t.Fatalf("invalid retention error = %v; want field errors", err)
+	}
+	for _, key := range []string{"history_days", "backup_file_min_age_days"} {
+		if fieldErrs[key] == "" {
+			t.Errorf("expected a %s validation error: %v", key, fieldErrs)
+		}
+	}
+	if len(repo.sections) != 0 {
+		t.Fatalf("invalid retention wrote an audit section: %v", repo.sections)
+	}
+
+	state, err = svc.UpdateCleanupRetention(ctx, uuid.Nil, RetentionInput{HistoryDays: 30, BackupFileMinAgeDays: 14})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if state.Cleanup.HistoryDays != 30 || state.Cleanup.BackupFileMinAgeDays != 14 {
+		t.Fatalf("state = %+v; want 30/14", state.Cleanup)
+	}
+	if len(repo.sections) != 1 || repo.sections[0] != SectionCleanup {
+		t.Fatalf("audit sections = %v; want one cleanup entry", repo.sections)
+	}
+	loaded, err := svc.CleanupRetention(ctx)
+	if err != nil || loaded != state.Cleanup {
+		t.Fatalf("reloaded = %+v err=%v; want %+v", loaded, err, state.Cleanup)
 	}
 }
 
@@ -144,6 +194,18 @@ func TestRoutesStatusCodes(t *testing.T) {
 		bytes.NewBufferString(`{"control_plane_url":"https://g.example.com","instance_name":"x","timezone":"UTC"}`)))
 	if rec.Code != http.StatusBadRequest {
 		t.Fatalf("dropped timezone field accepted: %d %s", rec.Code, rec.Body)
+	}
+	rec = httptest.NewRecorder()
+	ok.ServeHTTP(rec, httptest.NewRequest(http.MethodPut, "/v1/instance/settings/cleanup",
+		bytes.NewBufferString(`{"history_days":6,"backup_file_min_age_days":0}`)))
+	if rec.Code != http.StatusBadRequest || !bytes.Contains(rec.Body.Bytes(), []byte(`"history_days"`)) {
+		t.Fatalf("invalid retention: %d %s", rec.Code, rec.Body)
+	}
+	rec = httptest.NewRecorder()
+	ok.ServeHTTP(rec, httptest.NewRequest(http.MethodPut, "/v1/instance/settings/cleanup",
+		bytes.NewBufferString(`{"history_days":30,"backup_file_min_age_days":14}`)))
+	if rec.Code != http.StatusOK || !bytes.Contains(rec.Body.Bytes(), []byte(`"backup_file_min_age_days":14`)) {
+		t.Fatalf("valid retention: %d %s", rec.Code, rec.Body)
 	}
 	rec = httptest.NewRecorder()
 	ok.ServeHTTP(rec, httptest.NewRequest(http.MethodPost, "/v1/instance/settings/network/confirm", nil))

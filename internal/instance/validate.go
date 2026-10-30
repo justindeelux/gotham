@@ -1,6 +1,7 @@
 package instance
 
 import (
+	"fmt"
 	"net/netip"
 	"net/url"
 	"regexp"
@@ -41,6 +42,17 @@ func checkURL(raw string) string {
 		return "must not contain credentials, a query or a fragment"
 	}
 	return ""
+}
+
+func normalizeRetention(in RetentionInput) (Retention, FieldErrors) {
+	errs := FieldErrors{}
+	if in.HistoryDays < MinCleanupHistoryDays || in.HistoryDays > MaxCleanupHistoryDays {
+		errs["history_days"] = fmt.Sprintf("must be between %d and %d days", MinCleanupHistoryDays, MaxCleanupHistoryDays)
+	}
+	if in.BackupFileMinAgeDays < MinCleanupBackupFileAge || in.BackupFileMinAgeDays > MaxCleanupBackupFileAge {
+		errs["backup_file_min_age_days"] = fmt.Sprintf("must be between %d and %d days", MinCleanupBackupFileAge, MaxCleanupBackupFileAge)
+	}
+	return Retention(in), nonEmpty(errs)
 }
 
 func checkTimezone(tz string) string {

@@ -191,7 +191,58 @@ func ptrOrNil(v string, locked bool, stored *string) *string {
 }
 
 func (s *Service) stateLocked(rec Stored) State {
-	return State{General: s.general(rec), PendingControlPlaneURL: rec.PendingControlPlaneURL}
+	return State{
+		General:                s.general(rec),
+		PendingControlPlaneURL: rec.PendingControlPlaneURL,
+		Cleanup:                retentionOrDefault(rec.Retention),
+	}
+}
+
+func retentionOrDefault(r Retention) Retention {
+	out := defaultRetention()
+	if r.HistoryDays != 0 {
+		out.HistoryDays = r.HistoryDays
+	}
+	if r.BackupFileMinAgeDays != 0 {
+		out.BackupFileMinAgeDays = r.BackupFileMinAgeDays
+	}
+	return out
+}
+
+// CleanupRetention is read at every cleanup scan and clean, so a change takes
+// effect without a restart.
+func (s *Service) CleanupRetention(ctx context.Context) (Retention, error) {
+	rec, err := s.repo.Load(ctx)
+	if err != nil {
+		return Retention{}, err
+	}
+	return retentionOrDefault(rec.Retention), nil
+}
+
+func (s *Service) UpdateCleanupRetention(ctx context.Context, actor uuid.UUID, in RetentionInput) (State, error) {
+	next, errs := normalizeRetention(in)
+	if len(errs) > 0 {
+		return State{}, errs
+	}
+	rec, err := s.repo.Load(ctx)
+	if err != nil {
+		return State{}, err
+	}
+	cur := retentionOrDefault(rec.Retention)
+	if next == cur {
+		return s.stateLocked(rec), nil
+	}
+	changes := diff(map[string]any{
+		"history_days": cur.HistoryDays, "backup_file_min_age_days": cur.BackupFileMinAgeDays,
+	}, map[string]any{
+		"history_days": next.HistoryDays, "backup_file_min_age_days": next.BackupFileMinAgeDays,
+	})
+	rec.Retention = next
+	if err := s.repo.SaveCleanup(ctx, actor, rec, changes); err != nil {
+		return State{}, err
+	}
+	s.logger.Info("instance cleanup retention updated", "actor", actor, "changes", changes)
+	return s.stateLocked(rec), nil
 }
 
 func diff(from, to any) map[string]any {

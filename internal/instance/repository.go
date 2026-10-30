@@ -14,6 +14,9 @@ import (
 
 const SectionGeneral = "general"
 
+// SectionCleanup labels the retention changes in the settings audit trail.
+const SectionCleanup = "cleanup"
+
 // NodeSectionSystem and NodeSectionNetwork label the per-node host changes in
 // the settings audit trail.
 const (
@@ -24,6 +27,7 @@ const (
 type Repository interface {
 	Load(ctx context.Context) (Stored, error)
 	Save(ctx context.Context, actor uuid.UUID, section string, rec Stored, changes any) error
+	SaveCleanup(ctx context.Context, actor uuid.UUID, rec Stored, changes any) error
 }
 
 type storeRepository struct{ store *store.Store }
@@ -41,6 +45,7 @@ func (r *storeRepository) Load(ctx context.Context) (Stored, error) {
 		ControlPlaneURL: row.ControlPlaneUrl,
 		InstanceName:    row.InstanceName,
 		Timezone:        row.Timezone,
+		Retention:       retentionFrom(row.CleanupHistoryRetentionDays, row.CleanupBackupFileMinAgeDays),
 	}
 	if len(row.PendingControlPlaneUrl) > 0 {
 		var pending PendingControlPlaneURL
@@ -56,13 +61,9 @@ func (r *storeRepository) Save(ctx context.Context, actor uuid.UUID, section str
 	if section != SectionGeneral {
 		return fmt.Errorf("instance: unknown section %q", section)
 	}
-	payload, err := json.Marshal(changes)
+	audit, err := r.audit(actor, section, changes)
 	if err != nil {
-		return fmt.Errorf("instance: encode audit: %w", err)
-	}
-	audit := sqlc.InsertInstanceAuditParams{Section: section, Changes: payload}
-	if actor != uuid.Nil {
-		audit.ActorID = pgtype.UUID{Bytes: actor, Valid: true}
+		return err
 	}
 	var pending []byte
 	if rec.PendingControlPlaneURL != nil {
@@ -78,6 +79,33 @@ func (r *storeRepository) Save(ctx context.Context, actor uuid.UUID, section str
 		return fmt.Errorf("instance: save %s: %w", section, err)
 	}
 	return nil
+}
+
+func (r *storeRepository) SaveCleanup(ctx context.Context, actor uuid.UUID, rec Stored, changes any) error {
+	audit, err := r.audit(actor, SectionCleanup, changes)
+	if err != nil {
+		return err
+	}
+	err = r.store.UpdateInstanceCleanup(ctx, sqlc.UpdateInstanceCleanupParams{
+		CleanupHistoryRetentionDays: int32(rec.Retention.HistoryDays),
+		CleanupBackupFileMinAgeDays: int32(rec.Retention.BackupFileMinAgeDays),
+	}, audit)
+	if err != nil {
+		return fmt.Errorf("instance: save cleanup: %w", err)
+	}
+	return nil
+}
+
+func (r *storeRepository) audit(actor uuid.UUID, section string, changes any) (sqlc.InsertInstanceAuditParams, error) {
+	payload, err := json.Marshal(changes)
+	if err != nil {
+		return sqlc.InsertInstanceAuditParams{}, fmt.Errorf("instance: encode audit: %w", err)
+	}
+	audit := sqlc.InsertInstanceAuditParams{Section: section, Changes: payload}
+	if actor != uuid.Nil {
+		audit.ActorID = pgtype.UUID{Bytes: actor, Valid: true}
+	}
+	return audit, nil
 }
 
 func nonNil(in []string) []string {

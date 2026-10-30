@@ -60,6 +60,13 @@ type HostCleanupStatus struct {
 	PackageCache HostCleanupCategory
 }
 
+// LeftoverSource scans and cleans Gotham's own leftovers on the control-plane
+// node. nil means the feature is absent, so no Gotham category is offered.
+type LeftoverSource interface {
+	Scan(ctx context.Context) ([]Item, error)
+	Clean(ctx context.Context, id string, minAge time.Duration) ItemResult
+}
+
 // Registry resolves a recorded node.
 type Registry interface {
 	Get(ctx context.Context, id uuid.UUID) (*servers.Server, error)
@@ -73,13 +80,14 @@ type Store interface {
 
 // Config wires the cleanup service.
 type Config struct {
-	Registry Registry
-	Dial     DialFunc
-	Volumes  containers.VolumeService
-	Host     HostCleaner
-	Store    Store
-	Logger   *slog.Logger
-	Timeout  time.Duration
+	Registry  Registry
+	Dial      DialFunc
+	Volumes   containers.VolumeService
+	Host      HostCleaner
+	Leftovers LeftoverSource
+	Store     Store
+	Logger    *slog.Logger
+	Timeout   time.Duration
 }
 
 // Item is one reclaimable object.
@@ -129,13 +137,14 @@ type CleanResult struct {
 
 // Service scans nodes and removes selected objects.
 type Service struct {
-	registry Registry
-	dial     DialFunc
-	volumes  containers.VolumeService
-	host     HostCleaner
-	store    Store
-	logger   *slog.Logger
-	timeout  time.Duration
+	registry  Registry
+	dial      DialFunc
+	volumes   containers.VolumeService
+	host      HostCleaner
+	leftovers LeftoverSource
+	store     Store
+	logger    *slog.Logger
+	timeout   time.Duration
 
 	mu    sync.Mutex
 	locks map[string]*sync.Mutex
@@ -151,14 +160,15 @@ func NewService(cfg Config) *Service {
 		timeout = defaultTimeout
 	}
 	return &Service{
-		registry: cfg.Registry,
-		dial:     cfg.Dial,
-		volumes:  cfg.Volumes,
-		host:     cfg.Host,
-		store:    cfg.Store,
-		logger:   logger,
-		timeout:  timeout,
-		locks:    map[string]*sync.Mutex{},
+		registry:  cfg.Registry,
+		dial:      cfg.Dial,
+		volumes:   cfg.Volumes,
+		host:      cfg.Host,
+		leftovers: cfg.Leftovers,
+		store:     cfg.Store,
+		logger:    logger,
+		timeout:   timeout,
+		locks:     map[string]*sync.Mutex{},
 	}
 }
 
@@ -209,6 +219,7 @@ func (s *Service) scanNode(ctx context.Context, raw string, minAge time.Duration
 	hostItems, notices := s.scanHost(ctx, serverID)
 	scan.Items = append(scan.Items, hostItems...)
 	scan.Notices = notices
+	scan.Items = append(scan.Items, s.scanLeftovers(ctx, serverID)...)
 	return scan
 }
 
@@ -275,6 +286,32 @@ func hostCategoryName(category string) string {
 		return "Package cache"
 	}
 	return "Journal"
+}
+
+// scanLeftovers adds the control-plane leftovers only when this node is the
+// local Gotham node: another node's agent has no access to the control plane's
+// database or data directory.
+func (s *Service) scanLeftovers(ctx context.Context, serverID uuid.UUID) []Item {
+	if s.leftovers == nil || !s.controlPlaneNode(ctx, serverID) {
+		return nil
+	}
+	items, err := s.leftovers.Scan(ctx)
+	if err != nil {
+		s.logger.Warn("cleanup: gotham leftovers scan failed", "server_id", serverID.String(), "error", err)
+		return nil
+	}
+	return items
+}
+
+func (s *Service) controlPlaneNode(ctx context.Context, serverID uuid.UUID) bool {
+	if s.registry == nil {
+		return false
+	}
+	server, err := s.registry.Get(ctx, serverID)
+	if err != nil {
+		return false
+	}
+	return server.NodeID != nil && *server.NodeID == "localhost"
 }
 
 func failedScan(serverID string, err error) NodeScan {
@@ -355,7 +392,7 @@ func (s *Service) Clean(
 		return result
 	}
 
-	agentIDs, volumeIDs, hostIDs := splitIDs(ids)
+	agentIDs, volumeIDs, hostIDs, leftoverIDs := splitIDs(ids)
 	known := map[string]Item{}
 	if len(agentIDs) > 0 {
 		items, err := s.scanAgent(ctx, serverID, minAge)
@@ -378,6 +415,9 @@ func (s *Service) Clean(
 	}
 	if len(hostIDs) > 0 {
 		result.Items = append(result.Items, s.cleanHost(ctx, serverID, hostIDs, minAge)...)
+	}
+	if len(leftoverIDs) > 0 {
+		result.Items = append(result.Items, s.cleanLeftovers(ctx, serverID, leftoverIDs, minAge)...)
 	}
 
 	result.Items = orderResults(ids, result.Items)
@@ -424,6 +464,28 @@ func (s *Service) cleanHost(
 			continue
 		}
 		result.ReclaimedBytes = reclaimed
+		results = append(results, result)
+	}
+	return results
+}
+
+// cleanLeftovers removes the selected control-plane leftovers. They are safe at
+// every trigger as long as each item re-checks its own preconditions.
+func (s *Service) cleanLeftovers(
+	ctx context.Context, serverID uuid.UUID, ids []string, minAge time.Duration,
+) []ItemResult {
+	results := make([]ItemResult, 0, len(ids))
+	for _, id := range ids {
+		category, name := describeID(id)
+		result := ItemResult{ID: id, Category: category, Name: name}
+		switch {
+		case s.leftovers == nil:
+			result.Status, result.Message = StatusSkipped, "unsupported"
+		case !s.controlPlaneNode(ctx, serverID):
+			result.Status, result.Message = StatusSkipped, "control-plane node only"
+		default:
+			result = s.leftovers.Clean(ctx, id, minAge)
+		}
 		results = append(results, result)
 	}
 	return results
@@ -562,18 +624,20 @@ func dedupeIDs(ids []string) []string {
 	return unique
 }
 
-func splitIDs(ids []string) (agentIDs, volumeIDs, hostIDs []string) {
+func splitIDs(ids []string) (agentIDs, volumeIDs, hostIDs, leftoverIDs []string) {
 	for _, id := range ids {
 		switch {
 		case strings.HasPrefix(id, idVolumePrefix):
 			volumeIDs = append(volumeIDs, id)
 		case strings.HasPrefix(id, idHostPrefix):
 			hostIDs = append(hostIDs, id)
+		case strings.HasPrefix(id, idGothamPrefix):
+			leftoverIDs = append(leftoverIDs, id)
 		default:
 			agentIDs = append(agentIDs, id)
 		}
 	}
-	return agentIDs, volumeIDs, hostIDs
+	return agentIDs, volumeIDs, hostIDs, leftoverIDs
 }
 
 func (s *Service) record(
@@ -755,6 +819,10 @@ func describeID(id string) (string, string) {
 	case strings.HasPrefix(id, idHostPrefix):
 		category := strings.TrimPrefix(id, idHostPrefix)
 		return category, hostCategoryName(category)
+	case strings.HasPrefix(id, idGothamPrefix+"backup_file:"):
+		return CategoryBackupFiles, strings.TrimPrefix(id, idGothamPrefix+"backup_file:")
+	case strings.HasPrefix(id, idGothamPrefix+"history:"):
+		return CategoryHistory, historyLabel(strings.TrimPrefix(id, idGothamPrefix+"history:"))
 	case strings.HasPrefix(id, idVolumePrefix):
 		return CategoryOrphanedVolumes, strings.TrimPrefix(id, idVolumePrefix)
 	case strings.HasPrefix(id, idImagePrefix):

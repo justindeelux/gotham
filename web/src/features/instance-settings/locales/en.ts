@@ -15,6 +15,17 @@ const en = {
     submit: "Save settings",
     saved: "Settings saved.",
   },
+  cleanup: {
+    title: "Cleanup retention",
+    history: "History retention (days)",
+    historyHint:
+      "Deployment logs, toolchain logs, request receipts and webhook events older than this become cleanup candidates. 7-3650 days.",
+    backupAge: "Orphaned backup file age (days)",
+    backupAgeHint:
+      "A backup file no backups row references is offered as cleanup only after this many days. 1-365 days.",
+    submit: "Save retention",
+    saved: "Cleanup retention saved.",
+  },
   domainStatus: {
     title: "Control-plane domain status",
     empty: "Set a control-plane URL to see its router status.",
@@ -53,6 +64,8 @@ const en = {
   validation: {
     url: "Enter an http(s) URL with a host, without credentials, query or fragment.",
     name: "The name must be 1-64 characters.",
+    cleanupHistory: "History retention must be a whole number of days between 7 and 3650.",
+    cleanupBackupAge: "Backup file age must be a whole number of days between 1 and 365.",
   },
 };
 

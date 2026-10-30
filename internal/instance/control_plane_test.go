@@ -182,6 +182,12 @@ func (r *timerRepo) Save(_ context.Context, _ uuid.UUID, _ string, rec Stored, _
 	r.rec = rec
 	return nil
 }
+func (r *timerRepo) SaveCleanup(_ context.Context, _ uuid.UUID, rec Stored, _ any) error {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	r.rec = rec
+	return nil
+}
 
 func TestControlPlaneURLRestartRearmsAutomaticRollback(t *testing.T) {
 	old, next := "https://old.example.com", "https://new.example.com"

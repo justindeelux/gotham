@@ -17,6 +17,17 @@ const vi: typeof en = {
     submit: "Lưu cài đặt",
     saved: "Đã lưu cài đặt.",
   },
+  cleanup: {
+    title: "Thời hạn dọn dẹp",
+    history: "Thời hạn lịch sử (ngày)",
+    historyHint:
+      "Log triển khai, log toolchain, biên nhận yêu cầu và sự kiện webhook cũ hơn mốc này sẽ được đề xuất dọn dẹp. 7-3650 ngày.",
+    backupAge: "Tuổi tệp sao lưu mồ côi (ngày)",
+    backupAgeHint:
+      "Tệp sao lưu không còn dòng nào tham chiếu chỉ được đề xuất dọn dẹp sau số ngày này. 1-365 ngày.",
+    submit: "Lưu thời hạn",
+    saved: "Đã lưu thời hạn dọn dẹp.",
+  },
   domainStatus: {
     title: "Trạng thái tên miền control plane",
     empty: "Đặt URL control plane để xem trạng thái router.",
@@ -55,6 +66,8 @@ const vi: typeof en = {
   validation: {
     url: "Nhập URL http(s) có tên máy chủ, không kèm thông tin đăng nhập, query hay fragment.",
     name: "Tên phải dài 1-64 ký tự.",
+    cleanupHistory: "Thời hạn lịch sử phải là số nguyên ngày từ 7 đến 3650.",
+    cleanupBackupAge: "Tuổi tệp sao lưu phải là số nguyên ngày từ 1 đến 365.",
   },
 };
 

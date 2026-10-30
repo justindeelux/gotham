@@ -274,6 +274,7 @@ project PUT /api/v1/applications/{id}/env
 owner PUT /api/v1/applications/{id}/git-credential
 owner PUT /api/v1/applications/{id}/storages
 project PUT /api/v1/environments/{id}/variables
+owner PUT /api/v1/instance/settings/cleanup
 owner PUT /api/v1/instance/settings/general
 owner PUT /api/v1/monitoring/settings
 owner PUT /api/v1/projects/{id}/members

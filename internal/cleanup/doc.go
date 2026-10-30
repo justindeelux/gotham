@@ -14,6 +14,9 @@ const (
 	CategoryOrphanedVolumes   = "orphaned_volumes"
 	CategoryJournal           = "journal"
 	CategoryPackageCache      = "package_cache"
+	CategoryBackupFiles       = "backup_files"
+	CategoryUpdateFiles       = "update_files"
+	CategoryHistory           = "history"
 )
 
 const (
@@ -90,5 +93,6 @@ const (
 	idContainerPrefix = "container:"
 	idVolumePrefix    = "volume:"
 	idHostPrefix      = "host:"
+	idGothamPrefix    = "gotham:"
 	idBuildCache      = "build-cache"
 )

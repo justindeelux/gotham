@@ -34,7 +34,7 @@ import { useSectionForm } from "@/shared/composables/useSectionForm";
 import { ruleFrom } from "@/shared/validation/naiveAdapter";
 
 const props = defineProps<{ serverId: string; state: NodeHostState }>();
-const emit = defineEmits<{ saved: [state: NodeHostState] }>();
+const emit = defineEmits<{ saved: [serverId: string, state: NodeHostState] }>();
 const { t } = useI18n();
 
 const formRef = ref<FormInst | null>(null);
@@ -105,7 +105,7 @@ const { submitting, serverErrors, errorMessage, submit } = useSectionForm(
       },
       confirm_interface_change: confirmChecked.value,
     }),
-  (next) => emit("saved", next),
+  (next) => emit("saved", props.serverId, next),
   () => t("servers.settings.host.network.applied"),
 );
 

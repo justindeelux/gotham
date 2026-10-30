@@ -9,27 +9,40 @@ export function useNodeHost(serverId: () => string) {
   const loading = ref(false);
   const forbidden = ref(false);
   const loadError = ref("");
+  let requestSeq = 0;
 
   async function load(): Promise<void> {
     const id = serverId();
     if (id === "") {
       return;
     }
+    const seq = ++requestSeq;
     loading.value = true;
     loadError.value = "";
     try {
-      state.value = await getNodeHost(id);
+      const next = await getNodeHost(id);
+      if (seq !== requestSeq || serverId() !== id) {
+        return;
+      }
+      state.value = next;
       forbidden.value = false;
     } catch (error) {
+      if (seq !== requestSeq || serverId() !== id) {
+        return;
+      }
       forbidden.value = isForbidden(error);
       loadError.value = forbidden.value ? "" : errorText(error);
     } finally {
-      loading.value = false;
+      if (seq === requestSeq) {
+        loading.value = false;
+      }
     }
   }
 
-  function apply(next: NodeHostState): void {
-    state.value = next;
+  function apply(origin: string, next: NodeHostState): void {
+    if (origin === serverId()) {
+      state.value = next;
+    }
   }
 
   watch(serverId, () => {

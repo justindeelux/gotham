@@ -39,6 +39,16 @@ function mountHost(serverId: ReturnType<typeof ref<string>>) {
   return { wrapper, host: host as unknown as ReturnType<typeof useNodeHost> };
 }
 
+function deferred<T>() {
+  let resolve!: (_value: T) => void;
+  let reject!: (_reason: unknown) => void;
+  const promise = new Promise<T>((res, rej) => {
+    resolve = res;
+    reject = rej;
+  });
+  return { promise, resolve, reject };
+}
+
 beforeEach(() => {
   vi.restoreAllMocks();
 });
@@ -78,6 +88,65 @@ describe("useNodeHost", () => {
     await host.load();
     expect(host.forbidden.value).toBe(false);
     expect(host.loadError.value).toBe("the host helper failed");
+    wrapper.unmount();
+  });
+
+  it("drops the previous server's late success and its loading flag", async () => {
+    const first = deferred<NodeHostState>();
+    const second = deferred<NodeHostState>();
+    mockGet
+      .mockImplementationOnce(() => first.promise)
+      .mockImplementationOnce(() => second.promise);
+    const serverId = ref("srv-a");
+    const { wrapper, host } = mountHost(serverId);
+
+    const stale = host.load();
+    serverId.value = "srv-b";
+    await nextTick();
+
+    second.resolve(stateFor("node-b"));
+    await flushPromises();
+    expect(host.state.value?.system.hostname).toBe("node-b");
+    expect(host.loading.value).toBe(false);
+
+    first.resolve(stateFor("node-a"));
+    await flushPromises();
+    await stale;
+    expect(host.state.value?.system.hostname).toBe("node-b");
+    expect(host.loading.value).toBe(false);
+    wrapper.unmount();
+  });
+
+  it("drops the previous server's late error", async () => {
+    const first = deferred<NodeHostState>();
+    const second = deferred<NodeHostState>();
+    mockGet
+      .mockImplementationOnce(() => first.promise)
+      .mockImplementationOnce(() => second.promise);
+    const serverId = ref("srv-a");
+    const { wrapper, host } = mountHost(serverId);
+
+    const stale = host.load();
+    serverId.value = "srv-b";
+    await nextTick();
+
+    second.resolve(stateFor("node-b"));
+    await flushPromises();
+    first.reject({ status: 403, message: "forbidden" });
+    await flushPromises();
+    await stale;
+    expect(host.state.value?.system.hostname).toBe("node-b");
+    expect(host.forbidden.value).toBe(false);
+    expect(host.loadError.value).toBe("");
+    wrapper.unmount();
+  });
+
+  it("only applies a saved state that belongs to the current server", () => {
+    const { wrapper, host } = mountHost(ref("srv-b"));
+    host.apply("srv-a", stateFor("node-a"));
+    expect(host.state.value).toBeNull();
+    host.apply("srv-b", stateFor("node-b"));
+    expect(host.state.value?.system.hostname).toBe("node-b");
     wrapper.unmount();
   });
 });

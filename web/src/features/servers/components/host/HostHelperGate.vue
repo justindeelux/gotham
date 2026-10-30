@@ -8,7 +8,7 @@ import type { NodeHostState } from "@/features/servers/api/host";
 import { errorLog, errorText } from "@/shared/api/errors";
 
 const props = defineProps<{ serverId: string; state: NodeHostState }>();
-const emit = defineEmits<{ saved: [state: NodeHostState] }>();
+const emit = defineEmits<{ saved: [serverId: string, state: NodeHostState] }>();
 const { t } = useI18n();
 
 const reason = computed<string>(() => {
@@ -37,7 +37,7 @@ async function handleInstall(): Promise<void> {
   errorMessage.value = "";
   try {
     const result = await installNodeHelper(props.serverId);
-    emit("saved", result.state);
+    emit("saved", props.serverId, result.state);
   } catch (error) {
     errorMessage.value = errorText(error) || t("servers.settings.host.helper.installFailed");
     const log = errorLog(error);

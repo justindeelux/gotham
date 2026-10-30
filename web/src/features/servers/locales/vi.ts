@@ -167,6 +167,9 @@ const vi: ServersMessages = {
         body: "Cấu hình mới đang chạy trên máy chủ này. Nếu bạn không truy cập được nó ở địa chỉ mới, đừng làm gì: máy chủ sẽ tự khôi phục cấu hình cũ sau",
         keep: "Giữ thay đổi",
         revert: "Hoàn tác ngay",
+        countdownStart: "Thay đổi mạng sẽ được hoàn tác sau {time} nếu bạn không giữ lại.",
+        countdown30: "Còn dưới 30 giây trước khi thay đổi mạng được hoàn tác.",
+        countdown10: "Còn dưới 10 giây trước khi thay đổi mạng được hoàn tác.",
       },
       system: {
         title: "Hệ thống",

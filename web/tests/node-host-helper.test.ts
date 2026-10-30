@@ -47,7 +47,8 @@ function mountGate(state: NodeHostState) {
           h(HostHelperGate as never, {
             state,
             serverId: "srv-1",
-            onSaved: (next: NodeHostState) => {
+            onSaved: (origin: string, next: NodeHostState) => {
+              expect(origin).toBe("srv-1");
               saved.value = next;
             },
           }),
@@ -218,7 +219,7 @@ describe("host forms while the node is not ready", () => {
             h(HostHelperGate as never, {
               state: state.value,
               serverId: "srv-1",
-              onSaved: (next: NodeHostState) => {
+              onSaved: (_origin: string, next: NodeHostState) => {
                 state.value = next;
               },
             }),

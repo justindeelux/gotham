@@ -165,6 +165,9 @@ const en = {
         body: "The new configuration is live on this server. If you cannot reach it at the new address, do nothing: the host restores the previous configuration in",
         keep: "Keep changes",
         revert: "Revert now",
+        countdownStart: "Network changes will revert in {time} unless you keep them.",
+        countdown30: "Less than 30 seconds left before the network change reverts.",
+        countdown10: "Less than 10 seconds left before the network change reverts.",
       },
       system: {
         title: "System",

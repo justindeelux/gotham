@@ -184,6 +184,7 @@ const en = {
       cronAria: "Cron expression",
       destinationAria: "Schedule destination",
       enableNewAria: "Enable the new schedule",
+      enableLabel: "Enabled",
       add: "Add schedule",
       save: "Save schedule",
       saved: "Schedule saved · next run computed from {cron}",

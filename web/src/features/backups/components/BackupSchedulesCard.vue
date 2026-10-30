@@ -6,6 +6,8 @@ import {
   NCheckbox,
   NEmpty,
   NInput,
+  NInputGroup,
+  NInputGroupLabel,
   NInputNumber,
   NPopconfirm,
   NSelect,
@@ -31,11 +33,21 @@ function t(key: string, params?: Record<string, string | number>): string {
 const backups = inject(resourceBackupsKey)!;
 
 const cronFeedbackId = "backup-schedule-cron-feedback";
-const cronSummary = computed(() => describeCron(backups.scheduleCron.value));
+const cronSummary = computed(() =>
+  describeCron(backups.scheduleCron.value, { short: true }),
+);
 const cronInvalid = computed(
   () =>
     backups.scheduleCron.value.trim() !== "" && cronSummary.value === "",
 );
+
+function presetLabel(preset: string): string {
+  return describeCron(preset, { short: true });
+}
+
+function isPresetActive(preset: string): boolean {
+  return backups.scheduleCron.value === preset;
+}
 </script>
 
 <template>
@@ -163,95 +175,98 @@ const cronInvalid = computed(
       <NText strong>
         {{ backups.editingScheduleId.value === null ? t("databases.backups.schedules.newTitle") : t("databases.backups.schedules.editTitle") }}
       </NText>
-      <NSpace align="center" :size="8">
+      <div class="schedule-form__presets">
         <NButton
           v-for="preset in RESOURCE_BACKUP_CRON_PRESETS"
           :key="preset"
           size="small"
-          secondary
+          :type="isPresetActive(preset) ? 'primary' : 'default'"
+          :secondary="!isPresetActive(preset)"
+          :aria-pressed="isPresetActive(preset)"
           @click="backups.scheduleCron.value = preset"
         >
-          {{ preset }}
+          {{ presetLabel(preset) }}
         </NButton>
-      </NSpace>
+      </div>
       <NText depth="3">{{ t("backups.schedules.keepLastHint") }}</NText>
-      <div class="schedule-form__row">
-        <div class="schedule-form__cron">
-          <NInput
-            v-model:value="backups.scheduleCron.value"
-            class="mono"
-            placeholder="0 2 * * *"
-            :aria-label="t('databases.backups.schedules.cronAria')"
-            :input-props="{
-              'aria-describedby':
-                cronSummary !== '' || cronInvalid ? cronFeedbackId : undefined,
-            }"
-          />
-          <NText v-if="cronSummary" :id="cronFeedbackId" depth="3">
-            {{ cronSummary }}
-          </NText>
+      <NInputGroup class="schedule-form__cron-group">
+        <NInput
+          v-model:value="backups.scheduleCron.value"
+          class="mono"
+          placeholder="0 2 * * *"
+          :status="cronInvalid ? 'error' : undefined"
+          :aria-label="t('databases.backups.schedules.cronAria')"
+          :input-props="{
+            'aria-describedby':
+              cronSummary !== '' || cronInvalid ? cronFeedbackId : undefined,
+          }"
+        />
+        <NInputGroupLabel class="schedule-form__cron-label">
           <NText
-            v-else-if="cronInvalid"
+            v-if="cronInvalid"
             :id="cronFeedbackId"
             type="error"
             role="alert"
           >
             {{ t("backups.cron.invalid") }}
           </NText>
+          <NText v-else-if="cronSummary" :id="cronFeedbackId" depth="3">
+            {{ cronSummary }}
+          </NText>
+        </NInputGroupLabel>
+      </NInputGroup>
+      <div class="schedule-form__row">
+        <div class="schedule-form__field">
+          <NText depth="3">
+            {{ t("databases.backups.protection.maxRunLabel") }}
+          </NText>
+          <NInputNumber
+            v-model:value="backups.scheduleMaxRunMinutes.value"
+            :min="15"
+            :max="1440"
+            :step="15"
+            style="width: 150px"
+            :aria-label="t('databases.backups.protection.maxRunAria')"
+          >
+            <template #suffix>
+              {{ t("databases.backups.protection.minutesSuffix") }}
+            </template>
+          </NInputNumber>
         </div>
-        <NText depth="3">
-          {{ t("databases.backups.protection.maxRunLabel") }}
-        </NText>
-        <NInputNumber
-          v-model:value="backups.scheduleMaxRunMinutes.value"
-          :min="15"
-          :max="1440"
-          :step="15"
-          style="width: 150px"
-          :aria-label="t('databases.backups.protection.maxRunAria')"
-        >
-          <template #suffix>
-            {{ t("databases.backups.protection.minutesSuffix") }}
-          </template>
-        </NInputNumber>
-        <NText depth="3">{{ t("backups.schedules.keepLastLabel") }}</NText>
-        <NInputNumber
-          v-model:value="backups.scheduleKeepLast.value"
-          :min="1"
-          :max="365"
-          style="width: 120px"
-          :aria-label="t('backups.schedules.keepLastLabel')"
-        />
-        <NSelect
-          v-model:value="backups.scheduleProviderId.value"
-          :options="backups.scheduleProviderOptions.value"
-          :placeholder="t('databases.backups.runs.destination')"
-          :aria-label="t('databases.backups.schedules.destinationAria')"
-          style="width: 220px"
-        />
-        <NSwitch
-          v-model:value="backups.scheduleEnabled.value"
-          :aria-label="t('databases.backups.schedules.enableNewAria')"
-        >
-          <template #checked>{{ t("databases.backups.schedules.on") }}</template>
-          <template #unchecked>{{ t("databases.backups.schedules.off") }}</template>
-        </NSwitch>
-        <NButton
-          type="primary"
-          :loading="backups.backupsStore.schedulesActing"
-          :disabled="!isCronPresent(backups.scheduleCron.value)"
-          @click="() => void backups.handleCreateSchedule()"
-        >
-          {{
-            backups.editingScheduleId.value === null ? t("databases.backups.schedules.add") : t("databases.backups.schedules.save")
-          }}
-        </NButton>
-        <NButton
-          v-if="backups.editingScheduleId.value !== null"
-          @click="backups.resetScheduleForm()"
-        >
-          {{ t("common.actions.cancel") }}
-        </NButton>
+        <div class="schedule-form__field">
+          <NText depth="3">{{ t("backups.schedules.keepLastLabel") }}</NText>
+          <NInputNumber
+            v-model:value="backups.scheduleKeepLast.value"
+            :min="1"
+            :max="365"
+            style="width: 120px"
+            :aria-label="t('backups.schedules.keepLastLabel')"
+          />
+        </div>
+        <div class="schedule-form__field">
+          <NText depth="3">
+            {{ t("databases.backups.runs.destination") }}
+          </NText>
+          <NSelect
+            v-model:value="backups.scheduleProviderId.value"
+            :options="backups.scheduleProviderOptions.value"
+            :placeholder="t('databases.backups.runs.destination')"
+            :aria-label="t('databases.backups.schedules.destinationAria')"
+            style="width: 220px"
+          />
+        </div>
+        <div class="schedule-form__field">
+          <NText depth="3">
+            {{ t("databases.backups.schedules.enableLabel") }}
+          </NText>
+          <NSwitch
+            v-model:value="backups.scheduleEnabled.value"
+            :aria-label="t('databases.backups.schedules.enableNewAria')"
+          >
+            <template #checked>{{ t("databases.backups.schedules.on") }}</template>
+            <template #unchecked>{{ t("databases.backups.schedules.off") }}</template>
+          </NSwitch>
+        </div>
       </div>
       <div
         v-if="backups.resource.value.resource_type !== 'database'"
@@ -267,6 +282,24 @@ const cronInvalid = computed(
               : t("backups.resourceTab.noPauseHelper")
           }}
         </NText>
+      </div>
+      <div class="schedule-form__actions">
+        <NButton
+          type="primary"
+          :loading="backups.backupsStore.schedulesActing"
+          :disabled="!isCronPresent(backups.scheduleCron.value) || cronInvalid"
+          @click="() => void backups.handleCreateSchedule()"
+        >
+          {{
+            backups.editingScheduleId.value === null ? t("databases.backups.schedules.add") : t("databases.backups.schedules.save")
+          }}
+        </NButton>
+        <NButton
+          v-if="backups.editingScheduleId.value !== null"
+          @click="backups.resetScheduleForm()"
+        >
+          {{ t("common.actions.cancel") }}
+        </NButton>
       </div>
     </div>
   </NCard>
@@ -285,19 +318,53 @@ const cronInvalid = computed(
   border-top: 1px dashed var(--border);
 }
 
+.schedule-form__presets {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--space-2);
+}
+
 .schedule-form__row {
   display: flex;
-  align-items: center;
-  gap: var(--space-2);
+  align-items: flex-end;
+  gap: var(--space-3);
   flex-wrap: wrap;
 }
 
-.schedule-form__cron {
+.schedule-form__field {
   display: flex;
-  flex: 1 1 240px;
   flex-direction: column;
   gap: var(--space-1);
-  min-width: 200px;
+}
+
+.schedule-form__cron-group {
+  width: 100%;
+}
+
+.schedule-form__cron-label {
+  max-width: 55%;
+  overflow: hidden;
+  white-space: nowrap;
+  text-overflow: ellipsis;
+}
+
+.schedule-form__actions {
+  display: flex;
+  gap: var(--space-2);
+}
+
+@media (max-width: 640px) {
+  .schedule-form__cron-group {
+    flex-direction: column;
+  }
+
+  .schedule-form__cron-label {
+    width: 100%;
+    max-width: none;
+    justify-content: flex-start;
+    border-top: 1px solid var(--border);
+    border-left: 0;
+  }
 }
 
 .schedule-pause {

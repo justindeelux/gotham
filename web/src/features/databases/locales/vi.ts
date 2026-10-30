@@ -187,6 +187,7 @@ const vi: typeof en = {
       cronAria: "Biểu thức cron",
       destinationAria: "Đích lưu trữ của lịch",
       enableNewAria: "Bật lịch mới",
+      enableLabel: "Bật",
       add: "Thêm lịch",
       save: "Lưu lịch",
       saved: "Đã lưu lịch · lần chạy tiếp tính từ {cron}",

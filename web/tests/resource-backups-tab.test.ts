@@ -102,14 +102,14 @@ describe("ResourceBackupsTab contents", () => {
   it("explains the cron expression while typing", async () => {
     const wrapper = mountTab();
     await flushPromises();
-    const form = wrapper.get(".schedule-form__cron");
+    const form = wrapper.get(".schedule-form__cron-group");
     const input = form.get("input");
 
     await input.setValue("0 2 * * *");
     await flushPromises();
-    expect(form.text()).toContain(
-      "Every day at 02:00 (0 2 * * *) · Server local time",
-    );
+    expect(form.text()).toContain("Every day at 02:00");
+    expect(form.text()).not.toContain("(0 2 * * *)");
+    expect(form.text()).not.toContain("Server local time");
 
     await input.setValue("0 2 * *");
     await flushPromises();

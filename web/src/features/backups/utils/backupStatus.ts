@@ -146,7 +146,7 @@ function weekdayName(weekday: number): string {
     .format(date);
 }
 
-function cronSentence(fields: CronField[], cron: string): string {
+function cronSentence(fields: CronField[]): string {
   const [minute, hour, dayOfMonth, month, weekday] = fields as [
     CronField,
     CronField,
@@ -159,44 +159,36 @@ function cronSentence(fields: CronField[], cron: string): string {
   const hours = singleValue(hour);
 
   if (minute.any && hour.any && daysAny && weekday.any) {
-    return cronText("backups.cron.everyMinute", { cron });
+    return cronText("backups.cron.everyMinute");
   }
   if (minute.step !== null && hour.any && daysAny && weekday.any) {
-    return cronText("backups.cron.everyMinutes", {
-      count: minute.step,
-      cron,
-    });
+    return cronText("backups.cron.everyMinutes", { count: minute.step });
   }
   if (minutes !== null && hour.any && daysAny && weekday.any) {
-    return cronText("backups.cron.hourlyAt", {
-      minute: pad(minutes),
-      cron,
-    });
+    return cronText("backups.cron.hourlyAt", { minute: pad(minutes) });
   }
   if (minutes !== null && hour.step !== null && daysAny && weekday.any) {
     return cronText("backups.cron.everyNHours", {
       count: hour.step,
       minute: pad(minutes),
-      cron,
     });
   }
   if (minutes === null || hours === null) {
-    return cronText("backups.cron.custom", { cron });
+    return cronText("backups.cron.custom");
   }
   const time = `${pad(hours)}:${pad(minutes)}`;
   if (daysAny && weekday.any) {
-    return cronText("backups.cron.dailyAt", { time, cron });
+    return cronText("backups.cron.dailyAt", { time });
   }
   if (daysAny && !weekday.any) {
     const weekdays = [...weekday.values].sort((a, b) => a - b).join(",");
     if (weekdays === "1,2,3,4,5") {
-      return cronText("backups.cron.weekdaysAt", { time, cron });
+      return cronText("backups.cron.weekdaysAt", { time });
     }
     if (weekday.values.size === 1) {
       return cronText("backups.cron.weeklyAt", {
         day: weekdayName([...weekday.values][0]!),
         time,
-        cron,
       });
     }
   }
@@ -204,21 +196,33 @@ function cronSentence(fields: CronField[], cron: string): string {
     return cronText("backups.cron.monthlyAt", {
       day: singleValue(dayOfMonth)!,
       time,
-      cron,
     });
   }
-  return cronText("backups.cron.custom", { cron });
+  return cronText("backups.cron.custom");
+}
+
+export interface DescribeCronOptions {
+  /** Return only the plain-language sentence: no expression and no time note. */
+  short?: boolean;
 }
 
 // The backend runs the schedule in the server's local time, not UTC, so the
-// sentence carries that note wherever it is shown.
-export function describeCron(cron: string): string {
+// full sentence carries that note wherever it is shown. The short form is for
+// places that already show the expression next to it.
+export function describeCron(
+  cron: string,
+  options: DescribeCronOptions = {},
+): string {
   void activeLocale.value;
   const fields = parseCron(cron);
   if (fields === null) {
     return "";
   }
-  return `${cronSentence(fields, cron)} · ${cronText("backups.cron.serverTime")}`;
+  const sentence = cronSentence(fields);
+  if (options.short === true) {
+    return sentence;
+  }
+  return `${sentence} (${cron.trim()}) · ${cronText("backups.cron.serverTime")}`;
 }
 
 export function runDuration(

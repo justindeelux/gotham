@@ -264,6 +264,47 @@ async function openBackups(
   await page.route(/\/api\/v1\/services(\?.*)?$/, async (route) => {
     await route.fulfill({ json: { services: [service] } });
   });
+  await page.route("**/api/v1/servers", async (route) => {
+    await route.fulfill({
+      json: {
+        servers: [
+          {
+            id: database.server_id,
+            name: "node",
+            ip: "10.0.0.5",
+            port: 22,
+            status: "ready",
+            node_id: "localhost",
+          },
+        ],
+      },
+    });
+  });
+  await page.route(
+    /\/api\/v1\/databases\/[^/?]+\/credentials(\?.*)?$/,
+    async (route) => {
+      await route.fulfill({
+        json: {
+          credentials: {
+            username: "gotham",
+            password: "secret",
+            database: "gotham",
+          },
+        },
+      });
+    },
+  );
+  await page.route(
+    /\/api\/v1\/databases\/([^/?]+)(\?.*)?$/,
+    async (route) => {
+      const id = route.request().url().split("/databases/")[1]?.split(/[/?]/)[0];
+      if (id !== databaseId) {
+        await route.fallback();
+        return;
+      }
+      await route.fulfill({ json: { database } });
+    },
+  );
   await page.goto(`${baseURL}/backups`);
   await page.getByRole("heading", { name: "Backups", level: 1 }).waitFor();
   await waitForLayoutSettled(page);
@@ -369,4 +410,81 @@ test("keeps the provider prefix clearable and keys write-only", async ({
   expect(body["prefix"]).toBe("");
   expect(body).not.toHaveProperty("access_key");
   expect(body).not.toHaveProperty("secret_key");
+});
+
+test("schedule form reads vertically and fits at 390px", async ({ page }) => {
+  test.setTimeout(120_000);
+  await page.setViewportSize({ width: 1280, height: 900 });
+  await openBackups(page);
+  const path = `/projects/${projectId}/environments/${environmentId}/databases/${databaseId}`;
+  await page.goto(`${baseURL}${path}`);
+  await page.locator(".page-head h1").first().waitFor();
+  await page.locator(".n-tabs-tab").filter({ hasText: /^Backups$/ }).click();
+  const form = page.locator(".schedule-form");
+  await expect(form).toBeVisible();
+
+  const presets = form.locator(".schedule-form__presets button");
+  await expect(presets).toHaveCount(3);
+  await expect(presets.nth(0)).toHaveText("Every day at 02:00");
+  await expect(presets.nth(1)).toHaveText("Every 6 hours at :00");
+  await expect(presets.nth(2)).toHaveText("Every Sunday at 03:00");
+
+  const cronInput = form.locator(".schedule-form__cron-group input");
+  await cronInput.fill("0 5 * * *");
+  const cronLabel = form.locator(".schedule-form__cron-label");
+  await expect(cronLabel).toHaveText("Every day at 05:00");
+  await expect(cronLabel).not.toContainText("0 5 * * *");
+  await expect(form).not.toContainText("Server local time");
+
+  const group = form.locator(".schedule-form__cron-group");
+  const desktopInput = await group.locator(".n-input").first().boundingBox();
+  const desktopLabel = await cronLabel.boundingBox();
+  if (desktopInput === null || desktopLabel === null) {
+    throw new Error("expected the cron input and label");
+  }
+  expect(desktopLabel.x, "the sentence sits right of the input").toBeGreaterThan(
+    desktopInput.x,
+  );
+  expect(Math.abs(desktopLabel.y - desktopInput.y)).toBeLessThanOrEqual(1);
+
+  await page.setViewportSize({ width: 390, height: 844 });
+  await page.reload();
+  await page.locator(".page-head h1").first().waitFor();
+  await page.locator(".n-tabs-tab").filter({ hasText: /^Backups$/ }).click();
+  await expect(form).toBeVisible();
+  await cronInput.fill("0 5 * * *");
+
+  const rows = await form.evaluate((element) =>
+    Array.from(element.children).map((child) => ({
+      className: child.className,
+      y: child.getBoundingClientRect().y,
+    })),
+  );
+  const presetsRow = rows.find((row) => row.className.includes("presets"));
+  const cronRow = rows.find((row) => row.className.includes("cron-group"));
+  const optionsRow = rows.find(
+    (row) => row.className.includes("row") && !row.className.includes("pause"),
+  );
+  const actionsRow = rows.find((row) => row.className.includes("actions"));
+  if (!presetsRow || !cronRow || !optionsRow || !actionsRow) {
+    throw new Error("expected every schedule form row");
+  }
+  expect(presetsRow.y).toBeLessThan(cronRow.y);
+  expect(cronRow.y).toBeLessThan(optionsRow.y);
+  expect(optionsRow.y).toBeLessThan(actionsRow.y);
+
+  const mobileInput = await group.locator(".n-input").first().boundingBox();
+  const mobileLabel = await cronLabel.boundingBox();
+  if (mobileInput === null || mobileLabel === null) {
+    throw new Error("expected the stacked cron input and label");
+  }
+  expect(
+    mobileLabel.y,
+    "the sentence stacks under the input at 390px",
+  ).toBeGreaterThanOrEqual(mobileInput.y + mobileInput.height - 1);
+  expect(
+    await page.evaluate(
+      () => document.documentElement.scrollWidth - window.innerWidth,
+    ),
+  ).toBeLessThanOrEqual(1);
 });

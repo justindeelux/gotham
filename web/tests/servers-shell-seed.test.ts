@@ -88,6 +88,7 @@ function shellRouter(): ReturnType<typeof createRouter> {
           { path: "files", name: "files", component: stub },
           { path: "instance", name: "instance", component: stub },
           { path: "monitoring", name: "monitoring", component: stub },
+          { path: "cleanup", name: "cleanup", component: stub },
           { path: "updates", name: "updates", component: stub },
           { path: "servers/:id", name: "server-detail", component: stub },
         ],

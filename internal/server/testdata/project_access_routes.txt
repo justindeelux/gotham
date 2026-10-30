@@ -55,6 +55,7 @@ public GET /api/v1/auth/invites/validate
 personal GET /api/v1/auth/me
 personal GET /api/v1/auth/me/sessions
 personal GET /api/v1/auth/me/totp
+owner GET /api/v1/cleanup/categories
 project GET /api/v1/databases
 owner GET /api/v1/databases/backup-targets
 project GET /api/v1/databases/{id}
@@ -185,6 +186,8 @@ personal POST /api/v1/auth/me/totp/enroll
 personal POST /api/v1/auth/me/totp/recovery-codes
 personal POST /api/v1/auth/refresh
 personal POST /api/v1/auth/register
+owner POST /api/v1/cleanup/clean
+owner POST /api/v1/cleanup/scan
 project POST /api/v1/databases
 owner POST /api/v1/databases/backup-targets
 owner POST /api/v1/databases/backup-targets/{targetId}/test

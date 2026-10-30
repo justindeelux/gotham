@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"errors"
+	"fmt"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -13,6 +14,8 @@ import (
 
 	"github.com/go-chi/chi/v5"
 	"github.com/google/uuid"
+	"google.golang.org/grpc/codes"
+	"google.golang.org/grpc/status"
 
 	agentv1 "github.com/justindeelux/gotham/proto/agent/v1"
 )
@@ -470,6 +473,54 @@ func TestNodeRoutes(t *testing.T) {
 	ok.ServeHTTP(rec, httptest.NewRequest(http.MethodPost, "/v1/servers/"+id.String()+"/host/network/confirm", nil))
 	if rec.Code != http.StatusConflict {
 		t.Fatalf("confirm without pending: %d %s", rec.Code, rec.Body)
+	}
+}
+
+func TestNodeSystemHelperFailureShowsReason(t *testing.T) {
+	host := &fakeHost{status: HostStatus{}}
+	f := newNodeFixture(t, host, nil)
+	id := f.servers[0]
+	host.applyErr = fmt.Errorf("%w: apply-system: mkdir: cannot create directory '/etc/systemd/timesyncd.conf.d': Read-only file system", ErrHost)
+
+	r := chi.NewRouter()
+	MountNode(r, func(n http.Handler) http.Handler { return n }, func(context.Context) (uuid.UUID, bool) { return uuid.Nil, true }, f.svc)
+	rec := httptest.NewRecorder()
+	r.ServeHTTP(rec, httptest.NewRequest(http.MethodPut, "/v1/servers/"+id.String()+"/host/system",
+		bytes.NewBufferString(`{"hostname":"","ntp_enabled":true,"ntp_servers":[],"timezone":"Europe/Berlin"}`)))
+	if rec.Code != http.StatusBadGateway {
+		t.Fatalf("helper failure = %d, want 502: %s", rec.Code, rec.Body)
+	}
+	body := rec.Body.String()
+	for _, want := range []string{
+		`"message":"the host helper failed; the change was not applied"`,
+		`"log":"apply-system: mkdir: cannot create directory '/etc/systemd/timesyncd.conf.d': Read-only file system"`,
+	} {
+		if !strings.Contains(body, want) {
+			t.Errorf("502 body misses %s:\n%s", want, body)
+		}
+	}
+}
+
+func TestNodeSystemAgentHelperFailureShowsReason(t *testing.T) {
+	host := &fakeHost{status: HostStatus{}}
+	f := newNodeFixture(t, host, nil)
+	id := f.servers[0]
+	host.applyErr = errors.Join(ErrHost, status.Error(codes.Internal, "the host helper failed: gotham-hostctl: cannot prepare directories"))
+
+	r := chi.NewRouter()
+	MountNode(r, func(n http.Handler) http.Handler { return n }, func(context.Context) (uuid.UUID, bool) { return uuid.Nil, true }, f.svc)
+	rec := httptest.NewRecorder()
+	r.ServeHTTP(rec, httptest.NewRequest(http.MethodPut, "/v1/servers/"+id.String()+"/host/system",
+		bytes.NewBufferString(`{"hostname":"","ntp_enabled":true,"ntp_servers":[],"timezone":"Europe/Berlin"}`)))
+	if rec.Code != http.StatusBadGateway {
+		t.Fatalf("agent helper failure = %d, want 502: %s", rec.Code, rec.Body)
+	}
+	body := rec.Body.String()
+	if !strings.Contains(body, `"log":"the host helper failed: gotham-hostctl: cannot prepare directories"`) {
+		t.Errorf("502 body misses the agent's helper reason:\n%s", body)
+	}
+	if strings.Contains(body, "rpc error") {
+		t.Errorf("502 body leaks gRPC transport text:\n%s", body)
 	}
 }
 

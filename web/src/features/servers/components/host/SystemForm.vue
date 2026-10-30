@@ -77,7 +77,7 @@ const { focusTarget, unlocked } = useHostUnlock(() => props.state.capability ===
     <p class="sr-only" role="status" aria-live="polite">
       {{ unlocked ? t("servers.settings.host.helper.installed") : "" }}
     </p>
-    <NAlert v-if="errorMessage" type="error" :show-icon="true" class="form-alert">{{ errorMessage }}</NAlert>
+    <NAlert v-if="errorMessage" type="error" :show-icon="true" class="form-alert form-alert-multiline">{{ errorMessage }}</NAlert>
     <NForm ref="formRef" :model="form" :rules="rules" class="host-form" @submit.prevent="handleSubmit">
       <NFormItem
         path="hostname"

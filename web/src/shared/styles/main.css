@@ -384,6 +384,11 @@ a {
   margin-bottom: var(--space-4);
 }
 
+/* Keeps the newline between the API message and the host helper's reason. */
+.form-alert-multiline {
+  white-space: pre-line;
+}
+
 .switch-row {
   display: flex;
   align-items: flex-start;

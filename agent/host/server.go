@@ -32,12 +32,14 @@ type runner interface {
 	Run(ctx context.Context, verb, stdin string) (string, error)
 }
 
-// runError carries the helper's exit code and never its stderr: stderr may
-// name paths, and callers only need the pinned helper outcome.
+// runError carries the helper's exit code and its own last diagnostic line.
+// Underlying command stderr is dropped: it may name paths, while the helper
+// only ever writes its fixed "gotham-hostctl: ..." die lines itself.
 type runError struct {
-	verb string
-	code int
-	err  error
+	verb   string
+	code   int
+	err    error
+	reason string
 }
 
 func (e *runError) Error() string {
@@ -45,6 +47,22 @@ func (e *runError) Error() string {
 }
 
 func (e *runError) Unwrap() error { return e.err }
+
+// helperReasonLine returns the helper's own last diagnostic line, bounded, and
+// never a line from a command it ran.
+func helperReasonLine(stderr string) string {
+	var reason string
+	for _, line := range strings.Split(stderr, "\n") {
+		if line = strings.TrimSpace(line); strings.HasPrefix(line, "gotham-hostctl: ") {
+			reason = line
+		}
+	}
+	const maxReason = 300
+	if len(reason) > maxReason {
+		reason = reason[:maxReason]
+	}
+	return reason
+}
 
 type sudoRunner struct{ helper string }
 
@@ -61,7 +79,7 @@ func (r sudoRunner) Run(ctx context.Context, verb, stdin string) (string, error)
 		if errors.As(err, &exit) {
 			code = exit.ExitCode()
 		}
-		return "", &runError{verb: verb, code: code, err: err}
+		return "", &runError{verb: verb, code: code, err: err, reason: helperReasonLine(errOut.String())}
 	}
 	return out.String(), nil
 }
@@ -229,8 +247,8 @@ func (s *Server) ApplySystem(ctx context.Context, request *agentv1.HostApplySyst
 }
 
 // helperStatus maps the helper's pinned exit codes to gRPC statuses. The
-// helper's stderr is never forwarded: it is root-side output and may name host
-// paths.
+// helper's own fixed reason line rides along with an unexpected failure; raw
+// stderr (which may name host paths) is never forwarded.
 func helperStatus(verb string, err error) error {
 	var helperErr *runError
 	if !errors.As(err, &helperErr) {
@@ -246,6 +264,9 @@ func helperStatus(verb string, err error) error {
 			return status.Error(codes.FailedPrecondition, "a network change is already pending")
 		}
 		return status.Error(codes.FailedPrecondition, "no network change is pending")
+	}
+	if helperErr.reason != "" {
+		return status.Error(codes.Internal, "the host helper failed: "+helperErr.reason)
 	}
 	return status.Error(codes.Internal, "the host helper failed")
 }

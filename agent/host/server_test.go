@@ -229,6 +229,31 @@ func TestHelperErrorsStayOpaque(t *testing.T) {
 			}
 		})
 	}
+
+	reason := helperStatus("apply-system", &runError{
+		verb: "apply-system", code: 1,
+		reason: "gotham-hostctl: cannot prepare directories",
+	})
+	if got, want := status.Convert(reason).Message(), "the host helper failed: gotham-hostctl: cannot prepare directories"; got != want {
+		t.Fatalf("reason = %q, want %q", got, want)
+	}
+}
+
+func TestHelperReasonLineKeepsOnlyFixedDiagnostics(t *testing.T) {
+	stderr := "mkdir: cannot create directory '/etc/systemd/timesyncd.conf.d': Read-only file system\n" +
+		"gotham-hostctl: cannot prepare directories\n" +
+		"gotham-hostctl: timedatectl failed\n"
+	if got, want := helperReasonLine(stderr), "gotham-hostctl: timedatectl failed"; got != want {
+		t.Fatalf("reason = %q, want %q", got, want)
+	}
+	if got := helperReasonLine("some command: secret /etc/shadow"); got != "" {
+		t.Fatalf("foreign stderr must be dropped, got %q", got)
+	}
+
+	long := "gotham-hostctl: " + strings.Repeat("x", 400)
+	if got := helperReasonLine(long); len(got) != 300 {
+		t.Fatalf("reason not bounded: %d", len(got))
+	}
 }
 
 func TestSudoRunnerUsesFixedArguments(t *testing.T) {

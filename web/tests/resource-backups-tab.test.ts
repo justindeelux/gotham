@@ -2,6 +2,7 @@ import { flushPromises, mount } from "@vue/test-utils";
 import { createPinia } from "pinia";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
+import { createBackup } from "@/features/backups/api/backups";
 import ResourceBackupsTab from "@/features/backups/components/ResourceBackupsTab.vue";
 import {
   i18n,
@@ -43,6 +44,16 @@ vi.mock("@/features/backups/api/backups", async (importOriginal) => {
     }),
     listProviders: async () => [],
     getBackupContents: async () => state.contents,
+    createBackup: vi.fn(async () => ({
+      id: "run-2",
+      resource_type: "application",
+      resource_id: "app-1",
+      type: "manual",
+      status: "pending",
+      size: 0,
+      pause_during_backup: false,
+      created_at: "2026-01-01T00:00:00Z",
+    })),
   };
 });
 
@@ -52,6 +63,7 @@ beforeEach(() => {
   syncComposerLocale("en");
   state.contents = [];
   state.backups = [];
+  vi.mocked(createBackup).mockClear();
 });
 
 function mountTab() {
@@ -85,6 +97,57 @@ describe("ResourceBackupsTab contents", () => {
     expect(wrapper.text()).toContain(
       "Stop the resource while the archive is taken",
     );
+  });
+
+  it("offers the stop-resource option as a checkbox on the runs card", async () => {
+    const wrapper = mountTab();
+    await flushPromises();
+
+    const runs = wrapper.get("#backup-runs");
+    const pause = runs.get(".backup-pause");
+    expect(pause.classes()).toContain("n-checkbox");
+    expect(runs.find(".n-switch").exists()).toBe(false);
+    expect(pause.attributes("aria-label")).toBe(
+      "Stop the resource while the archive is taken",
+    );
+    expect(pause.text()).toContain(
+      "Stop the resource while the archive is taken",
+    );
+    expect(runs.findAll(".backup-pause")).toHaveLength(1);
+    wrapper.unmount();
+  });
+
+  it("sends the pause choice when the runs checkbox is cleared", async () => {
+    const wrapper = mountTab();
+    await flushPromises();
+
+    await wrapper.get("#backup-runs .backup-pause").trigger("click");
+    const backupNow = wrapper
+      .get("#backup-runs")
+      .findAll("button")
+      .find((button) => button.text().includes("Backup now"));
+    expect(backupNow).toBeDefined();
+    await backupNow!.trigger("click");
+    await flushPromises();
+
+    const popover = globalThis.document.body.querySelector(".n-popconfirm");
+    expect(popover, "expected the backup confirm popover").not.toBeNull();
+    const buttons = [...popover!.querySelectorAll("button")];
+    const positive =
+      buttons.find((button) =>
+        button.classList.contains("n-button--primary-type"),
+      ) ?? buttons[buttons.length - 1];
+    positive!.dispatchEvent(
+      new globalThis.MouseEvent("click", { bubbles: true }),
+    );
+    await flushPromises();
+
+    expect(createBackup).toHaveBeenCalledWith(
+      { resource_type: "application", resource_id: "app-1" },
+      "",
+      false,
+    );
+    wrapper.unmount();
   });
 
   it("offers the stop-resource option as a checkbox on schedules", async () => {

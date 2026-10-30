@@ -694,6 +694,41 @@ describe("server detail Terminal tab (JUS-246)", () => {
     expect(labels).not.toContain("Terminal");
     wrapper.unmount();
   });
+
+  it("hides the Node settings tab from a non-operator and falls back to Overview", async () => {
+    const pinia = createPinia();
+    setActivePinia(pinia);
+    login(pinia, false);
+    useServersStore().servers = [SERVER_A];
+    const router = pageRouter();
+    await router.push(`/servers/${SERVER_A.id}?tab=settings`);
+    await router.isReady();
+    const { default: ServerDetailPage } = await import(
+      "../src/features/servers/pages/ServerDetailPage.vue"
+    );
+    const wrapper = mount(ServerDetailPage, {
+      attachTo: document.body,
+      global: {
+        plugins: [pinia, router, i18n],
+        stubs: {
+          ServerDetailHeader: true,
+          ServerOverviewTab: true,
+          ServerMetricsTab: true,
+          ServerProxyTab: true,
+          ServerSettingsTab: true,
+          EditServerModal: true,
+        },
+      },
+    });
+    await flushPromises();
+    await nextTick();
+    const labels = wrapper.findAll(".n-tabs-tab").map((node) => node.text());
+    expect(labels).not.toContain("Settings");
+    const active = wrapper.find(".n-tabs-tab--active");
+    expect(active.exists()).toBe(true);
+    expect(active.text()).toBe("Overview");
+    wrapper.unmount();
+  });
 });
 
 describe("page session recovery (JUS-246 fix round 1)", () => {

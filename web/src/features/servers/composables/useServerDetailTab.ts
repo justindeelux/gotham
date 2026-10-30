@@ -22,6 +22,12 @@ function isDetailTab(value: unknown): value is DetailTab {
   );
 }
 
+const OWNER_ONLY_TABS: readonly DetailTab[] = ["files", "terminal", "settings"];
+
+function availableTab(tab: DetailTab, isOwner: boolean): DetailTab {
+  return isOwner || !OWNER_ONLY_TABS.includes(tab) ? tab : "overview";
+}
+
 export function useServerDetailTab(serverId: ComputedRef<string>) {
   const route = useRoute();
   const router = useRouter();
@@ -32,13 +38,7 @@ export function useServerDetailTab(serverId: ComputedRef<string>) {
     if (!isDetailTab(value)) {
       return "overview";
     }
-    if (
-      (value === "files" || value === "terminal") &&
-      !authStore.isOwner
-    ) {
-      return "overview";
-    }
-    return value;
+    return availableTab(value, authStore.isOwner);
   }
 
   const activeTab = ref<DetailTab>(tabFromQuery());
@@ -78,11 +78,7 @@ export function useServerDetailTab(serverId: ComputedRef<string>) {
         return;
       }
       const next = isDetailTab(value) ? value : "overview";
-      const visible =
-        (next === "files" || next === "terminal") &&
-        !authStore.isOwner
-          ? "overview"
-          : next;
+      const visible = availableTab(next, authStore.isOwner);
       if (visible !== activeTab.value) {
         activeTab.value = visible;
       }
@@ -94,7 +90,7 @@ export function useServerDetailTab(serverId: ComputedRef<string>) {
   });
 
   function showOverview(): void {
-    if (activeTab.value === "terminal" || activeTab.value === "files") {
+    if (availableTab(activeTab.value, authStore.isOwner) !== activeTab.value) {
       activeTab.value = "overview";
     }
   }

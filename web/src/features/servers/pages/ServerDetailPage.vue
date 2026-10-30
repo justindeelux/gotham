@@ -259,7 +259,11 @@ onMounted(() => {
             <ServerProxyTab :server-id="server.id" />
           </NTabPane>
 
-          <NTabPane name="settings" :tab="$t('servers.detail.tabSettings')">
+          <NTabPane
+            v-if="authStore.isOwner"
+            name="settings"
+            :tab="$t('servers.detail.tabSettings')"
+          >
             <ServerSettingsTab :server="server" />
           </NTabPane>
         </NTabs>

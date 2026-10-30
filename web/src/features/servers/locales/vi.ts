@@ -107,14 +107,94 @@ const vi: ServersMessages = {
   },
   settings: {
     title: "Cài đặt nút",
-    readOnlyNote:
-      "Backend chưa có cài đặt chỉnh sửa được. Các giá trị dưới đây chỉ để xem.",
+    identityNote: "Định danh do control plane ghi lại. Sửa bằng thao tác sửa của nút.",
     name: "Tên",
     address: "Địa chỉ",
     sshUser: "Người dùng SSH",
     credential: "Thông tin đăng nhập",
     registered: "Đã đăng ký",
     updated: "Đã cập nhật",
+    host: {
+      forbidden: "Chỉ chủ sở hữu mới xem hoặc thay đổi được cài đặt máy chủ của nút này.",
+      helper: {
+        install: "Cài helper máy chủ",
+        installed: "Đã cài helper máy chủ. Các cài đặt này giờ có thể chỉnh sửa.",
+        installFailed: "Không cài được helper máy chủ.",
+        logTitleFailed: "Cài helper máy chủ thất bại",
+        logHint: "Kết quả từ trình cài trên nút này.",
+        close: "Đóng",
+      },
+      capability: {
+        unsupported_stack:
+          "Máy chủ này không chạy ngăn xếp mạng và thời gian systemd mà Gotham cần, nên cài đặt máy chủ chỉ để xem.",
+        helper_missing:
+          "Chưa cài helper máy chủ trên máy chủ này. Hãy cài để quản lý các cài đặt này từ Gotham.",
+        helperMissingRemote:
+          "Chưa cài helper máy chủ trên máy chủ này. Hãy chạy lại trình cài Gotham trên máy này, hoặc trình cài agent trên nút từ xa, để bật cài đặt máy chủ.",
+        helper_denied:
+          "Máy chủ này không được phép chạy helper máy chủ. Hãy chạy lại trình cài Gotham tương ứng (control plane hoặc agent) để khôi phục quy tắc sudo.",
+        agent_outdated:
+          "Agent của máy chủ này quá cũ cho cài đặt máy chủ. Hãy cập nhật agent hoặc chạy lại trình cài agent trên nút đó, rồi tải lại trang.",
+        offline:
+          "Không kết nối được agent của máy chủ này. Cài đặt máy chủ chỉ để xem cho tới khi agent kết nối lại.",
+      },
+      network: {
+        title: "Mạng",
+        dnsPrimary: "Máy chủ DNS chính",
+        dnsAlternate: "Máy chủ DNS phụ",
+        dnsExtra: "Máy chủ DNS {n}",
+        dnsAdd: "Thêm máy chủ DNS",
+        dnsHint: "DNS chính bắt buộc, DNS phụ tùy chọn. Tối đa 3 resolver.",
+        optional: "tùy chọn",
+        mode: "Chế độ",
+        dhcp: "DHCP",
+        auto: "Tự động",
+        static: "Tĩnh",
+        address: "Địa chỉ (CIDR)",
+        gateway: "Gateway",
+        ipv6Enabled: "Bật IPv6",
+        submit: "Áp dụng thay đổi mạng",
+        applied: "Đã áp dụng thay đổi mạng. Hãy xác nhận trước khi đếm ngược kết thúc.",
+        pendingNote: "Đang có thay đổi mạng chờ xác nhận. Hãy xử lý trước khi thay đổi tiếp.",
+        dnsOnlyNote: "Chỉ đổi máy chủ DNS: cấu hình interface được giữ nguyên.",
+        riskyWarning:
+          "Thay đổi này can thiệp vào địa chỉ của interface máy chủ đang kết nối. Máy chủ có thể mất kết nối cho đến khi bạn xác nhận hoặc hoàn tác.",
+        confirmLabel: "Tôi hiểu thay đổi này có thể làm gián đoạn kết nối",
+        confirmRequired: "Hãy tích vào ô xác nhận để áp dụng thay đổi này.",
+      },
+      confirm: {
+        title: "Giữ các thay đổi mạng này?",
+        body: "Cấu hình mới đang chạy trên máy chủ này. Nếu bạn không truy cập được nó ở địa chỉ mới, đừng làm gì: máy chủ sẽ tự khôi phục cấu hình cũ sau",
+        keep: "Giữ thay đổi",
+        revert: "Hoàn tác ngay",
+        countdownStart: "Thay đổi mạng sẽ được hoàn tác sau {time} nếu bạn không giữ lại.",
+        countdown30: "Còn dưới 30 giây trước khi thay đổi mạng được hoàn tác.",
+        countdown10: "Còn dưới 10 giây trước khi thay đổi mạng được hoàn tác.",
+      },
+      system: {
+        title: "Hệ thống",
+        hostname: "Hostname",
+        ntpEnabled: "Đồng bộ thời gian (NTP)",
+        ntpServers: "Máy chủ NTP",
+        ntpHint: "Tối đa 4, cách nhau bằng dấu phẩy. Để trống để dùng mặc định của hệ thống.",
+        timezone: "Múi giờ",
+        timezoneHint:
+          "Danh sách IANA có thể tìm kiếm, kèm độ lệch UTC hiện tại. Áp dụng cho đồng hồ của máy chủ này và, với nút control plane, cho lịch chạy, hiển thị log và sao lưu.",
+        submit: "Lưu cài đặt hệ thống",
+        saved: "Đã lưu cài đặt hệ thống.",
+      },
+      validation: {
+        timezone: "Chọn múi giờ IANA, ví dụ Europe/Berlin.",
+        dns: "Nhập tối đa 3 địa chỉ IPv4 hoặc IPv6 khác nhau.",
+        dnsSingle: "Nhập một địa chỉ IPv4 hoặc IPv6 hợp lệ.",
+        ipv4Address: "Nhập địa chỉ IPv4 dạng CIDR, ví dụ 192.168.1.10/24.",
+        ipv4Gateway: "Nhập gateway IPv4 hợp lệ.",
+        ipv6Address: "Nhập địa chỉ IPv6 dạng CIDR, ví dụ 2001:db8::10/64.",
+        ipv6Gateway: "Nhập gateway IPv6 hợp lệ.",
+        hostname: "Dùng chữ cái, chữ số và dấu gạch ngang; dấu chấm ngăn cách các nhãn.",
+        ntp: "Nhập tối đa 4 tên máy chủ hoặc địa chỉ IP khác nhau.",
+      },
+    },
   },
   rail: {
     navLabel: "Máy chủ",

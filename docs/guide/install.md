@@ -98,7 +98,7 @@ Add `-s -- --domain panel.example.com` after `sh` in the command above. The
 domain must already point at this server. The installer waits up to 60
 seconds for the local agent, sets the panel URL to `https://panel.example.com`,
 and prints the HTTP address to open for confirmation. HTTPS is issued after you
-confirm it in **General settings** within 2 minutes. If the domain does not
+confirm it in **Settings** within 2 minutes. If the domain does not
 resolve yet, the install continues on the server address and you can set it
 later in the panel. See [Domain and HTTPS](/guide/domain-and-https).
 

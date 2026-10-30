@@ -132,7 +132,7 @@ depends on DNS and on ports 80/443 reaching that node.
 Keeping the Cloudflare proxy enabled requires a configured DNS provider and
 DNS-01 for the panel certificate, which is set through the owner API rather
 than the console. See [Proxy and DNS](/operating/proxy-dns) and
-[Instance network](/operating/instance-network).
+[Settings and node host settings](/operating/instance-network).
 
 ## Check migration state
 

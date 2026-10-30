@@ -35,7 +35,7 @@ available. It then:
 2. restarts the service so the panel answers on the new address;
 3. prints the HTTP address to open.
 
-Open `http://panel.example.com` and confirm the domain in **General settings**
+Open `http://panel.example.com` and confirm the domain in **Settings**
 within **2 minutes** to start HTTPS issuance. An unconfirmed trial reverts
 automatically. Invalid domains and DNS failures print a warning and leave the
 host HTTP address available; you can set the domain later in the panel.
@@ -43,7 +43,7 @@ host HTTP address available; you can set the domain later in the panel.
 ## Set the domain later
 
 1. Open the panel on `http://<server-ip>:8000`.
-2. In **General settings**, set the instance `control_plane_url` to
+2. In **Settings**, set the instance `control_plane_url` to
    `https://panel.example.com` and save.
 3. Open the proposed host over HTTP and confirm the change before the trial
    expires.

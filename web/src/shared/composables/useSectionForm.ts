@@ -1,12 +1,11 @@
 import { useMessage } from "naive-ui";
 import { ref } from "vue";
 
-import { errorText, serverFieldErrors } from "@/features/instance-settings/api/instance";
-import type { InstanceState } from "@/features/instance-settings/api/instance";
+import { errorText, fieldErrors } from "@/shared/api/errors";
 
-export function useSectionForm(
-  save: () => Promise<InstanceState>,
-  onSaved: (_next: InstanceState) => void,
+export function useSectionForm<T>(
+  save: () => Promise<T>,
+  onSaved: (_next: T) => void,
   successText: () => string,
 ) {
   const message = useMessage();
@@ -25,7 +24,7 @@ export function useSectionForm(
       onSaved(await save());
       message.success(successText());
     } catch (error) {
-      serverErrors.value = serverFieldErrors(error);
+      serverErrors.value = fieldErrors(error);
       if (Object.keys(serverErrors.value).length === 0) {
         errorMessage.value = errorText(error);
       }

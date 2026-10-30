@@ -89,6 +89,19 @@ dịch vụ hoặc cơ sở dữ liệu gắn với node; hãy di chuyển hoặ
 `localhost` (agent cục bộ tích hợp) không thể sửa hay xóa. Container, volume và
 chứng chỉ trên máy vẫn được giữ nguyên.
 
+## Cài đặt máy chủ
+
+Tab **Cài đặt nút** sửa máy mà nút đó chạy: địa chỉ DNS và IPv4/IPv6, hostname,
+NTP và múi giờ, cùng trạng thái của helper máy chủ. Thay đổi chỉ áp dụng cho nút
+đó và được đọc trực tiếp từ máy chủ của nó; control plane không lưu gì ngoài một
+thay đổi mạng đang chờ. Chỉ chủ sở hữu mới mở được các phần cài đặt máy chủ.
+
+Nút có agent cũ hoặc không kết nối được, hoặc thiếu ngăn xếp mạng và thời gian
+systemd, sẽ hiển thị các phần ở chế độ chỉ đọc kèm lý do rõ ràng thay vì lưu thất
+bại. Nút từ xa cần agent mới: hãy chạy lại trình cài agent để có hỗ trợ cài đặt
+máy chủ. Xem [Cài đặt và cài đặt máy chủ của nút](/vi/operating/instance-network)
+để biết các trạng thái khả năng và đếm ngược giữ/hoàn tác.
+
 ## Tổng quan node
 
 Mở một node sẽ thấy các tab:

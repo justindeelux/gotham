@@ -3,13 +3,13 @@ import { defineComponent, h, nextTick } from "vue";
 import { flushPromises, mount } from "@vue/test-utils";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
-vi.mock("@/features/instance-settings/api/instance", () => ({
-  saveNetwork: vi.fn(),
+vi.mock("@/features/servers/api/host", () => ({
+  saveNodeNetwork: vi.fn(),
 }));
 
-import { saveNetwork } from "@/features/instance-settings/api/instance";
-import type { InstanceState } from "@/features/instance-settings/api/instance";
-import NetworkForm from "@/features/instance-settings/components/NetworkForm.vue";
+import { saveNodeNetwork } from "@/features/servers/api/host";
+import type { NodeHostState } from "@/features/servers/api/host";
+import NetworkForm from "@/features/servers/components/host/NetworkForm.vue";
 import {
   i18n,
   registerDiscoveredCatalogs,
@@ -17,39 +17,33 @@ import {
   syncComposerLocale,
 } from "@/shared/i18n";
 
-const mockSave = vi.mocked(saveNetwork);
+const mockSave = vi.mocked(saveNodeNetwork);
 
-function stateWith(dns: string[]): InstanceState {
+function stateWith(dns: string[]): NodeHostState {
   return {
+    capability: "ready",
+    repair: true,
     network: {
       dns_servers: dns,
       ipv4: { mode: "dhcp", address: "", gateway: "" },
       ipv6: { enabled: false, mode: "dhcp", address: "", gateway: "" },
     },
-    capabilities: { network: true, system: true },
-    host: {
-      helper: "ready",
-      repair: true,
-      network_stack: true,
-      system_stack: true,
-      network: true,
-      system: true,
-    },
+    system: { hostname: "gotham-1", ntp_enabled: true, ntp_servers: [], timezone: "UTC" },
     pending: null,
-  } as unknown as InstanceState;
+  };
 }
 
-function shell(state: InstanceState) {
+function shell(state: NodeHostState) {
   return defineComponent({
     render() {
       return h(NMessageProvider, null, {
-        default: () => h(NetworkForm as never, { state }),
+        default: () => h(NetworkForm as never, { state, serverId: "srv-1" }),
       });
     },
   });
 }
 
-async function mountForm(state: InstanceState) {
+async function mountForm(state: NodeHostState) {
   const wrapper = mount(shell(state), {
     attachTo: globalThis.document.body,
     global: { plugins: [i18n], stubs: { transition: false } },
@@ -90,7 +84,10 @@ describe("NetworkForm DNS inputs", () => {
 
   it("saves Primary/Alternate as an array and drops an emptied third", async () => {
     const stored = stateWith(["1.1.1.1", "8.8.8.8", "9.9.9.9"]);
-    mockSave.mockImplementation(async (input) => ({ ...stored, network: { ...stored.network, ...input } }) as InstanceState);
+    mockSave.mockImplementation(async (_id, input) => ({
+      ...stored,
+      network: { ...stored.network, ...input },
+    }));
     const wrapper = await mountForm(stored);
     const inputs = dnsInputs(wrapper);
     await inputs[1].setValue("1.0.0.1");
@@ -99,7 +96,8 @@ describe("NetworkForm DNS inputs", () => {
     await flushPromises();
     await nextTick();
     expect(mockSave).toHaveBeenCalledTimes(1);
-    expect(mockSave.mock.calls[0][0].dns_servers).toEqual(["1.1.1.1", "1.0.0.1"]);
+    expect(mockSave.mock.calls[0][0]).toBe("srv-1");
+    expect(mockSave.mock.calls[0][1].dns_servers).toEqual(["1.1.1.1", "1.0.0.1"]);
     wrapper.unmount();
   });
 });

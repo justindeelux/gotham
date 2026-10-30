@@ -3,17 +3,17 @@ import { defineComponent, h, nextTick } from "vue";
 import { flushPromises, mount } from "@vue/test-utils";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
-vi.mock("@/features/instance-settings/api/instance", () => ({
-  saveNetwork: vi.fn(),
+vi.mock("@/features/servers/api/host", () => ({
+  saveNodeNetwork: vi.fn(),
 }));
 
-import { saveNetwork } from "@/features/instance-settings/api/instance";
-import type { InstanceState } from "@/features/instance-settings/api/instance";
-import NetworkForm from "@/features/instance-settings/components/NetworkForm.vue";
+import { saveNodeNetwork } from "@/features/servers/api/host";
+import type { NodeHostState } from "@/features/servers/api/host";
+import NetworkForm from "@/features/servers/components/host/NetworkForm.vue";
 import {
   isRiskyInterfaceChange,
   sameInterface,
-} from "@/features/instance-settings/schemas/instance";
+} from "@/features/servers/schemas/host";
 import {
   i18n,
   registerDiscoveredCatalogs,
@@ -21,39 +21,33 @@ import {
   syncComposerLocale,
 } from "@/shared/i18n";
 
-const mockSave = vi.mocked(saveNetwork);
+const mockSave = vi.mocked(saveNodeNetwork);
 
-function staticState(): InstanceState {
+function staticState(): NodeHostState {
   return {
+    capability: "ready",
+    repair: true,
     network: {
       dns_servers: ["1.1.1.1"],
       ipv4: { mode: "static", address: "103.176.22.225/24", gateway: "103.176.22.1" },
       ipv6: { enabled: false, mode: "dhcp", address: "", gateway: "" },
     },
-    capabilities: { network: true, system: true },
-    host: {
-      helper: "ready",
-      repair: true,
-      network_stack: true,
-      system_stack: true,
-      network: true,
-      system: true,
-    },
+    system: { hostname: "gotham-1", ntp_enabled: true, ntp_servers: [], timezone: "UTC" },
     pending: null,
-  } as unknown as InstanceState;
+  };
 }
 
-function shell(state: InstanceState) {
+function shell(state: NodeHostState) {
   return defineComponent({
     render() {
       return h(NMessageProvider, null, {
-        default: () => h(NetworkForm as never, { state }),
+        default: () => h(NetworkForm as never, { state, serverId: "srv-1" }),
       });
     },
   });
 }
 
-async function mountForm(state: InstanceState) {
+async function mountForm(state: NodeHostState) {
   const wrapper = mount(shell(state), {
     attachTo: globalThis.document.body,
     global: { plugins: [i18n], stubs: { transition: false } },
@@ -86,7 +80,10 @@ describe("NetworkForm static-host guard", () => {
 
   it("saves a DNS-only edit without the confirmation flag", async () => {
     const stored = staticState();
-    mockSave.mockImplementation(async (input) => ({ ...stored, network: { ...stored.network, ...input } }) as InstanceState);
+    mockSave.mockImplementation(async (_id, input) => ({
+      ...stored,
+      network: { ...stored.network, ...input },
+    }));
     const wrapper = await mountForm(stored);
     const inputs = dnsInputs(wrapper);
     await inputs[0].setValue("9.9.9.9");
@@ -95,7 +92,8 @@ describe("NetworkForm static-host guard", () => {
     await flushPromises();
     await nextTick();
     expect(mockSave).toHaveBeenCalledTimes(1);
-    const sent = mockSave.mock.calls[0][0];
+    const sent = mockSave.mock.calls[0][1];
+    expect(mockSave.mock.calls[0][0]).toBe("srv-1");
     expect(sent.dns_servers).toEqual(["9.9.9.9"]);
     expect(sent.ipv4).toEqual({ mode: "static", address: "103.176.22.225/24", gateway: "103.176.22.1" });
     expect(sent.confirm_interface_change).toBe(false);
@@ -104,7 +102,10 @@ describe("NetworkForm static-host guard", () => {
 
   it("blocks static-to-DHCP until the confirmation box is ticked", async () => {
     const stored = staticState();
-    mockSave.mockImplementation(async (input) => ({ ...stored, network: { ...stored.network, ...input } }) as InstanceState);
+    mockSave.mockImplementation(async (_id, input) => ({
+      ...stored,
+      network: { ...stored.network, ...input },
+    }));
     const wrapper = await mountForm(stored);
     const radios = wrapper.findAll(".n-radio-button");
     await radios[0].trigger("click");
@@ -120,7 +121,7 @@ describe("NetworkForm static-host guard", () => {
     await flushPromises();
     await nextTick();
     expect(mockSave).toHaveBeenCalledTimes(1);
-    const sent = mockSave.mock.calls[0][0];
+    const sent = mockSave.mock.calls[0][1];
     expect(sent.ipv4.mode).toBe("dhcp");
     expect(sent.confirm_interface_change).toBe(true);
     wrapper.unmount();

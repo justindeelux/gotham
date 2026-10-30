@@ -1,23 +1,21 @@
 ---
-title: Instance and network
+title: Settings and node host settings
 ---
 
-# Instance and network
+# Settings and node host settings
 
-**Settings → Instance** configures the control-plane host itself: its public
-address and identity, its network stack, and a few Linux system options. It is
-visible to the owner only and applies to the control-plane host, not
-to the nodes.
+**Settings** (`/settings/instance`) configures the Gotham instance itself: its
+public control-plane address and name. Everything that describes one machine —
+timezone, network and Linux system options — lives on that machine's node page
+under **Servers → [node] → Node settings** instead. Both surfaces are visible
+to the owner only.
 
-The page has three tabs: **General**, **Network** and **System**.
-
-## General
+## Settings
 
 | Setting | Purpose |
 |---|---|
 | Control-plane URL | Public base URL used for agent enrollment, OAuth redirects and webhooks. It also decides the panel route and its certificate. |
 | Instance name | Display name of the instance. Default: `gotham`. |
-| Timezone | IANA zone applied to schedules, log display and backups. Default: `UTC`. |
 
 The URL must be `http` or `https` with a host, without credentials, query or
 fragment. Each field shows where its value comes from — the environment, the
@@ -33,13 +31,13 @@ services call back to, so changing it is guarded:
    the change there.
 3. If the new route has not synced, confirmation is refused. If you cannot
    reach Gotham at the new address, do nothing: the previous route is restored
-   when the countdown ends, or you can revert immediately from the page.
+   when the countdown ends.
 
 Only one control-plane URL change can be pending at a time.
 
 ### Domain and certificate status
 
-The General tab reports the control-plane hostname's live state:
+The page reports the control-plane hostname's live state:
 
 - **Router** — `synced` when the node serves the current generated
   configuration, `pending` when a sync is needed, `unknown` when there is no
@@ -55,9 +53,23 @@ The panel certificate itself is managed by the proxy; see
 [Proxy and DNS](/operating/proxy-dns). Changing the URL reconciles it
 automatically.
 
-## Network
+## Node settings
 
-The Network tab edits the control-plane host's addressing:
+Each node's **Node settings** tab edits the host that node runs on. The read
+is live from that node on every visit; nothing is cached in the control plane.
+Changing one node never changes another.
+
+| Section | Settings |
+|---|---|
+| Network | DNS servers, IPv4 (DHCP or static address and gateway), IPv6 (off, automatic or static). |
+| System | Hostname, NTP on/off with up to four servers, and the node's timezone. |
+| Host helper | The privileged helper that applies the two sections. |
+
+The timezone of the **localhost** node is also the control plane's timezone:
+schedules, log display and backups run in it. A remote node's timezone only
+changes that machine's clock.
+
+### Network
 
 - **DNS servers** — primary required, alternate optional, up to three distinct
   IPv4 or IPv6 addresses.
@@ -66,7 +78,7 @@ The Network tab edits the control-plane host's addressing:
 - **IPv6** — enabled with automatic or static addressing and a gateway, or
   turned off.
 
-With no change pending, the form shows the host's live configuration rather
+With no change pending, the form shows the node's live configuration rather
 than the last saved values.
 
 ### Apply, keep, revert
@@ -76,12 +88,14 @@ Applying a network change puts it live immediately but leaves it
 
 - **Keep changes** confirms the configuration and clears the pending state.
 - **Revert now** restores the previous configuration immediately.
-- **Do nothing** — the host restores the previous configuration when the
+- **Do nothing** — the node restores the previous configuration when the
   two-minute countdown ends. This is the safe path when the change cut your
-  connection: you do not need to reach Gotham to undo it.
+  connection: you do not need to reach Gotham to undo it. On a remote node the
+  countdown timer runs on that node, so it still reverts if the agent link
+  drops.
 
-Only one network change can be pending. Settle it before making another; a
-second apply is refused while it waits.
+Only one network change per node can be pending. Settle it before making
+another; a second apply on the same node is refused while it waits.
 
 A **DNS-only change** — when the interface configuration is unchanged — still
 gets the countdown, but only the resolver settings are written: the interface
@@ -90,43 +104,40 @@ file is not rewritten and no risky-change confirmation is needed.
 A change that would disturb the active interface — a different address or
 gateway, switching a static interface to DHCP, or disabling an address family
 — shows a warning and requires you to tick an explicit confirmation before it
-can be applied. The host may become unreachable until the change is confirmed
+can be applied. The node may become unreachable until the change is confirmed
 or reverted.
 
 The section needs a host that runs systemd-networkd, systemd-resolved and
-`networkctl`. On any other host the values are read-only and the page says the
-stack is unsupported; installing the host helper cannot change that.
+`networkctl`.
 
-## System
-
-The System tab sets:
+### System
 
 - **Hostname** — letters, digits and hyphens; dots separate labels.
 - **NTP** — enable time synchronisation and list up to four servers. Empty
   leaves the system defaults.
+- **Timezone** — searchable IANA zone with its current UTC offset.
 
 System settings are applied immediately; they have no confirmation countdown.
-They need `systemctl` and `hostnamectl` on the host, and are read-only on a
-host that lacks them.
+They need `systemctl` and `hostnamectl` on the node.
 
-## The host helper
+## Capability states
 
-Network and system changes are applied by a fixed, root-owned host helper with
-a verb-pinned `sudo` rule, not by a general-purpose privileged shell. The page
-reports one of three helper states:
+Every node reports one capability. Only **Ready** allows edits; anything else
+shows both sections read-only with a plain-language reason, so a save never
+fails:
 
 | State | Meaning |
 |---|---|
-| Ready | The helper is installed and runnable. Both sections can be edited if their stack is supported. |
-| Missing | The helper file is absent. The in-product **Install host helper** action can restore it when the privileged repair path is present. |
-| Denied | The helper is present but `sudo` refuses it because its rule is missing. Only re-running the control-plane installer (or upgrading) can repair this. |
+| `ready` | The host helper runs and the node has the network and time stack. |
+| `unsupported_stack` | The node lacks systemd-networkd/resolved or timedatectl, or its helper is too old. Installing the helper cannot fix a missing stack. |
+| `helper_missing` | The helper file is absent. On the control-plane machine **Install host helper** can restore it when the privileged repair path is present. On a remote node, re-run the agent installer. |
+| `helper_denied` | The helper is present but the privilege rule refuses it. Re-run the matching installer. |
+| `agent_outdated` | The agent predates host settings. Update the agent, or re-run the agent installer on that node, then reload the page. |
+| `offline` | The agent is not reachable. Settings are read-only until it reconnects. |
 
-**Install host helper** appears only when the helper is missing and the
-in-product repair can actually run. A failed install shows the installer's
-output so you can read the cause. A host that is denied, or whose root-owned
-payload is gone, has no in-product repair; the page says so, and you must
-re-run the control-plane installer.
+A failed helper install shows the installer's output so you can read the
+cause. Re-running the agent installer on every remote node is a manual step:
+existing agents are not upgraded to host support automatically.
 
-Without a ready helper, the **Network** and **System** panels are read-only and
-explain why. **General** is unaffected: the URL, name and timezone are stored
-by the control plane and do not need the host helper.
+See [Nodes and containers](/operating/nodes-containers) for registering a node
+and the agent installer.

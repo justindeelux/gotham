@@ -191,7 +191,7 @@ const routes: RouteRecordRaw[] = [
         path: "settings/instance",
         name: "instance",
         component: () => import("@/features/instance-settings/pages/InstanceSettingsPage.vue"),
-        meta: { titleKey: "titles.instance", requiresAuth: true, requiresOwner: true },
+        meta: { titleKey: "titles.settings", requiresAuth: true, requiresOwner: true },
       },
       {
         path: "settings/monitoring",

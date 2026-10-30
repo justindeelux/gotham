@@ -95,7 +95,7 @@ Khi URL control plane là HTTPS, hostname của nó tự động có một ý đ
 riêng. Nó thuộc về instance, không thuộc về ứng dụng: nó không được tạo hay sửa từ
 biểu mẫu chứng chỉ theo ứng dụng, và được đồng bộ lại từ URL thay vì bị xóa khỏi
 danh sách chứng chỉ ứng dụng. Đổi hoặc xóa URL sẽ thêm hoặc gỡ bỏ nó. Trạng thái
-của nó hiện trong [Mạng của instance](/vi/operating/instance-network) ở phần trạng
+của nó hiện trong [Cài đặt và cài đặt máy chủ của nút](/vi/operating/instance-network) ở phần trạng
 thái tên miền control plane. Với URL HTTP thường thì không có chứng chỉ bảng điều
 khiển và trạng thái ghi là “not applicable”.
 

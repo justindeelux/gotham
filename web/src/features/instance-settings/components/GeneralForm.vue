@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { NAlert, NButton, NCard, NForm, NFormItem, NInput, NSelect } from "naive-ui";
+import { NAlert, NButton, NCard, NForm, NFormItem, NInput } from "naive-ui";
 import type { FormInst, FormRules } from "naive-ui";
 import { computed, reactive, ref, watch } from "vue";
 import { useI18n } from "vue-i18n";
@@ -7,13 +7,11 @@ import { useI18n } from "vue-i18n";
 import { saveGeneral } from "@/features/instance-settings/api/instance";
 import type { InstanceState } from "@/features/instance-settings/api/instance";
 import ControlPlaneDomainStatus from "@/features/instance-settings/components/ControlPlaneDomainStatus.vue";
-import { timezoneOptions } from "@/features/instance-settings/composables/useTimezoneOptions";
-import { useSectionForm } from "@/features/instance-settings/composables/useSectionForm";
 import {
   controlPlaneUrlSchema,
   instanceNameSchema,
-  timezoneSchema,
 } from "@/features/instance-settings/schemas/instance";
+import { useSectionForm } from "@/shared/composables/useSectionForm";
 import { ruleFrom } from "@/shared/validation/naiveAdapter";
 
 const props = defineProps<{ state: InstanceState }>();
@@ -21,16 +19,14 @@ const emit = defineEmits<{ saved: [state: InstanceState] }>();
 const { t } = useI18n();
 
 const formRef = ref<FormInst | null>(null);
-const form = reactive({ url: "", name: "", timezone: "" });
+const form = reactive({ url: "", name: "" });
 const general = computed(() => props.state.general);
-const zoneOptions = computed(() => timezoneOptions(form.timezone));
 
 watch(
   general,
   (value) => {
     form.url = value.control_plane_url.value;
     form.name = value.instance_name.value;
-    form.timezone = value.timezone.value;
   },
   { immediate: true },
 );
@@ -38,7 +34,6 @@ watch(
 const rules: FormRules = {
   url: ruleFrom(controlPlaneUrlSchema),
   name: ruleFrom(instanceNameSchema, { required: true }),
-  timezone: ruleFrom(timezoneSchema, { required: true }),
 };
 
 const { submitting, serverErrors, errorMessage, submit } = useSectionForm(
@@ -46,7 +41,6 @@ const { submitting, serverErrors, errorMessage, submit } = useSectionForm(
     saveGeneral({
       control_plane_url: form.url,
       instance_name: form.name,
-      timezone: form.timezone,
     }),
   (next) => emit("saved", next),
   () => t("instance-settings.general.saved"),
@@ -103,26 +97,6 @@ function status(path: string): "error" | undefined {
       </NFormItem>
       <p v-if="general.instance_name.locked" class="lock-note">
         {{ t("instance-settings.locked", { name: general.instance_name.env_var }) }}
-      </p>
-
-      <NFormItem
-        path="timezone"
-        :label="t('instance-settings.general.timezone')"
-        :validation-status="status('timezone')"
-        :feedback="serverErrors.timezone"
-      >
-        <NSelect
-          v-model:value="form.timezone"
-          filterable
-          :options="zoneOptions"
-          :disabled="general.timezone.locked"
-        />
-        <template #feedback v-if="!serverErrors.timezone">
-          {{ t("instance-settings.general.timezoneHint") }}
-        </template>
-      </NFormItem>
-      <p v-if="general.timezone.locked" class="lock-note">
-        {{ t("instance-settings.locked", { name: general.timezone.env_var }) }}
       </p>
 
       <NButton type="primary" :loading="submitting" @click="handleSubmit">

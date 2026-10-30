@@ -20,7 +20,6 @@ import GitPrivateSourcePanel from "@/features/applications/components/GitPrivate
 import type { PipelineStep } from "@/features/applications/utils/deployPipeline";
 import { commitSubject, shortCommitSha } from "@/features/applications/utils/deploymentCommit";
 import { durationText } from "@/features/applications/utils/deploymentDuration";
-import RuntimeHealthPanel from "@/shared/components/RuntimeHealthPanel.vue";
 import { relativeTime } from "@/shared/utils/format";
 
 interface Props {
@@ -31,14 +30,10 @@ interface Props {
   descColumns: number;
   acting: boolean;
   canWrite?: boolean;
-  monitorSaving?: boolean;
-  monitorError?: string | null;
 }
 
 const props = withDefaults(defineProps<Props>(), {
   canWrite: false,
-  monitorSaving: false,
-  monitorError: null,
 });
 
 const emit = defineEmits<{
@@ -46,9 +41,6 @@ const emit = defineEmits<{
   "view-all": [];
   "show-logs": [deploymentId: string];
   "open-rollback": [deploymentId: string];
-  "save-monitoring": [value: { enabled: boolean; graceSeconds: number }];
-  "view-logs": [];
-  "view-deployments": [];
 }>();
 
 const { t } = useI18n();
@@ -118,18 +110,6 @@ const isCompose = computed<boolean>(() => props.application?.source_type === "co
         </NDescriptionsItem>
       </NDescriptions>
     </NCard>
-    <RuntimeHealthPanel
-      v-if="props.application"
-      :health="props.application.runtime_health"
-      :can-write="props.canWrite"
-      :saving="props.monitorSaving"
-      :error="props.monitorError"
-      :show-logs="true"
-      :show-deployments="true"
-      @save="emit('save-monitoring', $event)"
-      @view-logs="emit('view-logs')"
-      @view-deployments="emit('view-deployments')"
-    />
     <DockerfileEditor
       v-if="props.application && props.application.source_type === 'dockerfile'"
       :application="props.application"

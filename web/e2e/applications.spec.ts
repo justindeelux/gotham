@@ -327,6 +327,7 @@ test.describe("applications", () => {
     const settled = waitForDetailReads(page, application.id);
     await page.goto(nestedURL(projectId, environmentId, "applications", application.id));
     await settled;
+    await page.locator(".n-tabs-tab").filter({ hasText: /^Settings$/ }).click();
     await expect(page.getByTestId("runtime-health-state")).toHaveText("unknown");
 
     const grace = page.getByRole("textbox", { name: /Startup grace/ });
@@ -375,7 +376,7 @@ test.describe("applications", () => {
     await expect(
       page.locator(".n-tabs-tab").filter({ hasText: /^Logs/ }),
     ).toHaveClass(/n-tabs-tab--active/);
-    await page.locator(".n-tabs-tab").filter({ hasText: /^Overview$/ }).click();
+    await page.locator(".n-tabs-tab").filter({ hasText: /^Settings$/ }).click();
     await page.getByRole("button", { name: "View deployments" }).click();
     await expect(
       page.locator(".n-tabs-tab").filter({ hasText: /^Deployments/ }),
@@ -449,6 +450,7 @@ test.describe("applications", () => {
     const settled = waitForDetailReads(page, application.id);
     await page.goto(nestedURL(projectId, environmentId, "applications", application.id));
     await settled;
+    await page.locator(".n-tabs-tab").filter({ hasText: /^Settings$/ }).click();
     await expect(page.getByTestId("runtime-health-state")).toHaveText("degraded");
     await expect(page.getByTestId("runtime-health-replica").first()).toContainText("web · 2");
     await expect(page.getByTestId("runtime-health-replica").first()).toContainText(
@@ -460,7 +462,7 @@ test.describe("applications", () => {
     await expect(
       page.locator(".n-tabs-tab").filter({ hasText: /^Logs/ }),
     ).toHaveClass(/n-tabs-tab--active/);
-    await page.locator(".n-tabs-tab").filter({ hasText: /^Overview$/ }).click();
+    await page.locator(".n-tabs-tab").filter({ hasText: /^Settings$/ }).click();
     await page.getByRole("button", { name: "View deployments" }).click();
     await expect(
       page.locator(".n-tabs-tab").filter({ hasText: /^Deployments/ }),

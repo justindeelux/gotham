@@ -374,6 +374,28 @@ export function useDatabaseDetail() {
     }
   }
 
+  const monitorSaving = ref(false);
+  const monitorError = ref<string | null>(null);
+
+  async function handleMonitoringSave(value: { enabled: boolean; graceSeconds: number }): Promise<void> {
+    const current = database.value;
+    if (!current) {
+      return;
+    }
+    monitorSaving.value = true;
+    monitorError.value = null;
+    try {
+      await databasesStore.update(current.id, {
+        monitor_enabled: value.enabled,
+        monitor_grace_seconds: value.graceSeconds,
+      });
+    } catch (error) {
+      monitorError.value = describeDatabaseError(error);
+    } finally {
+      monitorSaving.value = false;
+    }
+  }
+
   async function refreshProjectCounts(projectIds: string[]): Promise<void> {
     try {
       await projectsStore.fetchProjects();
@@ -453,6 +475,9 @@ export function useDatabaseDetail() {
     moveSaving,
     moveError,
     handleMove,
+    monitorSaving,
+    monitorError,
+    handleMonitoringSave,
   };
 }
 

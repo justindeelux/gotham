@@ -13,11 +13,11 @@ import { computed } from "vue";
 
 import type { Server } from "@/features/servers/api/servers";
 import ServerPressureCard from "@/features/monitoring/components/ServerPressureCard.vue";
+import ServerUsageBar from "@/features/servers/components/ServerUsageBar.vue";
 import { useMediaQuery } from "@/shared/composables/useMediaQuery";
 import {
   authLabel,
   fallback,
-  usageText,
 } from "@/features/servers/utils/serverDetailView";
 import { relativeTime } from "@/shared/utils/format";
 import { useI18n } from "vue-i18n";
@@ -68,13 +68,22 @@ const descColumns = computed<number>(() => (isNarrow.value ? 1 : 2));
           <span class="mono">{{ authLabel(server, locale) }}</span>
         </NDescriptionsItem>
         <NDescriptionsItem :label="$t('servers.overview.cpuUsage')">
-          {{ usageText(server.cpu_usage) }}
+          <ServerUsageBar
+            :label="$t('servers.overview.cpuUsage')"
+            :value="server.cpu_usage"
+          />
         </NDescriptionsItem>
         <NDescriptionsItem :label="$t('servers.overview.memUsage')">
-          {{ usageText(server.mem_usage) }}
+          <ServerUsageBar
+            :label="$t('servers.overview.memUsage')"
+            :value="server.mem_usage"
+          />
         </NDescriptionsItem>
         <NDescriptionsItem :label="$t('servers.overview.diskUsage')">
-          {{ usageText(server.disk_usage) }}
+          <ServerUsageBar
+            :label="$t('servers.overview.diskUsage')"
+            :value="server.disk_usage"
+          />
         </NDescriptionsItem>
         <NDescriptionsItem :label="$t('servers.overview.containers')">
           {{ server.container_count ?? "—" }}

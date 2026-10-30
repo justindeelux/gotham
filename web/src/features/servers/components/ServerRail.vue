@@ -336,7 +336,8 @@ onMounted(() => {
 }
 
 .rail-btn--editor .rail-badge,
-.rail-btn--terminal .rail-badge {
+.rail-btn--terminal .rail-badge,
+:deep(.rail-btn--bell .rail-badge) {
   top: calc(-1 * var(--space-1));
   right: calc(-1 * var(--space-1));
   width: var(--space-6);

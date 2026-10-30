@@ -37,8 +37,7 @@ onMounted(() => {
         <p class="eyebrow">{{ $t("domains.page.eyebrow") }}</p>
         <h1>{{ $t("domains.page.title") }}</h1>
         <p class="page-desc">
-          {{ $t("domains.page.descriptionPre") }}
-          <span class="mono">gotham-traefik</span>. {{ $t("domains.page.descriptionPost") }}
+          {{ $t("domains.page.description") }}
         </p>
       </div>
       <div class="page-actions">
@@ -90,10 +89,6 @@ onMounted(() => {
   display: flex;
   flex-direction: column;
   gap: var(--space-4);
-}
-
-.mono {
-  font-family: var(--font-mono);
 }
 
 .tabs {

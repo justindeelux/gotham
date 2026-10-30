@@ -232,7 +232,7 @@ async function openItem(item: NotificationItem): Promise<void> {
             <button
               ref="railButton"
               type="button"
-              class="rail-btn notif-rail-bell"
+              class="rail-btn rail-btn--bell notif-rail-bell"
               :aria-label="bellLabel"
               aria-haspopup="dialog"
               :aria-expanded="open"
@@ -325,10 +325,6 @@ async function openItem(item: NotificationItem): Promise<void> {
 <style scoped>
 .notif-bell {
   color: var(--fg);
-}
-
-.notif-bell-badge :deep(.n-badge-sup) {
-  font-size: var(--text-xs);
 }
 
 .notif-inbox {

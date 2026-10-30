@@ -142,7 +142,7 @@ func TestPanelTrialCertificateLifecycle(t *testing.T) {
 				t.Fatal(err)
 			}
 			repo := &panelSettingsRepo{rec: instance.Stored{ControlPlaneURL: &old}}
-			svc := instance.NewService(repo, nil, nil)
+			svc := instance.NewService(repo, nil)
 			t.Cleanup(svc.Close)
 			svc.SyncPanelCertificates = f.service.ReconcilePanelCertificates
 			svc.ResyncProxy = f.service.SyncControlPlane
@@ -150,7 +150,7 @@ func TestPanelTrialCertificateLifecycle(t *testing.T) {
 			if action == "issuance failure" {
 				f.service.certificateStatus = fixedPanelStatus{CertificateStatusObservation{Status: CertificateStatusUnknown}}
 			}
-			state, err := svc.UpdateGeneral(ctx, uuid.Nil, instance.GeneralInput{ControlPlaneURL: "https://new.example.com", InstanceName: "Gotham", Timezone: "UTC"})
+			state, err := svc.UpdateGeneral(ctx, uuid.Nil, instance.GeneralInput{ControlPlaneURL: "https://new.example.com", InstanceName: "Gotham"})
 			if err != nil || !state.PendingControlPlaneURL.Synced {
 				t.Fatalf("save=%+v err=%v", state, err)
 			}
@@ -283,11 +283,11 @@ func TestPanelCertificateRetryPreservesDNSConfiguration(t *testing.T) {
 	f.service.panelCertificates = st
 	raw := "https://panel.example.com"
 	repo := &panelSettingsRepo{rec: instance.Stored{ControlPlaneURL: &raw}}
-	svc := instance.NewService(repo, nil, nil)
+	svc := instance.NewService(repo, nil)
 	t.Cleanup(svc.Close)
 	svc.SyncPanelCertificates = f.service.ReconcilePanelCertificates
 	st.certCreateErr = errors.New("temporary store failure")
-	input := instance.GeneralInput{ControlPlaneURL: raw, InstanceName: "Gotham", Timezone: "UTC"}
+	input := instance.GeneralInput{ControlPlaneURL: raw, InstanceName: "Gotham"}
 	if _, err := svc.UpdateGeneral(ctx, uuid.Nil, input); err != nil {
 		t.Fatal(err)
 	}
@@ -395,7 +395,7 @@ func TestPanelCertificateStartupDuringTrial(t *testing.T) {
 					Previous: &previous, Proposed: proposed, Deadline: time.Now().Add(time.Minute), Synced: true,
 				},
 			}}
-			svc := instance.NewService(repo, nil, nil)
+			svc := instance.NewService(repo, nil)
 			t.Cleanup(svc.Close)
 			svc.SyncPanelCertificates = f.service.ReconcilePanelCertificates
 			f.service.reconcilePanel = svc.ReconcilePanelCertificates

@@ -12,10 +12,13 @@ import (
 	"github.com/justindeelux/gotham/internal/store/sqlc"
 )
 
+const SectionGeneral = "general"
+
+// NodeSectionSystem and NodeSectionNetwork label the per-node host changes in
+// the settings audit trail.
 const (
-	SectionGeneral = "general"
-	SectionNetwork = "network"
-	SectionSystem  = "system"
+	NodeSectionSystem  = "node-system"
+	NodeSectionNetwork = "node-network"
 )
 
 type Repository interface {
@@ -38,15 +41,6 @@ func (r *storeRepository) Load(ctx context.Context) (Stored, error) {
 		ControlPlaneURL: row.ControlPlaneUrl,
 		InstanceName:    row.InstanceName,
 		Timezone:        row.Timezone,
-		Network: Network{
-			DNSServers: row.DnsServers,
-			IPv4:       IPConfig{Mode: row.Ipv4Mode, Address: row.Ipv4Address, Gateway: row.Ipv4Gateway},
-			IPv6: IPv6Config{
-				Enabled: row.Ipv6Enabled, Mode: row.Ipv6Mode,
-				Address: row.Ipv6Address, Gateway: row.Ipv6Gateway,
-			},
-		},
-		System: System{Hostname: row.Hostname, NTPEnabled: row.NtpEnabled, NTPServers: row.NtpServers},
 	}
 	if len(row.PendingControlPlaneUrl) > 0 {
 		var pending PendingControlPlaneURL
@@ -55,20 +49,13 @@ func (r *storeRepository) Load(ctx context.Context) (Stored, error) {
 		}
 		rec.PendingControlPlaneURL = &pending
 	}
-	if len(row.PendingNetwork) > 0 {
-		var p Pending
-		if err := json.Unmarshal(row.PendingNetwork, &p); err != nil {
-			return Stored{}, fmt.Errorf("instance: decode pending: %w", err)
-		}
-		if row.PendingDeadline.Valid {
-			p.Deadline = row.PendingDeadline.Time
-		}
-		rec.Pending = &p
-	}
 	return rec, nil
 }
 
 func (r *storeRepository) Save(ctx context.Context, actor uuid.UUID, section string, rec Stored, changes any) error {
+	if section != SectionGeneral {
+		return fmt.Errorf("instance: unknown section %q", section)
+	}
 	payload, err := json.Marshal(changes)
 	if err != nil {
 		return fmt.Errorf("instance: encode audit: %w", err)
@@ -77,40 +64,16 @@ func (r *storeRepository) Save(ctx context.Context, actor uuid.UUID, section str
 	if actor != uuid.Nil {
 		audit.ActorID = pgtype.UUID{Bytes: actor, Valid: true}
 	}
-	switch section {
-	case SectionGeneral:
-		var pending []byte
-		if rec.PendingControlPlaneURL != nil {
-			pending, err = json.Marshal(rec.PendingControlPlaneURL)
-			if err != nil {
-				return fmt.Errorf("instance: encode pending control-plane URL: %w", err)
-			}
+	var pending []byte
+	if rec.PendingControlPlaneURL != nil {
+		pending, err = json.Marshal(rec.PendingControlPlaneURL)
+		if err != nil {
+			return fmt.Errorf("instance: encode pending control-plane URL: %w", err)
 		}
-		err = r.store.UpdateInstanceGeneral(ctx, sqlc.UpdateInstanceGeneralParams{
-			ControlPlaneUrl: rec.ControlPlaneURL, InstanceName: rec.InstanceName, Timezone: rec.Timezone, PendingControlPlaneUrl: pending,
-		}, audit)
-	case SectionSystem:
-		err = r.store.UpdateInstanceSystem(ctx, sqlc.UpdateInstanceSystemParams{
-			Hostname: rec.System.Hostname, NtpEnabled: rec.System.NTPEnabled, NtpServers: nonNil(rec.System.NTPServers),
-		}, audit)
-	case SectionNetwork:
-		params := sqlc.UpdateInstanceNetworkParams{
-			DnsServers:  nonNil(rec.Network.DNSServers),
-			Ipv4Mode:    rec.Network.IPv4.Mode,
-			Ipv4Address: rec.Network.IPv4.Address, Ipv4Gateway: rec.Network.IPv4.Gateway,
-			Ipv6Enabled: rec.Network.IPv6.Enabled, Ipv6Mode: rec.Network.IPv6.Mode,
-			Ipv6Address: rec.Network.IPv6.Address, Ipv6Gateway: rec.Network.IPv6.Gateway,
-		}
-		if rec.Pending != nil {
-			if params.PendingNetwork, err = json.Marshal(rec.Pending); err != nil {
-				return fmt.Errorf("instance: encode pending: %w", err)
-			}
-			params.PendingDeadline = pgtype.Timestamptz{Time: rec.Pending.Deadline, Valid: true}
-		}
-		err = r.store.UpdateInstanceNetwork(ctx, params, audit)
-	default:
-		return fmt.Errorf("instance: unknown section %q", section)
 	}
+	err = r.store.UpdateInstanceGeneral(ctx, sqlc.UpdateInstanceGeneralParams{
+		ControlPlaneUrl: rec.ControlPlaneURL, InstanceName: rec.InstanceName, Timezone: rec.Timezone, PendingControlPlaneUrl: pending,
+	}, audit)
 	if err != nil {
 		return fmt.Errorf("instance: save %s: %w", section, err)
 	}

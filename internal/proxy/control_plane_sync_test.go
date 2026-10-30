@@ -47,12 +47,12 @@ func TestControlPlaneTrialSyncIgnoresOtherApplications(t *testing.T) {
 			old := "https://old.example.com"
 			repo := &panelSettingsRepo{rec: instance.Stored{ControlPlaneURL: &old}}
 			var logs bytes.Buffer
-			svc := instance.NewService(repo, nil, slog.New(slog.NewTextHandler(&logs, nil)))
+			svc := instance.NewService(repo, slog.New(slog.NewTextHandler(&logs, nil)))
 			t.Cleanup(svc.Close)
 			svc.ResyncProxy = f.service.SyncControlPlane
 			f.service.controlPlaneURLs = svc.ControlPlaneURLs
 			state, err := svc.UpdateGeneral(ctx, uuid.Nil, instance.GeneralInput{
-				ControlPlaneURL: "https://new.example.com", InstanceName: "Gotham", Timezone: "UTC",
+				ControlPlaneURL: "https://new.example.com", InstanceName: "Gotham",
 			})
 			if err != nil || state.PendingControlPlaneURL == nil || state.PendingControlPlaneURL.Synced != (failure == "") {
 				t.Fatalf("trial=%+v err=%v", state, err)
@@ -82,7 +82,7 @@ func TestControlPlaneTrialSyncIgnoresOtherApplications(t *testing.T) {
 				t.Fatalf("confirm=%+v err=%v", state, err)
 			}
 			if _, err := svc.UpdateGeneral(ctx, uuid.Nil, instance.GeneralInput{
-				ControlPlaneURL: "https://third.example.com", InstanceName: "Gotham", Timezone: "UTC",
+				ControlPlaneURL: "https://third.example.com", InstanceName: "Gotham",
 			}); err != nil {
 				t.Fatal(err)
 			}

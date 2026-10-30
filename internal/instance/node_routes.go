@@ -1,0 +1,147 @@
+package instance
+
+import (
+	"errors"
+	"log/slog"
+	"net/http"
+
+	"github.com/go-chi/chi/v5"
+	"github.com/google/uuid"
+)
+
+type nodeEnvelope struct {
+	Host NodeState `json:"host"`
+}
+
+type nodeHelperEnvelope struct {
+	Host NodeState `json:"host"`
+	Log  string    `json:"log,omitempty"`
+}
+
+type nodeHandler struct {
+	svc    *NodeService
+	userID UserIDFunc
+	logger *slog.Logger
+}
+
+// MountNode mounts the per-server host settings. The gate is owner-only, the
+// same as the instance settings it replaces.
+func MountNode(r chi.Router, admin func(http.Handler) http.Handler, userID UserIDFunc, svc *NodeService) {
+	if svc == nil {
+		return
+	}
+	h := &nodeHandler{svc: svc, userID: userID, logger: slog.Default()}
+	r.Group(func(g chi.Router) {
+		g.Use(admin)
+		g.Get("/v1/servers/{id}/host", h.get)
+		g.Put("/v1/servers/{id}/host/system", h.putSystem)
+		g.Put("/v1/servers/{id}/host/network", h.putNetwork)
+		g.Post("/v1/servers/{id}/host/network/confirm", h.confirm)
+		g.Post("/v1/servers/{id}/host/network/revert", h.revert)
+		g.Post("/v1/servers/{id}/host/helper", h.installHelper)
+	})
+}
+
+func (h *nodeHandler) actor(r *http.Request) uuid.UUID {
+	id, _ := h.userID(r.Context())
+	return id
+}
+
+func (h *nodeHandler) get(w http.ResponseWriter, r *http.Request) {
+	id, ok := serverIDParam(w, r)
+	if !ok {
+		return
+	}
+	st, err := h.svc.Get(r.Context(), id)
+	h.reply(w, st, "", err)
+}
+
+func (h *nodeHandler) putSystem(w http.ResponseWriter, r *http.Request) {
+	id, ok := serverIDParam(w, r)
+	if !ok {
+		return
+	}
+	var in System
+	if !decode(w, r, &in) {
+		return
+	}
+	st, err := h.svc.UpdateSystem(r.Context(), h.actor(r), id, in)
+	h.reply(w, st, "", err)
+}
+
+func (h *nodeHandler) putNetwork(w http.ResponseWriter, r *http.Request) {
+	id, ok := serverIDParam(w, r)
+	if !ok {
+		return
+	}
+	var in NetworkInput
+	if !decode(w, r, &in) {
+		return
+	}
+	st, err := h.svc.UpdateNetwork(r.Context(), h.actor(r), id, in)
+	h.reply(w, st, "", err)
+}
+
+func (h *nodeHandler) confirm(w http.ResponseWriter, r *http.Request) {
+	id, ok := serverIDParam(w, r)
+	if !ok {
+		return
+	}
+	st, err := h.svc.ConfirmNetwork(r.Context(), h.actor(r), id)
+	h.reply(w, st, "", err)
+}
+
+func (h *nodeHandler) revert(w http.ResponseWriter, r *http.Request) {
+	id, ok := serverIDParam(w, r)
+	if !ok {
+		return
+	}
+	st, err := h.svc.RevertNetwork(r.Context(), h.actor(r), id)
+	h.reply(w, st, "", err)
+}
+
+func (h *nodeHandler) installHelper(w http.ResponseWriter, r *http.Request) {
+	id, ok := serverIDParam(w, r)
+	if !ok {
+		return
+	}
+	st, log, err := h.svc.InstallHelper(r.Context(), h.actor(r), id)
+	if err == nil {
+		writeJSON(w, http.StatusOK, nodeHelperEnvelope{Host: st, Log: log})
+		return
+	}
+	h.reply(w, st, log, err)
+}
+
+func (h *nodeHandler) reply(w http.ResponseWriter, st NodeState, log string, err error) {
+	var fe FieldErrors
+	var unsupported *UnsupportedError
+	switch {
+	case err == nil:
+		writeJSON(w, http.StatusOK, nodeEnvelope{Host: st})
+	case errors.Is(err, ErrNodeNotFound):
+		writeJSON(w, http.StatusNotFound, errorBody{Message: "server not found"})
+	case errors.As(err, &fe):
+		writeJSON(w, http.StatusBadRequest, errorBody{Message: "validation failed", Errors: fe})
+	case errors.As(err, &unsupported):
+		writeJSON(w, http.StatusConflict, errorBody{Message: unsupported.Error()})
+	case errors.Is(err, ErrPending), errors.Is(err, ErrNoPending), errors.Is(err, ErrRiskyNetwork),
+		errors.Is(err, ErrUnsupported), errors.Is(err, ErrAgentOutdated), errors.Is(err, ErrNodeOffline):
+		writeJSON(w, http.StatusConflict, errorBody{Message: err.Error()})
+	case errors.Is(err, ErrHost):
+		h.logger.Error("node host helper failed", "error", err)
+		writeJSON(w, http.StatusBadGateway, errorBody{Message: "the host helper failed; the change was not applied", Log: log})
+	default:
+		h.logger.Error("node host settings", "error", err)
+		writeJSON(w, http.StatusInternalServerError, errorBody{Message: "internal error"})
+	}
+}
+
+func serverIDParam(w http.ResponseWriter, r *http.Request) (uuid.UUID, bool) {
+	id, err := uuid.Parse(chi.URLParam(r, "id"))
+	if err != nil {
+		writeJSON(w, http.StatusBadRequest, errorBody{Message: "invalid server id"})
+		return uuid.Nil, false
+	}
+	return id, true
+}

@@ -53,6 +53,12 @@ type serviceListEnvelope struct {
 	Services []serviceResponse `json:"services"`
 }
 
+// deleteWarningsEnvelope reports data the delete could not remove. It is only
+// returned when there is something to report, so a clean delete stays a 204.
+type deleteWarningsEnvelope struct {
+	Warnings []string `json:"warnings"`
+}
+
 type deployEnvelope struct {
 	Service serviceResponse `json:"service"`
 	Deploy  deployResponse  `json:"deploy"`
@@ -271,8 +277,13 @@ func (h *handler) delete(w http.ResponseWriter, r *http.Request) {
 	if !ok {
 		return
 	}
-	if err := h.svc.Delete(r.Context(), userID, serviceID); err != nil {
+	warnings, err := h.svc.Delete(r.Context(), userID, serviceID)
+	if err != nil {
 		h.writeServiceError(w, err)
+		return
+	}
+	if len(warnings) > 0 {
+		writeJSON(w, http.StatusOK, deleteWarningsEnvelope{Warnings: warnings})
 		return
 	}
 	w.WriteHeader(http.StatusNoContent)

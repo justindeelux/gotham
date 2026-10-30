@@ -295,7 +295,7 @@ func TestDeleteApplicationProviderFailureStillDeletes(t *testing.T) {
 	}
 	registrar.removeErr = errors.New("host down")
 
-	if err := svc.DeleteApplication(context.Background(), app.UserID, app.ID); err != nil {
+	if _, err := svc.DeleteApplication(context.Background(), app.UserID, app.ID); err != nil {
 		t.Fatalf("DeleteApplication = %v, want the delete to proceed despite the host failure", err)
 	}
 	if _, err := svc.GetApplication(context.Background(), app.UserID, app.ID); !errors.Is(err, ErrNotFound) {
@@ -319,7 +319,7 @@ func TestDeleteApplicationRemovesDeployKey(t *testing.T) {
 		t.Fatalf("CreateDeployKey: %v", err)
 	}
 
-	if err := svc.DeleteApplication(context.Background(), app.UserID, app.ID); err != nil {
+	if _, err := svc.DeleteApplication(context.Background(), app.UserID, app.ID); err != nil {
 		t.Fatalf("DeleteApplication: %v", err)
 	}
 	if len(registrar.removed) != 1 || registrar.removed[0] != created.ProviderKeyID {
@@ -336,7 +336,7 @@ func TestDeleteApplicationRemovesDeployKey(t *testing.T) {
 func TestDeleteApplicationWithoutKeySkipsProvider(t *testing.T) {
 	repo, registrar, svc, app := keyFixture(t)
 
-	if err := svc.DeleteApplication(context.Background(), app.UserID, app.ID); err != nil {
+	if _, err := svc.DeleteApplication(context.Background(), app.UserID, app.ID); err != nil {
 		t.Fatalf("DeleteApplication: %v", err)
 	}
 	if len(registrar.removed) != 0 {
@@ -446,7 +446,7 @@ func TestDeleteApplicationCleansSealedKeyWhenLocalDetachFails(t *testing.T) {
 	}
 	repo.deleteDeployKeyErr = errors.New("database down")
 
-	if err := svc.DeleteApplication(context.Background(), app.UserID, app.ID); err != nil {
+	if _, err := svc.DeleteApplication(context.Background(), app.UserID, app.ID); err != nil {
 		t.Fatalf("DeleteApplication = %v, want the delete to proceed", err)
 	}
 	if repo.hasDeployKey(app.ID) {

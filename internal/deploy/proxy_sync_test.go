@@ -136,7 +136,7 @@ func TestServiceDeleteApplicationSyncsProxyForDomain(t *testing.T) {
 	proxySync := &fakeProxySync{}
 	svc := newProxyTestService(t, repo, proxySync)
 
-	if err := svc.DeleteApplication(context.Background(), userID, app.ID); err != nil {
+	if _, err := svc.DeleteApplication(context.Background(), userID, app.ID); err != nil {
 		t.Fatalf("delete: %v", err)
 	}
 	if calls := proxySync.calls(); len(calls) != 1 || calls[0] != app.ServerID {
@@ -149,7 +149,7 @@ func TestServiceDeleteApplicationSyncsProxyForDomain(t *testing.T) {
 	repo2 := &fakeRepository{app: plain}
 	proxySync2 := &fakeProxySync{}
 	svc2 := newProxyTestService(t, repo2, proxySync2)
-	if err := svc2.DeleteApplication(context.Background(), userID, plain.ID); err != nil {
+	if _, err := svc2.DeleteApplication(context.Background(), userID, plain.ID); err != nil {
 		t.Fatalf("delete without domain: %v", err)
 	}
 	if calls := proxySync2.calls(); len(calls) != 0 {

@@ -398,7 +398,7 @@ func TestServiceDeleteApplication(t *testing.T) {
 	seedDeployment(t, repo, app, Deployment{Kind: KindDeploy, State: StateRunning, ContainerID: node.containerID})
 	svc := newNodeService(t, repo, node)
 
-	if err := svc.DeleteApplication(context.Background(), userID, app.ID); err != nil {
+	if _, err := svc.DeleteApplication(context.Background(), userID, app.ID); err != nil {
 		t.Fatalf("delete: %v", err)
 	}
 	if node.removeCalls != 1 || len(node.removed) != 1 || node.removed[0] != node.containerID {
@@ -424,7 +424,7 @@ func TestServiceDeleteApplicationWithoutNode(t *testing.T) {
 	t.Cleanup(func() { _ = svc.Close() })
 	seedDeployment(t, repo, app, Deployment{Kind: KindDeploy, State: StateRunning, ContainerID: "abc"})
 
-	if err := svc.DeleteApplication(context.Background(), userID, app.ID); err != nil {
+	if _, err := svc.DeleteApplication(context.Background(), userID, app.ID); err != nil {
 		t.Fatalf("delete must not depend on the node: %v", err)
 	}
 	if _, err := svc.GetApplication(context.Background(), userID, app.ID); !errors.Is(err, ErrNotFound) {
@@ -457,7 +457,7 @@ func TestServiceDeleteApplicationRemovesProviderHook(t *testing.T) {
 	hooks := &fakeHookLifecycle{events: &events}
 	svc := newHookService(t, repo, hooks)
 
-	if err := svc.DeleteApplication(context.Background(), userID, app.ID); err != nil {
+	if _, err := svc.DeleteApplication(context.Background(), userID, app.ID); err != nil {
 		t.Fatalf("delete: %v", err)
 	}
 	if hooks.removeCalls != 1 || len(hooks.removed) != 1 || hooks.removed[0] != app.ID {
@@ -498,7 +498,7 @@ func TestServiceDeleteApplicationSurvivesDeployKeyDetachFailure(t *testing.T) {
 	})
 	t.Cleanup(func() { _ = svc.Close() })
 
-	if err := svc.DeleteApplication(context.Background(), userID, app.ID); err != nil {
+	if _, err := svc.DeleteApplication(context.Background(), userID, app.ID); err != nil {
 		t.Fatalf("a failed deploy-key detach must not leave a live hook-less application: %v", err)
 	}
 	if hooks.removeCalls != 1 {
@@ -531,7 +531,7 @@ func TestServiceDeleteApplicationSkipsHookWithoutProvider(t *testing.T) {
 			hooks := &fakeHookLifecycle{}
 			svc := newHookService(t, repo, hooks)
 
-			if err := svc.DeleteApplication(context.Background(), userID, app.ID); err != nil {
+			if _, err := svc.DeleteApplication(context.Background(), userID, app.ID); err != nil {
 				t.Fatalf("delete: %v", err)
 			}
 			if hooks.removeCalls != 0 {
@@ -553,7 +553,7 @@ func TestServiceDeleteApplicationFailsClosedOnHookRemovalFailure(t *testing.T) {
 	hooks := &fakeHookLifecycle{removeErr: fmt.Errorf("%w: provider unavailable", ErrProvider)}
 	svc := newHookService(t, repo, hooks)
 
-	err := svc.DeleteApplication(context.Background(), userID, app.ID)
+	_, err := svc.DeleteApplication(context.Background(), userID, app.ID)
 	if !errors.Is(err, ErrProvider) {
 		t.Fatalf("delete err = %v, want the hook removal failure to surface", err)
 	}
@@ -588,7 +588,7 @@ func TestServiceDeleteApplicationWithoutHookLifecycle(t *testing.T) {
 			})
 			t.Cleanup(func() { _ = svc.Close() })
 
-			if err := svc.DeleteApplication(context.Background(), userID, app.ID); err != nil {
+			if _, err := svc.DeleteApplication(context.Background(), userID, app.ID); err != nil {
 				t.Fatalf("delete: %v", err)
 			}
 			if _, err := svc.GetApplication(context.Background(), userID, app.ID); !errors.Is(err, ErrNotFound) {
@@ -679,7 +679,7 @@ func TestServiceDeleteApplicationBoundsStalledProvider(t *testing.T) {
 	t.Cleanup(func() { _ = svc.Close() })
 
 	start := time.Now()
-	err := svc.DeleteApplication(context.Background(), userID, app.ID)
+	_, err := svc.DeleteApplication(context.Background(), userID, app.ID)
 	elapsed := time.Since(start)
 
 	if !errors.Is(err, context.DeadlineExceeded) {

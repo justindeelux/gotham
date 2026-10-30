@@ -499,7 +499,7 @@ func (s *Service) UpdateApplication(ctx context.Context, userID, appID uuid.UUID
 	moved := updated.ServerID != previousServer
 	if moved {
 		s.stopContainerOnNode(ctx, previousServer, s.latestContainer(ctx, app.ID))
-		s.composeDownApp(ctx, previousServer, updated)
+		_ = s.composeDownApp(ctx, previousServer, updated, false)
 		s.syncProxyServer(ctx, previousServer)
 		if updated.PrimaryDomain != nil {
 			s.syncProxyServer(ctx, updated.ServerID)
@@ -510,26 +510,26 @@ func (s *Service) UpdateApplication(ctx context.Context, userID, appID uuid.UUID
 	return one[0], nil
 }
 
-func (s *Service) DeleteApplication(ctx context.Context, userID, appID uuid.UUID) error {
+func (s *Service) DeleteApplication(ctx context.Context, userID, appID uuid.UUID) ([]string, error) {
 	if !Enabled() {
-		return ErrDisabled
+		return nil, ErrDisabled
 	}
 	app, err := s.application(ctx, userID, appID, true)
 	if err != nil {
-		return err
+		return nil, err
 	}
 	unlock := s.locks.lock(app.ID)
 	defer unlock()
 	app, err = s.application(ctx, userID, appID, true)
 	if err != nil {
-		return err
+		return nil, err
 	}
 	if err := s.rejectInFlight(ctx, app.ID); err != nil {
-		return err
+		return nil, err
 	}
 	if s.previewCleanup != nil {
 		if err := s.previewCleanup(ctx, app.ID); err != nil {
-			return err
+			return nil, err
 		}
 	}
 	if !app.IsPreview && supportedSourceProvider(app.Provider) && strings.TrimSpace(app.Repo) != "" {
@@ -538,7 +538,7 @@ func (s *Service) DeleteApplication(ctx context.Context, userID, appID uuid.UUID
 			err := lifecycle.RemoveHook(hookCtx, userID, app.ID)
 			cancel()
 			if err != nil {
-				return err
+				return nil, err
 			}
 		}
 	}
@@ -556,10 +556,10 @@ func (s *Service) DeleteApplication(ctx context.Context, userID, appID uuid.UUID
 		s.logger.Warn("deploy: deploy key could not be detached; the application still deletes",
 			"application_id", app.ID, "provider", app.Provider, "repo", app.Repo, "error", err)
 	}
-	s.composeDownApp(ctx, app.ServerID, app)
-	s.removeApplicationContainers(ctx, app)
+	warnings := s.composeDownApp(ctx, app.ServerID, app, true)
+	warnings = append(warnings, s.removeApplicationContainers(ctx, app)...)
 	if err := s.repo.DeleteApplication(ctx, appID); err != nil {
-		return err
+		return nil, err
 	}
 	if s.runtimeMonitor != nil {
 		s.runtimeMonitor.CloseResource(ctx, runtimewatch.ResourceApplication, appID, "resource_deleted")
@@ -567,7 +567,7 @@ func (s *Service) DeleteApplication(ctx context.Context, userID, appID uuid.UUID
 	if app.PrimaryDomain != nil {
 		s.syncProxyServer(ctx, app.ServerID)
 	}
-	return nil
+	return warnings, nil
 }
 
 func (s *Service) GetEnv(ctx context.Context, userID, appID uuid.UUID) ([]EnvEntry, error) {
@@ -790,19 +790,19 @@ const containerCleanupTimeout = 15 * time.Second
 
 const composeCleanupTimeout = 2 * time.Minute
 
-func (s *Service) composeDownApp(ctx context.Context, serverID uuid.UUID, app Application) {
+func (s *Service) composeDownApp(ctx context.Context, serverID uuid.UUID, app Application, removeVolumes bool) []string {
 	if NormalizeSourceType(app.SourceType, app.Provider) != SourceCompose {
-		return
+		return nil
 	}
 	if serverID == uuid.Nil || s.dial == nil {
-		return
+		return nil
 	}
 	opCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), composeCleanupTimeout)
 	defer cancel()
 	dir, err := os.MkdirTemp("", "gotham-compose-down-*")
 	if err != nil {
 		s.logger.Warn("deploy: best-effort compose teardown skipped", "application_id", app.ID, "error", err)
-		return
+		return nil
 	}
 	defer func() { _ = os.RemoveAll(dir) }()
 	content, _, err := s.resolveComposeContent(opCtx, app, dir, nil)
@@ -820,7 +820,7 @@ func (s *Service) composeDownApp(ctx context.Context, serverID uuid.UUID, app Ap
 	node, err := s.dialNode(opCtx, serverID)
 	if err != nil {
 		s.logger.Warn("deploy: best-effort compose teardown skipped", "application_id", app.ID, "error", err)
-		return
+		return nil
 	}
 	defer func() {
 		if err := node.Close(); err != nil {
@@ -831,9 +831,16 @@ func (s *Service) composeDownApp(ctx context.Context, serverID uuid.UUID, app Ap
 		s.logger.Warn("deploy: compose teardown proceeds without verified confinement",
 			"application_id", app.ID, "error", err)
 	}
-	if err := node.ComposeDown(opCtx, services.ProjectName(app.ID), []byte(content)); err != nil {
+	warnings, err := node.ComposeDown(opCtx, services.ProjectName(app.ID), []byte(content), removeVolumes)
+	if err != nil {
 		s.logger.Warn("deploy: best-effort compose teardown failed", "application_id", app.ID, "error", err)
+		return nil
 	}
+	for _, warning := range warnings {
+		s.logger.Warn("deploy: a named volume was kept during delete",
+			"application_id", app.ID, "warning", warning)
+	}
+	return warnings
 }
 
 func (s *Service) stopContainerOnNode(ctx context.Context, serverID uuid.UUID, containerID string) {
@@ -857,9 +864,9 @@ func (s *Service) stopContainerOnNode(ctx context.Context, serverID uuid.UUID, c
 	}
 }
 
-func (s *Service) removeApplicationContainers(ctx context.Context, app Application) {
+func (s *Service) removeApplicationContainers(ctx context.Context, app Application) []string {
 	if app.ServerID == uuid.Nil || s.dial == nil {
-		return
+		return nil
 	}
 	opCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), containerCleanupTimeout)
 	defer cancel()
@@ -877,7 +884,7 @@ func (s *Service) removeApplicationContainers(ctx context.Context, app Applicati
 	node, err := s.dialNode(opCtx, app.ServerID)
 	if err != nil {
 		s.logger.Warn("deploy: best-effort container removal skipped", "application_id", app.ID, "error", err)
-		return
+		return nil
 	}
 	defer func() {
 		if err := node.Close(); err != nil {
@@ -901,6 +908,26 @@ func (s *Service) removeApplicationContainers(ctx context.Context, app Applicati
 				"application_id", app.ID, "container_id", id, "error", err)
 		}
 	}
+	return s.removeNamedStorageVolumes(opCtx, node, app)
+}
+
+func (s *Service) removeNamedStorageVolumes(ctx context.Context, node Node, app Application) []string {
+	storages, err := s.repo.ListStorages(ctx, app.ID)
+	if err != nil {
+		s.logger.Warn("deploy: storage lookup for delete failed; named volumes are kept",
+			"application_id", app.ID, "error", err)
+		return nil
+	}
+	var warnings []string
+	for _, name := range namedStorageVolumes(managedVolumeRoot(), app.ID, storages) {
+		if err := node.RemoveVolume(ctx, name); err != nil {
+			warning := name + ": " + err.Error()
+			s.logger.Warn("deploy: a named volume was kept during delete",
+				"application_id", app.ID, "warning", warning)
+			warnings = append(warnings, warning)
+		}
+	}
+	return warnings
 }
 
 func (s *Service) validateServer(ctx context.Context, _ uuid.UUID, serverID uuid.UUID) error {

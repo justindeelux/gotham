@@ -236,15 +236,16 @@ export const useApplicationsStore = defineStore("applications", () => {
     savingStorages.value = false;
   }
 
-  async function remove(appId: string): Promise<void> {
+  async function remove(appId: string): Promise<string[]> {
     acting.value = true;
     try {
-      await deleteApplication(appId);
+      const warnings = await deleteApplication(appId);
       delete applicationsById.value[appId];
       delete deploymentsByApp.value[appId];
       delete envByApp.value[appId];
       delete storagesByApp.value[appId];
       stopPolling(appId);
+      return warnings;
     } finally {
       acting.value = false;
     }

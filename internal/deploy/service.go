@@ -44,7 +44,7 @@ type DeployService interface {
 	UpdateDomain(ctx context.Context, userID, appID, domainID uuid.UUID, in DomainInput) (ApplicationDomain, error)
 	RemoveDomain(ctx context.Context, userID, appID, domainID uuid.UUID) error
 	SetPrimaryDomain(ctx context.Context, userID, appID, domainID uuid.UUID) error
-	DeleteApplication(ctx context.Context, userID, appID uuid.UUID) error
+	DeleteApplication(ctx context.Context, userID, appID uuid.UUID) ([]string, error)
 	GetEnv(ctx context.Context, userID, appID uuid.UUID) ([]EnvEntry, error)
 	ReplaceEnv(ctx context.Context, userID, appID uuid.UUID, entries []EnvEntry) ([]EnvEntry, error)
 	GetStorages(ctx context.Context, userID, appID uuid.UUID) ([]Storage, error)

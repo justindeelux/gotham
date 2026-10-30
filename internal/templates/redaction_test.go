@@ -204,7 +204,9 @@ func (a *failingAgent) Up(_ context.Context, _ string, _ []byte, _ bool) error {
 	return fmt.Errorf("%w: up: %s", services.ErrDeployFailed, a.message)
 }
 
-func (a *failingAgent) Down(_ context.Context, _ string, _ []byte) error { return nil }
+func (a *failingAgent) Down(_ context.Context, _ string, _ []byte, _ bool) ([]string, error) {
+	return nil, nil
+}
 
 func (a *failingAgent) Ps(_ context.Context, _ string) ([]services.ComposeContainer, error) {
 	return nil, nil

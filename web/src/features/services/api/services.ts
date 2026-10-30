@@ -17,6 +17,10 @@ export interface ServiceDomainRoute {
   port: number;
 }
 
+export interface DeleteWarnings {
+  warnings?: string[];
+}
+
 export type ServiceDomainStatus = "routed" | "held" | "shadowed" | "unknown";
 export type ServiceDomainProtocol = "http" | "https";
 export type ServiceDomainSource = "managed" | "compose";
@@ -175,8 +179,12 @@ export async function updateService(
   return response.data.service;
 }
 
-export async function deleteService(id: string): Promise<void> {
-  await http.delete(`/services/${id}`, { timeout: lifecycleTimeoutMs });
+export async function deleteService(id: string): Promise<string[]> {
+  const response = await http.delete<DeleteWarnings>(
+    `/services/${id}`,
+    { timeout: lifecycleTimeoutMs },
+  );
+  return response.data?.warnings ?? [];
 }
 
 export async function deployService(id: string): Promise<DeployOutcome> {

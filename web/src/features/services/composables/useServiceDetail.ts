@@ -411,8 +411,18 @@ export function useServiceDetail(): ServiceDetailContext {
     busy.value = "delete";
     actionFailure.value = null;
     try {
-      await servicesStore.remove(serviceId.value);
-      message.success(String(i18n.global.t("services.toast.deleted")));
+      const warnings = await servicesStore.remove(serviceId.value);
+      if (warnings.length > 0) {
+        message.warning(
+          String(
+            i18n.global.t("services.toast.deletedWithWarnings", {
+              warnings: warnings.join("; "),
+            }),
+          ),
+        );
+      } else {
+        message.success(String(i18n.global.t("services.toast.deleted")));
+      }
       if (current) {
         await router.push({
           name: "environment-detail",

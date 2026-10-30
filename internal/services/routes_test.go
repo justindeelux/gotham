@@ -27,6 +27,7 @@ type fakeRouteService struct {
 	streamErr error
 	created   CreateRequest
 	domainIn  DomainInput
+	deleted   []string
 
 	deployCalls int
 	err         error
@@ -61,7 +62,9 @@ func (f *fakeRouteService) Update(context.Context, uuid.UUID, uuid.UUID, UpdateR
 	return f.service, nil
 }
 
-func (f *fakeRouteService) Delete(context.Context, uuid.UUID, uuid.UUID) error { return f.err }
+func (f *fakeRouteService) Delete(context.Context, uuid.UUID, uuid.UUID) ([]string, error) {
+	return f.deleted, f.err
+}
 
 func (f *fakeRouteService) Deploy(context.Context, uuid.UUID, uuid.UUID) (Service, Deploy, error) {
 	f.deployCalls++
@@ -421,6 +424,30 @@ func TestRoutesCreateRejections(t *testing.T) {
 				t.Errorf("message = %q, want %q", decoded.Message, tc.message)
 			}
 		})
+	}
+}
+
+func TestRoutesDeleteReportsKeptVolumes(t *testing.T) {
+	service := sampleService()
+	fake := &fakeRouteService{
+		service: service,
+		deleted: []string{"kept volume shared-data: it has a custom name"},
+	}
+	router := routeTestServer(t, fake, service.UserID)
+
+	recorder := httptest.NewRecorder()
+	router.ServeHTTP(recorder, httptest.NewRequest(http.MethodDelete, "/v1/services/"+service.ID.String(), nil))
+	if recorder.Code != http.StatusOK {
+		t.Fatalf("status = %d, want 200 with the warning body (%s)", recorder.Code, recorder.Body)
+	}
+	var body struct {
+		Warnings []string `json:"warnings"`
+	}
+	if err := json.Unmarshal(recorder.Body.Bytes(), &body); err != nil {
+		t.Fatalf("decode body: %v", err)
+	}
+	if len(body.Warnings) != 1 || body.Warnings[0] != fake.deleted[0] {
+		t.Errorf("warnings = %v, want %v", body.Warnings, fake.deleted)
 	}
 }
 

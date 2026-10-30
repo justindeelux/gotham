@@ -8442,14 +8442,19 @@ type ComposeDownRequest struct {
 	// project_name is the compose project name: "gotham-<service uuid>".
 	ProjectName string `protobuf:"bytes,1,opt,name=project_name,json=projectName,proto3" json:"project_name,omitempty"`
 	// compose_yaml is the rendered compose document the project was last
-	// deployed with, capped at 1 MiB. The CLI needs it to resolve the project;
-	// the named volumes it declares are kept (down never passes --volumes).
+	// deployed with, capped at 1 MiB. The CLI needs it to resolve the project,
+	// and it is the record of which named volumes belong to the project.
 	ComposeYaml []byte `protobuf:"bytes,2,opt,name=compose_yaml,json=composeYaml,proto3" json:"compose_yaml,omitempty"`
 	// unconfined opts out of the application-scope confinement allowlist,
 	// like ComposeValidateRequest.unconfined. Teardown runs no containers,
 	// but the document still replaces the on-disk project file, so the same
 	// scope rule applies.
-	Unconfined    bool `protobuf:"varint,3,opt,name=unconfined,proto3" json:"unconfined,omitempty"`
+	Unconfined bool `protobuf:"varint,3,opt,name=unconfined,proto3" json:"unconfined,omitempty"`
+	// remove_volumes removes the project's own named volumes once the project
+	// is down: the project-prefixed defaults declared by compose_yaml. External
+	// volumes and volumes with a custom `name:` are kept, because another
+	// resource may own them, and are reported in volume_warnings.
+	RemoveVolumes bool `protobuf:"varint,4,opt,name=remove_volumes,json=removeVolumes,proto3" json:"remove_volumes,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
 }
@@ -8505,11 +8510,22 @@ func (x *ComposeDownRequest) GetUnconfined() bool {
 	return false
 }
 
-// ComposeDownResponse is empty.
+func (x *ComposeDownRequest) GetRemoveVolumes() bool {
+	if x != nil {
+		return x.RemoveVolumes
+	}
+	return false
+}
+
+// ComposeDownResponse reports volumes that outlived a teardown.
 type ComposeDownResponse struct {
-	state         protoimpl.MessageState `protogen:"open.v1"`
-	unknownFields protoimpl.UnknownFields
-	sizeCache     protoimpl.SizeCache
+	state protoimpl.MessageState `protogen:"open.v1"`
+	// volume_warnings lists the declared volumes that could not be removed
+	// (for example because another container still uses them). The project is
+	// down either way, so a caller treats these as warnings, not a failure.
+	VolumeWarnings []string `protobuf:"bytes,1,rep,name=volume_warnings,json=volumeWarnings,proto3" json:"volume_warnings,omitempty"`
+	unknownFields  protoimpl.UnknownFields
+	sizeCache      protoimpl.SizeCache
 }
 
 func (x *ComposeDownResponse) Reset() {
@@ -8540,6 +8556,13 @@ func (x *ComposeDownResponse) ProtoReflect() protoreflect.Message {
 // Deprecated: Use ComposeDownResponse.ProtoReflect.Descriptor instead.
 func (*ComposeDownResponse) Descriptor() ([]byte, []int) {
 	return file_agent_v1_agent_proto_rawDescGZIP(), []int{117}
+}
+
+func (x *ComposeDownResponse) GetVolumeWarnings() []string {
+	if x != nil {
+		return x.VolumeWarnings
+	}
+	return nil
 }
 
 // ComposeLogsRequest tails one project's logs.
@@ -10074,14 +10097,16 @@ const file_agent_v1_agent_proto_rawDesc = "" +
 	"\n" +
 	"unconfined\x18\x04 \x01(\bR\n" +
 	"unconfined\"\x13\n" +
-	"\x11ComposeUpResponse\"z\n" +
+	"\x11ComposeUpResponse\"\xa1\x01\n" +
 	"\x12ComposeDownRequest\x12!\n" +
 	"\fproject_name\x18\x01 \x01(\tR\vprojectName\x12!\n" +
 	"\fcompose_yaml\x18\x02 \x01(\fR\vcomposeYaml\x12\x1e\n" +
 	"\n" +
 	"unconfined\x18\x03 \x01(\bR\n" +
-	"unconfined\"\x15\n" +
-	"\x13ComposeDownResponse\"}\n" +
+	"unconfined\x12%\n" +
+	"\x0eremove_volumes\x18\x04 \x01(\bR\rremoveVolumes\">\n" +
+	"\x13ComposeDownResponse\x12'\n" +
+	"\x0fvolume_warnings\x18\x01 \x03(\tR\x0evolumeWarnings\"}\n" +
 	"\x12ComposeLogsRequest\x12!\n" +
 	"\fproject_name\x18\x01 \x01(\tR\vprojectName\x12\x18\n" +
 	"\aservice\x18\x02 \x01(\tR\aservice\x12\x16\n" +

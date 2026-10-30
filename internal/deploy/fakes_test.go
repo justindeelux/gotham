@@ -1192,20 +1192,24 @@ type mockNode struct {
 	registryAddr string
 	digest       string
 
-	composeUpErr         error
-	composeDownErr       error
-	composePsErr         error
-	composeValidateErr   error
-	composeOldAgent      bool
-	composeContainers    []ComposeContainer
-	composeUpCalls       int
-	composeDownCalls     int
-	composePsCalls       int
-	composeValidateCalls int
-	composeProjects      []string
-	composeDocuments     []string
-	composeDownProjects  []string
-	composeDownDocuments []string
+	composeUpErr          error
+	composeDownErr        error
+	composeDownWarnings   []string
+	composePsErr          error
+	composeValidateErr    error
+	composeOldAgent       bool
+	composeContainers     []ComposeContainer
+	composeUpCalls        int
+	composeDownCalls      int
+	composePsCalls        int
+	composeValidateCalls  int
+	composeProjects       []string
+	composeDocuments      []string
+	composeDownProjects   []string
+	composeDownDocuments  []string
+	composeDownRemoveVols []bool
+	removedVolumes        []string
+	removeVolumeErr       error
 
 	fileRoots    []*agentv1.FileRoot
 	fileRootsErr error
@@ -1445,13 +1449,21 @@ func (m *mockNode) ComposeUp(_ context.Context, projectName string, composeYAML 
 	return m.composeUpErr
 }
 
-func (m *mockNode) ComposeDown(_ context.Context, projectName string, composeYAML []byte) error {
+func (m *mockNode) ComposeDown(_ context.Context, projectName string, composeYAML []byte, removeVolumes bool) ([]string, error) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	m.composeDownCalls++
 	m.composeDownProjects = append(m.composeDownProjects, projectName)
 	m.composeDownDocuments = append(m.composeDownDocuments, string(composeYAML))
-	return m.composeDownErr
+	m.composeDownRemoveVols = append(m.composeDownRemoveVols, removeVolumes)
+	return append([]string(nil), m.composeDownWarnings...), m.composeDownErr
+}
+
+func (m *mockNode) RemoveVolume(_ context.Context, volumeName string) error {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	m.removedVolumes = append(m.removedVolumes, volumeName)
+	return m.removeVolumeErr
 }
 
 func (m *mockNode) ComposePs(_ context.Context, _ string) ([]ComposeContainer, error) {

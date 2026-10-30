@@ -136,9 +136,9 @@ service ComposeService {
   // existing containers.
   rpc ComposeUp(ComposeUpRequest) returns (ComposeUpResponse);
   // ComposeDown stops and removes the project's containers and networks with
-  // `docker compose down`. It never passes --volumes: named volumes survive a
-  // down, so a stop is always recoverable and volume data is never deleted
-  // (Phase 5 relies on the same guarantee for database volumes).
+  // `docker compose down`. It passes --volumes only when the request asks for
+  // it: a stop keeps every named volume so it stays recoverable, while a
+  // delete removes exactly the volumes the recorded document declares.
   rpc ComposeDown(ComposeDownRequest) returns (ComposeDownResponse);
   // ComposeLogs streams the merged stdout/stderr of one compose service (or
   // the whole project when service is empty), following until the client
@@ -1601,18 +1601,28 @@ message ComposeDownRequest {
   // project_name is the compose project name: "gotham-<service uuid>".
   string project_name = 1;
   // compose_yaml is the rendered compose document the project was last
-  // deployed with, capped at 1 MiB. The CLI needs it to resolve the project;
-  // the named volumes it declares are kept (down never passes --volumes).
+  // deployed with, capped at 1 MiB. The CLI needs it to resolve the project,
+  // and it is the record of which named volumes belong to the project.
   bytes compose_yaml = 2;
   // unconfined opts out of the application-scope confinement allowlist,
   // like ComposeValidateRequest.unconfined. Teardown runs no containers,
   // but the document still replaces the on-disk project file, so the same
   // scope rule applies.
   bool unconfined = 3;
+  // remove_volumes removes the project's own named volumes once the project
+  // is down: the project-prefixed defaults declared by compose_yaml. External
+  // volumes and volumes with a custom `name:` are kept, because another
+  // resource may own them, and are reported in volume_warnings.
+  bool remove_volumes = 4;
 }
 
-// ComposeDownResponse is empty.
-message ComposeDownResponse {}
+// ComposeDownResponse reports volumes that outlived a teardown.
+message ComposeDownResponse {
+  // volume_warnings lists the declared volumes that could not be removed
+  // (for example because another container still uses them). The project is
+  // down either way, so a caller treats these as warnings, not a failure.
+  repeated string volume_warnings = 1;
+}
 
 // ComposeLogsRequest tails one project's logs.
 message ComposeLogsRequest {

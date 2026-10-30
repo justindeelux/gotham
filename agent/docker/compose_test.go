@@ -225,6 +225,104 @@ func TestComposeUpDownCommands(t *testing.T) {
 	}
 }
 
+func TestComposeDownRemovesRecordedVolumesOnly(t *testing.T) {
+	logPath := fakeDockerCLI(t, `exit 0`)
+	server := newTestComposeServer(t, ComposeServerConfig{})
+	otherProject := "gotham-00000000-0000-0000-0000-000000000001"
+	document := []byte(`services:
+  web:
+    image: nginx:1.23
+    volumes:
+      - data:/data
+      - shared:/shared
+volumes:
+  data:
+  shared:
+    external: true
+  foreign:
+    name: ` + otherProject + `_data
+`)
+
+	response, err := server.ComposeDown(context.Background(), &agentv1.ComposeDownRequest{
+		ProjectName:   composeTestProject,
+		ComposeYaml:   document,
+		Unconfined:    true,
+		RemoveVolumes: true,
+	})
+	if err != nil {
+		t.Fatalf("ComposeDown: %v", err)
+	}
+	warnings := response.GetVolumeWarnings()
+	if len(warnings) != 1 || warnings[0] != "kept volume "+otherProject+"_data: it has a custom name" {
+		t.Errorf("volume warnings = %v, want the custom-name volume reported", warnings)
+	}
+
+	removed := map[string]bool{}
+	for _, call := range composeCalls(t, logPath) {
+		if fields := strings.Fields(strings.TrimPrefix(call, "args=")); len(fields) == 3 && fields[0] == "volume" {
+			removed[fields[2]] = true
+		}
+	}
+	if len(removed) != 1 || !removed[composeTestProject+"_data"] {
+		t.Fatalf("removed volumes = %v, want only %s_data", removed, composeTestProject)
+	}
+	if removed[otherProject+"_data"] || removed[composeTestProject+"_shared"] || removed["shared"] {
+		t.Errorf("removed volumes = %v, must not remove a custom-name or external volume", removed)
+	}
+}
+
+func TestComposeDownReportsVolumesItCannotRemove(t *testing.T) {
+	logPath := fakeDockerCLI(t, `
+if [ "$1" = "volume" ]; then
+  echo "Error response from daemon: remove $3: volume is in use" >&2
+  exit 1
+fi
+exit 0
+`)
+	server := newTestComposeServer(t, ComposeServerConfig{})
+
+	response, err := server.ComposeDown(context.Background(), &agentv1.ComposeDownRequest{
+		ProjectName:   composeTestProject,
+		ComposeYaml:   []byte(composeTestDocument),
+		Unconfined:    true,
+		RemoveVolumes: true,
+	})
+	if err != nil {
+		t.Fatalf("ComposeDown = %v, want success with a warning", err)
+	}
+	warnings := response.GetVolumeWarnings()
+	if len(warnings) != 1 || !strings.Contains(warnings[0], composeTestProject+"_data") {
+		t.Errorf("volume warnings = %v, want one for %s_data", warnings, composeTestProject)
+	}
+	if !strings.Contains(strings.Join(composeCalls(t, logPath), "\n"), "volume rm "+composeTestProject+"_data") {
+		t.Error("the volume removal was not attempted")
+	}
+}
+
+func TestComposeDownIgnoresAMissingVolume(t *testing.T) {
+	fakeDockerCLI(t, `
+if [ "$1" = "volume" ]; then
+  echo "Error response from daemon: get $3: no such volume" >&2
+  exit 1
+fi
+exit 0
+`)
+	server := newTestComposeServer(t, ComposeServerConfig{})
+
+	response, err := server.ComposeDown(context.Background(), &agentv1.ComposeDownRequest{
+		ProjectName:   composeTestProject,
+		ComposeYaml:   []byte(composeTestDocument),
+		Unconfined:    true,
+		RemoveVolumes: true,
+	})
+	if err != nil {
+		t.Fatalf("ComposeDown: %v", err)
+	}
+	if len(response.GetVolumeWarnings()) != 0 {
+		t.Errorf("volume warnings = %v, want none for an already absent volume", response.GetVolumeWarnings())
+	}
+}
+
 func managedVolumeDocument(device string) []byte {
 	return []byte(fmt.Sprintf(`services:
   web:

@@ -1158,11 +1158,56 @@ func TestServiceDeleteComposeDown(t *testing.T) {
 	node := newMockNode()
 	svc := newNodeService(t, repo, node)
 
-	if err := svc.DeleteApplication(context.Background(), userID, app.ID); err != nil {
+	if _, err := svc.DeleteApplication(context.Background(), userID, app.ID); err != nil {
 		t.Fatalf("delete: %v", err)
 	}
 	if node.composeDownCalls != 1 {
 		t.Errorf("compose down calls = %d, want 1", node.composeDownCalls)
+	}
+	if len(node.composeDownRemoveVols) != 1 || !node.composeDownRemoveVols[0] {
+		t.Errorf("remove volumes = %v, want the delete to remove the project's volumes", node.composeDownRemoveVols)
+	}
+}
+
+func TestServiceMoveKeepsNamedVolumes(t *testing.T) {
+	userID := uuid.New()
+	app := testComposeApp(userID)
+	repo := &fakeRepository{app: app}
+	oldNode := newMockNode()
+	newServer := uuid.New()
+	svc := NewService(Config{
+		Repository: repo,
+		Secret:     testSecretKey,
+		Logger:     discardLogger(),
+		Dial:       dialPerServer(map[uuid.UUID]Node{app.ServerID: oldNode, newServer: newMockNode()}),
+	})
+	t.Cleanup(func() { _ = svc.Close() })
+
+	if _, err := svc.UpdateApplication(context.Background(), userID, app.ID, UpdateApplicationInput{ServerID: &newServer}); err != nil {
+		t.Fatalf("move: %v", err)
+	}
+	if len(oldNode.composeDownRemoveVols) != 1 || oldNode.composeDownRemoveVols[0] {
+		t.Errorf("remove volumes = %v, want a move to keep the project's volumes", oldNode.composeDownRemoveVols)
+	}
+}
+
+func TestServiceDeleteReportsVolumeWarnings(t *testing.T) {
+	userID := uuid.New()
+	app := testComposeApp(userID)
+	repo := &fakeRepository{app: app}
+	node := newMockNode()
+	node.composeDownWarnings = []string{"gotham-data: volume is in use"}
+	svc := newNodeService(t, repo, node)
+
+	warnings, err := svc.DeleteApplication(context.Background(), userID, app.ID)
+	if err != nil {
+		t.Fatalf("delete = %v, want success despite the volume warning", err)
+	}
+	if len(warnings) != 1 || warnings[0] != "gotham-data: volume is in use" {
+		t.Errorf("warnings = %v, want the kept volume reported to the caller", warnings)
+	}
+	if _, err := repo.GetApplication(context.Background(), app.ID); !errors.Is(err, ErrNotFound) {
+		t.Errorf("GetApplication after delete = %v, want ErrNotFound despite the volume warning", err)
 	}
 }
 
@@ -1174,7 +1219,7 @@ func TestServiceDeleteComposeProbesUnverifiedNode(t *testing.T) {
 	node.composeOldAgent = true
 	svc := newNodeService(t, repo, node)
 
-	if err := svc.DeleteApplication(context.Background(), userID, app.ID); err != nil {
+	if _, err := svc.DeleteApplication(context.Background(), userID, app.ID); err != nil {
 		t.Fatalf("delete: %v", err)
 	}
 	if node.composeValidateCalls == 0 {

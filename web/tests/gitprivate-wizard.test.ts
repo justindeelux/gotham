@@ -161,7 +161,7 @@ describe("wizard SSH post-create flow", () => {
     const { wrapper, wiz } = await harness();
     await sshForm(wiz);
     mockCreateKey.mockRejectedValueOnce({ status: 500, message: "boom" });
-    mockDeleteApp.mockResolvedValueOnce(undefined);
+    mockDeleteApp.mockResolvedValueOnce([]);
 
     await wiz.handleSubmit();
     expect(wiz.keyRecovery.value).not.toBeNull();

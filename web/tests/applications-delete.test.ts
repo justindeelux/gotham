@@ -26,7 +26,7 @@ beforeEach(() => {
   registerDiscoveredCatalogs();
   resetLocaleState();
   syncComposerLocale("en");
-  mockDelete.mockReset().mockResolvedValue(undefined);
+  mockDelete.mockReset().mockResolvedValue([]);
   globalThis.document.body.innerHTML = "";
 });
 
@@ -83,5 +83,12 @@ describe("useApplicationsStore remove", () => {
     expect(mockDelete).toHaveBeenCalledTimes(1);
     expect(mockDelete).toHaveBeenCalledWith("app-1");
     expect(store.applicationsById["app-1"]).toBeUndefined();
+  });
+
+  it("returns the volumes the delete kept for the toast", async () => {
+    const store = useApplicationsStore();
+    mockDelete.mockResolvedValue(["kept volume shared-data: it has a custom name"]);
+    const warnings = await store.remove("app-1");
+    expect(warnings).toEqual(["kept volume shared-data: it has a custom name"]);
   });
 });

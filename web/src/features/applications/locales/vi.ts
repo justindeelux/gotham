@@ -704,7 +704,9 @@ const vi: ApplicationsMessages = {
     certCreated: "Đã tạo cấu hình chứng chỉ.",
     certRerecorded: "Đã ghi nhận lại tên miền hiện tại của ứng dụng.",
     certDeleted: "Đã xóa cấu hình chứng chỉ. Tuyến vẫn chỉ dùng HTTP.",
-    deleted: "Đã xóa ứng dụng {name}.",
+    deleted: "Đã xóa ứng dụng {name}. Các volume dữ liệu của nó đã được gỡ.",
+    deletedWithWarnings:
+      "Đã xóa ứng dụng {name}, nhưng một số volume dữ liệu được giữ lại: {warnings}",
     redeployTitle: "Triển khai lại để áp dụng thay đổi",
     redeployBody:
       "Ứng dụng này có thay đổi đang chờ chỉ có hiệu lực trong container mới: {changes}.",
@@ -717,7 +719,7 @@ const vi: ApplicationsMessages = {
   },
   delete: {
     title: "Vùng nguy hiểm",
-    hint: "Xóa sẽ gỡ ứng dụng, các container, cấu hình đã lưu và các bản sao lưu của nó. Thao tác này không thể hoàn tác.",
+    hint: "Xóa sẽ gỡ ứng dụng, các container, các volume dữ liệu, cấu hình đã lưu và các bản sao lưu của nó. Các thư mục bind vẫn nằm trên node, nên hãy tạo bản sao lưu trước nếu cần dữ liệu đó. Thao tác này không thể hoàn tác.",
     button: "Xóa ứng dụng",
     modalTitle: "Xóa ứng dụng",
     modalHint: "Nhập {name} để xác nhận. Thao tác này không thể hoàn tác.",

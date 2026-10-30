@@ -703,7 +703,9 @@ const en = {
     certCreated: "Certificate configuration created.",
     certRerecorded: "Certificate re-recorded the current application domain.",
     certDeleted: "Certificate configuration deleted. The route stays HTTP-only.",
-    deleted: "Application {name} deleted.",
+    deleted: "Application {name} deleted. Its data volumes are removed.",
+    deletedWithWarnings:
+      "Application {name} deleted, but some data volumes were kept: {warnings}",
     redeployTitle: "Redeploy to apply changes",
     redeployBody:
       "This application has pending changes that only take effect in a new container: {changes}.",
@@ -716,7 +718,7 @@ const en = {
   },
   delete: {
     title: "Danger zone",
-    hint: "Deleting removes the application, its containers, its stored configuration and its backups. This cannot be undone.",
+    hint: "Deleting removes the application, its containers, its data volumes, its stored configuration and its backups. Bind directories stay on the node, so create a backup first if you need that data. This cannot be undone.",
     button: "Delete application",
     modalTitle: "Delete application",
     modalHint: "Type {name} to confirm. This cannot be undone.",

@@ -34,6 +34,7 @@ type fakeDockerClient struct {
 	restarted          []string
 	removed            []string
 	removedVolumes     []string
+	volumes            []*agentv1.VolumeInfo
 	createdID          string
 	imports            []string
 	creates            int
@@ -76,6 +77,13 @@ func (f *fakeDockerClient) ListContainers(_ context.Context, all bool, labels ma
 		return nil, f.err
 	}
 	return f.containers, nil
+}
+
+func (f *fakeDockerClient) ListVolumes(context.Context) ([]*agentv1.VolumeInfo, error) {
+	if f.err != nil {
+		return nil, f.err
+	}
+	return f.volumes, nil
 }
 
 func (f *fakeDockerClient) Start(_ context.Context, id string) error {

@@ -276,6 +276,40 @@ func (c *DockerClient) ListContainers(ctx context.Context, all bool, labels map[
 	return containers, nil
 }
 
+// ListVolumes reports every Docker volume with the usage the engine computes.
+// /system/df is the only endpoint that includes size and reference count.
+func (c *DockerClient) ListVolumes(ctx context.Context) ([]*agentv1.VolumeInfo, error) {
+	var out struct {
+		Volumes []struct {
+			Name      string `json:"Name"`
+			CreatedAt string `json:"CreatedAt"`
+			UsageData struct {
+				Size     int64 `json:"Size"`
+				RefCount int64 `json:"RefCount"`
+			} `json:"UsageData"`
+		} `json:"Volumes"`
+	}
+	if err := c.doJSON(ctx, http.MethodGet, "/system/df?type=volume", nil, &out); err != nil {
+		return nil, err
+	}
+	volumes := make([]*agentv1.VolumeInfo, 0, len(out.Volumes))
+	for _, volume := range out.Volumes {
+		if volume.Name == "" {
+			continue
+		}
+		info := &agentv1.VolumeInfo{
+			Name:      volume.Name,
+			SizeBytes: volume.UsageData.Size,
+			RefCount:  volume.UsageData.RefCount,
+		}
+		if created, err := time.Parse(time.RFC3339Nano, volume.CreatedAt); err == nil {
+			info.CreatedAt = timestamppb.New(created)
+		}
+		volumes = append(volumes, info)
+	}
+	return volumes, nil
+}
+
 func (c *DockerClient) volumeDevice(ctx context.Context, name string) (string, error) {
 	var out struct {
 		Driver  string            `json:"Driver"`

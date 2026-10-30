@@ -358,8 +358,14 @@ func (s *Server) routes() (http.Handler, error) {
 		s.domainwatch = s.domainwatchService()
 		domainwatch.Mount(api, s.resourceAuth(), s.domainwatch)
 
+		platformOnly := func(next http.Handler) http.Handler {
+			return s.RequireAuth(s.RequireOwner(next))
+		}
 		containerService := s.containerService()
 		containers.Mount(api, s.resourceAuth(), containerService)
+		if volumeService, ok := containerService.(containers.VolumeService); ok {
+			containers.MountVolumes(api, platformOnly, volumeService)
+		}
 
 		filesAuth := s.resourceAuth()
 		files.Mount(api, filesAuth, files.TransferAuthorizerFunc(s.authorizeFileTransfer), s.fileService(), s.logger)
@@ -386,9 +392,6 @@ func (s *Server) routes() (http.Handler, error) {
 			statusConfig.Dial = func(ctx context.Context, serverID uuid.UUID) (proxy.ACMEReader, error) {
 				return dialer.DialProxyClient(ctx, serverID)
 			}
-		}
-		platformOnly := func(next http.Handler) http.Handler {
-			return s.RequireAuth(s.RequireOwner(next))
 		}
 		s.monitoring = s.monitoringService()
 		if s.monitoring != nil {
@@ -719,7 +722,19 @@ func (s *Server) containerService() containers.ContainerService {
 			return dialer.DialDockerClient(ctx, server.ID)
 		})
 	}
+	service.SetVolumeOwners(s.volumeOwners)
 	return service
+}
+
+func (s *Server) volumeOwners(ctx context.Context) (containers.VolumeOwners, error) {
+	if s.persistence == nil {
+		return containers.VolumeOwners{}, errors.New("server: persistence is unavailable")
+	}
+	recorded, err := s.persistence.ListRecordedVolumeOwners(ctx)
+	if err != nil {
+		return containers.VolumeOwners{}, err
+	}
+	return containers.NewVolumeOwners(recorded.Applications, recorded.Services, recorded.Databases), nil
 }
 
 type fileDialer interface {

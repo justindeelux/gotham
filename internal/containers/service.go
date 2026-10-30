@@ -40,6 +40,7 @@ type ContainerService interface {
 type Config struct {
 	Registry       Registry
 	Dial           DialFunc
+	VolumeOwners   VolumeOwnerSource
 	RedisAddr      string
 	Cache          Cache
 	Logger         *slog.Logger
@@ -53,6 +54,7 @@ type Service struct {
 	mu             sync.RWMutex
 	registry       Registry
 	dial           DialFunc
+	volumeOwners   VolumeOwnerSource
 	cache          Cache
 	logger         *slog.Logger
 	rpcTimeout     time.Duration
@@ -89,6 +91,7 @@ func NewService(cfg Config) *Service {
 	return &Service{
 		registry:       cfg.Registry,
 		dial:           cfg.Dial,
+		volumeOwners:   cfg.VolumeOwners,
 		cache:          cache,
 		logger:         logger,
 		rpcTimeout:     rpcTimeout,

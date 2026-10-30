@@ -299,6 +299,9 @@ func (f *e2eDockerClient) ListContainers(context.Context, bool, map[string]strin
 	return f.containers, nil
 }
 
+func (f *e2eDockerClient) ListVolumes(context.Context) ([]*agentv1.VolumeInfo, error) {
+	return nil, nil
+}
 func (f *e2eDockerClient) Start(context.Context, string) error        { return nil }
 func (f *e2eDockerClient) Stop(context.Context, string) error         { return nil }
 func (f *e2eDockerClient) Restart(context.Context, string) error      { return nil }

@@ -24,6 +24,7 @@ owner DELETE /api/v1/servers/{id}
 owner DELETE /api/v1/servers/{id}/files/entry
 owner DELETE /api/v1/servers/{id}/files/history/{version}
 owner DELETE /api/v1/servers/{id}/host-key
+owner DELETE /api/v1/servers/{id}/orphaned-volumes/{volumeName}
 owner DELETE /api/v1/servers/{id}/terminal/sessions/{sessionID}
 project DELETE /api/v1/services/{id}
 project DELETE /api/v1/services/{id}/domains/{domainId}
@@ -124,6 +125,7 @@ owner GET /api/v1/servers/{id}/files/stat
 owner GET /api/v1/servers/{id}/files/trash
 owner GET /api/v1/servers/{id}/host
 owner GET /api/v1/servers/{id}/metrics
+owner GET /api/v1/servers/{id}/orphaned-volumes
 public GET /api/v1/servers/{id}/terminal/sessions/{sessionID}/ws
 owner GET /api/v1/servers/{id}/toolchain/jobs
 owner GET /api/v1/servers/{id}/toolchain/jobs/{jobID}

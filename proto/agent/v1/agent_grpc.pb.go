@@ -321,6 +321,7 @@ var UpdateService_ServiceDesc = grpc.ServiceDesc{
 
 const (
 	DockerService_ListContainers_FullMethodName            = "/agent.v1.DockerService/ListContainers"
+	DockerService_ListVolumes_FullMethodName               = "/agent.v1.DockerService/ListVolumes"
 	DockerService_StartContainer_FullMethodName            = "/agent.v1.DockerService/StartContainer"
 	DockerService_StopContainer_FullMethodName             = "/agent.v1.DockerService/StopContainer"
 	DockerService_RestartContainer_FullMethodName          = "/agent.v1.DockerService/RestartContainer"
@@ -343,6 +344,10 @@ const (
 // containers on that node.
 type DockerServiceClient interface {
 	ListContainers(ctx context.Context, in *ListContainersRequest, opts ...grpc.CallOption) (*ListContainersResponse, error)
+	// ListVolumes reports the node's Docker volumes with their usage. The agent
+	// does not decide ownership; the control plane filters out the volumes a
+	// recorded resource owns.
+	ListVolumes(ctx context.Context, in *ListVolumesRequest, opts ...grpc.CallOption) (*ListVolumesResponse, error)
 	StartContainer(ctx context.Context, in *ContainerActionRequest, opts ...grpc.CallOption) (*ContainerActionResponse, error)
 	StopContainer(ctx context.Context, in *ContainerActionRequest, opts ...grpc.CallOption) (*ContainerActionResponse, error)
 	RestartContainer(ctx context.Context, in *ContainerActionRequest, opts ...grpc.CallOption) (*ContainerActionResponse, error)
@@ -350,13 +355,15 @@ type DockerServiceClient interface {
 	// Named volumes are never removed: deleting a resource must not delete its
 	// data (Phase 5 database soft delete relies on this).
 	RemoveContainer(ctx context.Context, in *ContainerActionRequest, opts ...grpc.CallOption) (*ContainerActionResponse, error)
-	// RemoveVolume deletes one named volume. It exists for the Phase 5 database
-	// grace-window expiry: a soft-deleted database keeps its volume for the
-	// retention window and this is the only way the control plane can remove it.
-	// The agent confines the call to Gotham-managed database volumes (the
-	// "gotham-db-" prefix) so a compromised control plane cannot delete arbitrary
-	// node storage. Removal is idempotent: a volume that is already gone is
-	// reported as success.
+	// RemoveVolume deletes one named volume. It serves the Phase 5 database
+	// grace-window expiry and the orphaned-volume cleanup: a soft-deleted
+	// database keeps its volume for the retention window, and a volume a deleted
+	// resource left behind can be removed from the node view. The agent confines
+	// the call to Gotham-managed names ("gotham-db-", "gotham-app-" and the
+	// compose project form "gotham-<uuid>_") so a compromised control plane
+	// cannot delete arbitrary node storage. A volume in use fails with
+	// codes.FailedPrecondition. Removal is idempotent: a volume that is already
+	// gone is reported as success.
 	RemoveVolume(ctx context.Context, in *VolumeActionRequest, opts ...grpc.CallOption) (*VolumeActionResponse, error)
 	PullImage(ctx context.Context, in *PullImageRequest, opts ...grpc.CallOption) (*PullImageResponse, error)
 	CreateContainer(ctx context.Context, in *CreateContainerRequest, opts ...grpc.CallOption) (*ContainerActionResponse, error)
@@ -394,6 +401,16 @@ func (c *dockerServiceClient) ListContainers(ctx context.Context, in *ListContai
 	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
 	out := new(ListContainersResponse)
 	err := c.cc.Invoke(ctx, DockerService_ListContainers_FullMethodName, in, out, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
+func (c *dockerServiceClient) ListVolumes(ctx context.Context, in *ListVolumesRequest, opts ...grpc.CallOption) (*ListVolumesResponse, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	out := new(ListVolumesResponse)
+	err := c.cc.Invoke(ctx, DockerService_ListVolumes_FullMethodName, in, out, cOpts...)
 	if err != nil {
 		return nil, err
 	}
@@ -549,6 +566,10 @@ type DockerService_RestoreVolumesClient = grpc.ClientStreamingClient[RestoreVolu
 // containers on that node.
 type DockerServiceServer interface {
 	ListContainers(context.Context, *ListContainersRequest) (*ListContainersResponse, error)
+	// ListVolumes reports the node's Docker volumes with their usage. The agent
+	// does not decide ownership; the control plane filters out the volumes a
+	// recorded resource owns.
+	ListVolumes(context.Context, *ListVolumesRequest) (*ListVolumesResponse, error)
 	StartContainer(context.Context, *ContainerActionRequest) (*ContainerActionResponse, error)
 	StopContainer(context.Context, *ContainerActionRequest) (*ContainerActionResponse, error)
 	RestartContainer(context.Context, *ContainerActionRequest) (*ContainerActionResponse, error)
@@ -556,13 +577,15 @@ type DockerServiceServer interface {
 	// Named volumes are never removed: deleting a resource must not delete its
 	// data (Phase 5 database soft delete relies on this).
 	RemoveContainer(context.Context, *ContainerActionRequest) (*ContainerActionResponse, error)
-	// RemoveVolume deletes one named volume. It exists for the Phase 5 database
-	// grace-window expiry: a soft-deleted database keeps its volume for the
-	// retention window and this is the only way the control plane can remove it.
-	// The agent confines the call to Gotham-managed database volumes (the
-	// "gotham-db-" prefix) so a compromised control plane cannot delete arbitrary
-	// node storage. Removal is idempotent: a volume that is already gone is
-	// reported as success.
+	// RemoveVolume deletes one named volume. It serves the Phase 5 database
+	// grace-window expiry and the orphaned-volume cleanup: a soft-deleted
+	// database keeps its volume for the retention window, and a volume a deleted
+	// resource left behind can be removed from the node view. The agent confines
+	// the call to Gotham-managed names ("gotham-db-", "gotham-app-" and the
+	// compose project form "gotham-<uuid>_") so a compromised control plane
+	// cannot delete arbitrary node storage. A volume in use fails with
+	// codes.FailedPrecondition. Removal is idempotent: a volume that is already
+	// gone is reported as success.
 	RemoveVolume(context.Context, *VolumeActionRequest) (*VolumeActionResponse, error)
 	PullImage(context.Context, *PullImageRequest) (*PullImageResponse, error)
 	CreateContainer(context.Context, *CreateContainerRequest) (*ContainerActionResponse, error)
@@ -598,6 +621,9 @@ type UnimplementedDockerServiceServer struct{}
 
 func (UnimplementedDockerServiceServer) ListContainers(context.Context, *ListContainersRequest) (*ListContainersResponse, error) {
 	return nil, status.Error(codes.Unimplemented, "method ListContainers not implemented")
+}
+func (UnimplementedDockerServiceServer) ListVolumes(context.Context, *ListVolumesRequest) (*ListVolumesResponse, error) {
+	return nil, status.Error(codes.Unimplemented, "method ListVolumes not implemented")
 }
 func (UnimplementedDockerServiceServer) StartContainer(context.Context, *ContainerActionRequest) (*ContainerActionResponse, error) {
 	return nil, status.Error(codes.Unimplemented, "method StartContainer not implemented")
@@ -670,6 +696,24 @@ func _DockerService_ListContainers_Handler(srv interface{}, ctx context.Context,
 	}
 	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
 		return srv.(DockerServiceServer).ListContainers(ctx, req.(*ListContainersRequest))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
+func _DockerService_ListVolumes_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(ListVolumesRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(DockerServiceServer).ListVolumes(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: DockerService_ListVolumes_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(DockerServiceServer).ListVolumes(ctx, req.(*ListVolumesRequest))
 	}
 	return interceptor(ctx, in, info, handler)
 }
@@ -875,6 +919,10 @@ var DockerService_ServiceDesc = grpc.ServiceDesc{
 		{
 			MethodName: "ListContainers",
 			Handler:    _DockerService_ListContainers_Handler,
+		},
+		{
+			MethodName: "ListVolumes",
+			Handler:    _DockerService_ListVolumes_Handler,
 		},
 		{
 			MethodName: "StartContainer",

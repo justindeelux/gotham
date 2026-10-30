@@ -12,6 +12,7 @@ import (
 
 type DockerClient interface {
 	ListContainers(ctx context.Context, in *agentv1.ListContainersRequest, opts ...grpc.CallOption) (*agentv1.ListContainersResponse, error)
+	ListVolumes(ctx context.Context, in *agentv1.ListVolumesRequest, opts ...grpc.CallOption) (*agentv1.ListVolumesResponse, error)
 	StartContainer(ctx context.Context, in *agentv1.ContainerActionRequest, opts ...grpc.CallOption) (*agentv1.ContainerActionResponse, error)
 	StopContainer(ctx context.Context, in *agentv1.ContainerActionRequest, opts ...grpc.CallOption) (*agentv1.ContainerActionResponse, error)
 	RestartContainer(ctx context.Context, in *agentv1.ContainerActionRequest, opts ...grpc.CallOption) (*agentv1.ContainerActionResponse, error)

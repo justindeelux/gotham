@@ -3,6 +3,7 @@ package containers
 import (
 	"context"
 	"errors"
+	"sort"
 	"testing"
 	"time"
 
@@ -52,12 +53,22 @@ func TestListOrphanedVolumesFiltersOwnedExternalAndInUse(t *testing.T) {
 	if len(volumes) != 2 {
 		t.Fatalf("volumes = %+v; want the two unowned managed volumes", volumes)
 	}
-	if volumes[0].Name != "gotham-"+orphanCompose.String()+"_cache" ||
-		volumes[1].Name != "gotham-app-"+orphanApp.String()+"-uploads" {
-		t.Errorf("volumes = %+v; want sorted orphan names", volumes)
+	byName := make(map[string]OrphanedVolume, len(volumes))
+	for _, volume := range volumes {
+		byName[volume.Name] = volume
 	}
-	if volumes[1].SizeBytes != 42 || volumes[1].CreatedAt == nil || !volumes[1].CreatedAt.Equal(created) {
-		t.Errorf("orphan metadata = %+v; want size 42 and the created time", volumes[1])
+	uploads, ok := byName["gotham-app-"+orphanApp.String()+"-uploads"]
+	if !ok {
+		t.Fatalf("volumes = %+v; want the orphaned app volume", volumes)
+	}
+	if _, ok := byName["gotham-"+orphanCompose.String()+"_cache"]; !ok {
+		t.Fatalf("volumes = %+v; want the orphaned compose volume", volumes)
+	}
+	if !sort.SliceIsSorted(volumes, func(i, j int) bool { return volumes[i].Name < volumes[j].Name }) {
+		t.Errorf("volumes = %+v; want them sorted by name", volumes)
+	}
+	if uploads.SizeBytes != 42 || uploads.CreatedAt == nil || !uploads.CreatedAt.Equal(created) {
+		t.Errorf("orphan metadata = %+v; want size 42 and the created time", uploads)
 	}
 }
 

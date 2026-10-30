@@ -2,12 +2,9 @@ const en = {
   page: {
     eyebrow: "Operations · Reverse proxy",
     title: "Domains & SSL",
-    descriptionPre: "Traefik 3.1 runs on every node as the container",
-    descriptionPost:
-      "The control plane generates the dynamic configuration from application " +
-      "state through the file provider — testable, idempotent, and keeping one " +
-      "previous version for a quick rollback. Certificates below are intent " +
-      "records; the node performs ACME issuance.",
+    description:
+      "Attach domains to your apps and Gotham routes traffic to them. " +
+      "HTTPS certificates are issued and renewed automatically.",
     addProvider: "Add DNS provider",
     addCertificate: "Add certificate",
   },

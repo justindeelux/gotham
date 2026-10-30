@@ -2,12 +2,9 @@ const vi = {
   page: {
     eyebrow: "Vận hành · Reverse proxy",
     title: "Tên miền & SSL",
-    descriptionPre: "Traefik 3.1 chạy trên mọi node dưới dạng container",
-    descriptionPost:
-      "Control plane sinh cấu hình động từ trạng thái ứng dụng thông qua file " +
-      "provider — dễ kiểm thử, lũy đẳng, và luôn giữ một phiên bản trước để " +
-      "hoàn tác nhanh. Các chứng chỉ bên dưới là bản ghi ý định; node thực " +
-      "hiện phát hành ACME.",
+    description:
+      "Gắn tên miền vào ứng dụng và Gotham định tuyến lưu lượng tới đó. " +
+      "Chứng chỉ HTTPS được cấp và gia hạn tự động.",
     addProvider: "Thêm nhà cung cấp DNS",
     addCertificate: "Thêm chứng chỉ",
   },

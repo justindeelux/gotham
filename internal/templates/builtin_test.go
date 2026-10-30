@@ -279,15 +279,15 @@ func TestBuiltinSecretFieldsAreNotBakedIn(t *testing.T) {
 	}
 }
 
-func TestBuiltinGeneratableFieldsAreSecrets(t *testing.T) {
+func TestBuiltinGeneratableFieldsAreTextOrSecret(t *testing.T) {
 	catalog, err := Load(builtin.FS)
 	if err != nil {
 		t.Fatalf("Load(builtin.FS): %v", err)
 	}
 	for _, template := range catalog.List() {
 		for _, field := range template.Fields {
-			if field.Generate && field.Type != FieldSecret {
-				t.Errorf("%s: generatable field %q is not a secret", template.Slug, field.Key)
+			if field.Generate && field.Type != FieldSecret && field.Type != FieldText {
+				t.Errorf("%s: generatable field %q is not text or secret", template.Slug, field.Key)
 			}
 		}
 	}

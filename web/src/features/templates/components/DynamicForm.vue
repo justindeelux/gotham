@@ -100,11 +100,14 @@ function setValue(key: string, value: string): void {
   emit("update:modelValue", { ...props.modelValue, [key]: value });
 }
 
-function setSecretInput(key: string, input: unknown): void {
+function setSecretInput(field: TemplateField, input: unknown): void {
+  if (field.type !== "secret") {
+    return;
+  }
   if (input && typeof input === "object" && "passwordVisible" in input) {
-    secretInputs.set(key, input as SecretInput);
+    secretInputs.set(field.key, input as SecretInput);
   } else {
-    secretInputs.delete(key);
+    secretInputs.delete(field.key);
   }
 }
 
@@ -112,6 +115,9 @@ function fillGenerated(field: TemplateField): void {
   const length = field.max_length ? Math.min(24, field.max_length) : 24;
   setValue(field.key, generateSecret(length));
   announcement.value = t("templates.secret.generated", { label: field.label });
+  if (field.type !== "secret") {
+    return;
+  }
   void nextTick(() => {
     const input = secretInputs.get(field.key);
     if (input) {
@@ -144,30 +150,24 @@ async function copyValue(field: TemplateField): Promise<void> {
       class="dynamic-form__item"
       :class="`field-${field.key}`"
     >
-      <NInput
-        v-if="field.type === 'text'"
-        :value="fieldValue(field)"
-        :placeholder="field.placeholder ?? ''"
-        :disabled="disabled"
-        :aria-label="fieldLabel(field)"
-        clearable
-        @update:value="(value: string) => setValue(field.key, value)"
-      />
-
-      <template v-else-if="field.type === 'secret'">
-        <NInputGroup v-if="field.generate" class="dynamic-form__secret-group">
+      <template v-if="field.type === 'text' || field.type === 'secret'">
+        <NInputGroup v-if="field.generate" class="dynamic-form__generated-group">
           <NInput
-            :ref="(input) => setSecretInput(field.key, input)"
-            type="password"
-            show-password-on="click"
-            :input-props="{ autocomplete: 'new-password' }"
+            :ref="(input) => setSecretInput(field, input)"
+            :type="field.type === 'secret' ? 'password' : 'text'"
+            :show-password-on="field.type === 'secret' ? 'click' : undefined"
+            :input-props="
+              field.type === 'secret'
+                ? { autocomplete: 'new-password' }
+                : undefined
+            "
             :value="fieldValue(field)"
             :placeholder="field.placeholder ?? ''"
             :disabled="disabled"
             :aria-label="fieldLabel(field)"
             @update:value="(value: string) => setValue(field.key, value)"
           />
-          <div class="dynamic-form__secret-actions">
+          <div class="dynamic-form__generated-actions">
             <NButton
               size="small"
               secondary
@@ -192,12 +192,17 @@ async function copyValue(field: TemplateField): Promise<void> {
 
         <NInput
           v-else
-          type="password"
-          show-password-on="click"
-          :input-props="{ autocomplete: 'new-password' }"
+          :type="field.type === 'secret' ? 'password' : 'text'"
+          :show-password-on="field.type === 'secret' ? 'click' : undefined"
+          :input-props="
+            field.type === 'secret'
+              ? { autocomplete: 'new-password' }
+              : undefined
+          "
           :value="fieldValue(field)"
           :placeholder="field.placeholder ?? ''"
           :disabled="disabled"
+          :clearable="field.type === 'text'"
           :aria-label="fieldLabel(field)"
           @update:value="(value: string) => setValue(field.key, value)"
         />
@@ -251,19 +256,19 @@ async function copyValue(field: TemplateField): Promise<void> {
   min-width: 0;
 }
 
-.dynamic-form__secret-group {
+.dynamic-form__generated-group {
   display: flex;
   flex-direction: column;
   align-items: stretch;
   gap: var(--space-2);
 }
 
-.dynamic-form__secret-group :deep(.n-input) {
+.dynamic-form__generated-group :deep(.n-input) {
   min-width: 0;
   border-radius: var(--radius-sm) !important;
 }
 
-.dynamic-form__secret-actions {
+.dynamic-form__generated-actions {
   display: flex;
   gap: var(--space-2);
   justify-content: flex-start;

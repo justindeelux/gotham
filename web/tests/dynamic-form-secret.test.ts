@@ -16,6 +16,14 @@ const fields: TemplateField[] = [
     generate: true,
   },
   { key: "root_password", label: "Root password", type: "secret", required: true },
+  {
+    key: "app_key",
+    label: "App key",
+    type: "text",
+    required: true,
+    generate: true,
+    max_length: 12,
+  },
   { key: "domain", label: "Domain", type: "text", required: true },
 ];
 
@@ -60,12 +68,28 @@ beforeEach(() => {
 });
 
 describe("DynamicForm secret generation", () => {
-  it("shows Generate only on generatable secret fields", () => {
+  it("shows Generate on generatable text and secret fields only", () => {
     const wrapper = mountForm({ db_password: "", root_password: "", domain: "" });
     expect(wrapper.find('[aria-label="Generate Database password"]').exists()).toBe(true);
+    expect(wrapper.find('[aria-label="Generate App key"]').exists()).toBe(true);
     expect(wrapper.find('[aria-label="Generate Root password"]').exists()).toBe(false);
     expect(wrapper.find('[aria-label="Generate Domain"]').exists()).toBe(false);
     expect(wrapper.find('[aria-label="Copy Database password"]').exists()).toBe(false);
+    wrapper.unmount();
+  });
+
+  it("fills a generated text field in clear text", async () => {
+    const wrapper = mountForm({ db_password: "", root_password: "", app_key: "", domain: "" });
+    expect(wrapper.find(".field-app_key input").attributes("type")).toBe("text");
+
+    await wrapper.find('[aria-label="Generate App key"]').trigger("click");
+    await flushPromises();
+
+    expect(valueOf(wrapper, "app_key")).toMatch(/^[A-Za-z0-9]{12}$/);
+    expect(wrapper.find(".field-app_key input").attributes("type")).toBe("text");
+    expect(wrapper.find('[aria-label="Copy App key"]').exists()).toBe(true);
+    expect(valueOf(wrapper, "db_password")).toBe("");
+    expect(wrapper.find('.dynamic-form [role="status"]').text()).toBe("App key generated.");
     wrapper.unmount();
   });
 

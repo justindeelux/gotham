@@ -1,6 +1,6 @@
 <script setup lang="ts">
 import { NButton, NCard, NPopconfirm, NSpace } from "naive-ui";
-import { useSlots } from "vue";
+import { computed, useSlots } from "vue";
 
 import ResourceMoveCard from "@/features/projects/components/ResourceMoveCard.vue";
 
@@ -35,7 +35,7 @@ const emit = defineEmits<{
 }>();
 
 const slots = useSlots();
-const hasDefaultSlot = Boolean(slots.default);
+const hasDefaultSlot = computed(() => Boolean(slots.default));
 
 function handleSave(scope: {
   projectId: string;

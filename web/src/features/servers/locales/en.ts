@@ -69,8 +69,6 @@ const en = {
     tabMetrics: "Metrics",
     tabProxy: "Proxy & Traefik",
     tabSettings: "Node settings",
-    containersEmpty: "Container management lives on the containers page.",
-    openContainers: "Open containers",
     filesEmpty: "Browse and download files inside the node agent's allowed roots.",
     openFiles: "Open files",
     validateAction: "Validate",

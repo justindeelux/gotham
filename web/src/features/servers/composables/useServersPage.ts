@@ -127,7 +127,9 @@ export function useServersPage() {
   }
 
   function openContainers(id: string): Promise<void> {
-    return router.push({ name: "server-containers", params: { id } }).then(() => undefined);
+    return router
+      .push({ name: "server-detail", params: { id }, query: { tab: "containers" } })
+      .then(() => undefined);
   }
 
   function openEdit(server: Server): void {

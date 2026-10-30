@@ -71,8 +71,6 @@ const vi: ServersMessages = {
     tabMetrics: "Chỉ số",
     tabProxy: "Proxy và Traefik",
     tabSettings: "Cài đặt nút",
-    containersEmpty: "Quản lý container nằm ở trang container.",
-    openContainers: "Mở container",
     filesEmpty: "Duyệt và tải tệp trong các thư mục gốc được phép của agent trên nút.",
     openFiles: "Mở tệp",
     validateAction: "Kiểm tra",

@@ -91,7 +91,6 @@ const vi: CommonMessages = {
     dashboard: "Bảng điều khiển",
     servers: "Máy chủ",
     serverDetail: "Chi tiết máy chủ",
-    serverContainers: "Container",
     serverFiles: "Tệp",
     files: "Quản lý tệp",
     projects: "Dự án",

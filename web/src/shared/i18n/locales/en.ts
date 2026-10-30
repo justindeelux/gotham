@@ -89,7 +89,6 @@ const en = {
     dashboard: "Dashboard",
     servers: "Servers",
     serverDetail: "Server detail",
-    serverContainers: "Containers",
     serverFiles: "Files",
     files: "File manager",
     projects: "Projects",

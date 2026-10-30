@@ -136,6 +136,9 @@ vi.mock("@/features/databases/composables/useDatabaseDetail", async () => {
       handleMove: vi.fn(),
       handleDelete: vi.fn(),
       openRename: vi.fn(),
+      monitorSaving: ref(false),
+      monitorError: ref(null),
+      handleMonitoringSave: vi.fn(),
     }),
   };
 });

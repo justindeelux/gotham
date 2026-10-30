@@ -21,6 +21,7 @@ import ResourceHistoryPanel from "@/features/monitoring/components/ResourceHisto
 import { useApplicationTerminalAccess } from "@/features/applications/composables/useApplicationTerminalAccess";
 import ResourceDetailFrame from "@/features/projects/components/ResourceDetailFrame.vue";
 import ResourceSettingsTab from "@/features/projects/components/ResourceSettingsTab.vue";
+import RuntimeHealthPanel from "@/shared/components/RuntimeHealthPanel.vue";
 
 const detail = useApplicationDetail();
 
@@ -161,11 +162,6 @@ const activeTab = computed<string>({
           :desc-columns="detail.descColumns.value"
           :acting="detail.appsStore.acting"
           :can-write="detail.canWrite.value"
-          :monitor-saving="detail.monitorSaving.value"
-          :monitor-error="detail.monitorError.value"
-          @save-monitoring="detail.handleMonitoringSave"
-          @view-logs="detail.showLogsFor(detail.latest.value?.id ?? '')"
-          @view-deployments="activeTab = 'deployments'"
           @deploy="detail.handleDeploy"
           @view-all="activeTab = 'deployments'"
           @show-logs="detail.showLogsFor"
@@ -319,6 +315,18 @@ const activeTab = computed<string>({
           :danger-label="t('applications.delete.button')"
           @save="detail.handleMove"
         >
+          <RuntimeHealthPanel
+            v-if="detail.application.value"
+            :health="detail.application.value.runtime_health"
+            :can-write="detail.canWrite.value"
+            :saving="detail.monitorSaving.value"
+            :error="detail.monitorError.value"
+            :show-logs="true"
+            :show-deployments="true"
+            @save="detail.handleMonitoringSave"
+            @view-logs="detail.showLogsFor(detail.latest.value?.id ?? '')"
+            @view-deployments="activeTab = 'deployments'"
+          />
           <template #danger-action>
             <NButton type="error" ghost @click="detail.deleteOpen.value = true">
               {{ t("applications.delete.button") }}

@@ -30,6 +30,14 @@ const database = {
   volume: "volume-1",
   created_at: now,
   updated_at: now,
+  runtime_health: {
+    state: "healthy",
+    coverage: "complete",
+    observed_at: now,
+    enabled: true,
+    grace_seconds: 60,
+    affected: [],
+  },
 };
 
 const schedule = {
@@ -222,6 +230,68 @@ test.describe("database backups", () => {
       page.locator(".n-card-header").filter({ hasText: "Backup targets" }),
     ).toHaveCount(0);
     await expect(page.getByText("Open Backups → Storage")).toBeVisible();
+  });
+
+  test("runtime health lives in the Settings tab and saves monitoring", async ({
+    page,
+    guardrails,
+  }) => {
+    await expect(page.getByTestId("runtime-health-state")).toHaveCount(0);
+
+    await page.route(`**/api/v1/projects/${projectId}`, (route) =>
+      route.fulfill({
+        status: 200,
+        contentType: "application/json",
+        body: JSON.stringify({
+          project: {
+            id: projectId,
+            name: "shop",
+            description: "",
+            created_at: now,
+            updated_at: now,
+            environment_count: 1,
+            resource_counts: { applications: 0, services: 0, databases: 1 },
+          },
+          environments: [
+            {
+              id: environmentId,
+              project_id: projectId,
+              name: "production",
+              created_at: now,
+              updated_at: now,
+              resource_counts: { applications: 0, services: 0, databases: 1 },
+            },
+          ],
+        }),
+      }),
+    );
+
+    await page.locator(".n-tabs-tab").filter({ hasText: "Settings" }).click();
+    await expect(page.getByTestId("runtime-health-state")).toHaveText("healthy");
+
+    await page.route(`**/api/v1/databases/${dbId}`, (route) => {
+      if (route.request().method() !== "PATCH") {
+        return route.fallback();
+      }
+      return route.fulfill({
+        status: 200,
+        contentType: "application/json",
+        body: JSON.stringify({ database }),
+      });
+    });
+    const saved = page.waitForRequest(
+      (request) =>
+        request.method() === "PATCH" &&
+        request.url().endsWith(`/api/v1/databases/${dbId}`),
+    );
+    await page.getByRole("textbox", { name: /Startup grace/ }).fill("90");
+    await page.getByTestId("runtime-health-save").click();
+    expect((await saved).postDataJSON()).toMatchObject({
+      monitor_enabled: true,
+      monitor_grace_seconds: 90,
+    });
+
+    expect(guardrails.apiFailures).toEqual([]);
   });
 
   test("restore history lists every durable restore run", async ({

@@ -12,6 +12,7 @@ import ResourceHistoryPanel from "@/features/monitoring/components/ResourceHisto
 import RenameDatabaseDialog from "@/features/databases/components/RenameDatabaseDialog.vue";
 import ResourceDetailFrame from "@/features/projects/components/ResourceDetailFrame.vue";
 import ResourceSettingsTab from "@/features/projects/components/ResourceSettingsTab.vue";
+import RuntimeHealthPanel from "@/shared/components/RuntimeHealthPanel.vue";
 import {
   databaseDetailKey,
   useDatabaseDetail,
@@ -132,6 +133,14 @@ watch(detail.dbId, () => {
           @save="detail.handleMove"
           @delete="() => void detail.handleDelete()"
         >
+          <RuntimeHealthPanel
+            v-if="detail.database.value"
+            :health="detail.database.value.runtime_health"
+            :can-write="detail.canWrite.value"
+            :saving="detail.monitorSaving.value"
+            :error="detail.monitorError.value"
+            @save="detail.handleMonitoringSave"
+          />
           <NCard :title="t('databases.detail.rename.title')">
             <NSpace vertical :size="12">
               <span>{{ t("databases.detail.rename.hint") }}</span>

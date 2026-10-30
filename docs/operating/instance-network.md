@@ -129,7 +129,8 @@ fails:
 | State | Meaning |
 |---|---|
 | `ready` | The host helper runs and the node has the network and time stack. |
-| `unsupported_stack` | The node lacks systemd-networkd/resolved or timedatectl, or its helper is too old. Installing the helper cannot fix a missing stack. |
+| `unsupported_stack` | The node lacks systemd-networkd/resolved or timedatectl. Installing the helper cannot fix a missing stack. |
+| `helper_outdated` | The helper is older than this control plane and cannot report the timezone. On the control-plane machine **Install host helper** updates it; on a remote node, update the agent or re-run the agent installer. |
 | `helper_missing` | The helper file is absent. On the control-plane machine **Install host helper** can restore it when the privileged repair path is present. On a remote node, re-run the agent installer. |
 | `helper_denied` | The helper is present but the privilege rule refuses it. Re-run the matching installer. |
 | `agent_outdated` | The agent predates host settings. Update the agent, or re-run the agent installer on that node, then reload the page. |

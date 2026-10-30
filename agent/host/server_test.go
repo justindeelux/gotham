@@ -80,13 +80,22 @@ func TestStatusReportsCapability(t *testing.T) {
 		t.Fatalf("capability = %v, want helper denied", response.GetCapability())
 	}
 
-	unsupported := NewServer(WithHelper(helper), withRunner(&fakeRunner{out: `{"network":false,"system":true}`}))
+	unsupported := NewServer(WithHelper(helper), withRunner(&fakeRunner{out: `{"network":false,"system":true,"timezone":"UTC"}`}))
 	response, err = unsupported.Status(context.Background(), &agentv1.HostStatusRequest{})
 	if err != nil {
 		t.Fatal(err)
 	}
 	if response.GetCapability() != agentv1.HostCapability_HOST_CAPABILITY_UNSUPPORTED_STACK {
 		t.Fatalf("capability = %v, want unsupported stack", response.GetCapability())
+	}
+
+	outdated := NewServer(WithHelper(helper), withRunner(&fakeRunner{out: `{"network":true,"system":true}`}))
+	response, err = outdated.Status(context.Background(), &agentv1.HostStatusRequest{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if response.GetCapability() != agentv1.HostCapability_HOST_CAPABILITY_HELPER_OUTDATED {
+		t.Fatalf("capability = %v, want helper outdated", response.GetCapability())
 	}
 }
 

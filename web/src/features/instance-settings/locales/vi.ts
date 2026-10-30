@@ -43,6 +43,15 @@ const vi: typeof en = {
     unsaved: "Lưu URL trước khi tạo và đồng bộ router tương ứng.",
     refresh: "Làm mới trạng thái",
   },
+  pendingConfirm: {
+    title: "Thay đổi URL control plane đang chờ xác nhận",
+    body: "URL control plane giờ là {url}. Hãy mở Gotham tại địa chỉ đó để giữ thay đổi.",
+    hint:
+      "Chỉ có thể giữ thay đổi từ địa chỉ mới. Nếu không truy cập được Gotham tại đó, hãy để nguyên: địa chỉ trước được khôi phục khi hết thời gian đếm ngược.",
+    countdownStart: "Thay đổi URL control plane sẽ tự hoàn tác sau {time}.",
+    keep: "Giữ thay đổi",
+    revert: "Hoàn tác ngay",
+  },
   validation: {
     url: "Nhập URL http(s) có tên máy chủ, không kèm thông tin đăng nhập, query hay fragment.",
     name: "Tên phải dài 1-64 ký tự.",

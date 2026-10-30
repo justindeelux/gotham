@@ -61,6 +61,8 @@ func capabilityReason(c NodeCapability) string {
 	switch c {
 	case CapabilityUnsupportedStack:
 		return "this server does not run the systemd network and time stack Gotham needs"
+	case CapabilityHelperOutdated:
+		return "this server's host helper is too old for host settings; update it to change them from here"
 	case CapabilityHelperMissing:
 		return "the host helper is not installed on this server"
 	case CapabilityHelperDenied:

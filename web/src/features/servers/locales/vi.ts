@@ -121,6 +121,10 @@ const vi: ServersMessages = {
       capability: {
         unsupported_stack:
           "Máy chủ này không chạy ngăn xếp mạng và thời gian systemd mà Gotham cần, nên cài đặt máy chủ chỉ để xem.",
+        helper_outdated:
+          "Helper máy chủ trên máy chủ này quá cũ cho cài đặt máy chủ. Hãy cập nhật nó để quản lý các cài đặt này từ Gotham.",
+        helperOutdatedRemote:
+          "Helper máy chủ trên máy chủ này quá cũ cho cài đặt máy chủ. Hãy cập nhật agent hoặc chạy lại trình cài agent trên nút đó, rồi tải lại trang.",
         helper_missing:
           "Chưa cài helper máy chủ trên máy chủ này. Hãy cài để quản lý các cài đặt này từ Gotham.",
         helperMissingRemote:

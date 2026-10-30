@@ -142,6 +142,22 @@ describe("HostHelperGate", () => {
     wrapper.unmount();
   });
 
+  it("says an outdated helper needs an update and offers the local repair", async () => {
+    const { wrapper } = mountGate(stateWith("helper_outdated", true));
+    await flushUi();
+    expect(wrapper.text()).toContain("host helper is too old");
+    expect(installButton(wrapper)).toBeTruthy();
+    wrapper.unmount();
+  });
+
+  it("points a remote outdated helper at the agent installer", async () => {
+    const { wrapper } = mountGate(stateWith("helper_outdated", false));
+    await flushUi();
+    expect(wrapper.text()).toContain("re-run the agent installer");
+    expect(installButton(wrapper)).toBeUndefined();
+    wrapper.unmount();
+  });
+
   it("states the unsupported stack plainly and offers no install", async () => {
     const { wrapper } = mountGate(stateWith("unsupported_stack"));
     await flushUi();

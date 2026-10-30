@@ -22,8 +22,16 @@ export interface GeneralInput {
   instance_name: string;
 }
 
+export interface PendingControlPlaneURL {
+  previous: string | null;
+  proposed: string;
+  deadline: string;
+  synced: boolean;
+}
+
 export interface InstanceState {
   general: GeneralSettings;
+  pending_control_plane_url?: PendingControlPlaneURL | null;
 }
 
 async function unwrap(request: Promise<{ data: unknown }>): Promise<InstanceState> {
@@ -37,3 +45,9 @@ export const getInstanceSettings = (): Promise<InstanceState> =>
 
 export const saveGeneral = (input: GeneralInput): Promise<InstanceState> =>
   unwrap(http.put("/instance/settings/general", input));
+
+export const confirmControlPlaneURL = (): Promise<InstanceState> =>
+  unwrap(http.post("/instance/settings/control-plane-url/confirm"));
+
+export const revertControlPlaneURL = (): Promise<InstanceState> =>
+  unwrap(http.post("/instance/settings/control-plane-url/revert"));

@@ -119,6 +119,10 @@ const en = {
       capability: {
         unsupported_stack:
           "This server does not run the systemd network and time stack Gotham needs, so its host settings are read-only.",
+        helper_outdated:
+          "This server's host helper is too old for host settings. Update it to manage these settings from Gotham.",
+        helperOutdatedRemote:
+          "This server's host helper is too old for host settings. Update the agent or re-run the agent installer on that node, then reload this page.",
         helper_missing:
           "The host helper is not installed on this server. Install it to manage these settings from Gotham.",
         helperMissingRemote:

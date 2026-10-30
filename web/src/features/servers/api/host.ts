@@ -9,6 +9,7 @@ import {
 export type NodeCapability =
   | "ready"
   | "unsupported_stack"
+  | "helper_outdated"
   | "helper_missing"
   | "helper_denied"
   | "agent_outdated"

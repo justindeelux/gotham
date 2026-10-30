@@ -65,12 +65,14 @@ const (
 )
 
 const (
-	ReasonOffline        = "offline"
-	ReasonBusy           = "busy"
-	ReasonUnsupported    = "unsupported"
-	ReasonHelperOutdated = "helper_outdated"
-	ReasonAgentOutdated  = "agent_outdated"
-	ReasonNotFound       = "not_found"
+	ReasonOffline         = "offline"
+	ReasonBusy            = "busy"
+	ReasonUnsupported     = "unsupported"
+	ReasonHelperOutdated  = "helper_outdated"
+	ReasonAgentOutdated   = "agent_outdated"
+	ReasonNotFound        = "not_found"
+	ReasonJournalArchived = "journal_archived"
+	ReasonPackageCache    = "package_cache"
 )
 
 const (

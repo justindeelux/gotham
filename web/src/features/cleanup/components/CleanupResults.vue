@@ -54,7 +54,7 @@ function reasonText(reason: string): string {
   if (key) {
     return t(key);
   }
-  return reason || t("cleanup.reasons.unknown");
+  return reason;
 }
 
 function noticeText(reason: string): string {
@@ -163,7 +163,10 @@ function selectedCount(groupItems: SelectableItem[]): number {
             <span class="cleanup-item__meta">{{ formatBytes(item.sizeBytes) }}</span>
             <span class="cleanup-item__meta">{{ ageText(item.createdAt) }}</span>
             <span class="cleanup-item__meta">{{ serverName(item.serverId) }}</span>
-            <span class="cleanup-item__meta cleanup-item__reason">
+            <span
+              v-if="item.reason"
+              class="cleanup-item__meta cleanup-item__reason"
+            >
               {{ reasonText(item.reason) }}
             </span>
           </li>

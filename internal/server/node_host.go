@@ -49,7 +49,7 @@ func (r nodeHostResolver) NodeHost(ctx context.Context, id uuid.UUID) (instance.
 // view. Transport failures become the sentinels the service turns into a
 // per-category notice instead of a failed node.
 type cleanupHost struct {
-	nodes nodeHostResolver
+	nodes instance.NodeResolver
 }
 
 func (h cleanupHost) CleanupStatus(
@@ -61,7 +61,7 @@ func (h cleanupHost) CleanupStatus(
 	}
 	status, err := applier.CleanupStatus(ctx)
 	if err != nil {
-		return cleanup.HostCleanupStatus{}, cleanupHostError(err)
+		return cleanup.HostCleanupStatus{}, cleanupHostError(err, true)
 	}
 	return cleanup.HostCleanupStatus{
 		Journal: cleanup.HostCleanupCategory{
@@ -86,7 +86,7 @@ func (h cleanupHost) CleanupHost(
 	}
 	reclaimed, err := applier.CleanupHost(ctx, category, minAge)
 	if err != nil {
-		return 0, cleanupHostError(err)
+		return 0, cleanupHostError(err, false)
 	}
 	return reclaimed, nil
 }
@@ -102,13 +102,18 @@ func (h cleanupHost) applier(ctx context.Context, serverID uuid.UUID) (instance.
 	return host.Applier, nil
 }
 
-func cleanupHostError(err error) error {
+// cleanupHostError maps the sentinels the cleanup service understands. A
+// status failure may mean the host simply cannot offer the category, but a
+// genuine host failure during a clean must stay failed with its message.
+func cleanupHostError(err error, statusPath bool) error {
 	switch {
 	case errors.Is(err, instance.ErrHelperOutdated):
 		return cleanup.ErrHostHelperOutdated
 	case errors.Is(err, instance.ErrAgentOutdated):
 		return cleanup.ErrHostAgentOutdated
-	case errors.Is(err, instance.ErrHost), errors.Is(err, instance.ErrUnsupported):
+	case errors.Is(err, instance.ErrUnsupported):
+		return cleanup.ErrHostUnsupported
+	case statusPath && errors.Is(err, instance.ErrHost):
 		return cleanup.ErrHostUnsupported
 	default:
 		return err

@@ -170,10 +170,12 @@ func TestScanAddsHostCategories(t *testing.T) {
 	for _, item := range scans[0].Items {
 		byCategory[item.Category] = item
 	}
-	if byCategory[CategoryJournal].SizeBytes != 100 || byCategory[CategoryJournal].ID != "host:journal" {
+	if byCategory[CategoryJournal].SizeBytes != 100 || byCategory[CategoryJournal].ID != "host:journal" ||
+		byCategory[CategoryJournal].Reason != ReasonJournalArchived {
 		t.Fatalf("journal item = %+v", byCategory[CategoryJournal])
 	}
-	if byCategory[CategoryPackageCache].SizeBytes != 50 || byCategory[CategoryPackageCache].ID != "host:package_cache" {
+	if byCategory[CategoryPackageCache].SizeBytes != 50 || byCategory[CategoryPackageCache].ID != "host:package_cache" ||
+		byCategory[CategoryPackageCache].Reason != ReasonPackageCache {
 		t.Fatalf("package cache item = %+v", byCategory[CategoryPackageCache])
 	}
 }
@@ -400,6 +402,19 @@ func TestCleanReportsBusyAsSkipped(t *testing.T) {
 	}
 }
 
+func TestCleanOmitsRunIDWhenRecordFails(t *testing.T) {
+	svc, serverID := testHostService(t, &fakeHost{reclaimed: 10}, &fakeStore{recordE: fmt.Errorf("record failed")})
+
+	result := svc.Clean(context.Background(), uuid.New(), TriggerManual, serverID.String(),
+		[]string{"host:journal"}, 0)
+	if result.Status != StatusOK || len(result.Items) != 1 || result.Items[0].Status != statusRemoved {
+		t.Fatalf("clean = %+v; want the host item removed", result)
+	}
+	if result.RunID != "" {
+		t.Fatalf("run_id = %q; want empty when the run was not recorded", result.RunID)
+	}
+}
+
 func TestCleanStoresRunAndItems(t *testing.T) {
 	ctx, dsn := cleanupScratch(t)
 	pool, err := pgxpool.New(ctx, dsn)
@@ -445,6 +460,9 @@ func TestCleanStoresRunAndItems(t *testing.T) {
 	result := svc.Clean(ctx, ownerID, TriggerManual, serverID.String(), []string{"image:sha256:x"}, 0)
 	if result.Status != StatusOK || len(result.Items) != 1 || result.Items[0].Status != "removed" {
 		t.Fatalf("clean = %+v; want one removed item", result)
+	}
+	if result.RunID == "" {
+		t.Fatal("run_id is empty; want the recorded run id")
 	}
 
 	var runID pgtype.UUID

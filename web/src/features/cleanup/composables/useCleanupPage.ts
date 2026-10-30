@@ -148,6 +148,9 @@ export function useCleanupPage() {
   }
 
   async function startScan(): Promise<void> {
+    if (phase.value === "scanning") {
+      return;
+    }
     const ids = [...selectedServerIds.value];
     if (ids.length === 0) {
       return;
@@ -179,6 +182,9 @@ export function useCleanupPage() {
   }
 
   async function startClean(): Promise<void> {
+    if (phase.value === "cleaning") {
+      return;
+    }
     const ids = selectedItems.value;
     if (ids.length === 0) {
       return;

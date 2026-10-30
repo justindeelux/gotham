@@ -78,7 +78,7 @@ function reasonText(reason: string): string {
   if (key) {
     return t(key);
   }
-  return reason || t("cleanup.reasons.unknown");
+  return reason;
 }
 
 function runStatusLabel(status: string): string {

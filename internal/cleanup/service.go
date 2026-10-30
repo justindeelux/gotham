@@ -237,6 +237,7 @@ func (s *Service) scanHost(ctx context.Context, serverID uuid.UUID) ([]Item, []C
 				Category:  CategoryJournal,
 				Name:      hostCategoryName(CategoryJournal),
 				SizeBytes: status.Journal.Bytes,
+				Reason:    ReasonJournalArchived,
 			})
 		}
 	} else {
@@ -249,6 +250,7 @@ func (s *Service) scanHost(ctx context.Context, serverID uuid.UUID) ([]Item, []C
 				Category:  CategoryPackageCache,
 				Name:      hostCategoryName(CategoryPackageCache),
 				SizeBytes: status.PackageCache.Bytes,
+				Reason:    ReasonPackageCache,
 			})
 		}
 	} else {
@@ -611,6 +613,7 @@ func (s *Service) record(
 	// A cancelled request must not leave a completed delete unaudited.
 	if err := s.store.RecordCleanupRun(context.WithoutCancel(ctx), run, history); err != nil {
 		s.logger.Warn("cleanup: recording the run failed", "server_id", serverID.String(), "error", err)
+		return uuid.Nil
 	}
 	return runID
 }

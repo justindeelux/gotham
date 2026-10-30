@@ -50,6 +50,15 @@ function scanNodeA() {
         reason: "unused build cache",
       },
       {
+        id: "host:journal",
+        category: "journal",
+        tier: "safe",
+        name: "Journal",
+        size_bytes: 2048,
+        created_at: "",
+        reason: "journal_archived",
+      },
+      {
         id: "volume:gotham-orphan-data",
         category: "orphaned_volumes",
         tier: "dangerous",
@@ -130,6 +139,11 @@ test("cleanup scans two nodes, requires confirmation for a volume and shows resu
   await expect(page.getByText("Skipped", { exact: true })).toBeVisible();
   await expect(page.getByText("A deployment is running")).toBeVisible();
   await expect(page.getByText(/Journal logs:/)).toBeVisible();
+  await expect(
+    page.getByText(
+      "Archived journal files older than the minimum age (at least 1 day)",
+    ),
+  ).toBeVisible();
   await expect(page.getByText("Orphaned volumes")).toBeVisible();
 
   const volumeRow = page.locator(".cleanup-item").filter({ hasText: "gotham-orphan-data" });

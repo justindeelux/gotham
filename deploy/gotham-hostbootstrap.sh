@@ -37,7 +37,7 @@
 # `create-agent` records the node agent user the same way and applies the same
 # payload, but keeps the control-plane grantee: on the control-plane machine both
 # users run the helper, and each keeps exactly its own rules. The agent user gets
-# the five host-control verbs only, never the tool-installer repair verb.
+# the host-control verbs only, never the tool-installer repair verb.
 #
 # `apply-release` refuses to install a payload whose signature-verified version
 # is lower than the installed one (a root-owned high-water mark) or when that
@@ -96,7 +96,7 @@ install_optional() {
 
 # Closed verb set the control plane may run the host helper with; the last rule
 # is the single pinned repair verb (the tool installer re-applies the payload).
-HOSTCTL_VERBS="status apply-network confirm-network revert-network apply-system"
+HOSTCTL_VERBS="status apply-network confirm-network revert-network apply-system cleanup-status cleanup-journal cleanup-package-cache"
 
 die() { echo "gotham-hostbootstrap: $*" >&2; exit "${2:-1}"; }
 
@@ -316,7 +316,7 @@ ensure_dir() {
 }
 
 # sudoers_for cp_user agent_user: the host-helper drop-in. Every recorded user
-# gets the five fixed host-control verbs; the control-plane user additionally
+# gets the fixed host-control verbs; the control-plane user additionally
 # gets the one pinned tool-installer verb used to repair the helper, so an
 # agent cannot reinstall root payloads. Both may be empty (the other is then
 # the only grantee). The rules always name the fixed production paths, never

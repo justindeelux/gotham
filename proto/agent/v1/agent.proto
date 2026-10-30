@@ -1224,6 +1224,12 @@ service HostService {
   // ApplySystem applies the hostname, NTP and timezone. An empty hostname or
   // timezone leaves that value unchanged.
   rpc ApplySystem(HostApplySystemRequest) returns (HostApplySystemResponse);
+  // CleanupStatus reports which root-only cleanup categories this host
+  // supports and how many bytes each currently holds.
+  rpc CleanupStatus(HostCleanupStatusRequest) returns (HostCleanupStatus);
+  // CleanupHost reclaims one root-only cleanup category (the systemd journal
+  // or the package cache) and reports the size it released.
+  rpc CleanupHost(HostCleanupRequest) returns (HostCleanupResult);
 }
 
 // HostCapability is the overall host-control state of this node. Anything but
@@ -1321,6 +1327,41 @@ message HostApplySystemRequest {
 }
 
 message HostApplySystemResponse {}
+
+// HostCleanupStatusRequest is empty: the host is the one the agent runs on.
+message HostCleanupStatusRequest {}
+
+// HostCleanupCategoryStatus is one cleanup category's state on this host.
+message HostCleanupCategoryStatus {
+  // supported is false when the host lacks the tool that owns the category.
+  bool supported = 1;
+  // bytes is the current on-disk size; 0 when unsupported.
+  int64 bytes = 2;
+  // manager is "apt", "dnf" or "" (the journal has no package manager).
+  string manager = 3;
+}
+
+// HostCleanupStatus reports both root-only cleanup categories.
+message HostCleanupStatus {
+  HostCleanupCategoryStatus journal = 1;
+  HostCleanupCategoryStatus package_cache = 2;
+  // capability explains missing values: READY means they are live, anything
+  // else means the helper is missing, denied or too old.
+  HostCapability capability = 3;
+}
+
+message HostCleanupRequest {
+  // category is "journal" or "package_cache".
+  string category = 1;
+  // min_age_seconds keeps entries newer than this; the helper clamps it to at
+  // least one day and ignores it for the package cache.
+  uint64 min_age_seconds = 2;
+}
+
+message HostCleanupResult {
+  // reclaimed_bytes is before - after, never negative.
+  int64 reclaimed_bytes = 1;
+}
 
 // InstallToolRequest names the catalog tool to install or uninstall.
 message InstallToolRequest {

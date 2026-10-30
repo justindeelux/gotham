@@ -120,6 +120,27 @@ type statusPayload struct {
 	// Timezone stays a pointer: a helper that predates it has no timezone key,
 	// which is how an outdated helper is told apart from a missing stack.
 	Timezone *string `json:"timezone"`
+	// Cleanup is the same signal for the cleanup verbs: a helper that predates
+	// them has no key, so it must be updated before a cleanup can run.
+	Cleanup bool `json:"cleanup"`
+}
+
+// cleanupStatusPayload is the helper's `cleanup-status` document. Unknown
+// fields are ignored so a newer helper stays readable.
+type cleanupStatusPayload struct {
+	Journal      cleanupCategoryStatus `json:"journal"`
+	PackageCache cleanupCategoryStatus `json:"package_cache"`
+}
+
+type cleanupCategoryStatus struct {
+	Supported bool   `json:"supported"`
+	Bytes     int64  `json:"bytes"`
+	Manager   string `json:"manager"`
+}
+
+type cleanupResultPayload struct {
+	Before int64 `json:"before"`
+	After  int64 `json:"after"`
 }
 
 type networkConfig struct {
@@ -246,6 +267,75 @@ func (s *Server) ApplySystem(ctx context.Context, request *agentv1.HostApplySyst
 	return &agentv1.HostApplySystemResponse{}, nil
 }
 
+// CleanupStatus reports the root-only cleanup categories this host supports.
+// A helper that predates the cleanup verbs has no cleanup key in its status,
+// which is reported as an outdated helper so the control plane can hint the
+// same repair as host settings.
+func (s *Server) CleanupStatus(ctx context.Context, _ *agentv1.HostCleanupStatusRequest) (*agentv1.HostCleanupStatus, error) {
+	if _, err := os.Stat(s.helper); err != nil {
+		return &agentv1.HostCleanupStatus{Capability: agentv1.HostCapability_HOST_CAPABILITY_HELPER_MISSING}, nil
+	}
+	out, err := s.runner.Run(ctx, "status", "")
+	if ctxErr := ctx.Err(); ctxErr != nil {
+		return nil, status.FromContextError(ctxErr).Err()
+	}
+	if err != nil {
+		return &agentv1.HostCleanupStatus{Capability: agentv1.HostCapability_HOST_CAPABILITY_HELPER_DENIED}, nil
+	}
+	var host statusPayload
+	if json.Unmarshal([]byte(strings.TrimSpace(out)), &host) != nil {
+		return &agentv1.HostCleanupStatus{Capability: agentv1.HostCapability_HOST_CAPABILITY_HELPER_DENIED}, nil
+	}
+	if !host.Cleanup {
+		return &agentv1.HostCleanupStatus{Capability: agentv1.HostCapability_HOST_CAPABILITY_HELPER_OUTDATED}, nil
+	}
+	out, err = s.runner.Run(ctx, "cleanup-status", "")
+	if err != nil {
+		return nil, helperStatus("cleanup-status", err)
+	}
+	var payload cleanupStatusPayload
+	if json.Unmarshal([]byte(strings.TrimSpace(out)), &payload) != nil {
+		return nil, status.Error(codes.Internal, "the host helper returned an unreadable cleanup status")
+	}
+	return &agentv1.HostCleanupStatus{
+		Capability: agentv1.HostCapability_HOST_CAPABILITY_READY,
+		Journal: &agentv1.HostCleanupCategoryStatus{
+			Supported: payload.Journal.Supported, Bytes: payload.Journal.Bytes, Manager: payload.Journal.Manager,
+		},
+		PackageCache: &agentv1.HostCleanupCategoryStatus{
+			Supported: payload.PackageCache.Supported, Bytes: payload.PackageCache.Bytes, Manager: payload.PackageCache.Manager,
+		},
+	}, nil
+}
+
+// CleanupHost reclaims one root-only cleanup category. The helper validates
+// the value again; this method only fixes the key set and the verb.
+func (s *Server) CleanupHost(ctx context.Context, request *agentv1.HostCleanupRequest) (*agentv1.HostCleanupResult, error) {
+	var verb, stdin string
+	switch request.GetCategory() {
+	case "journal":
+		verb = "cleanup-journal"
+		stdin = "min_age_seconds=" + strconv.FormatUint(request.GetMinAgeSeconds(), 10) + "\n"
+	case "package_cache":
+		verb = "cleanup-package-cache"
+	default:
+		return nil, status.Error(codes.InvalidArgument, "unknown cleanup category")
+	}
+	out, err := s.runner.Run(ctx, verb, stdin)
+	if err != nil {
+		return nil, helperStatus(verb, err)
+	}
+	var payload cleanupResultPayload
+	if json.Unmarshal([]byte(strings.TrimSpace(out)), &payload) != nil {
+		return nil, status.Error(codes.Internal, "the host helper returned an unreadable cleanup result")
+	}
+	reclaimed := payload.Before - payload.After
+	if reclaimed < 0 {
+		reclaimed = 0
+	}
+	return &agentv1.HostCleanupResult{ReclaimedBytes: reclaimed}, nil
+}
+
 // helperStatus maps the helper's pinned exit codes to gRPC statuses. The
 // helper's own fixed reason line rides along with an unexpected failure; raw
 // stderr (which may name host paths) is never forwarded.
@@ -258,6 +348,9 @@ func helperStatus(verb string, err error) error {
 	case 2:
 		return status.Error(codes.InvalidArgument, "the host helper rejected the value")
 	case 3:
+		if strings.HasPrefix(verb, "cleanup-") {
+			return status.Error(codes.FailedPrecondition, "unsupported")
+		}
 		return status.Error(codes.FailedPrecondition, "this host does not support the setting")
 	case 4:
 		if verb == "apply-network" {

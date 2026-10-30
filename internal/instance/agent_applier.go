@@ -3,6 +3,7 @@ package instance
 import (
 	"context"
 	"errors"
+	"fmt"
 	"time"
 
 	"google.golang.org/grpc/codes"
@@ -126,6 +127,61 @@ func (a *agentApplier) ApplySystem(ctx context.Context, s System) error {
 		Hostname: s.Hostname, NtpEnabled: s.NTPEnabled, NtpServers: s.NTPServers, Timezone: s.Timezone,
 	})
 	return classifyApplyError("system", err)
+}
+
+func (a *agentApplier) CleanupStatus(ctx context.Context) (HostCleanupStatus, error) {
+	callCtx, client, closeFn, err := a.client(ctx)
+	if err != nil {
+		return HostCleanupStatus{}, err
+	}
+	defer closeFn()
+	resp, err := client.CleanupStatus(callCtx, &agentv1.HostCleanupStatusRequest{})
+	if err != nil {
+		return HostCleanupStatus{}, classifyAgentError(err)
+	}
+	if resp.GetCapability() != agentv1.HostCapability_HOST_CAPABILITY_READY {
+		return HostCleanupStatus{}, ErrHelperOutdated
+	}
+	return HostCleanupStatus{
+		Journal: HostCleanupCategory{
+			Supported: resp.GetJournal().GetSupported(),
+			Manager:   resp.GetJournal().GetManager(),
+			Bytes:     resp.GetJournal().GetBytes(),
+		},
+		PackageCache: HostCleanupCategory{
+			Supported: resp.GetPackageCache().GetSupported(),
+			Manager:   resp.GetPackageCache().GetManager(),
+			Bytes:     resp.GetPackageCache().GetBytes(),
+		},
+	}, nil
+}
+
+func (a *agentApplier) CleanupHost(ctx context.Context, category string, minAge time.Duration) (int64, error) {
+	callCtx, client, closeFn, err := a.client(ctx)
+	if err != nil {
+		return 0, err
+	}
+	defer closeFn()
+	seconds := int64(minAge / time.Second)
+	if seconds < 0 {
+		seconds = 0
+	}
+	resp, err := client.CleanupHost(callCtx, &agentv1.HostCleanupRequest{
+		Category:      category,
+		MinAgeSeconds: uint64(seconds),
+	})
+	if err != nil {
+		switch status.Code(err) {
+		case codes.FailedPrecondition:
+			return 0, fmt.Errorf("%w: %s", ErrUnsupported, status.Convert(err).Message())
+		case codes.InvalidArgument:
+			// The agent fixes the key set itself, so a rejection here is an
+			// older helper that does not know the cleanup verb.
+			return 0, fmt.Errorf("%w: %v", ErrHelperOutdated, err)
+		}
+		return 0, classifyAgentError(err)
+	}
+	return resp.GetReclaimedBytes(), nil
 }
 
 func capabilityFromAgent(c agentv1.HostCapability) NodeCapability {

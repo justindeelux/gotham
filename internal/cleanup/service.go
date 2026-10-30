@@ -38,6 +38,28 @@ type DockerClient interface {
 // DialFunc opens a client to one node's agent.
 type DialFunc func(ctx context.Context, server *servers.Server) (DockerClient, error)
 
+// HostCleaner scans and clears the root-only categories (the systemd journal
+// and the package cache) on one node. The local control-plane node and every
+// agent node answer through the same fixed host helper. nil means the feature
+// is absent, so no host category is offered.
+type HostCleaner interface {
+	CleanupStatus(ctx context.Context, serverID uuid.UUID) (HostCleanupStatus, error)
+	CleanupHost(ctx context.Context, serverID uuid.UUID, category string, minAge time.Duration) (int64, error)
+}
+
+// HostCleanupCategory is one root-only category's state on a node.
+type HostCleanupCategory struct {
+	Supported bool
+	Manager   string
+	Bytes     int64
+}
+
+// HostCleanupStatus is the journal and package-cache state of one node.
+type HostCleanupStatus struct {
+	Journal      HostCleanupCategory
+	PackageCache HostCleanupCategory
+}
+
 // Registry resolves a recorded node.
 type Registry interface {
 	Get(ctx context.Context, id uuid.UUID) (*servers.Server, error)
@@ -54,6 +76,7 @@ type Config struct {
 	Registry Registry
 	Dial     DialFunc
 	Volumes  containers.VolumeService
+	Host     HostCleaner
 	Store    Store
 	Logger   *slog.Logger
 	Timeout  time.Duration
@@ -69,12 +92,20 @@ type Item struct {
 	Reason      string
 }
 
+// CategoryNotice says why one category could not be scanned on a node. The
+// node itself stays ok: only that category is unavailable.
+type CategoryNotice struct {
+	Category string
+	Reason   string
+}
+
 // NodeScan is one node's scan outcome.
 type NodeScan struct {
 	ServerID string
 	Status   string
 	Reason   string
 	Items    []Item
+	Notices  []CategoryNotice
 }
 
 // ItemResult is one requested object's clean outcome.
@@ -100,6 +131,7 @@ type Service struct {
 	registry Registry
 	dial     DialFunc
 	volumes  containers.VolumeService
+	host     HostCleaner
 	store    Store
 	logger   *slog.Logger
 	timeout  time.Duration
@@ -121,6 +153,7 @@ func NewService(cfg Config) *Service {
 		registry: cfg.Registry,
 		dial:     cfg.Dial,
 		volumes:  cfg.Volumes,
+		host:     cfg.Host,
 		store:    cfg.Store,
 		logger:   logger,
 		timeout:  timeout,
@@ -172,7 +205,73 @@ func (s *Service) scanNode(ctx context.Context, raw string, minAge time.Duration
 		scan.Items = append(scan.Items, itemFromProto(item))
 	}
 	scan.Items = append(scan.Items, s.scanVolumes(ctx, serverID, minAge)...)
+	hostItems, notices := s.scanHost(ctx, serverID)
+	scan.Items = append(scan.Items, hostItems...)
+	scan.Notices = notices
 	return scan
+}
+
+// scanHost adds one item per supported root-only category that holds bytes,
+// and a notice for each one this host cannot scan. A failure here never makes
+// the node itself failed: the Docker scan above already succeeded.
+func (s *Service) scanHost(ctx context.Context, serverID uuid.UUID) ([]Item, []CategoryNotice) {
+	if s.host == nil {
+		return nil, nil
+	}
+	status, err := s.host.CleanupStatus(ctx, serverID)
+	if err != nil {
+		s.logger.Debug("cleanup: host cleanup status failed", "server_id", serverID.String(), "error", err)
+		reason := hostNoticeReason(err)
+		return nil, []CategoryNotice{
+			{Category: CategoryJournal, Reason: reason},
+			{Category: CategoryPackageCache, Reason: reason},
+		}
+	}
+	var items []Item
+	var notices []CategoryNotice
+	if status.Journal.Supported {
+		if status.Journal.Bytes > 0 {
+			items = append(items, Item{
+				ID:        idHostPrefix + CategoryJournal,
+				Category:  CategoryJournal,
+				Name:      hostCategoryName(CategoryJournal),
+				SizeBytes: status.Journal.Bytes,
+			})
+		}
+	} else {
+		notices = append(notices, CategoryNotice{Category: CategoryJournal, Reason: ReasonUnsupported})
+	}
+	if status.PackageCache.Supported {
+		if status.PackageCache.Bytes > 0 {
+			items = append(items, Item{
+				ID:        idHostPrefix + CategoryPackageCache,
+				Category:  CategoryPackageCache,
+				Name:      hostCategoryName(CategoryPackageCache),
+				SizeBytes: status.PackageCache.Bytes,
+			})
+		}
+	} else {
+		notices = append(notices, CategoryNotice{Category: CategoryPackageCache, Reason: ReasonUnsupported})
+	}
+	return items, notices
+}
+
+func hostNoticeReason(err error) string {
+	switch {
+	case errors.Is(err, ErrHostHelperOutdated):
+		return ReasonHelperOutdated
+	case errors.Is(err, ErrHostAgentOutdated):
+		return ReasonAgentOutdated
+	default:
+		return ReasonUnsupported
+	}
+}
+
+func hostCategoryName(category string) string {
+	if category == CategoryPackageCache {
+		return "Package cache"
+	}
+	return "Journal"
 }
 
 func failedScan(serverID string, err error) NodeScan {
@@ -251,7 +350,7 @@ func (s *Service) Clean(
 		return result
 	}
 
-	agentIDs, volumeIDs := splitIDs(ids)
+	agentIDs, volumeIDs, hostIDs := splitIDs(ids)
 	known := map[string]Item{}
 	if len(agentIDs) > 0 {
 		items, err := s.scanAgent(ctx, serverID, minAge)
@@ -272,6 +371,9 @@ func (s *Service) Clean(
 	if len(volumeIDs) > 0 {
 		result.Items = append(result.Items, s.cleanVolumes(ctx, serverID, trigger, volumeIDs, minAge)...)
 	}
+	if len(hostIDs) > 0 {
+		result.Items = append(result.Items, s.cleanHost(ctx, serverID, hostIDs, minAge)...)
+	}
 
 	result.Items = orderResults(ids, result.Items)
 	return result
@@ -285,6 +387,55 @@ func (s *Service) cleanFailure(result CleanResult, err error) CleanResult {
 		result.Reason = message
 	}
 	return result
+}
+
+// cleanHost clears the selected root-only categories. They are safe at every
+// trigger, so unlike orphaned volumes there is no manual-only refusal.
+func (s *Service) cleanHost(
+	ctx context.Context, serverID uuid.UUID, ids []string, minAge time.Duration,
+) []ItemResult {
+	results := make([]ItemResult, 0, len(ids))
+	for _, id := range ids {
+		category := strings.TrimPrefix(id, idHostPrefix)
+		result := ItemResult{
+			ID:       id,
+			Category: category,
+			Name:     hostCategoryName(category),
+			Status:   statusRemoved,
+		}
+		if s.host == nil {
+			result.Status, result.Message = StatusSkipped, ReasonUnsupported
+			results = append(results, result)
+			continue
+		}
+		reclaimed, err := s.host.CleanupHost(ctx, serverID, category, minAge)
+		if err != nil {
+			status, message := hostSkipReason(err)
+			if status == "" {
+				status, message = StatusFailed, err.Error()
+			}
+			result.Status, result.Message = status, message
+			results = append(results, result)
+			continue
+		}
+		result.ReclaimedBytes = reclaimed
+		results = append(results, result)
+	}
+	return results
+}
+
+// hostSkipReason reports the categories a clean must skip rather than fail:
+// the feature is absent on that host, not broken.
+func hostSkipReason(err error) (string, string) {
+	switch {
+	case errors.Is(err, ErrHostUnsupported):
+		return StatusSkipped, "unsupported"
+	case errors.Is(err, ErrHostHelperOutdated):
+		return StatusSkipped, "helper outdated"
+	case errors.Is(err, ErrHostAgentOutdated):
+		return StatusSkipped, "agent outdated"
+	}
+	return "", ""
 }
 
 func (s *Service) cleanVolumes(
@@ -406,15 +557,18 @@ func dedupeIDs(ids []string) []string {
 	return unique
 }
 
-func splitIDs(ids []string) (agentIDs, volumeIDs []string) {
+func splitIDs(ids []string) (agentIDs, volumeIDs, hostIDs []string) {
 	for _, id := range ids {
-		if strings.HasPrefix(id, idVolumePrefix) {
+		switch {
+		case strings.HasPrefix(id, idVolumePrefix):
 			volumeIDs = append(volumeIDs, id)
-			continue
+		case strings.HasPrefix(id, idHostPrefix):
+			hostIDs = append(hostIDs, id)
+		default:
+			agentIDs = append(agentIDs, id)
 		}
-		agentIDs = append(agentIDs, id)
 	}
-	return agentIDs, volumeIDs
+	return agentIDs, volumeIDs, hostIDs
 }
 
 func (s *Service) record(
@@ -590,6 +744,9 @@ func resultFromProto(item *agentv1.CleanupItemResult, known map[string]Item) Ite
 // before the clean normally provides the exact category and name.
 func describeID(id string) (string, string) {
 	switch {
+	case strings.HasPrefix(id, idHostPrefix):
+		category := strings.TrimPrefix(id, idHostPrefix)
+		return category, hostCategoryName(category)
 	case strings.HasPrefix(id, idVolumePrefix):
 		return CategoryOrphanedVolumes, strings.TrimPrefix(id, idVolumePrefix)
 	case strings.HasPrefix(id, idImagePrefix):

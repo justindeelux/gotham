@@ -8,14 +8,15 @@ import (
 )
 
 var (
-	ErrUnsupported   = errors.New("instance: not supported on this host")
-	ErrPending       = errors.New("instance: a network change is awaiting confirmation")
-	ErrNoPending     = errors.New("instance: no network change is awaiting confirmation")
-	ErrHost          = errors.New("instance: host helper failed")
-	ErrRiskyNetwork  = errors.New("instance: this change touches the active interface; confirm it explicitly")
-	ErrNodeNotFound  = errors.New("instance: server not found")
-	ErrAgentOutdated = errors.New("instance: the node agent does not support host settings")
-	ErrNodeOffline   = errors.New("instance: the node agent is unreachable")
+	ErrUnsupported    = errors.New("instance: not supported on this host")
+	ErrPending        = errors.New("instance: a network change is awaiting confirmation")
+	ErrNoPending      = errors.New("instance: no network change is awaiting confirmation")
+	ErrHost           = errors.New("instance: host helper failed")
+	ErrRiskyNetwork   = errors.New("instance: this change touches the active interface; confirm it explicitly")
+	ErrNodeNotFound   = errors.New("instance: server not found")
+	ErrAgentOutdated  = errors.New("instance: the node agent does not support host settings")
+	ErrNodeOffline    = errors.New("instance: the node agent is unreachable")
+	ErrHelperOutdated = errors.New("instance: the host helper does not support this operation")
 )
 
 type FieldErrors map[string]string

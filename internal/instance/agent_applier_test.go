@@ -21,6 +21,12 @@ type fakeHostClient struct {
 	applyErr  error
 	system    *agentv1.HostApplySystemRequest
 	systemErr error
+
+	cleanupStatus    *agentv1.HostCleanupStatus
+	cleanupStatusErr error
+	cleanupRequest   *agentv1.HostCleanupRequest
+	cleanupResult    *agentv1.HostCleanupResult
+	cleanupErr       error
 }
 
 func (f *fakeHostClient) Status(context.Context, *agentv1.HostStatusRequest, ...grpc.CallOption) (*agentv1.HostStatusResponse, error) {
@@ -43,6 +49,15 @@ func (f *fakeHostClient) RevertNetwork(context.Context, *agentv1.HostRevertNetwo
 func (f *fakeHostClient) ApplySystem(_ context.Context, in *agentv1.HostApplySystemRequest, _ ...grpc.CallOption) (*agentv1.HostApplySystemResponse, error) {
 	f.system = in
 	return &agentv1.HostApplySystemResponse{}, f.systemErr
+}
+
+func (f *fakeHostClient) CleanupStatus(context.Context, *agentv1.HostCleanupStatusRequest, ...grpc.CallOption) (*agentv1.HostCleanupStatus, error) {
+	return f.cleanupStatus, f.cleanupStatusErr
+}
+
+func (f *fakeHostClient) CleanupHost(_ context.Context, in *agentv1.HostCleanupRequest, _ ...grpc.CallOption) (*agentv1.HostCleanupResult, error) {
+	f.cleanupRequest = in
+	return f.cleanupResult, f.cleanupErr
 }
 
 func newAgentApplier(fake *fakeHostClient) HostApplier {
@@ -81,6 +96,59 @@ func TestAgentApplierClassifiesTransportFailures(t *testing.T) {
 	offline := &fakeHostClient{statusErr: status.Error(codes.Unavailable, "down")}
 	if _, err := newAgentApplier(offline).Status(context.Background()); !errors.Is(err, ErrNodeOffline) {
 		t.Fatalf("unavailable = %v, want offline", err)
+	}
+}
+
+func TestAgentApplierCleanupStatus(t *testing.T) {
+	fake := &fakeHostClient{cleanupStatus: &agentv1.HostCleanupStatus{
+		Capability: agentv1.HostCapability_HOST_CAPABILITY_READY,
+		Journal:    &agentv1.HostCleanupCategoryStatus{Supported: true, Bytes: 100},
+		PackageCache: &agentv1.HostCleanupCategoryStatus{
+			Supported: true, Manager: "apt", Bytes: 50,
+		},
+	}}
+	cleanup, err := newAgentApplier(fake).CleanupStatus(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !cleanup.Journal.Supported || cleanup.Journal.Bytes != 100 ||
+		!cleanup.PackageCache.Supported || cleanup.PackageCache.Manager != "apt" || cleanup.PackageCache.Bytes != 50 {
+		t.Fatalf("cleanup status not mapped: %+v", cleanup)
+	}
+
+	outdated := &fakeHostClient{cleanupStatus: &agentv1.HostCleanupStatus{
+		Capability: agentv1.HostCapability_HOST_CAPABILITY_HELPER_OUTDATED,
+	}}
+	if _, err := newAgentApplier(outdated).CleanupStatus(context.Background()); !errors.Is(err, ErrHelperOutdated) {
+		t.Fatalf("outdated helper = %v, want helper outdated", err)
+	}
+	unimplemented := &fakeHostClient{cleanupStatusErr: status.Error(codes.Unimplemented, "old agent")}
+	if _, err := newAgentApplier(unimplemented).CleanupStatus(context.Background()); !errors.Is(err, ErrAgentOutdated) {
+		t.Fatalf("old agent = %v, want agent outdated", err)
+	}
+}
+
+func TestAgentApplierCleanupHost(t *testing.T) {
+	fake := &fakeHostClient{cleanupResult: &agentv1.HostCleanupResult{ReclaimedBytes: 60}}
+	reclaimed, err := newAgentApplier(fake).CleanupHost(context.Background(), "journal", 2*time.Minute)
+	if err != nil || reclaimed != 60 {
+		t.Fatalf("cleanup host = %d, %v", reclaimed, err)
+	}
+	if fake.cleanupRequest.GetCategory() != "journal" || fake.cleanupRequest.GetMinAgeSeconds() != 120 {
+		t.Fatalf("cleanup request = %+v", fake.cleanupRequest)
+	}
+
+	unsupported := &fakeHostClient{cleanupErr: status.Error(codes.FailedPrecondition, "unsupported")}
+	if _, err := newAgentApplier(unsupported).CleanupHost(context.Background(), "journal", 0); !errors.Is(err, ErrUnsupported) {
+		t.Fatalf("unsupported = %v", err)
+	}
+	old := &fakeHostClient{cleanupErr: status.Error(codes.InvalidArgument, "the host helper rejected the value")}
+	if _, err := newAgentApplier(old).CleanupHost(context.Background(), "journal", 0); !errors.Is(err, ErrHelperOutdated) {
+		t.Fatalf("old helper = %v, want helper outdated", err)
+	}
+	unimplemented := &fakeHostClient{cleanupErr: status.Error(codes.Unimplemented, "old agent")}
+	if _, err := newAgentApplier(unimplemented).CleanupHost(context.Background(), "journal", 0); !errors.Is(err, ErrAgentOutdated) {
+		t.Fatalf("old agent = %v, want agent outdated", err)
 	}
 }
 

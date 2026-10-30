@@ -190,14 +190,20 @@ The signed version, not the caller's `version`, decides what is applied.
 ### `gotham-hostctl.sh` — host settings helper
 
 Installed root-owned and reached only through its sudoers drop-in. Verbs:
-`status`, `apply-network`, `confirm-network`, `revert-network`, `apply-system`.
+`status`, `apply-network`, `confirm-network`, `revert-network`, `apply-system`,
+`cleanup-status`, `cleanup-journal`, `cleanup-package-cache`.
 Values arrive on stdin as `key=value` and are re-validated. Only
 systemd-networkd, systemd-resolved and systemd-timesyncd are supported, and it
 owns only its `05-gotham.*` drop-ins. A network change is tentative: a systemd
 timer reverts it (30–600 s window) unless the operator confirms. `status` also
 reports the live default-route interface, hostname, NTP state and timezone;
 `apply-system` accepts a `timezone` key (an IANA zone name, checked against
-tzdata) in addition to `hostname`, `ntp_enabled` and `ntp_servers`. Test seams:
+tzdata) in addition to `hostname`, `ntp_enabled` and `ntp_servers`.
+`cleanup-status` prints the journal and package-cache sizes; `cleanup-journal`
+takes `min_age_seconds` (clamped to at least one day) and vacuums older
+entries; `cleanup-package-cache` clears the apt or dnf cache. A host without
+the tool exits 3 (`unsupported`); `status` carries `"cleanup":true` so the
+control plane can spot a helper that predates them. Test seams:
 `GOTHAM_HOSTCTL_ROOT`, `GOTHAM_HOSTCTL_DRYRUN` (only without sudo).
 
 ### `gotham-toolctl.sh` — host build-tool installer

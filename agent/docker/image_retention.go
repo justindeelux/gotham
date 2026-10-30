@@ -39,10 +39,21 @@ func (c *DockerClient) listImages(ctx context.Context, all bool) ([]dockerImageS
 }
 
 func (c *DockerClient) removeImage(ctx context.Context, ref string) error {
+	return c.removeImageWithForce(ctx, ref, true)
+}
+
+func (c *DockerClient) removeImageUnforced(ctx context.Context, ref string) error {
+	return c.removeImageWithForce(ctx, ref, false)
+}
+
+func (c *DockerClient) removeImageWithForce(ctx context.Context, ref string, force bool) error {
 	if strings.TrimSpace(ref) == "" {
 		return fmt.Errorf("docker: image reference is required")
 	}
-	path := "/images/" + ref + "?force=1&noprune=1"
+	path := "/images/" + ref + "?noprune=1"
+	if force {
+		path += "&force=1"
+	}
 	response, err := c.doRaw(ctx, http.MethodDelete, path, nil, "")
 	if err != nil {
 		return err
@@ -51,6 +62,10 @@ func (c *DockerClient) removeImage(ctx context.Context, ref string) error {
 	if response.StatusCode == http.StatusNotFound {
 		_, _ = io.Copy(io.Discard, response.Body)
 		return nil
+	}
+	if response.StatusCode == http.StatusConflict {
+		raw, _ := io.ReadAll(io.LimitReader(response.Body, 4<<10))
+		return fmt.Errorf("%w: %s", ErrDockerImageInUse, strings.TrimSpace(string(raw)))
 	}
 	if !dockerOK(response.StatusCode) {
 		return statusError(http.MethodDelete, path, response)

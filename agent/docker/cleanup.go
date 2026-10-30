@@ -3,6 +3,7 @@ package docker
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"net/http"
 	"net/url"
@@ -74,7 +75,12 @@ func (c *DockerClient) Clean(ctx context.Context, ids []string, minAge time.Dura
 	}
 	cutoff := minAgeCutoff(minAge)
 	results := make([]*agentv1.CleanupItemResult, 0, len(ids))
+	seen := make(map[string]struct{}, len(ids))
 	for _, id := range ids {
+		if _, duplicate := seen[id]; duplicate {
+			continue
+		}
+		seen[id] = struct{}{}
 		results = append(results, c.cleanOne(ctx, id, scan, cutoff))
 	}
 	return results, nil
@@ -115,7 +121,15 @@ func (c *DockerClient) cleanOne(ctx context.Context, id string, scan *cleanupSca
 		}
 		result.ReclaimedBytes = reclaimed
 	case cleanupCategoryDanglingImages, cleanupCategoryUnusedImages:
-		if err := c.removeImage(ctx, candidate.ref); err != nil {
+		// Cleanup deletions are unforced: the engine refuses an image a
+		// container still references, which is reported as skipped.
+		err := c.removeImageUnforced(ctx, candidate.ref)
+		switch {
+		case errors.Is(err, ErrDockerImageInUse):
+			result.Status = cleanupStatusSkipped
+			result.Message = "in use"
+			result.ReclaimedBytes = 0
+		case err != nil:
 			result.Status = cleanupStatusFailed
 			result.Message = err.Error()
 			result.ReclaimedBytes = 0
@@ -146,13 +160,14 @@ func (c *DockerClient) scanCleanup(ctx context.Context, minAge time.Duration) (*
 	}
 	scanContainers(scan, containers, cutoff)
 
+	active := activeImageRefsFrom(containers)
 	if err := c.scanBuildCache(ctx, scan, cutoff); err != nil {
 		return nil, err
 	}
-	if err := c.scanDanglingImages(ctx, scan, cutoff); err != nil {
+	if err := c.scanDanglingImages(ctx, scan, active, cutoff); err != nil {
 		return nil, err
 	}
-	if err := c.scanUnusedImages(ctx, scan, containers, cutoff); err != nil {
+	if err := c.scanUnusedImages(ctx, scan, active, cutoff); err != nil {
 		return nil, err
 	}
 	return scan, nil
@@ -193,10 +208,20 @@ func scanContainers(scan *cleanupScan, containers []dockerContainerSummary, cuto
 }
 
 type dockerBuildCacheRecord struct {
-	ID        string `json:"ID"`
-	InUse     bool   `json:"InUse"`
-	Size      int64  `json:"Size"`
-	CreatedAt int64  `json:"CreatedAt"`
+	ID         string    `json:"ID"`
+	InUse      bool      `json:"InUse"`
+	Size       int64     `json:"Size"`
+	CreatedAt  time.Time `json:"CreatedAt"`
+	LastUsedAt time.Time `json:"LastUsedAt"`
+}
+
+// lastUsed is the timestamp the prune filter compares against: the engine
+// removes records not used since the cutoff, falling back to creation.
+func (r dockerBuildCacheRecord) lastUsed() time.Time {
+	if !r.LastUsedAt.IsZero() {
+		return r.LastUsedAt
+	}
+	return r.CreatedAt
 }
 
 func (c *DockerClient) scanBuildCache(ctx context.Context, scan *cleanupScan, cutoff int64) error {
@@ -212,7 +237,7 @@ func (c *DockerClient) scanBuildCache(ctx context.Context, scan *cleanupScan, cu
 		if record.InUse {
 			continue
 		}
-		if cutoff > 0 && record.CreatedAt > 0 && record.CreatedAt > cutoff {
+		if used := record.lastUsed(); cutoff > 0 && !used.IsZero() && used.Unix() > cutoff {
 			continue
 		}
 		size += record.Size
@@ -233,7 +258,9 @@ func (c *DockerClient) scanBuildCache(ctx context.Context, scan *cleanupScan, cu
 	return nil
 }
 
-func (c *DockerClient) scanDanglingImages(ctx context.Context, scan *cleanupScan, cutoff int64) error {
+func (c *DockerClient) scanDanglingImages(
+	ctx context.Context, scan *cleanupScan, active map[string]struct{}, cutoff int64,
+) error {
 	filters, err := json.Marshal(map[string][]string{"dangling": {"true"}})
 	if err != nil {
 		return fmt.Errorf("docker: encode image filter: %w", err)
@@ -245,6 +272,10 @@ func (c *DockerClient) scanDanglingImages(ctx context.Context, scan *cleanupScan
 	}
 	for _, image := range images {
 		id := cleanupIDImagePrefix + image.ID
+		if _, inUse := active[image.ID]; inUse {
+			scan.excluded[id] = "in use"
+			continue
+		}
 		if cutoff > 0 && image.Created > cutoff {
 			scan.excluded[id] = "too new"
 			continue
@@ -264,13 +295,12 @@ func (c *DockerClient) scanDanglingImages(ctx context.Context, scan *cleanupScan
 }
 
 func (c *DockerClient) scanUnusedImages(
-	ctx context.Context, scan *cleanupScan, containers []dockerContainerSummary, cutoff int64,
+	ctx context.Context, scan *cleanupScan, active map[string]struct{}, cutoff int64,
 ) error {
 	images, err := c.listImages(ctx, true)
 	if err != nil {
 		return err
 	}
-	active := activeImageRefsFrom(containers)
 
 	var appGroups map[string][]appImage
 	external := make([]appImage, 0, len(images))
@@ -369,7 +399,14 @@ func appImageRef(tags []string) (string, string) {
 func (c *DockerClient) pruneBuildCache(ctx context.Context, cutoff int64) (int64, error) {
 	path := "/build/prune"
 	if cutoff > 0 {
-		path += "?until=" + strconv.FormatInt(cutoff, 10)
+		// The engine reads the age bound from filters, not a bare query param.
+		filters, err := json.Marshal(map[string][]string{
+			"until": {strconv.FormatInt(cutoff, 10)},
+		})
+		if err != nil {
+			return 0, fmt.Errorf("docker: encode prune filter: %w", err)
+		}
+		path += "?filters=" + url.QueryEscape(string(filters))
 	}
 	var out struct {
 		SpaceReclaimed int64 `json:"SpaceReclaimed"`

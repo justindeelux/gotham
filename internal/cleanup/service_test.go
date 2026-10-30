@@ -221,9 +221,12 @@ func TestCleanRemovesOnlySelectedAgentItems(t *testing.T) {
 	svc, serverID := testService(t, agent, nil, st)
 
 	result := svc.Clean(context.Background(), uuid.New(), TriggerManual, serverID.String(),
-		[]string{"image:sha256:a"}, 0)
+		[]string{"image:sha256:a", "image:sha256:a"}, 0)
 	if len(agent.cleaned) != 1 || agent.cleaned[0] != "image:sha256:a" {
-		t.Fatalf("agent ids = %v; want only the selected id", agent.cleaned)
+		t.Fatalf("agent ids = %v; want the selected id once (deduplicated)", agent.cleaned)
+	}
+	if len(result.Items) != 1 {
+		t.Fatalf("items = %+v; want one deduplicated result", result.Items)
 	}
 	if result.Items[0].Category != CategoryUnusedImages || result.Items[0].Name != "app:1" {
 		t.Fatalf("item = %+v; want the scanned name and category", result.Items[0])

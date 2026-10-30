@@ -23,12 +23,15 @@ type cleanupFake struct {
 	containers []map[string]any
 	dangling   []map[string]any
 
-	removedImages     []string
-	removedContainers []string
-	containerQueries  []string
-	pruneUntil        string
-	pruneCalls        int
-	pruneReclaimed    int64
+	removedImages      []string
+	imageDeleteQueries []string
+	imageDeleteStatus  int
+	removedContainers  []string
+	containerQueries   []string
+	pruneFilters       string
+	pruneUntil         string
+	pruneCalls         int
+	pruneReclaimed     int64
 }
 
 func (f *cleanupFake) ServeHTTP(w http.ResponseWriter, r *http.Request) {
@@ -49,6 +52,12 @@ func (f *cleanupFake) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		_ = json.NewEncoder(w).Encode(f.images)
 	case r.Method == http.MethodDelete && strings.HasPrefix(r.URL.Path, "/images/"):
 		f.removedImages = append(f.removedImages, strings.TrimPrefix(r.URL.Path, "/images/"))
+		f.imageDeleteQueries = append(f.imageDeleteQueries, r.URL.RawQuery)
+		if f.imageDeleteStatus != 0 {
+			w.WriteHeader(f.imageDeleteStatus)
+			_, _ = w.Write([]byte(`{"message":"conflict: image is being used by stopped container c1"}`))
+			return
+		}
 		_, _ = w.Write([]byte(`[{"Deleted":"sha256:removed"}]`))
 	case r.Method == http.MethodDelete && strings.HasPrefix(r.URL.Path, "/containers/"):
 		f.removedContainers = append(f.removedContainers, r.URL.Path)
@@ -59,11 +68,21 @@ func (f *cleanupFake) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		w.WriteHeader(http.StatusNoContent)
 	case r.Method == http.MethodPost && r.URL.Path == "/build/prune":
 		f.pruneCalls++
-		f.pruneUntil = r.URL.Query().Get("until")
+		f.pruneFilters = r.URL.Query().Get("filters")
+		if f.pruneFilters != "" {
+			var filters map[string][]string
+			if err := json.Unmarshal([]byte(f.pruneFilters), &filters); err == nil && len(filters["until"]) > 0 {
+				f.pruneUntil = filters["until"][0]
+			}
+		}
 		_ = json.NewEncoder(w).Encode(map[string]any{"SpaceReclaimed": f.pruneReclaimed})
 	default:
 		http.NotFound(w, r)
 	}
+}
+
+func rfc3339(unix int64) string {
+	return time.Unix(unix, 0).UTC().Format(time.RFC3339Nano)
 }
 
 func imageSummary(id string, tags []string, created, size int64) map[string]any {
@@ -111,9 +130,9 @@ func TestScanCleanupCategoriesAndMinAge(t *testing.T) {
 
 	fake := &cleanupFake{
 		buildCache: []map[string]any{
-			{"ID": "bc-old", "InUse": false, "Size": 100, "CreatedAt": old},
-			{"ID": "bc-new", "InUse": false, "Size": 50, "CreatedAt": recent},
-			{"ID": "bc-in-use", "InUse": true, "Size": 999, "CreatedAt": old},
+			{"ID": "bc-old", "InUse": false, "Size": 100, "CreatedAt": rfc3339(old), "LastUsedAt": rfc3339(old)},
+			{"ID": "bc-new", "InUse": false, "Size": 50, "CreatedAt": rfc3339(recent), "LastUsedAt": rfc3339(recent)},
+			{"ID": "bc-in-use", "InUse": true, "Size": 999, "CreatedAt": rfc3339(old), "LastUsedAt": rfc3339(old)},
 		},
 		dangling: []map[string]any{
 			imageSummary("sha256:dang-old", nil, old, 200),
@@ -277,7 +296,7 @@ func TestCleanRemovesOnlySelectedItems(t *testing.T) {
 	old := now - 10*24*3600
 	fake := &cleanupFake{
 		buildCache: []map[string]any{
-			{"ID": "bc", "InUse": false, "Size": 100, "CreatedAt": old},
+			{"ID": "bc", "InUse": false, "Size": 100, "CreatedAt": rfc3339(old), "LastUsedAt": rfc3339(old)},
 		},
 		images: []map[string]any{
 			imageSummary("sha256:ext", []string{"library/alpine:3.20"}, old, 10),
@@ -290,7 +309,7 @@ func TestCleanRemovesOnlySelectedItems(t *testing.T) {
 	client := cleanupFixture(t, fake)
 
 	results, err := client.Clean(context.Background(), []string{
-		"image:sha256:ext", "container:c-old", cleanupIDBuildCache,
+		"image:sha256:ext", "image:sha256:ext", "container:c-old", cleanupIDBuildCache,
 	}, 0)
 	if err != nil {
 		t.Fatalf("Clean: %v", err)
@@ -304,7 +323,10 @@ func TestCleanRemovesOnlySelectedItems(t *testing.T) {
 		}
 	}
 	if len(fake.removedImages) != 1 || fake.removedImages[0] != "sha256:ext" {
-		t.Errorf("removed images = %v; want only the selected image", fake.removedImages)
+		t.Errorf("removed images = %v; want only the selected image once (deduplicated)", fake.removedImages)
+	}
+	if len(fake.imageDeleteQueries) != 1 || strings.Contains(fake.imageDeleteQueries[0], "force=1") {
+		t.Errorf("image delete queries = %v; want one unforced cleanup delete", fake.imageDeleteQueries)
 	}
 	if len(fake.removedContainers) != 1 {
 		t.Fatalf("removed containers = %v; want one", fake.removedContainers)
@@ -324,7 +346,7 @@ func TestCleanBuildCacheUsesMinAge(t *testing.T) {
 	now := time.Now().Unix()
 	fake := &cleanupFake{
 		buildCache: []map[string]any{
-			{"ID": "bc", "InUse": false, "Size": 100, "CreatedAt": now - 10*24*3600},
+			{"ID": "bc", "InUse": false, "Size": 100, "CreatedAt": rfc3339(now - 10*24*3600)},
 		},
 	}
 	client := cleanupFixture(t, fake)
@@ -333,6 +355,9 @@ func TestCleanBuildCacheUsesMinAge(t *testing.T) {
 	if _, err := client.Clean(context.Background(), []string{cleanupIDBuildCache}, minAge); err != nil {
 		t.Fatalf("Clean: %v", err)
 	}
+	if fake.pruneFilters == "" {
+		t.Fatal("build prune sent no filters; the engine ignores a bare until parameter")
+	}
 	cutoff := time.Now().Add(-minAge).Unix()
 	got, err := strconv.ParseInt(fake.pruneUntil, 10, 64)
 	if err != nil {
@@ -340,5 +365,62 @@ func TestCleanBuildCacheUsesMinAge(t *testing.T) {
 	}
 	if diff := got - cutoff; diff < -60 || diff > 60 {
 		t.Errorf("until = %d; want about the min-age cutoff %d", got, cutoff)
+	}
+}
+
+func TestScanAndCleanSkipDanglingImageUsedByStoppedContainer(t *testing.T) {
+	now := time.Now().Unix()
+	old := now - 10*24*3600
+	fake := &cleanupFake{
+		dangling: []map[string]any{
+			imageSummary("sha256:dang", nil, old, 100),
+		},
+		containers: []map[string]any{
+			containerSummary("c1", "stopped-app", "exited", old, 10, nil, "sha256:dang"),
+		},
+	}
+	client := cleanupFixture(t, fake)
+
+	items, err := client.ScanCleanup(context.Background(), 0)
+	if err != nil {
+		t.Fatalf("ScanCleanup: %v", err)
+	}
+	for _, item := range items {
+		if strings.Contains(item.GetId(), "sha256:dang") {
+			t.Fatalf("dangling image used by a stopped container was listed: %+v", item)
+		}
+	}
+
+	results, err := client.Clean(context.Background(), []string{"image:sha256:dang"}, 0)
+	if err != nil {
+		t.Fatalf("Clean: %v", err)
+	}
+	if len(results) != 1 || results[0].GetStatus() != cleanupStatusSkipped || results[0].GetMessage() != "in use" {
+		t.Fatalf("result = %+v; want skipped in use", results)
+	}
+	if len(fake.removedImages) != 0 {
+		t.Fatalf("removed images = %v; an image in use must not be deleted", fake.removedImages)
+	}
+}
+
+func TestCleanMapsImageConflictToSkipped(t *testing.T) {
+	now := time.Now().Unix()
+	fake := &cleanupFake{
+		dangling: []map[string]any{
+			imageSummary("sha256:dang", nil, now-10*24*3600, 100),
+		},
+		imageDeleteStatus: http.StatusConflict,
+	}
+	client := cleanupFixture(t, fake)
+
+	results, err := client.Clean(context.Background(), []string{"image:sha256:dang"}, 0)
+	if err != nil {
+		t.Fatalf("Clean: %v", err)
+	}
+	if len(results) != 1 || results[0].GetStatus() != cleanupStatusSkipped || results[0].GetMessage() != "in use" {
+		t.Fatalf("result = %+v; want skipped in use on a 409", results)
+	}
+	if len(fake.imageDeleteQueries) != 1 || strings.Contains(fake.imageDeleteQueries[0], "force=1") {
+		t.Fatalf("image delete queries = %v; want one unforced cleanup delete", fake.imageDeleteQueries)
 	}
 }

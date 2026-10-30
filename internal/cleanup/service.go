@@ -232,6 +232,7 @@ func (s *Service) Clean(
 	defer func() {
 		s.record(ctx, actor, trigger, serverID, startedAt, result.Items)
 	}()
+	ids = dedupeIDs(ids)
 
 	// ponytail: in-process lock, single control plane. A second Clean on the
 	// same node waits; a second control plane would need a distributed lock.
@@ -392,6 +393,19 @@ func orderResults(ids []string, results []ItemResult) []ItemResult {
 	return ordered
 }
 
+func dedupeIDs(ids []string) []string {
+	seen := make(map[string]struct{}, len(ids))
+	unique := make([]string, 0, len(ids))
+	for _, id := range ids {
+		if _, duplicate := seen[id]; duplicate {
+			continue
+		}
+		seen[id] = struct{}{}
+		unique = append(unique, id)
+	}
+	return unique
+}
+
 func splitIDs(ids []string) (agentIDs, volumeIDs []string) {
 	for _, id := range ids {
 		if strings.HasPrefix(id, idVolumePrefix) {
@@ -436,7 +450,8 @@ func (s *Service) record(
 			ReclaimedBytes: item.ReclaimedBytes,
 		})
 	}
-	if err := s.store.RecordCleanupRun(ctx, run, history); err != nil {
+	// A cancelled request must not leave a completed delete unaudited.
+	if err := s.store.RecordCleanupRun(context.WithoutCancel(ctx), run, history); err != nil {
 		s.logger.Warn("cleanup: recording the run failed", "server_id", serverID.String(), "error", err)
 	}
 }

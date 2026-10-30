@@ -38,6 +38,8 @@ var ErrDockerUnavailable = errors.New("docker: daemon unavailable")
 
 var ErrDockerImageNotFound = errors.New("docker: image not found")
 
+var ErrDockerImageInUse = errors.New("docker: image is in use")
+
 var ErrDockerVolumeNotFound = errors.New("docker: volume not found")
 
 var ErrDockerContainerNotRunning = errors.New("docker: container is not running")

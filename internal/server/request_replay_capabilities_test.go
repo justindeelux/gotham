@@ -1,6 +1,7 @@
 package server
 
 import (
+	"context"
 	"encoding/json"
 	"io"
 	"log/slog"
@@ -8,11 +9,20 @@ import (
 	"slices"
 	"testing"
 
+	"github.com/google/uuid"
 	"github.com/justindeelux/gotham/internal/auth"
 	"github.com/justindeelux/gotham/internal/config"
 	"github.com/justindeelux/gotham/internal/deploy"
 	"github.com/justindeelux/gotham/internal/store"
 )
+
+type fakeTargetDeployService struct {
+	deploy.DeployService
+}
+
+func (fakeTargetDeployService) ListApplications(context.Context, uuid.UUID, deploy.ApplicationFilter) ([]deploy.Application, error) {
+	return nil, nil
+}
 
 func TestMCPMutationCapabilitiesRequireMountedAliasesAndStableKey(t *testing.T) {
 	for _, tc := range []struct {

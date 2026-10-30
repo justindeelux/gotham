@@ -16,7 +16,7 @@ import (
 type ComposeAgent interface {
 	Validate(ctx context.Context, projectName string, composeYAML []byte) ([]string, error)
 	Up(ctx context.Context, projectName string, composeYAML []byte, restart bool) error
-	Down(ctx context.Context, projectName string, composeYAML []byte) error
+	Down(ctx context.Context, projectName string, composeYAML []byte, removeVolumes bool) ([]string, error)
 	Ps(ctx context.Context, projectName string) ([]ComposeContainer, error)
 	Logs(ctx context.Context, projectName, service string, tail int64, follow bool) (LogStream, error)
 	Close() error
@@ -76,13 +76,17 @@ func (a *GRPCComposeAgent) Up(ctx context.Context, projectName string, composeYA
 	return mapAgentError("up", err)
 }
 
-func (a *GRPCComposeAgent) Down(ctx context.Context, projectName string, composeYAML []byte) error {
-	_, err := a.client.ComposeDown(ctx, &agentv1.ComposeDownRequest{
-		ProjectName: projectName,
-		ComposeYaml: composeYAML,
-		Unconfined:  true,
+func (a *GRPCComposeAgent) Down(ctx context.Context, projectName string, composeYAML []byte, removeVolumes bool) ([]string, error) {
+	response, err := a.client.ComposeDown(ctx, &agentv1.ComposeDownRequest{
+		ProjectName:   projectName,
+		ComposeYaml:   composeYAML,
+		Unconfined:    true,
+		RemoveVolumes: removeVolumes,
 	})
-	return mapAgentError("down", err)
+	if err != nil {
+		return nil, mapAgentError("down", err)
+	}
+	return response.GetVolumeWarnings(), nil
 }
 
 func (a *GRPCComposeAgent) Ps(ctx context.Context, projectName string) ([]ComposeContainer, error) {

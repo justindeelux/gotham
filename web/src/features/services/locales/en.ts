@@ -141,7 +141,7 @@ const en = {
     controlNodeOffline: "The node is offline. Reconnect it before using these actions.",
     delete: "Delete",
     deleteConfirm:
-      "Delete the service {name}? The project goes down; its named volumes stay on the node. Its backups are deleted with it.",
+      "Delete the service {name}? The project and its data volumes are removed from the node. Its backups are deleted with it, so create a backup first if you need the data.",
   },
   overview: {
     title: "Overview",
@@ -226,7 +226,7 @@ const en = {
     backToProjects: "Back to projects",
     deleteTitle: "Delete service",
     deleteHint:
-      "Deleting tears down the compose project on its node and removes the service configuration. Named volumes stay on the node.",
+      "Deleting tears down the compose project on its node and removes the service configuration, together with its data volumes. Create a backup on the Backups tab first if you need the data.",
     serverPinnedReason:
       "This service already deployed, so its node is pinned and cannot be changed. Moving it to another environment stays possible.",
     deployFailedTitle: "Deploy failed",
@@ -245,7 +245,7 @@ const en = {
     stopped: "Service stopped. Named volumes were kept.",
     restartSent: "Restart sent to the node agent.",
     started: "Start sent to the node agent.",
-    deleted: "Service deleted. Named volumes were kept on the node.",
+    deleted: "Service deleted with its data volumes.",
     domainAdded: "Domain added.",
     domainSaved: "Domain saved.",
     domainRemoved: "Domain removed.",

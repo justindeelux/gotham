@@ -392,6 +392,30 @@ func TestDeleteStopsThenSoftDeletes(t *testing.T) {
 	if lastDown.project != ProjectName(broken.ID) || lastDown.yaml != snapshot {
 		t.Errorf("last down = %+v, want the running deploy snapshot", lastDown)
 	}
+	if !lastDown.removeVolumes {
+		t.Error("delete must remove the project's named volumes")
+	}
+}
+
+func TestDeleteSucceedsWhenAVolumeCannotBeRemoved(t *testing.T) {
+	repo := newFakeRepository()
+	agent := &fakeAgent{downWarnings: []string{"gotham-data: volume is in use"}}
+	svc := newTestService(t, repo, agent)
+	userID := uuid.New()
+	created := createService(t, svc, repo, userID)
+
+	if err := svc.Delete(context.Background(), userID, created.ID); err != nil {
+		t.Fatalf("Delete = %v, want success despite the volume warning", err)
+	}
+	if _, err := svc.Get(context.Background(), userID, created.ID); !errors.Is(err, ErrNotFound) {
+		t.Fatalf("Get after delete = %v, want ErrNotFound", err)
+	}
+	agent.mu.Lock()
+	lastDown := agent.downs[len(agent.downs)-1]
+	agent.mu.Unlock()
+	if !lastDown.removeVolumes {
+		t.Error("delete must ask the agent to remove the project's named volumes")
+	}
 }
 
 func TestDeployDoesNotClobberConcurrentEdit(t *testing.T) {

@@ -142,13 +142,15 @@ func (s *DockerServer) RemoveContainer(ctx context.Context, req *agentv1.Contain
 
 var dbVolumePattern = regexp.MustCompile(`^gotham-db-[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$`)
 
+var appVolumePattern = regexp.MustCompile(`^gotham-app-[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}-[a-zA-Z0-9][a-zA-Z0-9._-]*$`)
+
 func (s *DockerServer) RemoveVolume(ctx context.Context, req *agentv1.VolumeActionRequest) (*agentv1.VolumeActionResponse, error) {
 	name := req.GetName()
 	if strings.TrimSpace(name) == "" {
 		return nil, status.Error(codes.InvalidArgument, "volume name is required")
 	}
-	if !dbVolumePattern.MatchString(name) {
-		return nil, status.Errorf(codes.InvalidArgument, "remove volume: %q is not a managed database volume", name)
+	if !dbVolumePattern.MatchString(name) && !appVolumePattern.MatchString(name) {
+		return nil, status.Errorf(codes.InvalidArgument, "remove volume: %q is not a managed volume", name)
 	}
 	if err := s.docker.RemoveVolume(ctx, name); err != nil {
 		return nil, dockerError("remove volume", err)

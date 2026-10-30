@@ -1262,9 +1262,9 @@ type ComposeServiceClient interface {
 	// existing containers.
 	ComposeUp(ctx context.Context, in *ComposeUpRequest, opts ...grpc.CallOption) (*ComposeUpResponse, error)
 	// ComposeDown stops and removes the project's containers and networks with
-	// `docker compose down`. It never passes --volumes: named volumes survive a
-	// down, so a stop is always recoverable and volume data is never deleted
-	// (Phase 5 relies on the same guarantee for database volumes).
+	// `docker compose down`. It passes --volumes only when the request asks for
+	// it: a stop keeps every named volume so it stays recoverable, while a
+	// delete removes exactly the volumes the recorded document declares.
 	ComposeDown(ctx context.Context, in *ComposeDownRequest, opts ...grpc.CallOption) (*ComposeDownResponse, error)
 	// ComposeLogs streams the merged stdout/stderr of one compose service (or
 	// the whole project when service is empty), following until the client
@@ -1375,9 +1375,9 @@ type ComposeServiceServer interface {
 	// existing containers.
 	ComposeUp(context.Context, *ComposeUpRequest) (*ComposeUpResponse, error)
 	// ComposeDown stops and removes the project's containers and networks with
-	// `docker compose down`. It never passes --volumes: named volumes survive a
-	// down, so a stop is always recoverable and volume data is never deleted
-	// (Phase 5 relies on the same guarantee for database volumes).
+	// `docker compose down`. It passes --volumes only when the request asks for
+	// it: a stop keeps every named volume so it stays recoverable, while a
+	// delete removes exactly the volumes the recorded document declares.
 	ComposeDown(context.Context, *ComposeDownRequest) (*ComposeDownResponse, error)
 	// ComposeLogs streams the merged stdout/stderr of one compose service (or
 	// the whole project when service is empty), following until the client

@@ -143,7 +143,7 @@ const vi: typeof en = {
     controlNodeOffline: "Node đang ngoại tuyến. Hãy kết nối lại trước khi dùng các thao tác này.",
     delete: "Xóa",
     deleteConfirm:
-      "Xóa dịch vụ {name}? Dự án sẽ dừng; các volume có tên vẫn giữ trên node. Các bản sao lưu của nó cũng bị xóa.",
+      "Xóa dịch vụ {name}? Dự án và các volume dữ liệu của nó sẽ bị gỡ khỏi node. Các bản sao lưu của nó cũng bị xóa, nên hãy tạo bản sao lưu trước nếu cần dữ liệu.",
   },
   overview: {
     title: "Tổng quan",
@@ -228,7 +228,7 @@ const vi: typeof en = {
     backToProjects: "Về dự án",
     deleteTitle: "Xóa dịch vụ",
     deleteHint:
-      "Xóa sẽ gỡ dự án compose trên node và xóa cấu hình dịch vụ. Các volume có tên vẫn giữ trên node.",
+      "Xóa sẽ gỡ dự án compose trên node và xóa cấu hình dịch vụ, cùng các volume dữ liệu của nó. Hãy tạo bản sao lưu ở tab Bản sao lưu trước nếu cần dữ liệu.",
     serverPinnedReason:
       "Dịch vụ này đã triển khai nên node bị ghim, không thể đổi. Vẫn có thể chuyển sang môi trường khác.",
     deployFailedTitle: "Triển khai thất bại",
@@ -247,7 +247,7 @@ const vi: typeof en = {
     stopped: "Đã dừng dịch vụ. Các volume có tên được giữ lại.",
     restartSent: "Đã gửi lệnh khởi động lại tới node agent.",
     started: "Đã gửi lệnh khởi động tới node agent.",
-    deleted: "Đã xóa dịch vụ. Các volume có tên vẫn giữ trên node.",
+    deleted: "Đã xóa dịch vụ cùng các volume dữ liệu của nó.",
     domainAdded: "Đã thêm tên miền.",
     domainSaved: "Đã lưu tên miền.",
     domainRemoved: "Đã gỡ tên miền.",

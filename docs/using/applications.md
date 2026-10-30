@@ -233,10 +233,11 @@ already holds an application with the same name, and while a base application
 still has live previews.
 
 **Danger zone → Delete application** removes the application and requires typing
-its name to confirm. It removes the containers and stored configuration and
-stops its routes; volumes and bind directories stay on the node, so remove them
-separately if the data is no longer needed. A delete is refused while a deploy
-is in flight.
+its name to confirm. It removes the containers, the named data volumes and the
+stored configuration, and stops its routes; bind directories stay on the node,
+so remove them separately if the data is no longer needed. A volume still in use
+is reported as a warning and the delete still completes. A delete is refused
+while a deploy is in flight.
 
 ## Access
 

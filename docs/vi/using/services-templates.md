@@ -138,7 +138,10 @@ hãy triển khai từ trang chi tiết.
 - **Dừng** đưa dự án xuống bằng `compose down`. Volume có tên giữ nguyên từng byte,
   nên một dịch vụ đã dừng hoàn toàn khôi phục được bằng một lần triển khai hoặc
   khởi động lại.
-- **Xóa** dừng dự án và xóa mềm dịch vụ. Volume có tên vẫn ở trên node.
+- **Xóa** dừng dự án, gỡ các volume có tên mà tài liệu đã lưu khai báo rồi xóa
+  mềm dịch vụ. Volume bên ngoài và ổ gắn kết không bị đụng tới. Volume còn đang
+  được dùng sẽ được báo là cảnh báo và lần xóa vẫn hoàn tất, nên dự án không bao
+  giờ sống lâu hơn bản ghi của nó. Hãy tạo bản sao lưu trước nếu cần dữ liệu.
 
 Một thao tác vòng đời phát ra khi lần triển khai còn chạy sẽ bị từ chối với xung
 đột (`409`) thay vì chờ triển khai xong. Nếu control plane khởi động lại giữa lúc

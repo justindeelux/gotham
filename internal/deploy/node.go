@@ -49,12 +49,13 @@ type Node interface {
 	PullWithAuth(ctx context.Context, image, username, password string) (string, error)
 	ComposeUp(ctx context.Context, projectName string, composeYAML []byte) error
 	ComposeValidate(ctx context.Context, projectName string, composeYAML []byte) (services []string, enforced bool, err error)
-	ComposeDown(ctx context.Context, projectName string, composeYAML []byte) error
+	ComposeDown(ctx context.Context, projectName string, composeYAML []byte, removeVolumes bool) ([]string, error)
 	ComposePs(ctx context.Context, projectName string) ([]ComposeContainer, error)
 	Run(ctx context.Context, req *agentv1.CreateContainerRequest) (string, error)
 	Stop(ctx context.Context, containerID string) error
 	Start(ctx context.Context, containerID string) error
 	Remove(ctx context.Context, containerID string) error
+	RemoveVolume(ctx context.Context, volumeName string) error
 	Containers(ctx context.Context) ([]*agentv1.ContainerInfo, error)
 	ContainersByLabel(ctx context.Context, labels map[string]string, all, resolveVolumes bool) ([]*agentv1.ContainerInfo, error)
 	FileRoots(ctx context.Context) ([]*agentv1.FileRoot, error)
@@ -260,18 +261,29 @@ func (n *agentNode) ComposeValidate(ctx context.Context, projectName string, com
 	return response.GetServices(), response.GetConfinedEnforced(), nil
 }
 
-func (n *agentNode) ComposeDown(ctx context.Context, projectName string, composeYAML []byte) error {
+func (n *agentNode) ComposeDown(ctx context.Context, projectName string, composeYAML []byte, removeVolumes bool) ([]string, error) {
 	if strings.TrimSpace(projectName) == "" {
-		return fmt.Errorf("%w: compose project name is required", ErrValidation)
+		return nil, fmt.Errorf("%w: compose project name is required", ErrValidation)
 	}
 	if len(composeYAML) == 0 {
-		return fmt.Errorf("%w: compose document is required", ErrValidation)
+		return nil, fmt.Errorf("%w: compose document is required", ErrValidation)
 	}
-	_, err := n.compose.ComposeDown(ctx, &agentv1.ComposeDownRequest{
-		ProjectName: projectName,
-		ComposeYaml: composeYAML,
+	response, err := n.compose.ComposeDown(ctx, &agentv1.ComposeDownRequest{
+		ProjectName:   projectName,
+		ComposeYaml:   composeYAML,
+		RemoveVolumes: removeVolumes,
 	})
 	if err != nil {
+		return nil, mapRPCError(err)
+	}
+	return response.GetVolumeWarnings(), nil
+}
+
+func (n *agentNode) RemoveVolume(ctx context.Context, volumeName string) error {
+	if strings.TrimSpace(volumeName) == "" {
+		return fmt.Errorf("%w: volume name is required", ErrValidation)
+	}
+	if _, err := n.docker.RemoveVolume(ctx, &agentv1.VolumeActionRequest{Name: volumeName}); err != nil {
 		return mapRPCError(err)
 	}
 	return nil

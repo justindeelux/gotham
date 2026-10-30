@@ -230,9 +230,10 @@ Việc di chuyển bị từ chối khi một lần triển khai đang diễn ra
 đã có ứng dụng cùng tên, và khi một ứng dụng gốc vẫn còn bản xem trước đang sống.
 
 **Vùng nguy hiểm → Xóa ứng dụng** gỡ ứng dụng và yêu cầu bạn nhập tên nó để xác
-nhận. Nó gỡ các container và cấu hình đã lưu và dừng các tuyến của ứng dụng; volume
-và thư mục bind vẫn nằm trên node, nên hãy gỡ chúng riêng nếu dữ liệu không còn cần
-nữa. Việc xóa bị từ chối khi một lần triển khai đang diễn ra.
+nhận. Nó gỡ các container, các volume dữ liệu có tên và cấu hình đã lưu rồi dừng
+các tuyến của ứng dụng; thư mục bind vẫn nằm trên node, nên hãy gỡ chúng riêng nếu
+dữ liệu không còn cần nữa. Volume còn đang được dùng sẽ được báo là cảnh báo và
+lần xóa vẫn hoàn tất. Việc xóa bị từ chối khi một lần triển khai đang diễn ra.
 
 ## Quyền truy cập
 

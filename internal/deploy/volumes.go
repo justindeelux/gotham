@@ -153,6 +153,27 @@ func storageDirName(name string) string {
 	return cleaned
 }
 
+// namedStorageVolumes resolves the Docker named volumes a non-compose
+// application recorded in its storage mappings. Derived or explicit host
+// paths are bind mounts, not volumes, and are never listed.
+func namedStorageVolumes(root string, appID uuid.UUID, storages []Storage) []string {
+	names := make([]string, 0, len(storages))
+	seen := make(map[string]bool, len(storages))
+	for _, storage := range storages {
+		host := strings.TrimSpace(storage.HostPath)
+		if host == "" || strings.HasPrefix(host, "/") {
+			continue
+		}
+		resolved, err := managedHostPath(root, appID, storage.Name, host)
+		if err != nil || strings.HasPrefix(resolved, "/") || seen[resolved] {
+			continue
+		}
+		seen[resolved] = true
+		names = append(names, resolved)
+	}
+	return names
+}
+
 func warnLegacyStorageResolution(logger *slog.Logger, appID uuid.UUID, storages []Storage) {
 	if logger == nil {
 		return

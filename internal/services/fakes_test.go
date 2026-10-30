@@ -462,11 +462,12 @@ func (r *fakeRepository) environmentProject(environmentID uuid.UUID) uuid.UUID {
 type fakeAgent struct {
 	mu sync.Mutex
 
-	validateErr error
-	upErr       error
-	downErr     error
-	psErr       error
-	logsErr     error
+	validateErr  error
+	upErr        error
+	downErr      error
+	downWarnings []string
+	psErr        error
+	logsErr      error
 
 	services  []string
 	ps        []ComposeContainer
@@ -489,8 +490,9 @@ type fakeUp struct {
 }
 
 type fakeDown struct {
-	project string
-	yaml    string
+	project       string
+	yaml          string
+	removeVolumes bool
 }
 
 type fakeLogs struct {
@@ -531,20 +533,21 @@ func (a *fakeAgent) Up(ctx context.Context, project string, composeYAML []byte, 
 	return err
 }
 
-func (a *fakeAgent) Down(ctx context.Context, project string, composeYAML []byte) error {
+func (a *fakeAgent) Down(ctx context.Context, project string, composeYAML []byte, removeVolumes bool) ([]string, error) {
 	a.mu.Lock()
-	a.downs = append(a.downs, fakeDown{project: project, yaml: string(composeYAML)})
+	a.downs = append(a.downs, fakeDown{project: project, yaml: string(composeYAML), removeVolumes: removeVolumes})
 	gate := a.downGate
 	err := a.downErr
+	warnings := append([]string(nil), a.downWarnings...)
 	a.mu.Unlock()
 	if gate != nil {
 		select {
 		case <-gate:
 		case <-ctx.Done():
-			return ctx.Err()
+			return nil, ctx.Err()
 		}
 	}
-	return err
+	return warnings, err
 }
 
 func (a *fakeAgent) Ps(_ context.Context, project string) ([]ComposeContainer, error) {

@@ -200,8 +200,88 @@ func (s *ComposeServer) ComposeDown(ctx context.Context, req *agentv1.ComposeDow
 	if _, err := s.run(ctx, project, "down", "--remove-orphans"); err != nil {
 		return nil, composeError("down", err)
 	}
-	s.log.Info("compose: project down; named volumes retained", "project", project)
-	return &agentv1.ComposeDownResponse{}, nil
+	response := &agentv1.ComposeDownResponse{}
+	if req.GetRemoveVolumes() {
+		response.VolumeWarnings = s.removeProjectVolumes(ctx, project, req.GetComposeYaml())
+	}
+	s.log.Info("compose: project down", "project", project, "volumes_removed", req.GetRemoveVolumes())
+	return response, nil
+}
+
+type composeVolumeDefinition struct {
+	Name     string `yaml:"name"`
+	External any    `yaml:"external"`
+}
+
+// projectVolumeNames lists the Docker volumes the recorded document creates
+// for the project. External volumes belong to another owner; a declared name
+// overrides the project-prefixed default.
+func projectVolumeNames(project string, document []byte) []string {
+	var doc struct {
+		Volumes map[string]composeVolumeDefinition `yaml:"volumes"`
+	}
+	if err := yaml.Unmarshal(document, &doc); err != nil {
+		return nil
+	}
+	names := make([]string, 0, len(doc.Volumes))
+	for key, definition := range doc.Volumes {
+		if externalVolume(definition.External) {
+			continue
+		}
+		name := strings.TrimSpace(definition.Name)
+		if name == "" {
+			name = project + "_" + key
+		}
+		names = append(names, name)
+	}
+	sort.Strings(names)
+	return names
+}
+
+func externalVolume(raw any) bool {
+	switch value := raw.(type) {
+	case bool:
+		return value
+	case map[string]any:
+		return true
+	}
+	return false
+}
+
+// removeProjectVolumes removes the project's declared volumes after the
+// project is down. A volume that is gone already is not a warning; one that
+// is still in use is, and the teardown itself still succeeded.
+func (s *ComposeServer) removeProjectVolumes(ctx context.Context, project string, document []byte) []string {
+	var warnings []string
+	for _, name := range projectVolumeNames(project, document) {
+		if err := s.removeVolume(ctx, name); err != nil {
+			warnings = append(warnings, name+": "+err.Error())
+		}
+	}
+	return warnings
+}
+
+func (s *ComposeServer) removeVolume(ctx context.Context, name string) error {
+	commandCtx, cancel := context.WithTimeout(ctx, s.timeout)
+	defer cancel()
+	command := exec.CommandContext(commandCtx, s.binary, "volume", "rm", name)
+	if s.dockerHost != "" {
+		command.Env = append(os.Environ(), "DOCKER_HOST="+s.dockerHost)
+	}
+	command.WaitDelay = 5 * time.Second
+	output := &boundedBuffer{limit: maxComposeError}
+	command.Stdout = output
+	command.Stderr = output
+	if err := command.Run(); err != nil {
+		if ctxErr := ctx.Err(); ctxErr != nil {
+			return ctxErr
+		}
+		if strings.Contains(strings.ToLower(string(output.Bytes())), "no such volume") {
+			return nil
+		}
+		return &composeCommandError{err: err, output: output.Bytes()}
+	}
+	return nil
 }
 
 func (s *ComposeServer) ComposeLogs(req *agentv1.ComposeLogsRequest, stream grpc.ServerStreamingServer[agentv1.ComposeLogChunk]) error {

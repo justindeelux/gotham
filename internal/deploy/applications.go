@@ -499,7 +499,7 @@ func (s *Service) UpdateApplication(ctx context.Context, userID, appID uuid.UUID
 	moved := updated.ServerID != previousServer
 	if moved {
 		s.stopContainerOnNode(ctx, previousServer, s.latestContainer(ctx, app.ID))
-		s.composeDownApp(ctx, previousServer, updated)
+		s.composeDownApp(ctx, previousServer, updated, false)
 		s.syncProxyServer(ctx, previousServer)
 		if updated.PrimaryDomain != nil {
 			s.syncProxyServer(ctx, updated.ServerID)
@@ -556,7 +556,7 @@ func (s *Service) DeleteApplication(ctx context.Context, userID, appID uuid.UUID
 		s.logger.Warn("deploy: deploy key could not be detached; the application still deletes",
 			"application_id", app.ID, "provider", app.Provider, "repo", app.Repo, "error", err)
 	}
-	s.composeDownApp(ctx, app.ServerID, app)
+	s.composeDownApp(ctx, app.ServerID, app, true)
 	s.removeApplicationContainers(ctx, app)
 	if err := s.repo.DeleteApplication(ctx, appID); err != nil {
 		return err
@@ -790,7 +790,7 @@ const containerCleanupTimeout = 15 * time.Second
 
 const composeCleanupTimeout = 2 * time.Minute
 
-func (s *Service) composeDownApp(ctx context.Context, serverID uuid.UUID, app Application) {
+func (s *Service) composeDownApp(ctx context.Context, serverID uuid.UUID, app Application, removeVolumes bool) {
 	if NormalizeSourceType(app.SourceType, app.Provider) != SourceCompose {
 		return
 	}
@@ -831,8 +831,14 @@ func (s *Service) composeDownApp(ctx context.Context, serverID uuid.UUID, app Ap
 		s.logger.Warn("deploy: compose teardown proceeds without verified confinement",
 			"application_id", app.ID, "error", err)
 	}
-	if err := node.ComposeDown(opCtx, services.ProjectName(app.ID), []byte(content)); err != nil {
+	warnings, err := node.ComposeDown(opCtx, services.ProjectName(app.ID), []byte(content), removeVolumes)
+	if err != nil {
 		s.logger.Warn("deploy: best-effort compose teardown failed", "application_id", app.ID, "error", err)
+		return
+	}
+	for _, warning := range warnings {
+		s.logger.Warn("deploy: a named volume could not be removed during delete; it may still be in use",
+			"application_id", app.ID, "error", warning)
 	}
 }
 
@@ -899,6 +905,22 @@ func (s *Service) removeApplicationContainers(ctx context.Context, app Applicati
 		if err := node.Remove(opCtx, id); err != nil {
 			s.logger.Warn("deploy: best-effort container removal failed",
 				"application_id", app.ID, "container_id", id, "error", err)
+		}
+	}
+	s.removeNamedStorageVolumes(opCtx, node, app)
+}
+
+func (s *Service) removeNamedStorageVolumes(ctx context.Context, node Node, app Application) {
+	storages, err := s.repo.ListStorages(ctx, app.ID)
+	if err != nil {
+		s.logger.Warn("deploy: storage lookup for delete failed; named volumes are kept",
+			"application_id", app.ID, "error", err)
+		return
+	}
+	for _, name := range namedStorageVolumes(managedVolumeRoot(), app.ID, storages) {
+		if err := node.RemoveVolume(ctx, name); err != nil {
+			s.logger.Warn("deploy: a named volume could not be removed during delete; it may still be in use",
+				"application_id", app.ID, "volume", name, "error", err)
 		}
 	}
 }

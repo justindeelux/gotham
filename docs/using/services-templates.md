@@ -139,8 +139,11 @@ page.
 - **Restart** restarts a running project in place and starts a stopped one.
 - **Stop** takes the project down with `compose down`. Named volumes keep every
   byte, so a stopped service is fully recoverable by a deploy or restart.
-- **Delete** stops the project and soft-deletes the service. Named volumes stay
-  on the node.
+- **Delete** stops the project, removes the named volumes the stored document
+  declares and soft-deletes the service. External volumes and bind mounts stay
+  untouched. A volume that is still in use is reported as a warning and the
+  delete still completes, so the project never outlives its record. Create a
+  backup first if you need the data.
 
 A lifecycle action issued while a deploy is still running is refused with a
 conflict (`409`) instead of waiting for the deploy to finish. If the control

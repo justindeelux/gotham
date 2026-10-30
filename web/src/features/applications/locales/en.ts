@@ -716,7 +716,7 @@ const en = {
   },
   delete: {
     title: "Danger zone",
-    hint: "Deleting removes the application, its containers, its stored configuration and its backups. This cannot be undone.",
+    hint: "Deleting removes the application, its containers, its data volumes, its stored configuration and its backups. Bind directories stay on the node, so create a backup first if you need that data. This cannot be undone.",
     button: "Delete application",
     modalTitle: "Delete application",
     modalHint: "Type {name} to confirm. This cannot be undone.",

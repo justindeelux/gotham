@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"path/filepath"
 	"strings"
 	"sync"
 	"testing"
@@ -317,6 +318,60 @@ func TestDeleteApplicationRemovesEveryLabeledContainer(t *testing.T) {
 	}
 	if containsString(node.removed, "foreign") {
 		t.Errorf("removed = %v, must not touch another application's container", node.removed)
+	}
+}
+
+func TestDeleteApplicationRemovesRecordedNamedVolumes(t *testing.T) {
+	userID := uuid.New()
+	app := testApplication(userID)
+	repo := &fakeRepository{app: app}
+	node := newMockNode()
+	svc := newNodeService(t, repo, node)
+	prefix := appNamedVolumePrefix + app.ID.String() + "-"
+	repo.storages = []Storage{
+		{ApplicationID: app.ID, Name: "data", HostPath: prefix + "data", ContainerPath: "/data"},
+		{ApplicationID: app.ID, Name: "cache", HostPath: "shared-cache", ContainerPath: "/cache"},
+		{ApplicationID: app.ID, Name: "bind", HostPath: filepath.Join(managedVolumeRoot(), app.ID.String(), "bind"), ContainerPath: "/bind"},
+	}
+
+	if err := svc.DeleteApplication(context.Background(), userID, app.ID); err != nil {
+		t.Fatalf("delete: %v", err)
+	}
+	want := []string{prefix + "data", prefix + "shared-cache"}
+	if len(node.removedVolumes) != len(want) {
+		t.Fatalf("removed volumes = %v, want exactly %v", node.removedVolumes, want)
+	}
+	for _, name := range want {
+		if !containsString(node.removedVolumes, name) {
+			t.Errorf("removed volumes = %v, want %q removed", node.removedVolumes, name)
+		}
+	}
+	if containsString(node.removedVolumes, filepath.Join(managedVolumeRoot(), app.ID.String(), "bind")) {
+		t.Errorf("removed volumes = %v, must not remove a bind directory", node.removedVolumes)
+	}
+}
+
+func TestDeleteApplicationKeepsAnotherApplicationsVolume(t *testing.T) {
+	userID := uuid.New()
+	app := testApplication(userID)
+	other := uuid.New()
+	repo := &fakeRepository{app: app}
+	node := newMockNode()
+	svc := newNodeService(t, repo, node)
+	repo.storages = []Storage{
+		{ApplicationID: app.ID, Name: "data", HostPath: "data", ContainerPath: "/data"},
+		{ApplicationID: other, Name: "data", HostPath: "data", ContainerPath: "/data"},
+	}
+
+	if err := svc.DeleteApplication(context.Background(), userID, app.ID); err != nil {
+		t.Fatalf("delete: %v", err)
+	}
+	foreign := appNamedVolumePrefix + other.String() + "-data"
+	if containsString(node.removedVolumes, foreign) {
+		t.Errorf("removed volumes = %v, must not touch another application's volume %q", node.removedVolumes, foreign)
+	}
+	if !containsString(node.removedVolumes, appNamedVolumePrefix+app.ID.String()+"-data") {
+		t.Errorf("removed volumes = %v, want the application's own volume", node.removedVolumes)
 	}
 }
 

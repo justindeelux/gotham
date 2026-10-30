@@ -39,6 +39,8 @@ describe("channelHelpers", () => {
       "redeploy_needed",
       "runtime_failure",
       "runtime_recovery",
+      "cleanup_success",
+      "cleanup_failure",
     ]);
   });
 

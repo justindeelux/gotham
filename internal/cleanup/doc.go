@@ -45,6 +45,12 @@ var categories = map[string]Category{
 	CategoryHistory:           {Key: CategoryHistory, Tier: TierCareful},
 }
 
+// KnownCategory reports whether key is a category Gotham can clean.
+func KnownCategory(key string) bool {
+	_, ok := categories[key]
+	return ok
+}
+
 // CategoryTier returns the risk tier of a category; unknown keys are careful.
 func CategoryTier(key string) string {
 	if category, ok := categories[key]; ok {

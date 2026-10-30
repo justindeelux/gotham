@@ -104,11 +104,17 @@ func (f *fakeHost) CleanupHost(_ context.Context, _ uuid.UUID, category string, 
 }
 
 type fakeStore struct {
-	active  int64
-	err     error
-	runs    []store.CleanupRun
-	items   [][]store.CleanupRunItem
-	recordE error
+	active     int64
+	err        error
+	runs       []store.CleanupRun
+	items      [][]store.CleanupRunItem
+	recordE    error
+	exclusions []store.CleanupExclusion
+	excludeErr error
+}
+
+func (f *fakeStore) ListCleanupExclusions(context.Context) ([]store.CleanupExclusion, error) {
+	return f.exclusions, f.excludeErr
 }
 
 func (f *fakeStore) CountActiveDeploymentsByServer(context.Context, uuid.UUID) (int64, error) {

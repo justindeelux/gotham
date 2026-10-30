@@ -2,11 +2,24 @@ package backups
 
 import (
 	"context"
+	"fmt"
 	"strings"
 	"time"
 
 	"github.com/google/uuid"
+
+	"github.com/justindeelux/gotham/internal/cronexpr"
 )
+
+// nextScheduleTime resolves a schedule's next slot and keeps the package's
+// validation sentinel for callers that classify the error.
+func nextScheduleTime(cron string, after time.Time) (time.Time, error) {
+	next, err := cronexpr.Next(cron, after, time.Local)
+	if err != nil {
+		return time.Time{}, fmt.Errorf("%w: %v", ErrValidation, err)
+	}
+	return next, nil
+}
 
 func (m *BackupManager) ListSchedules(ctx context.Context, userID uuid.UUID, ref ResourceRef) ([]BackupSchedule, error) {
 	if err := m.backupsReady(); err != nil {
@@ -47,7 +60,7 @@ func (m *BackupManager) CreateSchedule(ctx context.Context, userID uuid.UUID, re
 		}
 	}
 	cron := strings.TrimSpace(req.Cron)
-	next, err := nextCronTime(cron, m.now(), time.Local)
+	next, err := nextScheduleTime(cron, m.now())
 	if err != nil {
 		return BackupSchedule{}, err
 	}
@@ -118,7 +131,7 @@ func (m *BackupManager) UpdateSchedule(ctx context.Context, userID, scheduleID u
 		}
 	}
 	cron := strings.TrimSpace(req.Cron)
-	next, err := nextCronTime(cron, m.now(), time.Local)
+	next, err := nextScheduleTime(cron, m.now())
 	if err != nil {
 		return BackupSchedule{}, err
 	}

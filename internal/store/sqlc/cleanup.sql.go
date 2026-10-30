@@ -28,9 +28,213 @@ func (q *Queries) CountActiveDeploymentsByServer(ctx context.Context, serverID p
 	return count, err
 }
 
+const createCleanupSchedule = `-- name: CreateCleanupSchedule :one
+INSERT INTO cleanup_schedules (
+    id, name, server_ids, categories, cron, min_age_hours, enabled, next_run_at, created_by
+) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)
+RETURNING id, name, server_ids, categories, cron, min_age_hours, enabled, next_run_at, last_run_at, created_by, created_at, updated_at
+`
+
+type CreateCleanupScheduleParams struct {
+	ID          pgtype.UUID        `json:"id"`
+	Name        string             `json:"name"`
+	ServerIds   []pgtype.UUID      `json:"server_ids"`
+	Categories  []string           `json:"categories"`
+	Cron        string             `json:"cron"`
+	MinAgeHours int32              `json:"min_age_hours"`
+	Enabled     bool               `json:"enabled"`
+	NextRunAt   pgtype.Timestamptz `json:"next_run_at"`
+	CreatedBy   pgtype.UUID        `json:"created_by"`
+}
+
+func (q *Queries) CreateCleanupSchedule(ctx context.Context, arg CreateCleanupScheduleParams) (CleanupSchedule, error) {
+	row := q.db.QueryRow(ctx, createCleanupSchedule,
+		arg.ID,
+		arg.Name,
+		arg.ServerIds,
+		arg.Categories,
+		arg.Cron,
+		arg.MinAgeHours,
+		arg.Enabled,
+		arg.NextRunAt,
+		arg.CreatedBy,
+	)
+	var i CleanupSchedule
+	err := row.Scan(
+		&i.ID,
+		&i.Name,
+		&i.ServerIds,
+		&i.Categories,
+		&i.Cron,
+		&i.MinAgeHours,
+		&i.Enabled,
+		&i.NextRunAt,
+		&i.LastRunAt,
+		&i.CreatedBy,
+		&i.CreatedAt,
+		&i.UpdatedAt,
+	)
+	return i, err
+}
+
+const deleteCleanupExclusion = `-- name: DeleteCleanupExclusion :exec
+DELETE FROM cleanup_exclusions WHERE id = $1
+`
+
+func (q *Queries) DeleteCleanupExclusion(ctx context.Context, id pgtype.UUID) error {
+	_, err := q.db.Exec(ctx, deleteCleanupExclusion, id)
+	return err
+}
+
+const deleteCleanupSchedule = `-- name: DeleteCleanupSchedule :exec
+DELETE FROM cleanup_schedules WHERE id = $1
+`
+
+func (q *Queries) DeleteCleanupSchedule(ctx context.Context, id pgtype.UUID) error {
+	_, err := q.db.Exec(ctx, deleteCleanupSchedule, id)
+	return err
+}
+
+const getCleanupExclusionByKey = `-- name: GetCleanupExclusionByKey :one
+SELECT id, server_id, category, match, note, created_by, created_at FROM cleanup_exclusions
+WHERE COALESCE(server_id, '00000000-0000-0000-0000-000000000000'::uuid)
+    = COALESCE($3::uuid, '00000000-0000-0000-0000-000000000000'::uuid)
+  AND category = $1
+  AND match = $2
+`
+
+type GetCleanupExclusionByKeyParams struct {
+	Category string      `json:"category"`
+	Match    string      `json:"match"`
+	ServerID pgtype.UUID `json:"server_id"`
+}
+
+func (q *Queries) GetCleanupExclusionByKey(ctx context.Context, arg GetCleanupExclusionByKeyParams) (CleanupExclusion, error) {
+	row := q.db.QueryRow(ctx, getCleanupExclusionByKey, arg.Category, arg.Match, arg.ServerID)
+	var i CleanupExclusion
+	err := row.Scan(
+		&i.ID,
+		&i.ServerID,
+		&i.Category,
+		&i.Match,
+		&i.Note,
+		&i.CreatedBy,
+		&i.CreatedAt,
+	)
+	return i, err
+}
+
+const getCleanupRun = `-- name: GetCleanupRun :one
+SELECT r.id, r.server_id, r.actor_user_id, r.trigger, r.started_at, r.finished_at,
+       r.reclaimed_bytes, r.schedule_id, r.status, r.reason,
+       s.name AS schedule_name, u.email AS actor_email
+FROM cleanup_runs r
+LEFT JOIN cleanup_schedules s ON s.id = r.schedule_id
+LEFT JOIN users u ON u.id = r.actor_user_id
+WHERE r.id = $1
+`
+
+type GetCleanupRunRow struct {
+	ID             pgtype.UUID        `json:"id"`
+	ServerID       pgtype.UUID        `json:"server_id"`
+	ActorUserID    pgtype.UUID        `json:"actor_user_id"`
+	Trigger        string             `json:"trigger"`
+	StartedAt      pgtype.Timestamptz `json:"started_at"`
+	FinishedAt     pgtype.Timestamptz `json:"finished_at"`
+	ReclaimedBytes int64              `json:"reclaimed_bytes"`
+	ScheduleID     pgtype.UUID        `json:"schedule_id"`
+	Status         string             `json:"status"`
+	Reason         string             `json:"reason"`
+	ScheduleName   *string            `json:"schedule_name"`
+	ActorEmail     *string            `json:"actor_email"`
+}
+
+func (q *Queries) GetCleanupRun(ctx context.Context, id pgtype.UUID) (GetCleanupRunRow, error) {
+	row := q.db.QueryRow(ctx, getCleanupRun, id)
+	var i GetCleanupRunRow
+	err := row.Scan(
+		&i.ID,
+		&i.ServerID,
+		&i.ActorUserID,
+		&i.Trigger,
+		&i.StartedAt,
+		&i.FinishedAt,
+		&i.ReclaimedBytes,
+		&i.ScheduleID,
+		&i.Status,
+		&i.Reason,
+		&i.ScheduleName,
+		&i.ActorEmail,
+	)
+	return i, err
+}
+
+const getCleanupSchedule = `-- name: GetCleanupSchedule :one
+SELECT id, name, server_ids, categories, cron, min_age_hours, enabled, next_run_at, last_run_at, created_by, created_at, updated_at FROM cleanup_schedules WHERE id = $1
+`
+
+func (q *Queries) GetCleanupSchedule(ctx context.Context, id pgtype.UUID) (CleanupSchedule, error) {
+	row := q.db.QueryRow(ctx, getCleanupSchedule, id)
+	var i CleanupSchedule
+	err := row.Scan(
+		&i.ID,
+		&i.Name,
+		&i.ServerIds,
+		&i.Categories,
+		&i.Cron,
+		&i.MinAgeHours,
+		&i.Enabled,
+		&i.NextRunAt,
+		&i.LastRunAt,
+		&i.CreatedBy,
+		&i.CreatedAt,
+		&i.UpdatedAt,
+	)
+	return i, err
+}
+
+const insertCleanupExclusion = `-- name: InsertCleanupExclusion :one
+INSERT INTO cleanup_exclusions (id, server_id, category, match, note, created_by)
+VALUES ($1, $2, $3, $4, $5, $6)
+ON CONFLICT (COALESCE(server_id, '00000000-0000-0000-0000-000000000000'::uuid), category, match)
+DO NOTHING
+RETURNING id, server_id, category, match, note, created_by, created_at
+`
+
+type InsertCleanupExclusionParams struct {
+	ID        pgtype.UUID `json:"id"`
+	ServerID  pgtype.UUID `json:"server_id"`
+	Category  string      `json:"category"`
+	Match     string      `json:"match"`
+	Note      string      `json:"note"`
+	CreatedBy pgtype.UUID `json:"created_by"`
+}
+
+func (q *Queries) InsertCleanupExclusion(ctx context.Context, arg InsertCleanupExclusionParams) (CleanupExclusion, error) {
+	row := q.db.QueryRow(ctx, insertCleanupExclusion,
+		arg.ID,
+		arg.ServerID,
+		arg.Category,
+		arg.Match,
+		arg.Note,
+		arg.CreatedBy,
+	)
+	var i CleanupExclusion
+	err := row.Scan(
+		&i.ID,
+		&i.ServerID,
+		&i.Category,
+		&i.Match,
+		&i.Note,
+		&i.CreatedBy,
+		&i.CreatedAt,
+	)
+	return i, err
+}
+
 const insertCleanupRun = `-- name: InsertCleanupRun :exec
-INSERT INTO cleanup_runs (id, server_id, actor_user_id, trigger, started_at, finished_at, reclaimed_bytes)
-VALUES ($1, $2, $3, $4, $5, $6, $7)
+INSERT INTO cleanup_runs (id, server_id, actor_user_id, trigger, started_at, finished_at, reclaimed_bytes, schedule_id, status, reason)
+VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)
 `
 
 type InsertCleanupRunParams struct {
@@ -41,6 +245,9 @@ type InsertCleanupRunParams struct {
 	StartedAt      pgtype.Timestamptz `json:"started_at"`
 	FinishedAt     pgtype.Timestamptz `json:"finished_at"`
 	ReclaimedBytes int64              `json:"reclaimed_bytes"`
+	ScheduleID     pgtype.UUID        `json:"schedule_id"`
+	Status         string             `json:"status"`
+	Reason         string             `json:"reason"`
 }
 
 func (q *Queries) InsertCleanupRun(ctx context.Context, arg InsertCleanupRunParams) error {
@@ -52,6 +259,9 @@ func (q *Queries) InsertCleanupRun(ctx context.Context, arg InsertCleanupRunPara
 		arg.StartedAt,
 		arg.FinishedAt,
 		arg.ReclaimedBytes,
+		arg.ScheduleID,
+		arg.Status,
+		arg.Reason,
 	)
 	return err
 }
@@ -82,4 +292,332 @@ func (q *Queries) InsertCleanupRunItem(ctx context.Context, arg InsertCleanupRun
 		arg.ReclaimedBytes,
 	)
 	return err
+}
+
+const listCleanupExclusions = `-- name: ListCleanupExclusions :many
+SELECT id, server_id, category, match, note, created_by, created_at FROM cleanup_exclusions ORDER BY category, match, created_at
+`
+
+func (q *Queries) ListCleanupExclusions(ctx context.Context) ([]CleanupExclusion, error) {
+	rows, err := q.db.Query(ctx, listCleanupExclusions)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	items := []CleanupExclusion{}
+	for rows.Next() {
+		var i CleanupExclusion
+		if err := rows.Scan(
+			&i.ID,
+			&i.ServerID,
+			&i.Category,
+			&i.Match,
+			&i.Note,
+			&i.CreatedBy,
+			&i.CreatedAt,
+		); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
+const listCleanupRunCategoryTotals = `-- name: ListCleanupRunCategoryTotals :many
+SELECT run_id, category, sum(reclaimed_bytes)::bigint AS reclaimed_bytes
+FROM cleanup_run_items
+WHERE run_id = ANY($1::uuid[])
+GROUP BY run_id, category
+`
+
+type ListCleanupRunCategoryTotalsRow struct {
+	RunID          pgtype.UUID `json:"run_id"`
+	Category       string      `json:"category"`
+	ReclaimedBytes int64       `json:"reclaimed_bytes"`
+}
+
+func (q *Queries) ListCleanupRunCategoryTotals(ctx context.Context, runIds []pgtype.UUID) ([]ListCleanupRunCategoryTotalsRow, error) {
+	rows, err := q.db.Query(ctx, listCleanupRunCategoryTotals, runIds)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	items := []ListCleanupRunCategoryTotalsRow{}
+	for rows.Next() {
+		var i ListCleanupRunCategoryTotalsRow
+		if err := rows.Scan(&i.RunID, &i.Category, &i.ReclaimedBytes); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
+const listCleanupRunItems = `-- name: ListCleanupRunItems :many
+SELECT id, run_id, item_id, category, name, status, message, reclaimed_bytes FROM cleanup_run_items WHERE run_id = $1 ORDER BY category, name, item_id
+`
+
+func (q *Queries) ListCleanupRunItems(ctx context.Context, runID pgtype.UUID) ([]CleanupRunItem, error) {
+	rows, err := q.db.Query(ctx, listCleanupRunItems, runID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	items := []CleanupRunItem{}
+	for rows.Next() {
+		var i CleanupRunItem
+		if err := rows.Scan(
+			&i.ID,
+			&i.RunID,
+			&i.ItemID,
+			&i.Category,
+			&i.Name,
+			&i.Status,
+			&i.Message,
+			&i.ReclaimedBytes,
+		); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
+const listCleanupRuns = `-- name: ListCleanupRuns :many
+SELECT r.id, r.server_id, r.actor_user_id, r.trigger, r.started_at, r.finished_at,
+       r.reclaimed_bytes, r.schedule_id, r.status, r.reason,
+       s.name AS schedule_name, u.email AS actor_email
+FROM cleanup_runs r
+LEFT JOIN cleanup_schedules s ON s.id = r.schedule_id
+LEFT JOIN users u ON u.id = r.actor_user_id
+WHERE ($1::uuid IS NULL OR r.server_id = $1::uuid)
+  AND ($2::timestamptz IS NULL OR r.started_at < $2::timestamptz)
+ORDER BY r.started_at DESC, r.id DESC
+LIMIT $3
+`
+
+type ListCleanupRunsParams struct {
+	ServerID pgtype.UUID        `json:"server_id"`
+	Before   pgtype.Timestamptz `json:"before"`
+	RowLimit int32              `json:"row_limit"`
+}
+
+type ListCleanupRunsRow struct {
+	ID             pgtype.UUID        `json:"id"`
+	ServerID       pgtype.UUID        `json:"server_id"`
+	ActorUserID    pgtype.UUID        `json:"actor_user_id"`
+	Trigger        string             `json:"trigger"`
+	StartedAt      pgtype.Timestamptz `json:"started_at"`
+	FinishedAt     pgtype.Timestamptz `json:"finished_at"`
+	ReclaimedBytes int64              `json:"reclaimed_bytes"`
+	ScheduleID     pgtype.UUID        `json:"schedule_id"`
+	Status         string             `json:"status"`
+	Reason         string             `json:"reason"`
+	ScheduleName   *string            `json:"schedule_name"`
+	ActorEmail     *string            `json:"actor_email"`
+}
+
+func (q *Queries) ListCleanupRuns(ctx context.Context, arg ListCleanupRunsParams) ([]ListCleanupRunsRow, error) {
+	rows, err := q.db.Query(ctx, listCleanupRuns, arg.ServerID, arg.Before, arg.RowLimit)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	items := []ListCleanupRunsRow{}
+	for rows.Next() {
+		var i ListCleanupRunsRow
+		if err := rows.Scan(
+			&i.ID,
+			&i.ServerID,
+			&i.ActorUserID,
+			&i.Trigger,
+			&i.StartedAt,
+			&i.FinishedAt,
+			&i.ReclaimedBytes,
+			&i.ScheduleID,
+			&i.Status,
+			&i.Reason,
+			&i.ScheduleName,
+			&i.ActorEmail,
+		); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
+const listCleanupSchedules = `-- name: ListCleanupSchedules :many
+SELECT id, name, server_ids, categories, cron, min_age_hours, enabled, next_run_at, last_run_at, created_by, created_at, updated_at FROM cleanup_schedules ORDER BY name, id
+`
+
+func (q *Queries) ListCleanupSchedules(ctx context.Context) ([]CleanupSchedule, error) {
+	rows, err := q.db.Query(ctx, listCleanupSchedules)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	items := []CleanupSchedule{}
+	for rows.Next() {
+		var i CleanupSchedule
+		if err := rows.Scan(
+			&i.ID,
+			&i.Name,
+			&i.ServerIds,
+			&i.Categories,
+			&i.Cron,
+			&i.MinAgeHours,
+			&i.Enabled,
+			&i.NextRunAt,
+			&i.LastRunAt,
+			&i.CreatedBy,
+			&i.CreatedAt,
+			&i.UpdatedAt,
+		); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
+const listDueCleanupSchedules = `-- name: ListDueCleanupSchedules :many
+SELECT id, name, server_ids, categories, cron, min_age_hours, enabled, next_run_at, last_run_at, created_by, created_at, updated_at FROM cleanup_schedules
+WHERE enabled AND next_run_at <= $1
+ORDER BY next_run_at, id
+`
+
+func (q *Queries) ListDueCleanupSchedules(ctx context.Context, nextRunAt pgtype.Timestamptz) ([]CleanupSchedule, error) {
+	rows, err := q.db.Query(ctx, listDueCleanupSchedules, nextRunAt)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	items := []CleanupSchedule{}
+	for rows.Next() {
+		var i CleanupSchedule
+		if err := rows.Scan(
+			&i.ID,
+			&i.Name,
+			&i.ServerIds,
+			&i.Categories,
+			&i.Cron,
+			&i.MinAgeHours,
+			&i.Enabled,
+			&i.NextRunAt,
+			&i.LastRunAt,
+			&i.CreatedBy,
+			&i.CreatedAt,
+			&i.UpdatedAt,
+		); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
+const markCleanupScheduleRun = `-- name: MarkCleanupScheduleRun :one
+UPDATE cleanup_schedules
+SET last_run_at = $2, next_run_at = $3, updated_at = now()
+WHERE id = $1
+RETURNING id, name, server_ids, categories, cron, min_age_hours, enabled, next_run_at, last_run_at, created_by, created_at, updated_at
+`
+
+type MarkCleanupScheduleRunParams struct {
+	ID        pgtype.UUID        `json:"id"`
+	LastRunAt pgtype.Timestamptz `json:"last_run_at"`
+	NextRunAt pgtype.Timestamptz `json:"next_run_at"`
+}
+
+func (q *Queries) MarkCleanupScheduleRun(ctx context.Context, arg MarkCleanupScheduleRunParams) (CleanupSchedule, error) {
+	row := q.db.QueryRow(ctx, markCleanupScheduleRun, arg.ID, arg.LastRunAt, arg.NextRunAt)
+	var i CleanupSchedule
+	err := row.Scan(
+		&i.ID,
+		&i.Name,
+		&i.ServerIds,
+		&i.Categories,
+		&i.Cron,
+		&i.MinAgeHours,
+		&i.Enabled,
+		&i.NextRunAt,
+		&i.LastRunAt,
+		&i.CreatedBy,
+		&i.CreatedAt,
+		&i.UpdatedAt,
+	)
+	return i, err
+}
+
+const updateCleanupSchedule = `-- name: UpdateCleanupSchedule :one
+UPDATE cleanup_schedules
+SET name = $2,
+    server_ids = $3,
+    categories = $4,
+    cron = $5,
+    min_age_hours = $6,
+    enabled = $7,
+    next_run_at = $8,
+    updated_at = now()
+WHERE id = $1
+RETURNING id, name, server_ids, categories, cron, min_age_hours, enabled, next_run_at, last_run_at, created_by, created_at, updated_at
+`
+
+type UpdateCleanupScheduleParams struct {
+	ID          pgtype.UUID        `json:"id"`
+	Name        string             `json:"name"`
+	ServerIds   []pgtype.UUID      `json:"server_ids"`
+	Categories  []string           `json:"categories"`
+	Cron        string             `json:"cron"`
+	MinAgeHours int32              `json:"min_age_hours"`
+	Enabled     bool               `json:"enabled"`
+	NextRunAt   pgtype.Timestamptz `json:"next_run_at"`
+}
+
+func (q *Queries) UpdateCleanupSchedule(ctx context.Context, arg UpdateCleanupScheduleParams) (CleanupSchedule, error) {
+	row := q.db.QueryRow(ctx, updateCleanupSchedule,
+		arg.ID,
+		arg.Name,
+		arg.ServerIds,
+		arg.Categories,
+		arg.Cron,
+		arg.MinAgeHours,
+		arg.Enabled,
+		arg.NextRunAt,
+	)
+	var i CleanupSchedule
+	err := row.Scan(
+		&i.ID,
+		&i.Name,
+		&i.ServerIds,
+		&i.Categories,
+		&i.Cron,
+		&i.MinAgeHours,
+		&i.Enabled,
+		&i.NextRunAt,
+		&i.LastRunAt,
+		&i.CreatedBy,
+		&i.CreatedAt,
+		&i.UpdatedAt,
+	)
+	return i, err
 }

@@ -1,5 +1,6 @@
 import { computed, onMounted, ref, watch } from "vue";
 
+import { createExclusion } from "@/features/cleanup/api/center";
 import {
   cleanNode,
   scanNode,
@@ -66,6 +67,7 @@ export function useCleanupPage() {
   const selectedKeys = ref<Set<string>>(new Set());
   const confirmOpen = ref(false);
   const runs = ref<RunNodeState[]>([]);
+  const excludeError = ref("");
   const initialized = ref(false);
 
   const minAgeHours = computed(() =>
@@ -136,6 +138,27 @@ export function useCleanupPage() {
 
   function toggleItemKey(key: string, checked: boolean): void {
     selectedKeys.value = toggleItem(selectedKeys.value, key, checked);
+  }
+
+  async function excludeItem(item: SelectableItem): Promise<void> {
+    excludeError.value = "";
+    try {
+      await createExclusion({
+        server_id: item.serverId,
+        category: item.category,
+        match: item.name,
+      });
+    } catch (error) {
+      excludeError.value = failureText(error);
+      return;
+    }
+    const scan = scans.value.find((state) => state.serverId === item.serverId);
+    if (scan) {
+      scan.items = scan.items.filter((entry) => entry.id !== item.id);
+    }
+    const next = new Set(selectedKeys.value);
+    next.delete(item.key);
+    selectedKeys.value = next;
   }
 
   function setCategory(category: string, select: boolean): void {
@@ -251,6 +274,7 @@ export function useCleanupPage() {
     hasDangerous,
     confirmOpen,
     runs,
+    excludeError,
     totalFreed,
     serverName,
     toggleServer,
@@ -259,5 +283,6 @@ export function useCleanupPage() {
     startScan,
     backToSelect,
     startClean,
+    excludeItem,
   };
 }

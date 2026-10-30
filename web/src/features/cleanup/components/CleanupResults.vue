@@ -34,6 +34,7 @@ const props = defineProps<Props>();
 const emit = defineEmits<{
   toggleItem: [key: string, checked: boolean];
   setCategory: [category: string, select: boolean];
+  exclude: [item: SelectableItem];
 }>();
 
 const { t, te } = useI18n();
@@ -176,6 +177,15 @@ function selectedCount(groupItems: SelectableItem[]): number {
             >
               {{ reasonText(item.reason) }}
             </span>
+            <NButton
+              text
+              size="small"
+              class="cleanup-item__exclude"
+              :data-testid="`cleanup-exclude-${item.id}`"
+              @click="emit('exclude', item)"
+            >
+              {{ t("cleanup.actions.exclude") }}
+            </NButton>
           </li>
         </ul>
       </NCollapseItem>
@@ -267,5 +277,10 @@ function selectedCount(groupItems: SelectableItem[]): number {
 
 .cleanup-item__reason {
   flex: 1 1 180px;
+}
+
+.cleanup-item__exclude {
+  margin-left: auto;
+  color: var(--muted);
 }
 </style>

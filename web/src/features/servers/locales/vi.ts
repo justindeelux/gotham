@@ -82,6 +82,8 @@ const vi: ServersMessages = {
     loading: "Đang tải router…",
   },
   overview: {
+    usage: "Mức sử dụng",
+    usageStale: "Dữ liệu cũ — nút chưa báo cáo trong hơn 3 phút.",
     nodeInfo: "Thông tin nút",
     name: "Tên",
     address: "Địa chỉ",

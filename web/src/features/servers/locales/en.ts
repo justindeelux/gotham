@@ -80,6 +80,8 @@ const en = {
     loading: "Loading routers…",
   },
   overview: {
+    usage: "Usage",
+    usageStale: "Stale — the node has not reported for over 3 minutes.",
     nodeInfo: "Node info",
     name: "Name",
     address: "Address",

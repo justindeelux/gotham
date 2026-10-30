@@ -28,6 +28,7 @@ import {
   useServerMetrics,
 } from "@/features/servers/composables/useServerMetrics";
 import { useServerDetailTab } from "@/features/servers/composables/useServerDetailTab";
+import { useServerUsageRefresh } from "@/features/servers/composables/useServerUsageRefresh";
 import { useAuthStore } from "@/features/auth";
 import { useServersStore } from "@/features/servers/stores/servers";
 import ServerTerminalTab from "@/features/servers/components/ServerTerminalTab.vue";
@@ -42,6 +43,7 @@ const authStore = useAuthStore();
 const serverId = computed<string>(() => String(route.params.id ?? ""));
 
 const { activeTab, blockedTerminal, showOverview } = useServerDetailTab(serverId);
+useServerUsageRefresh(activeTab);
 
 const server = ref<Server | null>(null);
 const loading = ref(false);
@@ -62,13 +64,7 @@ const editOpen = ref(false);
 const liveServer = computed<Server | null>(() => {
   const local = server.value;
   const cached = serversStore.servers.find((item) => item.id === serverId.value);
-  if (!local) {
-    return cached ?? null;
-  }
-  if (!cached || cached.status === local.status) {
-    return local;
-  }
-  return { ...local, status: cached.status };
+  return cached ?? local ?? null;
 });
 
 const { context: metricsContext, resetForServer } = useServerMetrics(serverId, activeTab);
@@ -195,7 +191,7 @@ onMounted(() => {
         <NTabs v-model:value="activeTab" type="line" animated>
           <NTabPane name="overview" :tab="$t('servers.detail.tabOverview')">
             <ServerOverviewTab
-              :server="server"
+              :server="liveServer ?? server"
               :deleting="deleting"
               @delete="handleDelete"
             />

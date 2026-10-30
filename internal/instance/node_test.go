@@ -13,6 +13,8 @@ import (
 
 	"github.com/go-chi/chi/v5"
 	"github.com/google/uuid"
+
+	agentv1 "github.com/justindeelux/gotham/proto/agent/v1"
 )
 
 type fakeHost struct {
@@ -377,6 +379,41 @@ func TestNodeSystemValidationAndApplyError(t *testing.T) {
 	host.applyErr = ErrHost
 	if _, err := f.svc.UpdateSystem(ctx, uuid.Nil, f.servers[0], System{Hostname: "gotham-1", NTPEnabled: true}); !errors.Is(err, ErrHost) {
 		t.Fatalf("want host error: %v", err)
+	}
+}
+
+func TestNodeWithoutDialableAddressIsOffline(t *testing.T) {
+	ctx := context.Background()
+	f := newNodeFixture(t, &fakeHost{}, nil)
+	id := f.servers[0]
+	f.nodes.hosts[id] = NodeHost{Applier: NewAgentApplier(func(context.Context) (agentv1.HostServiceClient, func(), error) {
+		return nil, nil, errors.New("servers: validation failed: server has no dialable address")
+	})}
+
+	st, err := f.svc.Get(ctx, id)
+	if err != nil || st.Capability != CapabilityOffline || st.Reason == "" {
+		t.Fatalf("state: %+v %v", st, err)
+	}
+
+	ok := chi.NewRouter()
+	MountNode(ok, func(n http.Handler) http.Handler { return n }, func(context.Context) (uuid.UUID, bool) { return uuid.Nil, true }, f.svc)
+	rec := httptest.NewRecorder()
+	ok.ServeHTTP(rec, httptest.NewRequest(http.MethodGet, "/v1/servers/"+id.String()+"/host", nil))
+	if rec.Code != http.StatusOK || !strings.Contains(rec.Body.String(), `"capability":"offline"`) {
+		t.Fatalf("read-only settings: %d %s", rec.Code, rec.Body)
+	}
+	for _, tc := range []struct {
+		method, path, body string
+	}{
+		{http.MethodPut, "/host/system", `{"hostname":"node-a","ntp_enabled":true}`},
+		{http.MethodPut, "/host/network", `{"ipv4":{"mode":"dhcp"},"ipv6":{"enabled":false,"mode":"dhcp"}}`},
+		{http.MethodPost, "/host/helper", ""},
+	} {
+		rec = httptest.NewRecorder()
+		ok.ServeHTTP(rec, httptest.NewRequest(tc.method, "/v1/servers/"+id.String()+tc.path, strings.NewReader(tc.body)))
+		if rec.Code != http.StatusConflict {
+			t.Fatalf("%s %s = %d, want 409: %s", tc.method, tc.path, rec.Code, rec.Body)
+		}
 	}
 }
 

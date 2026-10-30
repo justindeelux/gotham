@@ -33,7 +33,7 @@ func (a *agentApplier) client(ctx context.Context) (context.Context, agentv1.Hos
 	client, closeFn, err := a.dial(callCtx)
 	if err != nil {
 		cancel()
-		return nil, nil, nil, classifyAgentError(err)
+		return nil, nil, nil, classifyDialError(err)
 	}
 	return callCtx, client, func() {
 		if closeFn != nil {
@@ -140,6 +140,16 @@ func capabilityFromAgent(c agentv1.HostCapability) NodeCapability {
 		return CapabilityHelperDenied
 	}
 	return CapabilityAgentOutdated
+}
+
+// classifyDialError handles failures before any RPC: no dialable address or a
+// rejected certificate has no gRPC status, so it must still read as offline
+// instead of a host-helper failure.
+func classifyDialError(err error) error {
+	if status.Code(err) == codes.Unknown {
+		return ErrNodeOffline
+	}
+	return classifyAgentError(err)
 }
 
 // classifyAgentError turns a transport failure into the capability the UI

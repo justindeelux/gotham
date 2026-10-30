@@ -84,6 +84,25 @@ func TestAgentApplierClassifiesTransportFailures(t *testing.T) {
 	}
 }
 
+func TestAgentApplierDialFailureIsOffline(t *testing.T) {
+	noAddress := NewAgentApplier(func(context.Context) (agentv1.HostServiceClient, func(), error) {
+		return nil, nil, errors.New("servers: validation failed: server has no dialable address")
+	})
+	if _, err := noAddress.Status(context.Background()); !errors.Is(err, ErrNodeOffline) {
+		t.Fatalf("dial failure = %v, want offline", err)
+	}
+	if err := noAddress.ApplySystem(context.Background(), System{NTPEnabled: true}); !errors.Is(err, ErrNodeOffline) {
+		t.Fatalf("dial failure on apply = %v, want offline", err)
+	}
+
+	denied := NewAgentApplier(func(context.Context) (agentv1.HostServiceClient, func(), error) {
+		return nil, nil, status.Error(codes.PermissionDenied, "bad client certificate")
+	})
+	if _, err := denied.Status(context.Background()); !errors.Is(err, ErrHost) {
+		t.Fatalf("credential refusal = %v, want host failure", err)
+	}
+}
+
 func TestAgentApplierAppliesValues(t *testing.T) {
 	fake := &fakeHostClient{}
 	applier := newAgentApplier(fake)

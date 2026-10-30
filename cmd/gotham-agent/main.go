@@ -13,6 +13,7 @@ import (
 	"time"
 
 	"github.com/justindeelux/gotham/agent"
+	agenthost "github.com/justindeelux/gotham/agent/host"
 	agentv1 "github.com/justindeelux/gotham/proto/agent/v1"
 	"google.golang.org/grpc/credentials"
 )
@@ -179,6 +180,7 @@ func runServe() int {
 				agent.WithBuildService(agent.NewBuildServer(docker, log, agent.WithToolUseTracker(toolUse))),
 				agent.WithProxyService(agent.NewProxyServer(agent.ProxyServerConfig{Logger: log})),
 				agent.WithToolService(agent.NewToolServer(agent.WithToolUse(toolUse))),
+				agent.WithHostService(agenthost.NewServer()),
 				agent.WithComposeService(agent.NewComposeServer(agent.ComposeServerConfig{
 					Root:       cfg.ComposeRoot,
 					DockerHost: cfg.DockerSock,

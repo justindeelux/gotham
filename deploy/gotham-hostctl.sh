@@ -14,7 +14,8 @@
 # as untrusted input. Nothing is ever passed to a shell for evaluation.
 #
 # Supported stack: systemd-networkd + systemd-resolved (network) and
-# systemd-timesyncd + hostnamectl (system). Gotham only ever owns these files:
+# systemd-timesyncd + hostnamectl + timedatectl (system, including the host
+# timezone). Gotham only ever owns these files:
 #   /etc/systemd/network/05-gotham.network
 #   /etc/systemd/resolved.conf.d/05-gotham.conf
 #   /etc/systemd/timesyncd.conf.d/05-gotham.conf
@@ -23,8 +24,9 @@
 #
 # `status` also reports the default-route interface as the host sees it
 # (`host_network`: live addresses/gateways from `ip`, the address modes from
-# the winning .network file, effective DNS from resolvectl), so callers can
-# seed forms with the host truth instead of stored defaults. A DNS-only
+# the winning .network file, effective DNS from resolvectl), plus the live
+# hostname, NTP state and timezone, so callers can seed forms with the host
+# truth instead of stored defaults. A DNS-only
 # apply (`dns_only=true`) writes only the resolved drop-in plus a DNS-only
 # networkd drop-in on the winning .network file and sets the link DNS at
 # runtime, and never touches the interface file, so a resolver change cannot
@@ -108,6 +110,14 @@ all_hosts()  {
     done
     IFS="${oldifs}"
     [ "${n}" -le "${max}" ]
+}
+# is_tz: an IANA zone name tzdata actually ships. The anchored pattern rejects
+# whitespace, shell metacharacters and any "." (so no ".." traversal) and the
+# zoneinfo file check rejects a well-formed name that is not a real zone.
+TZ_RE='^[A-Za-z][A-Za-z0-9_+-]{0,63}(/[A-Za-z0-9_+-]{1,64}){0,4}$'
+is_tz() {
+    printf '%s\n' "$1" | grep -Eq "${TZ_RE}" || return 1
+    [ -f "${ROOT}/usr/share/zoneinfo/$1" ]
 }
 
 # read_kv reads stdin into K_<key> variables for the keys in $1 (space list).
@@ -258,6 +268,38 @@ host_network_json() {
         "${e6}" "$(jstr "${m6}")" "$(jstr "${a6}")" "$(jstr "${g6}")"
 }
 
+host_name() {
+    v="$(hostnamectl hostname 2>/dev/null)" || v=""
+    [ -n "${v}" ] || v="$(hostname 2>/dev/null)"
+    is_host "${v}" && printf '%s' "${v}"
+    return 0
+}
+
+ntp_state() {
+    v="$(timedatectl show --property=NTP --value 2>/dev/null | tr 'A-Z' 'a-z')"
+    case "${v}" in
+        true | yes) printf 'true' ;;
+        *) printf 'false' ;;
+    esac
+}
+
+ntp_list() { # comma list: Gotham's own drop-in, else the synced server.
+    if [ -f "${NTPFILE}" ]; then
+        v="$(sed -n 's/^[[:space:]]*NTP[[:space:]]*=[[:space:]]*//p' "${NTPFILE}" 2>/dev/null | head -n 1 | tr ' ' ',')"
+        all_hosts "${v}" 4 && printf '%s' "${v}"
+        return 0
+    fi
+    v="$(timedatectl show-timesync --property=ServerName --value 2>/dev/null | head -n 1)"
+    { is_host "${v}" || is_ip "${v}"; } && printf '%s' "${v}"
+    return 0
+}
+
+current_tz() {
+    v="$(timedatectl show --property=Timezone --value 2>/dev/null)"
+    is_tz "${v}" && printf '%s' "${v}"
+    return 0
+}
+
 case "${VERB}" in
 status)
     n=false; s=false
@@ -265,7 +307,9 @@ status)
     sys_ok && s=true
     hn="null"
     [ "${n}" = "true" ] && hn="$(host_network_json)"
-    printf '{"network":%s,"system":%s,"host_network":%s}\n' "${n}" "${s}" "${hn}"
+    printf '{"network":%s,"system":%s,"host_network":%s,"hostname":%s,"ntp_enabled":%s,"ntp_servers":[%s],"timezone":%s}\n' \
+        "${n}" "${s}" "${hn}" "$(jstr "$(host_name)")" "$(ntp_state)" \
+        "$(jstrs "$(ntp_list)")" "$(jstr "$(current_tz)")"
     ;;
 
 apply-network)
@@ -434,11 +478,12 @@ revert-network)
 
 apply-system)
     sys_ok || die "hostnamectl is not available" 3
-    K_hostname=""; K_ntp_enabled=""; K_ntp_servers=""
-    read_kv "hostname ntp_enabled ntp_servers"
+    K_hostname=""; K_ntp_enabled=""; K_ntp_servers=""; K_timezone=""
+    read_kv "hostname ntp_enabled ntp_servers timezone"
     { [ -z "${K_hostname}" ] || is_host "${K_hostname}"; } || die "invalid hostname" 2
     is_bool "${K_ntp_enabled}" || die "invalid ntp_enabled" 2
     all_hosts "${K_ntp_servers}" 4 || die "invalid ntp_servers" 2
+    { [ -z "${K_timezone}" ] || is_tz "${K_timezone}"; } || die "invalid timezone" 2
     if [ -n "${K_hostname}" ]; then run hostnamectl set-hostname "${K_hostname}" || die "hostnamectl failed"; fi
     mkdir -p "${NTPD}" || die "cannot prepare directories"
     if [ -n "${K_ntp_servers}" ]; then
@@ -449,6 +494,7 @@ apply-system)
     fi
     if [ "${K_ntp_enabled}" = "true" ]; then run timedatectl set-ntp true; else run timedatectl set-ntp false; fi
     run systemctl restart systemd-timesyncd 2>/dev/null
+    if [ -n "${K_timezone}" ]; then run timedatectl set-timezone "${K_timezone}" || die "timedatectl failed"; fi
     ;;
 
 *)

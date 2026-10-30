@@ -41,8 +41,27 @@ func stubProbes(t *testing.T, root string) []string {
 		"if [ \"$2\" = \"-4\" ] && [ \"$3\" = \"addr\" ]; then echo \"2: eth0 inet 103.176.22.225/24 brd x scope global eth0\"; fi\n" +
 		"if [ \"$2\" = \"-4\" ] && [ \"$3\" = \"route\" ]; then echo \"default via 103.176.22.1 dev eth0 proto static\"; fi\n"
 	resolvectl := "#!/bin/sh\necho \"Link 2 (eth0): 8.8.8.8 8.8.4.4\"\n"
-	for name, body := range map[string]string{"ip": ip, "resolvectl": resolvectl} {
+	timedatectl := "#!/bin/sh\n" +
+		"case \"$*\" in\n" +
+		"  *Timezone*) echo \"Europe/Berlin\" ;;\n" +
+		"  *ServerName*) echo \"time.cloudflare.com\" ;;\n" +
+		"  *NTP*) echo \"yes\" ;;\n" +
+		"esac\n"
+	hostnamectl := "#!/bin/sh\necho \"node-1\"\n"
+	for name, body := range map[string]string{
+		"ip": ip, "resolvectl": resolvectl, "timedatectl": timedatectl, "hostnamectl": hostnamectl,
+	} {
 		if err := os.WriteFile(filepath.Join(bin, name), []byte(body), 0o755); err != nil {
+			t.Fatal(err)
+		}
+	}
+	// tzdata files for the zones the stubs report and the tests apply.
+	for _, zone := range []string{"Europe/Berlin", "America/Argentina/Buenos_Aires"} {
+		path := filepath.Join(root, "usr/share/zoneinfo", zone)
+		if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(path, []byte("fixture"), 0o644); err != nil {
 			t.Fatal(err)
 		}
 	}
@@ -102,10 +121,56 @@ func TestHostctlStatusReportsHostTruth(t *testing.T) {
 	for _, want := range []string{
 		`"interface":"eth0"`, `"mode":"static"`, `"address":"103.176.22.225/24"`,
 		`"gateway":"103.176.22.1"`, `"dns_servers":["8.8.8.8","8.8.4.4"]`,
+		`"hostname":"node-1"`, `"ntp_enabled":true`,
+		`"ntp_servers":["time.cloudflare.com"]`, `"timezone":"Europe/Berlin"`,
 	} {
 		if !strings.Contains(out, want) {
 			t.Errorf("status misses %s:\n%s", want, out)
 		}
+	}
+}
+
+func TestHostctlApplySystemTimezone(t *testing.T) {
+	root := t.TempDir()
+	extra := stubProbes(t, root)
+	good := "hostname=node-1\nntp_enabled=true\nntp_servers=time.cloudflare.com\n" +
+		"timezone=America/Argentina/Buenos_Aires\n"
+	out, err := runHostctlEnv(t, root, good, "apply-system", extra)
+	if err != nil {
+		t.Fatalf("apply-system failed: %v\n%s", err, out)
+	}
+	if !strings.Contains(out, "timedatectl set-timezone America/Argentina/Buenos_Aires") {
+		t.Errorf("apply-system misses the timezone command:\n%s", out)
+	}
+	if data, err := os.ReadFile(filepath.Join(root, "etc/systemd/timesyncd.conf.d/05-gotham.conf")); err != nil ||
+		!strings.Contains(string(data), "NTP=time.cloudflare.com") {
+		t.Fatalf("timesyncd drop-in: %v %s", err, data)
+	}
+
+	// The helper itself rejects a timezone that is not a real IANA zone, before
+	// it touches the host: a traversal-looking value, a shell-looking value and
+	// a well-formed name tzdata does not ship all fail with nothing applied.
+	for name, zone := range map[string]string{
+		"traversal":     "../../etc/passwd",
+		"dot segment":   "Europe/../Berlin",
+		"absolute":      "/etc/passwd",
+		"shell":         "Europe/Berlin;reboot",
+		"empty segment": "Europe//Berlin",
+		"trailing sep":  "Europe/Berlin/",
+		"unknown zone":  "Not/AZone",
+		"trailing gap":  "Europe/Berlin ",
+		"substitution":  "$(reboot)",
+	} {
+		t.Run(name, func(t *testing.T) {
+			in := "hostname=\nntp_enabled=true\nntp_servers=\ntimezone=" + zone + "\n"
+			out, err := runHostctlEnv(t, root, in, "apply-system", extra)
+			if err == nil {
+				t.Fatalf("helper accepted invalid timezone %q:\n%s", zone, out)
+			}
+			if strings.Contains(out, "set-timezone") {
+				t.Fatalf("helper reached timedatectl with %q:\n%s", zone, out)
+			}
+		})
 	}
 }
 

@@ -67,6 +67,49 @@ grep -q "ops ALL=(root) NOPASSWD:" "${SCRATCH}/root-custom/etc/sudoers.d/gotham-
 grep -q "gotham ALL=(root)" "${SCRATCH}/root-custom/etc/sudoers.d/gotham-hostctl" && fail "default user leaked into a custom install"
 pass "a custom control-plane user is used instead of the default"
 
+# ---- create-agent adds the node agent grantee without dropping the CP one ---
+# The agent gets exactly the five host-control verbs; the pinned tool-installer
+# repair verb stays with the control-plane user.
+ROOTA="$(root_for "${SCRATCH}/root-agent")"
+GOTHAM_HOST_BOOTSTRAP_ROOT="${ROOTA}" sh "${BOOTSTRAP}" create-agent gotham-agent v9.0.0 >/dev/null
+DROPIN_A="${ROOTA}/etc/sudoers.d/gotham-hostctl"
+[ "$(grep -c '^gotham-agent ALL=(root) NOPASSWD: /usr/libexec/gotham/gotham-hostctl ' "${DROPIN_A}")" = "5" ] \
+    || fail "the agent drop-in does not carry exactly the five host-control verbs"
+grep -q '^gotham-agent ALL=(root) NOPASSWD: /usr/libexec/gotham/gotham-toolctl' "${DROPIN_A}" \
+    && fail "the agent must not get the tool-installer repair verb"
+[ -f "${ROOTA}/usr/libexec/gotham/hostbootstrap/cp-user" ] \
+    && fail "an agent-only install must not record a control-plane user"
+grep -qx 'gotham-agent' "${ROOTA}/usr/libexec/gotham/hostbootstrap/agent-user" \
+    || fail "create-agent did not record the agent user"
+pass "create-agent installs the helper with exactly five verbs and no repair grant"
+
+# Control-plane machine: both users keep their own rules, in either order.
+ROOTB="$(root_for "${SCRATCH}/root-both")"
+GOTHAM_HOST_BOOTSTRAP_ROOT="${ROOTB}" sh "${BOOTSTRAP}" create alice v9.0.0 >/dev/null
+GOTHAM_HOST_BOOTSTRAP_ROOT="${ROOTB}" sh "${BOOTSTRAP}" create-agent gotham-agent v9.0.0 >/dev/null
+DROPIN_B="${ROOTB}/etc/sudoers.d/gotham-hostctl"
+for user in alice gotham-agent; do
+    [ "$(grep -c "^${user} ALL=(root) NOPASSWD: /usr/libexec/gotham/gotham-hostctl " "${DROPIN_B}")" = "5" ] \
+        || fail "${user} lost a host-control verb when both users were installed"
+done
+[ "$(grep -c 'gotham-toolctl install-tool gotham-hostctl' "${DROPIN_B}")" = "1" ] \
+    || fail "exactly the control-plane user may hold the repair verb"
+grep -q '^alice ALL=(root) NOPASSWD: /usr/libexec/gotham/gotham-toolctl' "${DROPIN_B}" \
+    || fail "the control-plane user lost the repair verb"
+# A re-run of either mode keeps the other grantee.
+GOTHAM_HOST_BOOTSTRAP_ROOT="${ROOTB}" sh "${BOOTSTRAP}" create alice v9.0.0 >/dev/null
+grep -q '^gotham-agent ALL=(root)' "${DROPIN_B}" || fail "re-running create dropped the agent grantee"
+GOTHAM_HOST_BOOTSTRAP_ROOT="${ROOTB}" sh "${BOOTSTRAP}" create-agent gotham-agent v9.0.0 >/dev/null
+grep -q '^alice ALL=(root)' "${DROPIN_B}" || fail "re-running create-agent dropped the control-plane grantee"
+pass "the control plane and the agent coexist in one drop-in, both ways round"
+
+if GOTHAM_HOST_BOOTSTRAP_ROOT="$(root_for "${SCRATCH}/root-agent-usage")" sh "${BOOTSTRAP}" create-agent gotham-agent >"${SCRATCH}/agent-usage.log" 2>&1; then
+    fail "create-agent without a version argument was accepted"
+fi
+grep -q "usage: gotham-hostbootstrap create-agent" "${SCRATCH}/agent-usage.log" \
+    || fail "create-agent usage was not explained"
+pass "create-agent requires the release version"
+
 # The reserved sudoers word ALL is rejected, never written into a drop-in.
 if GOTHAM_HOST_BOOTSTRAP_ROOT="$(root_for "${SCRATCH}/root-all")" sh "${BOOTSTRAP}" create ALL v9.0.0 >"${SCRATCH}/all.log" 2>&1; then
     fail "the reserved user ALL was accepted"
@@ -80,7 +123,7 @@ pass "rejects the reserved user ALL"
 if GOTHAM_HOST_BOOTSTRAP_ROOT="$(root_for "${SCRATCH}/root-nover")" sh "${BOOTSTRAP}" create dave "" >"${SCRATCH}/create-nover.log" 2>&1; then
     fail "create with an empty version was accepted"
 fi
-grep -q "create needs the release version" "${SCRATCH}/create-nover.log" || fail "the empty-version refusal was not explained"
+grep -q "the release version is required" "${SCRATCH}/create-nover.log" || fail "the empty-version refusal was not explained"
 if GOTHAM_HOST_BOOTSTRAP_ROOT="$(root_for "${SCRATCH}/root-nover2")" sh "${BOOTSTRAP}" create dave >"${SCRATCH}/create-usage.log" 2>&1; then
     fail "create without a version argument was accepted"
 fi
@@ -94,7 +137,7 @@ pass "create requires the release version (beside the usage guard)"
 if GOTHAM_HOST_BOOTSTRAP_ROOT="$(root_for "${SCRATCH}/root-junkver")" sh "${BOOTSTRAP}" create dave latest >"${SCRATCH}/create-junk.log" 2>&1; then
     fail "create accepted the non-semver version 'latest'"
 fi
-grep -q "invalid control-plane version" "${SCRATCH}/create-junk.log" || fail "the malformed-version refusal was not explained"
+grep -q "invalid version" "${SCRATCH}/create-junk.log" || fail "the malformed-version refusal was not explained"
 
 ROOTL="$(root_for "${SCRATCH}/root-lower")"
 GOTHAM_HOST_BOOTSTRAP_ROOT="${ROOTL}" sh "${BOOTSTRAP}" create erin v2.0.0 >/dev/null
@@ -245,6 +288,7 @@ pass "version-cmp refuses a malformed argument with a clear reason"
 # ---- apply-release installs a verified payload, keeps the pinned drop-in ---
 ROOT5="$(root_for "${SCRATCH}/root5")"
 GOTHAM_HOST_BOOTSTRAP_ROOT="${ROOT5}" sh "${BOOTSTRAP}" create bob v1.0.0 >/dev/null
+GOTHAM_HOST_BOOTSTRAP_ROOT="${ROOT5}" sh "${BOOTSTRAP}" create-agent gotham-agent v1.0.0 >/dev/null
 SRC="${SCRATCH}/payload-src"
 mkdir -p "${SRC}"
 printf '#!/bin/sh\necho refreshed-hostctl\n' >"${SRC}/gotham-hostctl"
@@ -259,6 +303,7 @@ grep -q refreshed-fetch "${ROOT5}/usr/libexec/gotham/gotham-hostbootstrap-fetch.
 grep -q refreshed-wrapper "${ROOT5}/usr/libexec/gotham/gotham-update" || fail "apply-release did not refresh the wrapper"
 grep -q refreshed-toolctl "${ROOT5}/usr/libexec/gotham/hostbootstrap/gotham-toolctl" || fail "apply-release did not refresh the payload"
 grep -q "bob ALL=(root)" "${ROOT5}/etc/sudoers.d/gotham-hostctl" || fail "the recorded drop-in user was lost"
+grep -q "gotham-agent ALL=(root)" "${ROOT5}/etc/sudoers.d/gotham-hostctl" || fail "the agent grantee was lost on refresh"
 grep -q "gotham ALL=(root)" "${ROOT5}/etc/sudoers.d/gotham-hostctl" && fail "the drop-in user changed"
 [ "$(cat "${ROOT5}/usr/libexec/gotham/hostbootstrap/version")" = "v1.2.0" ] || fail "apply-release did not record the version"
 pass "apply-release installs a verified payload, keeps the recorded user and records the version"
@@ -296,6 +341,7 @@ GOTHAM_HOST_BOOTSTRAP_ROOT="${ROOT5}" sh "${RELBOOT}/gotham-hostbootstrap.sh" ap
 grep -q "extra-verb" "${ROOT5}/etc/sudoers.d/gotham-hostctl" || fail "the live drop-in was not regenerated"
 grep -q "extra-verb" "${ROOT5}/usr/libexec/gotham/hostbootstrap/gotham-hostctl.sudoers" || fail "the payload drop-in was not regenerated"
 grep -q "bob ALL=(root)" "${ROOT5}/etc/sudoers.d/gotham-hostctl" || fail "the recorded user was lost on regeneration"
+grep -q "gotham-agent ALL=(root)" "${ROOT5}/etc/sudoers.d/gotham-hostctl" || fail "the agent user was lost on regeneration"
 pass "every refresh regenerates the drop-in from the released hostbootstrap"
 
 # ---- a failed refresh leaves the live files and the high-water mark intact --
@@ -371,7 +417,7 @@ ROOT6="$(root_for "${SCRATCH}/root6")"
 if GOTHAM_HOST_BOOTSTRAP_ROOT="${ROOT6}" sh "${BOOTSTRAP}" apply-release "${SRC}" v1.2.0 >"${SCRATCH}/norelay.log" 2>&1; then
     fail "apply-release without a recorded user succeeded"
 fi
-grep -q "run create first" "${SCRATCH}/norelay.log" || fail "the missing-user refusal was not explained"
+grep -q "run create or create-agent first" "${SCRATCH}/norelay.log" || fail "the missing-user refusal was not explained"
 pass "apply-release refuses without a recorded control-plane user"
 
 # ---- apply-release needs the signature-verified version --------------------

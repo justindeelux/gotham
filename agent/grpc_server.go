@@ -86,6 +86,14 @@ func WithToolService(tools agentv1.ToolServiceServer) ServerOption {
 	}
 }
 
+func WithHostService(host agentv1.HostServiceServer) ServerOption {
+	return func(c *serverConfig) {
+		c.registers = append(c.registers, func(server *grpc.Server) {
+			agentv1.RegisterHostServiceServer(server, host)
+		})
+	}
+}
+
 func WithoutControlPlanePeer() ServerOption {
 	return func(c *serverConfig) {
 		c.allowAnyPeer = true

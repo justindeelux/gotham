@@ -479,6 +479,20 @@ grep -q 'ensure_docker_full' "${AGENT_INSTALLER}" \
     || fail "install-agent.sh does not call ensure_docker_full for --full"
 pass "--full is opt-in, fail-closed without a CA, and wired to ensure_docker_full"
 
+# --- H2: the host helper (gotham-hostctl) is installed for the agent user ----
+echo "==> H2 install-agent.sh installs the host helper for the agent user"
+# A dry run on a plain install announces the hostbootstrap create-agent step
+# with the fixed service user and the release version.
+if ! grep -q '\[dry-run\] sh .*/gotham-hostbootstrap.sh create-agent gotham-agent v9.9.9-test' \
+    "${SCRATCH}/no-full-dry.log"; then
+    fail "H2: the installer does not install the host helper for gotham-agent"
+fi
+# The hostbootstrap and hostctl payload files are required siblings, so an
+# install from an incomplete bundle fails before touching the host.
+grep -q 'gotham-hostbootstrap.sh gotham-hostbootstrap-fetch.sh gotham-hostctl.sh gotham-signing-key.pub' "${AGENT_INSTALLER}" \
+    || fail "H2: install-agent.sh does not require the hostbootstrap payload siblings"
+pass "H2: the host helper is installed for gotham-agent and its payload is required"
+
 # --- F2: ensure_docker_full behaviour ----------------------------------------
 echo "==> F2 ensure_docker_full skips, refuses, and installs via shims"
 F2_DIR="${SCRATCH}/full-flow"

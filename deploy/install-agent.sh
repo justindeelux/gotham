@@ -5,8 +5,9 @@
 # It downloads the latest release binary for the host architecture, installs it
 # to the service StateDirectory (/var/lib/gotham-agent/bin/gotham-agent), writes
 # /etc/gotham/agent.env from the current environment, installs the privileged
-# update wrapper + sudoers rule, creates the gotham-agent system user and
-# enables the systemd unit.
+# update wrapper + sudoers rule and the host helper (gotham-hostctl with a
+# five-verb sudoers rule for the agent user), creates the gotham-agent system
+# user and enables the systemd unit.
 #
 # Re-running it is a reinstall: keys left unset keep the value the previous run
 # wrote (so the control plane address and node id survive), operator-added keys
@@ -187,7 +188,7 @@ log() {
 # config and the sudoers installer). Fail early with a clear message rather than
 # aborting after the user has been created and the binary installed.
 SCRIPT_DIR="$(CDPATH= cd -- "$(dirname -- "$0")" && pwd)"
-for sibling in release-verify.sh gotham-update.sh gotham-agent-updater.conf install-agent-sudoers.sh install-agent-lib.sh gotham-toolctl.sh install-toolctl-sudoers.sh; do
+for sibling in release-verify.sh gotham-update.sh gotham-agent-updater.conf install-agent-sudoers.sh install-agent-lib.sh gotham-toolctl.sh install-toolctl-sudoers.sh gotham-hostbootstrap.sh gotham-hostbootstrap-fetch.sh gotham-hostctl.sh gotham-signing-key.pub; do
     if [ ! -f "${SCRIPT_DIR}/${sibling}" ]; then
         echo "install-agent.sh: ${sibling} must be next to this script (run it from the repository checkout)" >&2
         exit 2
@@ -502,6 +503,21 @@ else
     install -m 0755 -o root -g root "${SCRIPT_DIR}/gotham-toolctl.sh" "${TOOLCTL_PATH}"
     # Invoke via sh so a checkout that lost the exec bit still installs.
     sh "${SCRIPT_DIR}/install-toolctl-sudoers.sh" "${SERVICE_USER}"
+fi
+
+# Host helper: the fixed root-owned gotham-hostctl and the five-verb sudoers
+# drop-in for the agent user, so the control plane can configure this node's
+# network, hostname, NTP and timezone over the agent channel. It reuses the
+# hostbootstrap payload installer; on the control-plane machine that keeps the
+# control-plane grantee in the same drop-in (neither user replaces the other).
+log "installing the host helper for ${SERVICE_USER}"
+if [ "${DRY_RUN}" -eq 1 ]; then
+    echo "[dry-run] sh ${SCRIPT_DIR}/gotham-hostbootstrap.sh create-agent ${SERVICE_USER} ${VERSION}"
+else
+    if ! sh "${SCRIPT_DIR}/gotham-hostbootstrap.sh" create-agent "${SERVICE_USER}" "${VERSION}"; then
+        echo "install-agent.sh: host helper install failed; this node reports helper_missing until you run:" >&2
+        echo "  sudo sh ${SCRIPT_DIR}/gotham-hostbootstrap.sh create-agent ${SERVICE_USER} ${VERSION}" >&2
+    fi
 fi
 
 log "installing systemd unit ${SERVICE_FILE}"

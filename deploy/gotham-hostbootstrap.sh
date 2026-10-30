@@ -258,9 +258,10 @@ version_cmp() {
     fi
 }
 
-# payload_cp_user prints the recorded control-plane user (root-owned record, or
-# the one in the installed drop-in of an install that predates the record), or
-# fails when none is usable.
+# payload_cp_user prints the recorded control-plane user, or the one an older
+# payload granted without recording it. That fallback reads the installed
+# drop-in: the pinned tool-installer repair verb is granted to the control-plane
+# user only, so it names them even when an agent grantee is present too.
 read_user_record() { # file: the recorded user, or empty.
     [ -f "$1" ] && [ ! -L "$1" ] || return 0
     u="$(sed -n '1p' "$1" 2>/dev/null | tr -d '\r\n')"
@@ -270,9 +271,8 @@ read_user_record() { # file: the recorded user, or empty.
 
 payload_cp_user() {
     u="$(read_user_record "${CP_USER_FILE}")"
-    if [ -z "${u}" ] && [ -z "$(read_user_record "${AGENT_USER_FILE}")" \
-        && [ -f "${PAYLOAD_DIR}/gotham-hostctl.sudoers" ]; then
-        u="$(sed -n 's/^\([A-Za-z0-9_-]\{1,\}\) ALL=(root).*/\1/p' "${PAYLOAD_DIR}/gotham-hostctl.sudoers" 2>/dev/null | head -n 1)"
+    if [ -z "${u}" ] && [ -f "${PAYLOAD_DIR}/gotham-hostctl.sudoers" ]; then
+        u="$(sed -n 's|^\([A-Za-z0-9_-]\{1,\}\) ALL=(root) NOPASSWD: /usr/libexec/gotham/gotham-toolctl install-tool gotham-hostctl$|\1|p' "${PAYLOAD_DIR}/gotham-hostctl.sudoers" 2>/dev/null | head -n 1)"
     fi
     [ -n "${u}" ] || return 1
     valid_user "${u}" || return 1
@@ -390,8 +390,10 @@ write_payload() {
 
     # A dedicated name: install_file assigns its own global `tmp`, so reusing that
     # name here would leave this temp behind on the way out.
-    cp_user="$(read_user_record "${CP_USER_FILE}")"
-    agent_user="$(read_user_record "${AGENT_USER_FILE}")"
+    # payload_cp_user falls back to the installed drop-in, so a host whose older
+    # install predates the cp-user record keeps its control-plane grantee.
+    cp_user="$(payload_cp_user)" || cp_user=""
+    agent_user="$(payload_agent_user)"
     [ -n "${cp_user}${agent_user}" ] || die "no host-helper user is recorded" 2
     dropin_tmp="$(mktemp "${PAYLOAD_DIR}/.sudoers.XXXXXX")" || die "cannot create a payload temp file"
     trap 'rm -f "${dropin_tmp}" 2>/dev/null || true' EXIT

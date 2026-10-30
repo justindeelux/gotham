@@ -103,6 +103,30 @@ GOTHAM_HOST_BOOTSTRAP_ROOT="${ROOTB}" sh "${BOOTSTRAP}" create-agent gotham-agen
 grep -q '^alice ALL=(root)' "${DROPIN_B}" || fail "re-running create-agent dropped the control-plane grantee"
 pass "the control plane and the agent coexist in one drop-in, both ways round"
 
+# A payload written before the cp-user record existed still names its
+# control-plane user in the installed drop-in. create-agent must carry that
+# grantee forward instead of regenerating the drop-in from the agent record
+# alone (the repair line is what identifies the control-plane user then).
+ROOTC="$(root_for "${SCRATCH}/root-prerecord")"
+LEGACY_PAYLOAD="${ROOTC}/usr/libexec/gotham/hostbootstrap"
+mkdir -p "${LEGACY_PAYLOAD}"
+{
+    for verb in status apply-network confirm-network revert-network apply-system; do
+        echo "legacycp ALL=(root) NOPASSWD: /usr/libexec/gotham/gotham-hostctl ${verb}"
+    done
+    echo "legacycp ALL=(root) NOPASSWD: /usr/libexec/gotham/gotham-toolctl install-tool gotham-hostctl"
+} >"${LEGACY_PAYLOAD}/gotham-hostctl.sudoers"
+GOTHAM_HOST_BOOTSTRAP_ROOT="${ROOTC}" sh "${BOOTSTRAP}" create-agent gotham-agent v9.0.0 >/dev/null \
+    || fail "create-agent failed on a payload that predates the cp-user record"
+DROPIN_C="${ROOTC}/etc/sudoers.d/gotham-hostctl"
+[ "$(grep -c '^legacycp ALL=(root) NOPASSWD: /usr/libexec/gotham/gotham-hostctl ' "${DROPIN_C}")" = "5" ] \
+    || fail "create-agent dropped the pre-record control-plane grantee"
+grep -q '^legacycp ALL=(root) NOPASSWD: /usr/libexec/gotham/gotham-toolctl install-tool gotham-hostctl$' "${DROPIN_C}" \
+    || fail "create-agent dropped the pre-record control-plane repair verb"
+[ "$(grep -c '^gotham-agent ALL=(root) NOPASSWD: /usr/libexec/gotham/gotham-hostctl ' "${DROPIN_C}")" = "5" ] \
+    || fail "create-agent did not grant the agent on a pre-record payload"
+pass "create-agent keeps a pre-record control-plane grantee"
+
 if GOTHAM_HOST_BOOTSTRAP_ROOT="$(root_for "${SCRATCH}/root-agent-usage")" sh "${BOOTSTRAP}" create-agent gotham-agent >"${SCRATCH}/agent-usage.log" 2>&1; then
     fail "create-agent without a version argument was accepted"
 fi

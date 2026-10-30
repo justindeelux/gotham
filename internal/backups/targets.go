@@ -239,7 +239,8 @@ func (m *BackupManager) storeAndKey(
 		return nil, "", fmt.Errorf("%w: the backup driver reported no artifact extension", ErrValidation)
 	}
 	// Volume captures already report "tar.gz"; suffixing it again produces
-	// "<run>.tar.gz.gz" and a file nobody can read by its declared name.
+	// "<run>.tar.gz.gz". The core gzips every capture, so the stored bytes stay
+	// gzip over that archive and the location keeps the driver's extension.
 	suffix := ".gz"
 	if strings.HasSuffix(extension, ".gz") {
 		suffix = ""

@@ -36,8 +36,8 @@ này.
 - [Terminal và tệp](/vi/operating/terminal-files) — shell trên máy chủ và trình
   quản lý tệp từ xa, cùng các cờ tính năng gác cả hai.
 - [Kho ứng dụng](/vi/operating/app-store) — cài và gỡ công cụ máy chủ trên một node.
-- [Mạng của instance](/vi/operating/instance-network) — địa chỉ control plane, tên
-  máy, DNS và cài đặt thời gian.
+- [Cài đặt và cài đặt máy chủ của nút](/vi/operating/instance-network) — địa chỉ
+  và tên control plane, cùng múi giờ, mạng và cài đặt hệ thống của từng nút.
 - [Proxy và DNS](/vi/operating/proxy-dns) — bộ định tuyến Traefik, chứng chỉ và nhà
   cung cấp DNS.
 - [Bảo mật](/vi/operating/security) — tài khoản chủ sở hữu và thành viên, quyền dự

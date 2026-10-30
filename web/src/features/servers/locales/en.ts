@@ -105,14 +105,91 @@ const en = {
   },
   settings: {
     title: "Node settings",
-    readOnlyNote:
-      "Editable settings do not exist in the backend yet. Values below are read-only.",
+    identityNote: "Identity recorded by the control plane. Edit it with the node's edit action.",
     name: "Name",
     address: "Address",
     sshUser: "SSH user",
     credential: "Credential",
     registered: "Registered",
     updated: "Updated",
+    host: {
+      forbidden: "Only the owner can view or change this node's host settings.",
+      helper: {
+        install: "Install host helper",
+        installed: "Host helper installed. These settings are now editable.",
+        installFailed: "The host helper could not be installed.",
+        logTitleFailed: "Host helper install failed",
+        logHint: "Output from the installer on this node.",
+        close: "Close",
+      },
+      capability: {
+        unsupported_stack:
+          "This server does not run the systemd network and time stack Gotham needs, so its host settings are read-only.",
+        helper_missing:
+          "The host helper is not installed on this server. Install it to manage these settings from Gotham.",
+        helperMissingRemote:
+          "The host helper is not installed on this server. Re-run the Gotham installer on this machine, or the agent installer on a remote node, to enable host settings.",
+        helper_denied:
+          "This server may not run the host helper. Re-run the matching Gotham installer (control plane or agent) to restore its privilege rule.",
+        agent_outdated:
+          "This server's agent is too old for host settings. Update the agent or re-run the agent installer on that node, then reload this page.",
+        offline:
+          "This server's agent is not reachable. Host settings are read-only until it reconnects.",
+      },
+      network: {
+        title: "Network",
+        dnsPrimary: "Primary DNS server",
+        dnsAlternate: "Alternate DNS server",
+        dnsExtra: "DNS server {n}",
+        dnsAdd: "Add DNS server",
+        dnsHint: "Primary required, alternate optional. Up to 3 resolvers.",
+        optional: "optional",
+        mode: "Mode",
+        dhcp: "DHCP",
+        auto: "Automatic",
+        static: "Static",
+        address: "Address (CIDR)",
+        gateway: "Gateway",
+        ipv6Enabled: "Enable IPv6",
+        submit: "Apply network changes",
+        applied: "Network changes applied. Confirm them before the countdown ends.",
+        pendingNote: "A network change is awaiting confirmation. Settle it before making another.",
+        dnsOnlyNote: "Only the DNS servers changed: the interface configuration is left untouched.",
+        riskyWarning:
+          "This changes the address of the interface the server is connected through. It may become unreachable until the change is confirmed or reverted.",
+        confirmLabel: "I understand this may interrupt the connection",
+        confirmRequired: "Tick the confirmation box to apply this change.",
+      },
+      confirm: {
+        title: "Keep these network changes?",
+        body: "The new configuration is live on this server. If you cannot reach it at the new address, do nothing: the host restores the previous configuration in",
+        keep: "Keep changes",
+        revert: "Revert now",
+      },
+      system: {
+        title: "System",
+        hostname: "Hostname",
+        ntpEnabled: "Synchronize time (NTP)",
+        ntpServers: "NTP servers",
+        ntpHint: "Up to 4, comma separated. Leave empty for the system defaults.",
+        timezone: "Timezone",
+        timezoneHint:
+          "Searchable list of IANA zones with the current UTC offset. Applied to this server's clock and, for the control-plane node, to schedules, log display and backups.",
+        submit: "Save system settings",
+        saved: "System settings saved.",
+      },
+      validation: {
+        timezone: "Select an IANA timezone such as Europe/Berlin.",
+        dns: "Enter up to 3 distinct IPv4 or IPv6 addresses.",
+        dnsSingle: "Enter a valid IPv4 or IPv6 address.",
+        ipv4Address: "Enter an IPv4 address in CIDR notation, e.g. 192.168.1.10/24.",
+        ipv4Gateway: "Enter a valid IPv4 gateway.",
+        ipv6Address: "Enter an IPv6 address in CIDR notation, e.g. 2001:db8::10/64.",
+        ipv6Gateway: "Enter a valid IPv6 gateway.",
+        hostname: "Use letters, digits and hyphens; dots separate labels.",
+        ntp: "Enter up to 4 distinct host names or IP addresses.",
+      },
+    },
   },
   rail: {
     navLabel: "Servers",

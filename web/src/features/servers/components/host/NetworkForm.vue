@@ -15,11 +15,9 @@ import type { FormInst, FormRules } from "naive-ui";
 import { computed, reactive, ref, watch } from "vue";
 import { useI18n } from "vue-i18n";
 
-import { saveNetwork } from "@/features/instance-settings/api/instance";
-import type { InstanceState } from "@/features/instance-settings/api/instance";
-import HostHelperGate from "@/features/instance-settings/components/HostHelperGate.vue";
-import { useHostUnlock } from "@/features/instance-settings/composables/useHostUnlock";
-import { useSectionForm } from "@/features/instance-settings/composables/useSectionForm";
+import { saveNodeNetwork } from "@/features/servers/api/host";
+import type { NodeHostState } from "@/features/servers/api/host";
+import { useHostUnlock } from "@/features/servers/composables/useHostUnlock";
 import {
   dnsPrimaryServerSchema,
   dnsServerSchema,
@@ -30,12 +28,13 @@ import {
   ipv6GatewaySchema,
   isRiskyInterfaceChange,
   sameInterface,
-} from "@/features/instance-settings/schemas/instance";
-import type { InterfaceConfig } from "@/features/instance-settings/schemas/instance";
+} from "@/features/servers/schemas/host";
+import type { InterfaceConfig } from "@/features/servers/schemas/host";
+import { useSectionForm } from "@/shared/composables/useSectionForm";
 import { ruleFrom } from "@/shared/validation/naiveAdapter";
 
-const props = defineProps<{ state: InstanceState }>();
-const emit = defineEmits<{ saved: [state: InstanceState] }>();
+const props = defineProps<{ serverId: string; state: NodeHostState }>();
+const emit = defineEmits<{ saved: [state: NodeHostState] }>();
 const { t } = useI18n();
 
 const formRef = ref<FormInst | null>(null);
@@ -63,11 +62,11 @@ watch(
     form.dns1 = servers[1] ?? "";
     form.dns2 = servers[2] ?? "";
     dnsExtra.value = servers.length > 2;
-    form.v4Mode = n.ipv4.mode;
+    form.v4Mode = n.ipv4.mode === "static" ? "static" : "dhcp";
     form.v4Address = n.ipv4.address;
     form.v4Gateway = n.ipv4.gateway;
     form.v6Enabled = n.ipv6.enabled;
-    form.v6Mode = n.ipv6.mode;
+    form.v6Mode = n.ipv6.mode === "static" ? "static" : "dhcp";
     form.v6Address = n.ipv6.address;
     form.v6Gateway = n.ipv6.gateway;
     baseline.value = snapshot(n);
@@ -91,7 +90,7 @@ const rules: FormRules = {
 
 const { submitting, serverErrors, errorMessage, submit } = useSectionForm(
   () =>
-    saveNetwork({
+    saveNodeNetwork(props.serverId, {
       dns_servers: dnsServers(),
       ipv4: {
         mode: form.v4Mode,
@@ -107,7 +106,7 @@ const { submitting, serverErrors, errorMessage, submit } = useSectionForm(
       confirm_interface_change: confirmChecked.value,
     }),
   (next) => emit("saved", next),
-  () => t("instance-settings.network.applied"),
+  () => t("servers.settings.host.network.applied"),
 );
 
 function snapshot(n: InterfaceConfig): InterfaceConfig {
@@ -153,11 +152,11 @@ async function handleSubmit(): Promise<void> {
     return;
   }
   if (!dnsServersValid(dnsServers())) {
-    errorMessage.value = t("instance-settings.validation.dns");
+    errorMessage.value = t("servers.settings.host.validation.dns");
     return;
   }
   if (risky.value && !confirmChecked.value) {
-    errorMessage.value = t("instance-settings.network.confirmRequired");
+    errorMessage.value = t("servers.settings.host.network.confirmRequired");
     return;
   }
   await submit();
@@ -167,30 +166,25 @@ function status(path: string): "error" | undefined {
   return serverErrors.value[path] ? "error" : undefined;
 }
 
-const disabled = (): boolean => !props.state.capabilities.network || props.state.pending !== null;
+const disabled = (): boolean =>
+  props.state.capability !== "ready" || props.state.pending !== null;
 
-const { focusTarget, unlocked } = useHostUnlock(() => props.state.capabilities.network);
+const { focusTarget, unlocked } = useHostUnlock(() => props.state.capability === "ready");
 </script>
 
 <template>
-  <NCard :title="t('instance-settings.network.title')">
+  <NCard :title="t('servers.settings.host.network.title')">
     <p class="sr-only" role="status" aria-live="polite">
-      {{ unlocked ? t("instance-settings.helper.installed") : "" }}
+      {{ unlocked ? t("servers.settings.host.helper.installed") : "" }}
     </p>
-    <HostHelperGate
-      v-if="!state.capabilities.network"
-      :state="state"
-      section="network"
-      @saved="emit('saved', $event)"
-    />
-    <NAlert v-else-if="state.pending" type="warning" :show-icon="true" class="form-alert">
-      {{ t("instance-settings.network.pendingNote") }}
+    <NAlert v-if="state.pending" type="warning" :show-icon="true" class="form-alert">
+      {{ t("servers.settings.host.network.pendingNote") }}
     </NAlert>
     <NAlert v-if="errorMessage" type="error" :show-icon="true" class="form-alert">{{ errorMessage }}</NAlert>
-    <NForm ref="formRef" :model="form" :rules="rules" class="instance-form" @submit.prevent="handleSubmit">
+    <NForm ref="formRef" :model="form" :rules="rules" class="host-form" @submit.prevent="handleSubmit">
       <NFormItem
         path="dns0"
-        :label="t('instance-settings.network.dnsPrimary')"
+        :label="t('servers.settings.host.network.dnsPrimary')"
         :validation-status="status('dns_servers')"
         :feedback="serverErrors.dns_servers"
       >
@@ -198,11 +192,11 @@ const { focusTarget, unlocked } = useHostUnlock(() => props.state.capabilities.n
       </NFormItem>
       <NFormItem
         path="dns1"
-        :label="`${t('instance-settings.network.dnsAlternate')} (${t('instance-settings.network.optional')})`"
+        :label="`${t('servers.settings.host.network.dnsAlternate')} (${t('servers.settings.host.network.optional')})`"
       >
         <NInput v-model:value="form.dns1" :disabled="disabled()" placeholder="1.0.0.1" />
         <span class="field-hint">
-          {{ t("instance-settings.network.dnsHint") }}
+          {{ t("servers.settings.host.network.dnsHint") }}
           <NButton
             v-if="!dnsExtra"
             text
@@ -211,29 +205,29 @@ const { focusTarget, unlocked } = useHostUnlock(() => props.state.capabilities.n
             :disabled="disabled()"
             @click="dnsExtra = true"
           >
-            {{ t("instance-settings.network.dnsAdd") }}
+            {{ t("servers.settings.host.network.dnsAdd") }}
           </NButton>
         </span>
       </NFormItem>
       <NFormItem
         v-if="dnsExtra"
         path="dns2"
-        :label="t('instance-settings.network.dnsExtra', { n: 3 })"
+        :label="t('servers.settings.host.network.dnsExtra', { n: 3 })"
       >
         <NInput v-model:value="form.dns2" :disabled="disabled()" placeholder="9.9.9.9" />
       </NFormItem>
 
       <h4>IPv4</h4>
-      <NFormItem :label="t('instance-settings.network.mode')">
+      <NFormItem :label="t('servers.settings.host.network.mode')">
         <NRadioGroup v-model:value="form.v4Mode" :disabled="disabled()">
-          <NRadioButton value="dhcp">{{ t("instance-settings.network.dhcp") }}</NRadioButton>
-          <NRadioButton value="static">{{ t("instance-settings.network.static") }}</NRadioButton>
+          <NRadioButton value="dhcp">{{ t("servers.settings.host.network.dhcp") }}</NRadioButton>
+          <NRadioButton value="static">{{ t("servers.settings.host.network.static") }}</NRadioButton>
         </NRadioGroup>
       </NFormItem>
       <template v-if="form.v4Mode === 'static'">
         <NFormItem
           path="v4Address"
-          :label="t('instance-settings.network.address')"
+          :label="t('servers.settings.host.network.address')"
           :validation-status="status('ipv4.address')"
           :feedback="serverErrors['ipv4.address']"
         >
@@ -241,7 +235,7 @@ const { focusTarget, unlocked } = useHostUnlock(() => props.state.capabilities.n
         </NFormItem>
         <NFormItem
           path="v4Gateway"
-          :label="t('instance-settings.network.gateway')"
+          :label="t('servers.settings.host.network.gateway')"
           :validation-status="status('ipv4.gateway')"
           :feedback="serverErrors['ipv4.gateway']"
         >
@@ -250,20 +244,20 @@ const { focusTarget, unlocked } = useHostUnlock(() => props.state.capabilities.n
       </template>
 
       <h4>IPv6</h4>
-      <NFormItem :label="t('instance-settings.network.ipv6Enabled')">
+      <NFormItem :label="t('servers.settings.host.network.ipv6Enabled')">
         <NSwitch v-model:value="form.v6Enabled" :disabled="disabled()" />
       </NFormItem>
       <template v-if="form.v6Enabled">
-        <NFormItem :label="t('instance-settings.network.mode')">
+        <NFormItem :label="t('servers.settings.host.network.mode')">
           <NRadioGroup v-model:value="form.v6Mode" :disabled="disabled()">
-            <NRadioButton value="dhcp">{{ t("instance-settings.network.auto") }}</NRadioButton>
-            <NRadioButton value="static">{{ t("instance-settings.network.static") }}</NRadioButton>
+            <NRadioButton value="dhcp">{{ t("servers.settings.host.network.auto") }}</NRadioButton>
+            <NRadioButton value="static">{{ t("servers.settings.host.network.static") }}</NRadioButton>
           </NRadioGroup>
         </NFormItem>
         <template v-if="form.v6Mode === 'static'">
           <NFormItem
             path="v6Address"
-            :label="t('instance-settings.network.address')"
+            :label="t('servers.settings.host.network.address')"
             :validation-status="status('ipv6.address')"
             :feedback="serverErrors['ipv6.address']"
           >
@@ -271,7 +265,7 @@ const { focusTarget, unlocked } = useHostUnlock(() => props.state.capabilities.n
           </NFormItem>
           <NFormItem
             path="v6Gateway"
-            :label="t('instance-settings.network.gateway')"
+            :label="t('servers.settings.host.network.gateway')"
             :validation-status="status('ipv6.gateway')"
             :feedback="serverErrors['ipv6.gateway']"
           >
@@ -281,27 +275,27 @@ const { focusTarget, unlocked } = useHostUnlock(() => props.state.capabilities.n
       </template>
 
       <NButton type="primary" :loading="submitting" :disabled="disabled()" @click="handleSubmit">
-        {{ t("instance-settings.network.submit") }}
+        {{ t("servers.settings.host.network.submit") }}
       </NButton>
       <NAlert v-if="dnsOnly" type="info" :show-icon="true" class="form-alert">
-        {{ t("instance-settings.network.dnsOnlyNote") }}
+        {{ t("servers.settings.host.network.dnsOnlyNote") }}
       </NAlert>
       <NAlert v-if="risky" type="warning" :show-icon="true" class="form-alert">
-        {{ t("instance-settings.network.riskyWarning") }}
+        {{ t("servers.settings.host.network.riskyWarning") }}
       </NAlert>
       <NCheckbox v-if="risky" v-model:checked="confirmChecked" :disabled="disabled()">
-        {{ t("instance-settings.network.confirmLabel") }}
+        {{ t("servers.settings.host.network.confirmLabel") }}
       </NCheckbox>
     </NForm>
   </NCard>
 </template>
 
 <style scoped>
-.instance-form {
+.host-form {
   max-width: 640px;
 }
 
-.instance-form :deep(.n-form-item-blank) {
+.host-form :deep(.n-form-item-blank) {
   flex-wrap: wrap;
 }
 

@@ -96,7 +96,7 @@ intent automatically. It belongs to the instance, not to an application: it is
 not created or edited from the per-application certificate form, and it is
 reconciled from the URL rather than deleted from the application certificate
 list. Changing or clearing the URL adds or retires it. Its state appears in
-[Instance and network](/operating/instance-network) under the control-plane
+[Settings and node host settings](/operating/instance-network) under the control-plane
 domain status. With a plain-HTTP URL there is no panel certificate and the
 status reads "not applicable".
 

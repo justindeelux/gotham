@@ -35,7 +35,7 @@ Sau đó nó:
 2. khởi động lại dịch vụ để bảng điều khiển trả lời ở địa chỉ mới;
 3. in địa chỉ HTTP để mở.
 
-Mở `http://panel.example.com` và xác nhận tên miền trong **Cài đặt chung** trong
+Mở `http://panel.example.com` và xác nhận tên miền trong **Cài đặt** trong
 vòng **2 phút** để bắt đầu cấp chứng chỉ HTTPS. Một phiên thử không được xác nhận
 sẽ tự khôi phục. Tên miền không hợp lệ và lỗi DNS sẽ in cảnh báo và để địa chỉ
 HTTP của máy chủ khả dụng; bạn có thể đặt tên miền sau trong bảng điều khiển.
@@ -43,7 +43,7 @@ HTTP của máy chủ khả dụng; bạn có thể đặt tên miền sau trong
 ## Đặt tên miền sau
 
 1. Mở bảng điều khiển tại `http://<server-ip>:8000`.
-2. Trong **Cài đặt chung**, đặt `control_plane_url` của instance thành
+2. Trong **Cài đặt**, đặt `control_plane_url` của instance thành
    `https://panel.example.com` rồi lưu.
 3. Mở host được đề xuất qua HTTP và xác nhận thay đổi trước khi phiên thử hết hạn.
 

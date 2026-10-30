@@ -8,20 +8,9 @@ test("URL status follows edits and warns when localhost is missing", async ({ pa
   const settings = {
     general: {
       control_plane_url: field("https://panel.example.com"),
-      instance_name: field("Gotham"), timezone: field("UTC"),
+      instance_name: field("Gotham"),
     },
-    network: {
-      dns_servers: ["1.1.1.1"],
-      ipv4: { mode: "dhcp", address: "", gateway: "" },
-      ipv6: { enabled: false, mode: "dhcp", address: "", gateway: "" },
-    },
-    system: { hostname: "gotham", ntp_enabled: true, ntp_servers: [] },
-    capabilities: { network: false, system: false },
-    host: {
-      helper: "missing", repair: true,
-      network_stack: true, system_stack: true, network: false, system: false,
-    },
-    pending: null,
+    pending_control_plane_url: null,
   };
   await page.route("**/api/v1/instance/settings", (route) =>
     route.fulfill({ json: { settings } }),

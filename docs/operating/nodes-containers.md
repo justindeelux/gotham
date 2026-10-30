@@ -94,6 +94,21 @@ delete those first. The `localhost` node (the built-in local agent) cannot be
 edited or deleted. Containers, volumes and certificates on the machine are left
 untouched.
 
+## Host settings
+
+The **Node settings** tab edits the machine that node runs on: its DNS and
+IPv4/IPv6 addressing, hostname, NTP and timezone, plus the state of the host
+helper. Changes go to that node only and are read live from its host; the
+control plane stores nothing but a pending network change. Only the owner can
+open the host sections.
+
+A node whose agent is old or unreachable, or whose host lacks the systemd
+network and time stack, shows the sections read-only with a plain-language
+reason instead of failing a save. Remote nodes need a current agent: re-run the
+agent installer to add host settings support. See
+[Settings and node host settings](/operating/instance-network) for the
+capability states and the keep/revert countdown.
+
 ## Node overview
 
 Opening a node shows tabs:

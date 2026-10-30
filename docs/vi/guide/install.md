@@ -95,7 +95,7 @@ nguyên nhân thường gặp.
 Thêm `-s -- --domain panel.example.com` sau `sh` trong lệnh trên. Tên miền phải
 đã trỏ về máy chủ này. Trình cài đặt chờ tối đa 60 giây để agent cục bộ sẵn sàng,
 đặt URL bảng điều khiển thành `https://panel.example.com`, và in địa chỉ HTTP để
-mở xác nhận. HTTPS được cấp sau khi bạn xác nhận trong **Cài đặt chung** trong
+mở xác nhận. HTTPS được cấp sau khi bạn xác nhận trong **Cài đặt** trong
 vòng 2 phút. Nếu tên miền chưa phân giải được, quá trình cài tiếp tục trên địa
 chỉ máy chủ và bạn có thể đặt tên miền sau trong bảng điều khiển. Xem
 [Tên miền và HTTPS](/vi/guide/domain-and-https).

@@ -2,14 +2,7 @@ import { describe, expect, it } from "vitest";
 
 import {
   controlPlaneUrlSchema,
-  dnsListSchema,
-  dnsPrimaryServerSchema,
-  dnsServerSchema,
-  dnsServersValid,
-  ipv4AddressSchema,
-  ipv6AddressSchema,
-  hostnameSchema,
-  timezoneSchema,
+  instanceNameSchema,
 } from "@/features/instance-settings/schemas/instance";
 
 describe("instance-settings schemas", () => {
@@ -21,30 +14,10 @@ describe("instance-settings schemas", () => {
     }
   });
 
-  it("validates timezone, DNS, addresses and hostname", () => {
-    expect(timezoneSchema.safeParse("Europe/Berlin").success).toBe(true);
-    expect(timezoneSchema.safeParse("Mars/Base").success).toBe(false);
-    expect(dnsListSchema.safeParse("1.1.1.1, 2606:4700:4700::1111").success).toBe(true);
-    expect(dnsListSchema.safeParse("1.1.1.1, 1.1.1.1").success).toBe(false);
-    expect(dnsListSchema.safeParse("1.1.1.1;x").success).toBe(false);
-    expect(ipv4AddressSchema.safeParse("10.0.0.5/24").success).toBe(true);
-    expect(ipv4AddressSchema.safeParse("10.0.0.5").success).toBe(false);
-    expect(ipv6AddressSchema.safeParse("2001:db8::10/64").success).toBe(true);
-    expect(ipv6AddressSchema.safeParse("2001:db8::10/200").success).toBe(false);
-    expect(hostnameSchema.safeParse("gotham-1.lan").success).toBe(true);
-    expect(hostnameSchema.safeParse("-bad").success).toBe(false);
-  });
-
-  it("validates single resolver inputs and the combined list", () => {
-    expect(dnsPrimaryServerSchema.safeParse("1.1.1.1").success).toBe(true);
-    expect(dnsPrimaryServerSchema.safeParse("").success).toBe(false);
-    expect(dnsPrimaryServerSchema.safeParse("not-an-ip").success).toBe(false);
-    expect(dnsServerSchema.safeParse("").success).toBe(true);
-    expect(dnsServerSchema.safeParse("2606:4700:4700::1111").success).toBe(true);
-    expect(dnsServerSchema.safeParse("1.1.1.1;x").success).toBe(false);
-    expect(dnsServersValid(["1.1.1.1", ""])).toBe(true);
-    expect(dnsServersValid(["1.1.1.1", "9.9.9.9", "2606:4700:4700::1111"])).toBe(true);
-    expect(dnsServersValid(["1.1.1.1", "1.1.1.1"])).toBe(false);
-    expect(dnsServersValid(["1.1.1.1", "bad"])).toBe(false);
+  it("validates the instance name", () => {
+    expect(instanceNameSchema.safeParse("gotham").success).toBe(true);
+    expect(instanceNameSchema.safeParse("  homelab  ").success).toBe(true);
+    expect(instanceNameSchema.safeParse("").success).toBe(false);
+    expect(instanceNameSchema.safeParse("x".repeat(65)).success).toBe(false);
   });
 });

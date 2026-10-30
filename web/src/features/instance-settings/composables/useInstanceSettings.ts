@@ -1,11 +1,8 @@
 import { ref } from "vue";
 
-import {
-  errorText,
-  getInstanceSettings,
-  isForbidden,
-} from "@/features/instance-settings/api/instance";
+import { getInstanceSettings } from "@/features/instance-settings/api/instance";
 import type { InstanceState } from "@/features/instance-settings/api/instance";
+import { errorText, isForbidden } from "@/shared/api/errors";
 
 export function useInstanceSettings() {
   const state = ref<InstanceState | null>(null);

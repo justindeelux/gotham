@@ -4,6 +4,7 @@ import (
 	"errors"
 	"log/slog"
 	"net/http"
+	"strings"
 
 	"github.com/go-chi/chi/v5"
 	"github.com/google/uuid"
@@ -130,11 +131,25 @@ func (h *nodeHandler) reply(w http.ResponseWriter, st NodeState, log string, err
 		writeJSON(w, http.StatusConflict, errorBody{Message: err.Error()})
 	case errors.Is(err, ErrHost):
 		h.logger.Error("node host helper failed", "error", err)
+		if log == "" {
+			log = helperReason(err)
+		}
 		writeJSON(w, http.StatusBadGateway, errorBody{Message: "the host helper failed; the change was not applied", Log: log})
 	default:
 		h.logger.Error("node host settings", "error", err)
 		writeJSON(w, http.StatusInternalServerError, errorBody{Message: "internal error"})
 	}
+}
+
+// helperReason strips the ErrHost wrapper so the helper's own diagnostic can
+// be shown to the owner, in the same log field the install flow already uses.
+func helperReason(err error) string {
+	msg := strings.TrimSpace(err.Error())
+	prefix := ErrHost.Error()
+	if !strings.HasPrefix(msg, prefix) {
+		return msg
+	}
+	return strings.TrimLeft(strings.TrimPrefix(msg, prefix), ":\n ")
 }
 
 func serverIDParam(w http.ResponseWriter, r *http.Request) (uuid.UUID, bool) {

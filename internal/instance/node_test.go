@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"errors"
+	"fmt"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -470,6 +471,31 @@ func TestNodeRoutes(t *testing.T) {
 	ok.ServeHTTP(rec, httptest.NewRequest(http.MethodPost, "/v1/servers/"+id.String()+"/host/network/confirm", nil))
 	if rec.Code != http.StatusConflict {
 		t.Fatalf("confirm without pending: %d %s", rec.Code, rec.Body)
+	}
+}
+
+func TestNodeSystemHelperFailureShowsReason(t *testing.T) {
+	host := &fakeHost{status: HostStatus{}}
+	f := newNodeFixture(t, host, nil)
+	id := f.servers[0]
+	host.applyErr = fmt.Errorf("%w: apply-system: mkdir: cannot create directory '/etc/systemd/timesyncd.conf.d': Read-only file system", ErrHost)
+
+	r := chi.NewRouter()
+	MountNode(r, func(n http.Handler) http.Handler { return n }, func(context.Context) (uuid.UUID, bool) { return uuid.Nil, true }, f.svc)
+	rec := httptest.NewRecorder()
+	r.ServeHTTP(rec, httptest.NewRequest(http.MethodPut, "/v1/servers/"+id.String()+"/host/system",
+		bytes.NewBufferString(`{"hostname":"","ntp_enabled":true,"ntp_servers":[],"timezone":"Europe/Berlin"}`)))
+	if rec.Code != http.StatusBadGateway {
+		t.Fatalf("helper failure = %d, want 502: %s", rec.Code, rec.Body)
+	}
+	body := rec.Body.String()
+	for _, want := range []string{
+		`"message":"the host helper failed; the change was not applied"`,
+		`"log":"apply-system: mkdir: cannot create directory '/etc/systemd/timesyncd.conf.d': Read-only file system"`,
+	} {
+		if !strings.Contains(body, want) {
+			t.Errorf("502 body misses %s:\n%s", want, body)
+		}
 	}
 }
 

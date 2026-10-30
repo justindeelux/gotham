@@ -174,6 +174,50 @@ func TestHostctlApplySystemTimezone(t *testing.T) {
 	}
 }
 
+func TestHostctlApplySystemTimezoneNeedsNoNtpDirectory(t *testing.T) {
+	root := t.TempDir()
+	extra := stubProbes(t, root)
+	// Make the NTP drop-in directory impossible to create (its parent is a
+	// regular file), regardless of whether the test runs as root.
+	if err := os.RemoveAll(filepath.Join(root, "etc")); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(root, "etc"), []byte("not a directory"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	in := "hostname=\nntp_enabled=true\nntp_servers=\ntimezone=Europe/Berlin\n"
+	out, err := runHostctlEnv(t, root, in, "apply-system", extra)
+	if err != nil {
+		t.Fatalf("timezone-only apply must not need the NTP drop-in directory: %v\n%s", err, out)
+	}
+	if !strings.Contains(out, "timedatectl set-timezone Europe/Berlin") {
+		t.Errorf("apply-system misses the timezone command:\n%s", out)
+	}
+
+	// A real NTP server change still owns that directory and must fail loudly
+	// instead of pretending it was written.
+	withNtp := "hostname=\nntp_enabled=true\nntp_servers=time.cloudflare.com\ntimezone=Europe/Berlin\n"
+	if out, err := runHostctlEnv(t, root, withNtp, "apply-system", extra); err == nil {
+		t.Fatalf("NTP change into an unusable directory must fail:\n%s", out)
+	}
+}
+
+func TestServiceUnitsLeaveEtcWritableForHostHelper(t *testing.T) {
+	// The host helper is a sudo child of these units, so it inherits their
+	// mount namespace. ProtectSystem=full makes /etc read-only and every helper
+	// write under /etc fail with EROFS.
+	for _, name := range []string{"gotham.service", "gotham-agent.service"} {
+		data, err := os.ReadFile(name)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if !strings.Contains(string(data), "\nProtectSystem=yes\n") {
+			t.Errorf("%s must keep /etc writable for the root-owned host helper", name)
+		}
+	}
+}
+
 func TestHostctlDNSOnlyOverridesLinkDNS(t *testing.T) {
 	root := t.TempDir()
 	extra := stubProbes(t, root)

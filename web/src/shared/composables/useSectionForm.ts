@@ -1,7 +1,7 @@
 import { useMessage } from "naive-ui";
 import { ref } from "vue";
 
-import { errorText, fieldErrors } from "@/shared/api/errors";
+import { errorLog, errorText, fieldErrors } from "@/shared/api/errors";
 
 export function useSectionForm<T>(
   save: () => Promise<T>,
@@ -26,7 +26,11 @@ export function useSectionForm<T>(
     } catch (error) {
       serverErrors.value = fieldErrors(error);
       if (Object.keys(serverErrors.value).length === 0) {
-        errorMessage.value = errorText(error);
+        // The API's log carries the host helper's own reason; show it with the
+        // generic message so a failed change is diagnosable from the form.
+        errorMessage.value = [errorText(error), errorLog(error)]
+          .filter((part) => part !== "")
+          .join("\n");
       }
     } finally {
       submitting.value = false;

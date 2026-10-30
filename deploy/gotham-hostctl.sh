@@ -485,12 +485,15 @@ apply-system)
     all_hosts "${K_ntp_servers}" 4 || die "invalid ntp_servers" 2
     { [ -z "${K_timezone}" ] || is_tz "${K_timezone}"; } || die "invalid timezone" 2
     if [ -n "${K_hostname}" ]; then run hostnamectl set-hostname "${K_hostname}" || die "hostnamectl failed"; fi
-    mkdir -p "${NTPD}" || die "cannot prepare directories"
+    # Only touch the timesyncd drop-in when NTP servers are set or one is left
+    # to remove: a timezone-only change must not depend on that directory being
+    # writable.
     if [ -n "${K_ntp_servers}" ]; then
+        mkdir -p "${NTPD}" || die "cannot prepare directories"
         { echo "# Managed by Gotham (gotham-hostctl)."; echo "[Time]"; echo "NTP=$(printf '%s' "${K_ntp_servers}" | tr ',' ' ')"; } >"${NTPFILE}.new" \
             && mv -f "${NTPFILE}.new" "${NTPFILE}" || die "cannot write timesyncd file"
-    else
-        rm -f "${NTPFILE}"
+    elif [ -e "${NTPFILE}" ]; then
+        rm -f "${NTPFILE}" || die "cannot remove timesyncd file"
     fi
     if [ "${K_ntp_enabled}" = "true" ]; then run timedatectl set-ntp true; else run timedatectl set-ntp false; fi
     run systemctl restart systemd-timesyncd 2>/dev/null

@@ -132,3 +132,55 @@ func TestRuntimeComposeReal(t *testing.T) {
 		time.Sleep(250 * time.Millisecond)
 	}
 }
+
+func composeDown(t *testing.T, server *agent.ComposeServer, project, document string) {
+	t.Helper()
+	cleanupCtx, cancel := context.WithTimeout(context.Background(), 90*time.Second)
+	defer cancel()
+	if _, err := server.ComposeDown(cleanupCtx, &agentv1.ComposeDownRequest{
+		ProjectName: project,
+		ComposeYaml: []byte(document),
+		Unconfined:  true,
+	}); err != nil {
+		t.Logf("compose down %s: %v", project, err)
+	}
+}
+
+type composeRealNode struct {
+	*mockNode
+	compose *agent.ComposeServer
+	docker  *agent.DockerClient
+}
+
+func (n *composeRealNode) ComposePs(ctx context.Context, projectName string) ([]ComposeContainer, error) {
+	response, err := n.compose.ComposePs(ctx, &agentv1.ComposePsRequest{ProjectName: projectName})
+	if err != nil {
+		return nil, err
+	}
+	containers := make([]ComposeContainer, 0, len(response.GetContainers()))
+	for _, container := range response.GetContainers() {
+		containers = append(containers, ComposeContainer{
+			ID:      container.GetContainerId(),
+			Service: container.GetService(),
+			Name:    container.GetName(),
+			Image:   container.GetImage(),
+			State:   container.GetState(),
+			Status:  container.GetStatus(),
+		})
+	}
+	return containers, nil
+}
+
+func (n *composeRealNode) ContainersByLabel(ctx context.Context, labels map[string]string, all, resolveVolumes bool) ([]*agentv1.ContainerInfo, error) {
+	containers, err := n.docker.ListContainers(ctx, all, labels, resolveVolumes)
+	if err != nil {
+		return nil, mapRPCError(err)
+	}
+	return containers, nil
+}
+
+func (n *composeRealNode) FileRoots(context.Context) ([]*agentv1.FileRoot, error) {
+	return nil, nil
+}
+
+func (n *composeRealNode) Close() error { return nil }

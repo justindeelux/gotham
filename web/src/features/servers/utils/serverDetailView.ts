@@ -46,9 +46,26 @@ export function authLabel(server: Server, locale?: string | null): string {
   return "—";
 }
 
-export function usageText(value: number | null): string {
-  if (value === null || value === undefined) {
-    return "—";
+export type UsageIndicatorLevel = "normal" | "warning" | "critical";
+
+export interface UsageIndicator {
+  percentage: number;
+  level: UsageIndicatorLevel;
+  color: string;
+}
+
+export function usageIndicator(
+  value: number | null | undefined,
+): UsageIndicator | null {
+  if (value === null || value === undefined || Number.isNaN(value)) {
+    return null;
   }
-  return `${toPercent(value)}%`;
+  const percentage = toPercent(value);
+  if (percentage >= 90) {
+    return { percentage, level: "critical", color: "var(--danger)" };
+  }
+  if (percentage >= 70) {
+    return { percentage, level: "warning", color: "var(--warn)" };
+  }
+  return { percentage, level: "normal", color: "var(--success)" };
 }

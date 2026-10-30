@@ -2,7 +2,8 @@ import { NMessageProvider } from "naive-ui";
 import { createPinia, setActivePinia } from "pinia";
 import { defineComponent, h } from "vue";
 import { flushPromises, mount } from "@vue/test-utils";
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import type { VueWrapper } from "@vue/test-utils";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import { useWebSocket } from "@/shared/composables/useWebSocket";
 
@@ -89,7 +90,19 @@ function tool(overrides: Partial<ToolchainTool> = {}): ToolchainTool {
 }
 
 const Shell = defineComponent({
-  setup: () => () => h(NMessageProvider, null, { default: () => h(ToolchainPage) }),
+  setup: () => () =>
+    h(NMessageProvider, { duration: 0 }, { default: () => h(ToolchainPage) }),
+});
+
+let activeWrapper: VueWrapper | null = null;
+
+function unmountActive(): void {
+  activeWrapper?.unmount();
+  activeWrapper = null;
+}
+
+afterEach(() => {
+  unmountActive();
 });
 
 beforeEach(() => {
@@ -111,6 +124,7 @@ beforeEach(() => {
 
 async function mountPage() {
   const wrapper = mount(Shell, { global: { plugins: [i18n] } });
+  activeWrapper = wrapper;
   await flushPromises();
   return wrapper;
 }
@@ -119,8 +133,7 @@ describe("error state", () => {
   it("shows the alert with retry and no table or empty state on load failure", async () => {
     useServersStore().servers = [server()];
     listToolsMock.mockRejectedValue(new Error("boom"));
-    const wrapper = mount(Shell, { global: { plugins: [i18n] } });
-    await flushPromises();
+    const wrapper = await mountPage();
     expect(wrapper.find(".n-alert").exists()).toBe(true);
     expect(wrapper.find(".n-data-table").exists()).toBe(false);
     expect(wrapper.find(".n-empty").exists()).toBe(false);
@@ -132,19 +145,19 @@ describe("socket lifecycle", () => {
   it("releases the socket on unmount and re-establishes it on remount", async () => {
     useServersStore().servers = [server()];
     listToolsMock.mockResolvedValue([tool({ id: "git", name: "Git" })]);
-    const first = await mountPage();
+    await mountPage();
     expect(useWebSocketMock).toHaveBeenCalledTimes(1);
     expect(socketStub.subscribe).toHaveBeenCalledWith("logs:srv-1:toolchain");
     expect(useToolchainStore().tools).toHaveLength(1);
-    first.unmount();
+    unmountActive();
     expect(socketStub.unsubscribe).toHaveBeenCalledWith("logs:srv-1:toolchain");
     expect(socketStub.close).toHaveBeenCalledTimes(1);
     useServersStore().servers = [server()];
-    const second = await mountPage();
+    await mountPage();
     expect(useWebSocketMock).toHaveBeenCalledTimes(2);
     expect(socketStub.subscribe).toHaveBeenCalledTimes(2);
     expect(useToolchainStore().tools).toHaveLength(1);
-    second.unmount();
+    unmountActive();
     expect(socketStub.close).toHaveBeenCalledTimes(2);
   });
 });
@@ -176,7 +189,6 @@ describe("install selected", () => {
     await action?.trigger("click");
     await flushPromises();
     expect(enqueueJobsMock).toHaveBeenCalledWith("srv-1", ["git"], "install");
-    wrapper.unmount();
   });
 });
 
@@ -248,7 +260,6 @@ describe("category tabs (JUS-189)", () => {
     await action?.trigger("click");
     await flushPromises();
     expect(enqueueJobsMock).toHaveBeenCalledWith("srv-1", ["git", "curl"], "install");
-    wrapper.unmount();
   });
 
   it("moves and activates tabs with ArrowLeft/Right/Home/End", async () => {
@@ -281,7 +292,6 @@ describe("category tabs (JUS-189)", () => {
     await flushPromises();
     expect(tabs(wrapper)[0].attributes("aria-selected")).toBe("true");
     expect(globalThis.document.activeElement).toBe(tabs(wrapper)[0].element);
-    wrapper.unmount();
   });
 
   it("counts only selectable rows in the tab badge and footer", async () => {
@@ -394,7 +404,6 @@ describe("platform tools", () => {
     await uninstall[0].trigger("click");
     await flushPromises();
     expect(enqueueJobsMock).toHaveBeenCalledWith("srv-1", ["pack"], "uninstall");
-    wrapper.unmount();
   });
 
   it("offers install/update for outdated git through the existing install action", async () => {
@@ -409,6 +418,5 @@ describe("platform tools", () => {
     await update?.trigger("click");
     await flushPromises();
     expect(enqueueJobsMock).toHaveBeenCalledWith("srv-1", ["git"], "install");
-    wrapper.unmount();
   });
 });

@@ -67,7 +67,7 @@ const vi: CommonMessages = {
       mcp: "Thiết lập MCP",
       instance: "Hệ thống Gotham",
       monitoring: "Giám sát",
-      updates: "Cập nhật & cài đặt",
+      updates: "Cập nhật",
     },
   },
   shell: {

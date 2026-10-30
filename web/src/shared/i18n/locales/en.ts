@@ -65,7 +65,7 @@ const en = {
       mcp: "MCP setup",
       instance: "Instance",
       monitoring: "Monitoring",
-      updates: "Updates & settings",
+      updates: "Updates",
     },
   },
   shell: {

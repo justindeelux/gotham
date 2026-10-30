@@ -54,6 +54,13 @@ function reasonText(reason: string): string {
   if (key) {
     return t(key);
   }
+  const history = /^(\d+) rows older than (\d+) days$/.exec(reason);
+  if (history) {
+    return t("cleanup.reasons.historyOlder", {
+      count: Number(history[1]),
+      days: Number(history[2]),
+    });
+  }
   return reason;
 }
 

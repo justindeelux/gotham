@@ -36,3 +36,12 @@ func (s *Store) UpdateInstanceNetwork(ctx context.Context, params sqlc.UpdateIns
 		return tx.queries.InsertInstanceAudit(ctx, audit)
 	})
 }
+
+func (s *Store) UpdateInstanceCleanup(ctx context.Context, params sqlc.UpdateInstanceCleanupParams, audit sqlc.InsertInstanceAuditParams) error {
+	return s.InTx(ctx, func(tx *Store) error {
+		if _, err := tx.queries.UpdateInstanceCleanup(ctx, params); err != nil {
+			return err
+		}
+		return tx.queries.InsertInstanceAudit(ctx, audit)
+	})
+}

@@ -24,5 +24,13 @@ SET dns_servers = $1,
 WHERE id = 1
 RETURNING *;
 
+-- name: UpdateInstanceCleanup :one
+UPDATE instance_settings
+SET cleanup_history_retention_days = $1,
+    cleanup_backup_file_min_age_days = $2,
+    updated_at = now()
+WHERE id = 1
+RETURNING *;
+
 -- name: InsertInstanceAudit :exec
 INSERT INTO instance_settings_audit (actor_id, section, changes) VALUES ($1, $2, $3);

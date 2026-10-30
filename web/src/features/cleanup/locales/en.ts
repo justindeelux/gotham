@@ -92,6 +92,8 @@ const en = {
     orphaned_volumes: "Orphaned volumes",
     journal: "Journal logs",
     package_cache: "Package cache",
+    backup_files: "Orphaned backup files",
+    history: "History",
   },
   tiers: {
     safe: "Safe",
@@ -106,6 +108,8 @@ const en = {
     stopped: "Stopped container",
     journalArchived: "Archived journal files older than the minimum age (at least 1 day)",
     packageCache: "Downloaded package files the package manager can fetch again",
+    backupFile: "No backups record references this file",
+    historyOlder: "{count} rows older than {days} days",
     offline: "Node is offline",
     busy: "A deployment is running",
     unsupported: "The node agent is too old",

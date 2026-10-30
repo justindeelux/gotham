@@ -5,6 +5,7 @@ const reasonKeys: Record<string, string> = {
   "unused build cache": "cleanup.reasons.buildCache",
   "not used by any container": "cleanup.reasons.unusedImage",
   "not owned by any recorded resource": "cleanup.reasons.orphanedVolume",
+  "no backups row references this file": "cleanup.reasons.backupFile",
   journal_archived: "cleanup.reasons.journalArchived",
   package_cache: "cleanup.reasons.packageCache",
   offline: "cleanup.reasons.offline",

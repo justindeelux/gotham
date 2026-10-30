@@ -3,6 +3,7 @@ import { NAlert, NSpin } from "naive-ui";
 import { onMounted } from "vue";
 import { useI18n } from "vue-i18n";
 
+import CleanupRetentionForm from "@/features/instance-settings/components/CleanupRetentionForm.vue";
 import GeneralForm from "@/features/instance-settings/components/GeneralForm.vue";
 import { useInstanceSettings } from "@/features/instance-settings/composables/useInstanceSettings";
 
@@ -30,12 +31,21 @@ onMounted(() => {
     </NAlert>
     <NAlert v-else-if="loadError" type="error" :show-icon="true">{{ loadError }}</NAlert>
 
-    <GeneralForm v-else-if="state" :state="state" @saved="apply" />
+    <div v-else-if="state" class="instance-stack">
+      <GeneralForm :state="state" @saved="apply" />
+      <CleanupRetentionForm :state="state" @saved="apply" />
+    </div>
   </div>
 </template>
 
 <style scoped>
 .instance-page {
   max-width: 760px;
+}
+
+.instance-stack {
+  display: flex;
+  flex-direction: column;
+  gap: 16px;
 }
 </style>

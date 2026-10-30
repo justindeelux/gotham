@@ -97,6 +97,8 @@ func TestCategoryRoutes(t *testing.T) {
 		CategoryPackageCache:      TierSafe,
 		CategoryUnusedImages:      TierCareful,
 		CategoryOrphanedVolumes:   TierDangerous,
+		CategoryBackupFiles:       TierCareful,
+		CategoryHistory:           TierCareful,
 	} {
 		category, ok := tiers[key]
 		if !ok {

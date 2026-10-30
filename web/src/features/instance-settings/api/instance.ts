@@ -29,8 +29,16 @@ export interface PendingControlPlaneURL {
   synced: boolean;
 }
 
+export interface CleanupRetention {
+  history_days: number;
+  backup_file_min_age_days: number;
+}
+
+export type CleanupRetentionInput = CleanupRetention;
+
 export interface InstanceState {
   general: GeneralSettings;
+  cleanup: CleanupRetention;
   pending_control_plane_url?: PendingControlPlaneURL | null;
 }
 
@@ -45,6 +53,11 @@ export const getInstanceSettings = (): Promise<InstanceState> =>
 
 export const saveGeneral = (input: GeneralInput): Promise<InstanceState> =>
   unwrap(http.put("/instance/settings/general", input));
+
+export const saveCleanupRetention = (
+  input: CleanupRetentionInput,
+): Promise<InstanceState> =>
+  unwrap(http.put("/instance/settings/cleanup", input));
 
 export const confirmControlPlaneURL = (): Promise<InstanceState> =>
   unwrap(http.post("/instance/settings/control-plane-url/confirm"));

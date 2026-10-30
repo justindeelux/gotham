@@ -20,6 +20,10 @@ func (r *instanceCLIRepo) Save(_ context.Context, _ uuid.UUID, _ string, rec ins
 	r.rec = rec
 	return nil
 }
+func (r *instanceCLIRepo) SaveCleanup(_ context.Context, _ uuid.UUID, rec instance.Stored, _ any) error {
+	r.rec = rec
+	return nil
+}
 
 func TestInstanceSetURL(t *testing.T) {
 	for _, tc := range []struct {

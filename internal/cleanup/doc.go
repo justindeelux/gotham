@@ -14,6 +14,9 @@ const (
 	CategoryOrphanedVolumes   = "orphaned_volumes"
 	CategoryJournal           = "journal"
 	CategoryPackageCache      = "package_cache"
+	CategoryBackupFiles       = "backup_files"
+	CategoryUpdateFiles       = "update_files"
+	CategoryHistory           = "history"
 )
 
 const (
@@ -38,6 +41,8 @@ var categories = map[string]Category{
 	CategoryPackageCache:      {Key: CategoryPackageCache, Tier: TierSafe},
 	CategoryUnusedImages:      {Key: CategoryUnusedImages, Tier: TierCareful},
 	CategoryOrphanedVolumes:   {Key: CategoryOrphanedVolumes, Tier: TierDangerous, ManualOnly: true},
+	CategoryBackupFiles:       {Key: CategoryBackupFiles, Tier: TierCareful},
+	CategoryHistory:           {Key: CategoryHistory, Tier: TierCareful},
 }
 
 // CategoryTier returns the risk tier of a category; unknown keys are careful.
@@ -90,5 +95,6 @@ const (
 	idContainerPrefix = "container:"
 	idVolumePrefix    = "volume:"
 	idHostPrefix      = "host:"
+	idGothamPrefix    = "gotham:"
 	idBuildCache      = "build-cache"
 )

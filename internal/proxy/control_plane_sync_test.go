@@ -20,6 +20,10 @@ func (r *panelSettingsRepo) Save(_ context.Context, _ uuid.UUID, _ string, rec i
 	r.rec = rec
 	return nil
 }
+func (r *panelSettingsRepo) SaveCleanup(_ context.Context, _ uuid.UUID, rec instance.Stored, _ any) error {
+	r.rec = rec
+	return nil
+}
 
 func TestControlPlaneTrialSyncIgnoresOtherApplications(t *testing.T) {
 	for _, failure := range []string{"", "write", "panel route"} {

@@ -119,7 +119,8 @@ bại:
 | Trạng thái | Ý nghĩa |
 |---|---|
 | `ready` | Helper máy chủ chạy được và nút có đủ ngăn xếp mạng và thời gian. |
-| `unsupported_stack` | Nút thiếu systemd-networkd/resolved hoặc timedatectl, hoặc helper quá cũ. Cài helper không khắc phục được ngăn xếp thiếu. |
+| `unsupported_stack` | Nút thiếu systemd-networkd/resolved hoặc timedatectl. Cài helper không khắc phục được ngăn xếp thiếu. |
+| `helper_outdated` | Helper cũ hơn control plane này và không báo được múi giờ. Trên máy chạy control plane, **Cài helper máy chủ** sẽ cập nhật nó; trên nút từ xa, hãy cập nhật agent hoặc chạy lại trình cài agent. |
 | `helper_missing` | Thiếu tệp helper. Trên máy chạy control plane, **Cài helper máy chủ** có thể khôi phục khi đường sửa chữa đặc quyền có mặt. Trên nút từ xa, hãy chạy lại trình cài agent. |
 | `helper_denied` | Helper có mặt nhưng quy tắc đặc quyền từ chối nó. Hãy chạy lại trình cài tương ứng. |
 | `agent_outdated` | Agent cũ hơn tính năng cài đặt máy chủ. Hãy cập nhật agent hoặc chạy lại trình cài agent trên nút đó, rồi tải lại trang. |

@@ -280,6 +280,16 @@ func TestNodeUnsupportedAndOutdated(t *testing.T) {
 		t.Fatalf("unsupported node state: %+v %v", st, err)
 	}
 
+	outdated := &fakeHost{status: HostStatus{Capability: CapabilityHelperOutdated, Repair: true}}
+	f = newNodeFixture(t, outdated, nil)
+	if _, err := f.svc.UpdateSystem(ctx, uuid.Nil, f.servers[0], System{Hostname: "gotham-1", NTPEnabled: true}); !isUnsupported(err, CapabilityHelperOutdated) {
+		t.Fatalf("want helper_outdated capability, got %v", err)
+	}
+	st, err = f.svc.Get(ctx, f.servers[0])
+	if err != nil || st.Capability != CapabilityHelperOutdated || st.Reason == "" {
+		t.Fatalf("outdated helper state: %+v %v", st, err)
+	}
+
 	for _, tc := range []struct {
 		err  error
 		want NodeCapability

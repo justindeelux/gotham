@@ -262,6 +262,9 @@ const (
 	HostCapability_HOST_CAPABILITY_HELPER_MISSING HostCapability = 3
 	// HELPER_DENIED: the helper exists but the agent may not run it.
 	HostCapability_HOST_CAPABILITY_HELPER_DENIED HostCapability = 4
+	// HELPER_OUTDATED: gotham-hostctl predates the fields this control plane
+	// reads (its status has no timezone), so the helper needs an update.
+	HostCapability_HOST_CAPABILITY_HELPER_OUTDATED HostCapability = 5
 )
 
 // Enum value maps for HostCapability.
@@ -272,6 +275,7 @@ var (
 		2: "HOST_CAPABILITY_UNSUPPORTED_STACK",
 		3: "HOST_CAPABILITY_HELPER_MISSING",
 		4: "HOST_CAPABILITY_HELPER_DENIED",
+		5: "HOST_CAPABILITY_HELPER_OUTDATED",
 	}
 	HostCapability_value = map[string]int32{
 		"HOST_CAPABILITY_UNSPECIFIED":       0,
@@ -279,6 +283,7 @@ var (
 		"HOST_CAPABILITY_UNSUPPORTED_STACK": 2,
 		"HOST_CAPABILITY_HELPER_MISSING":    3,
 		"HOST_CAPABILITY_HELPER_DENIED":     4,
+		"HOST_CAPABILITY_HELPER_OUTDATED":   5,
 	}
 )
 
@@ -11191,13 +11196,14 @@ const file_agent_v1_agent_proto_rawDesc = "" +
 	"\x10METRIC_STATUS_OK\x10\x01\x12\x1d\n" +
 	"\x19METRIC_STATUS_UNSUPPORTED\x10\x02\x12\x17\n" +
 	"\x13METRIC_STATUS_ERROR\x10\x03\x12\x19\n" +
-	"\x15METRIC_STATUS_WARMING\x10\x04*\xba\x01\n" +
+	"\x15METRIC_STATUS_WARMING\x10\x04*\xdf\x01\n" +
 	"\x0eHostCapability\x12\x1f\n" +
 	"\x1bHOST_CAPABILITY_UNSPECIFIED\x10\x00\x12\x19\n" +
 	"\x15HOST_CAPABILITY_READY\x10\x01\x12%\n" +
 	"!HOST_CAPABILITY_UNSUPPORTED_STACK\x10\x02\x12\"\n" +
 	"\x1eHOST_CAPABILITY_HELPER_MISSING\x10\x03\x12!\n" +
-	"\x1dHOST_CAPABILITY_HELPER_DENIED\x10\x04*_\n" +
+	"\x1dHOST_CAPABILITY_HELPER_DENIED\x10\x04\x12#\n" +
+	"\x1fHOST_CAPABILITY_HELPER_OUTDATED\x10\x05*_\n" +
 	"\vRestoreMode\x12\x1c\n" +
 	"\x18RESTORE_MODE_UNSPECIFIED\x10\x00\x12\x18\n" +
 	"\x14RESTORE_MODE_REPLACE\x10\x01\x12\x18\n" +

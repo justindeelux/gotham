@@ -16,11 +16,17 @@ const reason = computed<string>(() => {
   if (capability === "helper_missing" && !props.state.repair) {
     return t("servers.settings.host.capability.helperMissingRemote");
   }
+  if (capability === "helper_outdated" && !props.state.repair) {
+    return t("servers.settings.host.capability.helperOutdatedRemote");
+  }
   return capability === "ready" ? "" : t(`servers.settings.host.capability.${capability}`);
 });
 
 const installable = computed<boolean>(
-  () => props.state.capability === "helper_missing" && props.state.repair,
+  () =>
+    (props.state.capability === "helper_missing" ||
+      props.state.capability === "helper_outdated") &&
+    props.state.repair,
 );
 
 const installing = ref(false);

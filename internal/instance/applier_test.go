@@ -80,10 +80,7 @@ func TestStatusReportsOutdatedHelper(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if status.Capability != CapabilityUnsupportedStack {
-		t.Fatalf("old helper must be read-only, got %q", status.Capability)
-	}
-	if status.Reason == "" {
-		t.Fatal("old helper needs a reason the UI can show")
+	if status.Capability != CapabilityHelperOutdated {
+		t.Fatalf("old helper must report helper_outdated, got %q", status.Capability)
 	}
 }

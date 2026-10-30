@@ -41,6 +41,15 @@ const en = {
     unsaved: "Save the URL before its router can be generated and synced.",
     refresh: "Refresh status",
   },
+  pendingConfirm: {
+    title: "Pending control-plane URL change",
+    body: "The control-plane URL is now {url}. Open Gotham at that address to keep the change.",
+    hint:
+      "Keep works only from the new address. If you cannot reach Gotham there, do nothing: the previous address is restored when the countdown ends.",
+    countdownStart: "The control-plane URL change will revert in {time}.",
+    keep: "Keep change",
+    revert: "Revert now",
+  },
   validation: {
     url: "Enter an http(s) URL with a host, without credentials, query or fragment.",
     name: "The name must be 1-64 characters.",

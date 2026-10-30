@@ -1,4 +1,4 @@
-import { i18n } from "@/shared/i18n";
+import { activeLocale, i18n } from "@/shared/i18n";
 
 import type {
   BackupRestore,
@@ -44,17 +44,181 @@ export function matchesBackupFilters(
 
 export const CRON_PRESETS = ["0 2 * * *", "0 */6 * * *", "0 3 * * 0"] as const;
 
-export function describeCron(cron: string): string {
-  switch (cron.trim()) {
-    case "0 2 * * *":
-      return String(i18n.global.t("backups.cron.dailyAtTwo"));
-    case "0 */6 * * *":
-      return String(i18n.global.t("backups.cron.everySixHours"));
-    case "0 3 * * 0":
-      return String(i18n.global.t("backups.cron.weeklySunday"));
-    default:
-      return String(i18n.global.t("backups.cron.custom", { cron }));
+const CRON_FIELD_BOUNDS: ReadonlyArray<readonly [number, number]> = [
+  [0, 59],
+  [0, 23],
+  [1, 31],
+  [1, 12],
+  [0, 7],
+];
+
+interface CronField {
+  values: Set<number>;
+  any: boolean;
+  step: number | null;
+}
+
+function cronText(key: string, params?: Record<string, string | number>): string {
+  return String(i18n.global.t(key, params ?? {}));
+}
+
+function parseCronNumber(value: string): number | null {
+  return /^\d+$/.test(value) ? Number(value) : null;
+}
+
+function parseCronField(part: string, min: number, max: number): CronField | null {
+  const values = new Set<number>();
+  let any = false;
+  let step: number | null = null;
+  for (const item of part.split(",")) {
+    if (item === "") {
+      return null;
+    }
+    const slash = item.indexOf("/");
+    const rangePart = slash === -1 ? item : item.slice(0, slash);
+    const stepPart = slash === -1 ? "" : item.slice(slash + 1);
+    let fieldStep = 1;
+    if (slash !== -1) {
+      const parsed = parseCronNumber(stepPart);
+      if (parsed === null || parsed === 0) {
+        return null;
+      }
+      fieldStep = parsed;
+    }
+    let low: number | null;
+    let high: number | null;
+    if (rangePart === "*") {
+      any = any || slash === -1;
+      step = slash === -1 ? step : fieldStep;
+      low = min;
+      high = max;
+    } else if (rangePart.includes("-")) {
+      const bounds = rangePart.split("-");
+      low = parseCronNumber(bounds[0] ?? "");
+      high = parseCronNumber(bounds[1] ?? "");
+    } else {
+      low = parseCronNumber(rangePart);
+      high = slash === -1 ? low : max;
+    }
+    if (low === null || high === null || low < min || high > max || low > high) {
+      return null;
+    }
+    for (let value = low; value <= high; value += fieldStep) {
+      values.add(max === 7 && value === 7 ? 0 : value);
+    }
   }
+  if (part.includes(",")) {
+    step = null;
+  }
+  return values.size === 0 ? null : { values, any, step };
+}
+
+function parseCron(cron: string): CronField[] | null {
+  const parts = cron.trim().split(/\s+/);
+  if (parts.length !== 5) {
+    return null;
+  }
+  const fields: CronField[] = [];
+  for (const [index, part] of parts.entries()) {
+    const bounds = CRON_FIELD_BOUNDS[index]!;
+    const field = parseCronField(part, bounds[0], bounds[1]);
+    if (field === null) {
+      return null;
+    }
+    fields.push(field);
+  }
+  return fields;
+}
+
+function singleValue(field: CronField): number | null {
+  return field.values.size === 1 ? [...field.values][0]! : null;
+}
+
+function pad(value: number): string {
+  return value.toString().padStart(2, "0");
+}
+
+function weekdayName(weekday: number): string {
+  // 2024-01-07 is a Sunday, so offsetting by the weekday index is stable.
+  const date = new Date(Date.UTC(2024, 0, 7 + weekday));
+  const locale = activeLocale.value === "vi" ? "vi-VN" : "en-US";
+  return new Intl.DateTimeFormat(locale, { weekday: "long", timeZone: "UTC" })
+    .format(date);
+}
+
+function cronSentence(fields: CronField[], cron: string): string {
+  const [minute, hour, dayOfMonth, month, weekday] = fields as [
+    CronField,
+    CronField,
+    CronField,
+    CronField,
+    CronField,
+  ];
+  const daysAny = dayOfMonth.any && month.any;
+  const minutes = singleValue(minute);
+  const hours = singleValue(hour);
+
+  if (minute.any && hour.any && daysAny && weekday.any) {
+    return cronText("backups.cron.everyMinute", { cron });
+  }
+  if (minute.step !== null && hour.any && daysAny && weekday.any) {
+    return cronText("backups.cron.everyMinutes", {
+      count: minute.step,
+      cron,
+    });
+  }
+  if (minutes !== null && hour.any && daysAny && weekday.any) {
+    return cronText("backups.cron.hourlyAt", {
+      minute: pad(minutes),
+      cron,
+    });
+  }
+  if (minutes !== null && hour.step !== null && daysAny && weekday.any) {
+    return cronText("backups.cron.everyNHours", {
+      count: hour.step,
+      minute: pad(minutes),
+      cron,
+    });
+  }
+  if (minutes === null || hours === null) {
+    return cronText("backups.cron.custom", { cron });
+  }
+  const time = `${pad(hours)}:${pad(minutes)}`;
+  if (daysAny && weekday.any) {
+    return cronText("backups.cron.dailyAt", { time, cron });
+  }
+  if (daysAny && !weekday.any) {
+    const weekdays = [...weekday.values].sort((a, b) => a - b).join(",");
+    if (weekdays === "1,2,3,4,5") {
+      return cronText("backups.cron.weekdaysAt", { time, cron });
+    }
+    if (weekday.values.size === 1) {
+      return cronText("backups.cron.weeklyAt", {
+        day: weekdayName([...weekday.values][0]!),
+        time,
+        cron,
+      });
+    }
+  }
+  if (month.any && weekday.any && singleValue(dayOfMonth) !== null) {
+    return cronText("backups.cron.monthlyAt", {
+      day: singleValue(dayOfMonth)!,
+      time,
+      cron,
+    });
+  }
+  return cronText("backups.cron.custom", { cron });
+}
+
+// The backend runs the schedule in the server's local time, not UTC, so the
+// sentence carries that note wherever it is shown.
+export function describeCron(cron: string): string {
+  void activeLocale.value;
+  const fields = parseCron(cron);
+  if (fields === null) {
+    return "";
+  }
+  return `${cronSentence(fields, cron)} · ${cronText("backups.cron.serverTime")}`;
 }
 
 export function runDuration(

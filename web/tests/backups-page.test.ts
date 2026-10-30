@@ -68,21 +68,51 @@ describe("backup filters", () => {
 });
 
 describe("cron in plain language", () => {
-  it("names every preset", () => {
-    expect(describeCron(CRON_PRESETS[0])).toBe("Every day at 02:00");
-    expect(describeCron(CRON_PRESETS[1])).toBe("Every 6 hours");
-    expect(describeCron(CRON_PRESETS[2])).toBe("Every Sunday at 03:00");
+  it("names every preset with its expression and the server timezone", () => {
+    expect(describeCron(CRON_PRESETS[0])).toBe(
+      "Every day at 02:00 (0 2 * * *) · Server local time",
+    );
+    expect(describeCron(CRON_PRESETS[1])).toBe(
+      "Every 6 hours at :00 (0 */6 * * *) · Server local time",
+    );
+    expect(describeCron(CRON_PRESETS[2])).toBe(
+      "Every Sunday at 03:00 (0 3 * * 0) · Server local time",
+    );
   });
 
-  it("keeps an unknown expression visible", () => {
+  it("explains the other accepted forms", () => {
     expect(describeCron("*/5 * * * *")).toBe(
-      "Custom schedule (*/5 * * * *)",
+      "Every 5 minutes (*/5 * * * *) · Server local time",
     );
+    expect(describeCron("0 * * * *")).toBe(
+      "Every hour at :00 (0 * * * *) · Server local time",
+    );
+    expect(describeCron("0 2 * * 1-5")).toBe(
+      "Every weekday at 02:00 (0 2 * * 1-5) · Server local time",
+    );
+    expect(describeCron("0 2 1 * *")).toBe(
+      "On day 1 of each month at 02:00 (0 2 1 * *) · Server local time",
+    );
+  });
+
+  it("keeps an unsupported but valid expression visible", () => {
+    expect(describeCron("0 2 1,15 * *")).toBe(
+      "Custom schedule (0 2 1,15 * *) · Server local time",
+    );
+  });
+
+  it("returns no summary for an invalid expression", () => {
+    expect(describeCron("0 2 * *")).toBe("");
+    expect(describeCron("0 25 * * *")).toBe("");
+    expect(describeCron("0 2 32 * *")).toBe("");
+    expect(describeCron("not a cron")).toBe("");
   });
 
   it("translates to Vietnamese", () => {
     setLocale("vi", null);
-    expect(describeCron(CRON_PRESETS[1])).toBe("Mỗi 6 giờ");
+    expect(describeCron(CRON_PRESETS[0])).toBe(
+      "Mỗi ngày lúc 02:00 (0 2 * * *) · Giờ máy chủ",
+    );
   });
 });
 

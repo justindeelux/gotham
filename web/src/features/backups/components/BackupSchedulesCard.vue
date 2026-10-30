@@ -15,10 +15,11 @@ import {
   NTag,
   NText,
 } from "naive-ui";
-import { inject } from "vue";
+import { computed, inject } from "vue";
 
 import { RESOURCE_BACKUP_CRON_PRESETS, resourceBackupsKey } from "@/features/backups/composables/useResourceBackups";
 import { isCronPresent } from "@/features/backups/schemas/backups";
+import { describeCron } from "@/features/backups/utils/backupStatus";
 import { relativeTime } from "@/shared/utils/format";
 
 import { i18n } from "@/shared/i18n";
@@ -28,6 +29,13 @@ function t(key: string, params?: Record<string, string | number>): string {
 }
 
 const backups = inject(resourceBackupsKey)!;
+
+const cronFeedbackId = "backup-schedule-cron-feedback";
+const cronSummary = computed(() => describeCron(backups.scheduleCron.value));
+const cronInvalid = computed(
+  () =>
+    backups.scheduleCron.value.trim() !== "" && cronSummary.value === "",
+);
 </script>
 
 <template>
@@ -64,6 +72,7 @@ const backups = inject(resourceBackupsKey)!;
                 {{ backups.providerLabel(schedule.provider_id) }}
               </NTag>
             </NSpace>
+            <NText depth="3">{{ describeCron(schedule.cron) }}</NText>
             <NText depth="3">
               {{ t("databases.backups.schedules.nextRun") }}
               <span :title="schedule.next_run_at">
@@ -167,12 +176,29 @@ const backups = inject(resourceBackupsKey)!;
       </NSpace>
       <NText depth="3">{{ t("backups.schedules.keepLastHint") }}</NText>
       <div class="schedule-form__row">
-        <NInput
-          v-model:value="backups.scheduleCron.value"
-          class="mono grow"
-          placeholder="0 2 * * *"
-          :aria-label="t('databases.backups.schedules.cronAria')"
-        />
+        <div class="schedule-form__cron">
+          <NInput
+            v-model:value="backups.scheduleCron.value"
+            class="mono"
+            placeholder="0 2 * * *"
+            :aria-label="t('databases.backups.schedules.cronAria')"
+            :input-props="{
+              'aria-describedby':
+                cronSummary !== '' || cronInvalid ? cronFeedbackId : undefined,
+            }"
+          />
+          <NText v-if="cronSummary" :id="cronFeedbackId" depth="3">
+            {{ cronSummary }}
+          </NText>
+          <NText
+            v-else-if="cronInvalid"
+            :id="cronFeedbackId"
+            type="error"
+            role="alert"
+          >
+            {{ t("backups.cron.invalid") }}
+          </NText>
+        </div>
         <NText depth="3">
           {{ t("databases.backups.protection.maxRunLabel") }}
         </NText>
@@ -264,6 +290,14 @@ const backups = inject(resourceBackupsKey)!;
   align-items: center;
   gap: var(--space-2);
   flex-wrap: wrap;
+}
+
+.schedule-form__cron {
+  display: flex;
+  flex: 1 1 240px;
+  flex-direction: column;
+  gap: var(--space-1);
+  min-width: 200px;
 }
 
 .schedule-pause {

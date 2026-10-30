@@ -41,6 +41,8 @@ var categories = map[string]Category{
 	CategoryPackageCache:      {Key: CategoryPackageCache, Tier: TierSafe},
 	CategoryUnusedImages:      {Key: CategoryUnusedImages, Tier: TierCareful},
 	CategoryOrphanedVolumes:   {Key: CategoryOrphanedVolumes, Tier: TierDangerous, ManualOnly: true},
+	CategoryBackupFiles:       {Key: CategoryBackupFiles, Tier: TierCareful},
+	CategoryHistory:           {Key: CategoryHistory, Tier: TierCareful},
 }
 
 // CategoryTier returns the risk tier of a category; unknown keys are careful.

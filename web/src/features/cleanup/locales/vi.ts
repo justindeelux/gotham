@@ -92,6 +92,8 @@ const vi = {
     orphaned_volumes: "Volume mồ côi",
     journal: "Nhật ký journal",
     package_cache: "Bộ nhớ đệm gói",
+    backup_files: "Tệp sao lưu mồ côi",
+    history: "Lịch sử",
   },
   tiers: {
     safe: "An toàn",
@@ -106,6 +108,8 @@ const vi = {
     stopped: "Container đã dừng",
     journalArchived: "Tệp nhật ký đã lưu trữ cũ hơn tuổi tối thiểu (ít nhất 1 ngày)",
     packageCache: "Tệp gói đã tải về mà trình quản lý gói có thể tải lại",
+    backupFile: "Không có bản ghi sao lưu nào tham chiếu tệp này",
+    historyOlder: "{count} dòng cũ hơn {days} ngày",
     offline: "Máy chủ ngoại tuyến",
     busy: "Đang có triển khai chạy",
     unsupported: "Agent trên máy chủ quá cũ",

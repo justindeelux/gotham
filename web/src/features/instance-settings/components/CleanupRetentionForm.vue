@@ -126,6 +126,6 @@ function status(path: string): "error" | undefined {
 }
 
 .instance-cleanup-alert {
-  margin-bottom: 16px;
+  margin-bottom: var(--space-4);
 }
 </style>

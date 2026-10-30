@@ -748,8 +748,12 @@ func (s *Server) cleanupService(volumes containers.VolumeService) cleanup.Cleanu
 		Dial:     dial,
 		Volumes:  volumes,
 		Host:     host,
-		Store:    s.persistence,
-		Logger:   s.logger,
+		Leftovers: cleanup.NewLeftoversSource(cleanup.LeftoversConfig{
+			Store:  s.persistence,
+			Logger: s.logger,
+		}),
+		Store:  s.persistence,
+		Logger: s.logger,
 	})
 }
 

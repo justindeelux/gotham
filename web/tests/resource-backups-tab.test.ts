@@ -87,6 +87,39 @@ describe("ResourceBackupsTab contents", () => {
     );
   });
 
+  it("offers the stop-resource option as a checkbox on schedules", async () => {
+    const wrapper = mountTab();
+    await flushPromises();
+
+    const pause = wrapper.get(".schedule-pause");
+    expect(pause.find(".n-checkbox").exists()).toBe(true);
+    expect(pause.find(".n-switch").exists()).toBe(false);
+    expect(pause.text()).toContain("Stop the resource during backup");
+    expect(pause.text()).toContain("The backup is consistent");
+    wrapper.unmount();
+  });
+
+  it("explains the cron expression while typing", async () => {
+    const wrapper = mountTab();
+    await flushPromises();
+    const form = wrapper.get(".schedule-form__cron");
+    const input = form.get("input");
+
+    await input.setValue("0 2 * * *");
+    await flushPromises();
+    expect(form.text()).toContain(
+      "Every day at 02:00 (0 2 * * *) · Server local time",
+    );
+
+    await input.setValue("0 2 * *");
+    await flushPromises();
+    expect(form.text()).toContain(
+      "Enter a cron expression with 5 fields",
+    );
+    expect(form.text()).not.toContain("Every day at");
+    wrapper.unmount();
+  });
+
   it("labels a run that was taken without stopping", async () => {
     state.backups = [
       {

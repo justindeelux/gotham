@@ -244,13 +244,13 @@ func parseField(raw fieldDocument) (Field, error) {
 	hasBounds := field.Min != nil || field.Max != nil
 	hasOptions := len(raw.Options) > 0
 	if field.Generate {
-		if field.Type != FieldSecret {
-			return Field{}, fmt.Errorf("%w: field %q: generate applies to secret fields only", ErrValidation, key)
+		if field.Type != FieldSecret && field.Type != FieldText {
+			return Field{}, fmt.Errorf("%w: field %q: generate applies to text and secret fields only", ErrValidation, key)
 		}
 		if hasPattern {
-			return Field{}, fmt.Errorf("%w: field %q: generated secrets must not declare a pattern", ErrValidation, key)
+			return Field{}, fmt.Errorf("%w: field %q: generated fields must not declare a pattern", ErrValidation, key)
 		}
-		if field.MaxLength != 0 && field.MaxLength < minGeneratedLength {
+		if field.Type == FieldSecret && field.MaxLength != 0 && field.MaxLength < minGeneratedLength {
 			return Field{}, fmt.Errorf("%w: field %q: generated secrets need max_length of at least %d", ErrValidation, key, minGeneratedLength)
 		}
 	}

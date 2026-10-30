@@ -59,6 +59,7 @@ const vi = {
       "Giữ mọi bản sao lưu theo lịch — sửa lịch để đặt giới hạn",
     keepLast: "Giữ {count} bản sao lưu theo lịch gần nhất",
     keepLastInvalid: "Số bản giữ lại phải từ 1 đến 365.",
+    pauseLabel: "Dừng tài nguyên khi sao lưu",
   },
   errors: {
     noSpace: "Không đủ dung lượng trống trên đĩa sao lưu",
@@ -115,10 +116,17 @@ const vi = {
     shortId: "Tài nguyên {id}",
   },
   cron: {
-    dailyAtTwo: "Mỗi ngày lúc 02:00",
-    everySixHours: "Mỗi 6 giờ",
-    weeklySunday: "Mỗi Chủ nhật lúc 03:00",
+    everyMinute: "Mỗi phút ({cron})",
+    everyMinutes: "Mỗi {count} phút ({cron})",
+    hourlyAt: "Mỗi giờ lúc :{minute} ({cron})",
+    everyNHours: "Mỗi {count} giờ lúc :{minute} ({cron})",
+    dailyAt: "Mỗi ngày lúc {time} ({cron})",
+    weekdaysAt: "Mỗi ngày trong tuần lúc {time} ({cron})",
+    weeklyAt: "Mỗi {day} lúc {time} ({cron})",
+    monthlyAt: "Ngày {day} mỗi tháng lúc {time} ({cron})",
     custom: "Lịch tùy chỉnh ({cron})",
+    serverTime: "Giờ máy chủ",
+    invalid: "Nhập biểu thức cron gồm 5 trường: phút giờ ngày tháng thứ.",
   },
   restore: {
     title: "Khôi phục bản sao lưu",

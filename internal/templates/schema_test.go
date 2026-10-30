@@ -124,6 +124,25 @@ func TestLoadSample(t *testing.T) {
 	}
 }
 
+func TestLoadAllowsGenerateOnText(t *testing.T) {
+	files := sampleFiles()
+	files["demo/template.yaml"] = strings.Replace(
+		sampleTemplateYAML,
+		"    type: text\n    default: hello\n",
+		"    type: text\n    required: true\n    generate: true\n    max_length: 12\n",
+		1,
+	)
+	catalog := mustCatalog(t, files)
+	template, ok := catalog.Get("demo")
+	if !ok {
+		t.Fatal("Get(demo) not found")
+	}
+	field := template.Fields[5]
+	if field.Type != FieldText || !field.Generate || field.MaxLength != 12 {
+		t.Errorf("note field = %+v", field)
+	}
+}
+
 func TestLoadRoutes(t *testing.T) {
 	withRoutes := func(routes string) map[string]string {
 		files := sampleFiles()
@@ -248,17 +267,17 @@ func TestLoadRejectsBadDefinitions(t *testing.T) {
 			files: map[string]string{"demo/template.yaml": strings.Replace(sampleTemplateYAML, "    type: secret\n    required: true\n", "    type: secret\n    required: true\n    default: hunter2\n", 1), "demo/compose.yaml": sampleComposeYAML},
 			want:  "must not declare a default",
 		},
-		"generate on text": {
+		"generate on text with a pattern": {
 			files: map[string]string{"demo/template.yaml": strings.Replace(sampleTemplateYAML, "    type: text\n    required: true\n", "    type: text\n    required: true\n    generate: true\n", 1), "demo/compose.yaml": sampleComposeYAML},
-			want:  "generate applies to secret fields only",
+			want:  "generated fields must not declare a pattern",
 		},
 		"generate on number": {
 			files: map[string]string{"demo/template.yaml": strings.Replace(sampleTemplateYAML, "    type: number\n", "    type: number\n    generate: true\n", 1), "demo/compose.yaml": sampleComposeYAML},
-			want:  "generate applies to secret fields only",
+			want:  "generate applies to text and secret fields only",
 		},
 		"generate with pattern": {
 			files: map[string]string{"demo/template.yaml": strings.Replace(sampleTemplateYAML, "    required: true\n    generate: true\n", "    required: true\n    generate: true\n    pattern: ^[a-z]+$\n", 1), "demo/compose.yaml": sampleComposeYAML},
-			want:  "generated secrets must not declare a pattern",
+			want:  "generated fields must not declare a pattern",
 		},
 		"generate with short max_length": {
 			files: map[string]string{"demo/template.yaml": strings.Replace(sampleTemplateYAML, "    required: true\n    generate: true\n", "    required: true\n    generate: true\n    max_length: 12\n", 1), "demo/compose.yaml": sampleComposeYAML},

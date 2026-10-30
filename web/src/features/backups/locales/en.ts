@@ -58,6 +58,7 @@ const en = {
       "Keeps every scheduled backup — edit the schedule to set a limit",
     keepLast: "Keeps the last {count} scheduled backups",
     keepLastInvalid: "Keep the last must be between 1 and 365 backups.",
+    pauseLabel: "Stop the resource during backup",
   },
   errors: {
     noSpace: "Not enough free space on the backup disk",
@@ -113,10 +114,17 @@ const en = {
     shortId: "Resource {id}",
   },
   cron: {
-    dailyAtTwo: "Every day at 02:00",
-    everySixHours: "Every 6 hours",
-    weeklySunday: "Every Sunday at 03:00",
+    everyMinute: "Every minute ({cron})",
+    everyMinutes: "Every {count} minutes ({cron})",
+    hourlyAt: "Every hour at :{minute} ({cron})",
+    everyNHours: "Every {count} hours at :{minute} ({cron})",
+    dailyAt: "Every day at {time} ({cron})",
+    weekdaysAt: "Every weekday at {time} ({cron})",
+    weeklyAt: "Every {day} at {time} ({cron})",
+    monthlyAt: "On day {day} of each month at {time} ({cron})",
     custom: "Custom schedule ({cron})",
+    serverTime: "Server local time",
+    invalid: "Enter a cron expression with 5 fields: minute hour day month weekday.",
   },
   restore: {
     title: "Restore backup",

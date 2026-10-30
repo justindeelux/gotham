@@ -3,6 +3,7 @@ import {
   NAlert,
   NButton,
   NCard,
+  NCheckbox,
   NEmpty,
   NInput,
   NInputNumber,
@@ -14,10 +15,11 @@ import {
   NTag,
   NText,
 } from "naive-ui";
-import { inject } from "vue";
+import { computed, inject } from "vue";
 
 import { RESOURCE_BACKUP_CRON_PRESETS, resourceBackupsKey } from "@/features/backups/composables/useResourceBackups";
 import { isCronPresent } from "@/features/backups/schemas/backups";
+import { describeCron } from "@/features/backups/utils/backupStatus";
 import { relativeTime } from "@/shared/utils/format";
 
 import { i18n } from "@/shared/i18n";
@@ -27,6 +29,13 @@ function t(key: string, params?: Record<string, string | number>): string {
 }
 
 const backups = inject(resourceBackupsKey)!;
+
+const cronFeedbackId = "backup-schedule-cron-feedback";
+const cronSummary = computed(() => describeCron(backups.scheduleCron.value));
+const cronInvalid = computed(
+  () =>
+    backups.scheduleCron.value.trim() !== "" && cronSummary.value === "",
+);
 </script>
 
 <template>
@@ -63,6 +72,7 @@ const backups = inject(resourceBackupsKey)!;
                 {{ backups.providerLabel(schedule.provider_id) }}
               </NTag>
             </NSpace>
+            <NText depth="3">{{ describeCron(schedule.cron) }}</NText>
             <NText depth="3">
               {{ t("databases.backups.schedules.nextRun") }}
               <span :title="schedule.next_run_at">
@@ -166,12 +176,29 @@ const backups = inject(resourceBackupsKey)!;
       </NSpace>
       <NText depth="3">{{ t("backups.schedules.keepLastHint") }}</NText>
       <div class="schedule-form__row">
-        <NInput
-          v-model:value="backups.scheduleCron.value"
-          class="mono grow"
-          placeholder="0 2 * * *"
-          :aria-label="t('databases.backups.schedules.cronAria')"
-        />
+        <div class="schedule-form__cron">
+          <NInput
+            v-model:value="backups.scheduleCron.value"
+            class="mono"
+            placeholder="0 2 * * *"
+            :aria-label="t('databases.backups.schedules.cronAria')"
+            :input-props="{
+              'aria-describedby':
+                cronSummary !== '' || cronInvalid ? cronFeedbackId : undefined,
+            }"
+          />
+          <NText v-if="cronSummary" :id="cronFeedbackId" depth="3">
+            {{ cronSummary }}
+          </NText>
+          <NText
+            v-else-if="cronInvalid"
+            :id="cronFeedbackId"
+            type="error"
+            role="alert"
+          >
+            {{ t("backups.cron.invalid") }}
+          </NText>
+        </div>
         <NText depth="3">
           {{ t("databases.backups.protection.maxRunLabel") }}
         </NText>
@@ -230,17 +257,9 @@ const backups = inject(resourceBackupsKey)!;
         v-if="backups.resource.value.resource_type !== 'database'"
         class="schedule-form__row schedule-pause"
       >
-        <NSwitch
-          v-model:value="backups.schedulePauseDuringBackup.value"
-          :aria-label="t('backups.resourceTab.pauseDuringBackup')"
-        >
-          <template #checked>
-            {{ t("backups.resourceTab.pauseDuringBackup") }}
-          </template>
-          <template #unchecked>
-            {{ t("backups.resourceTab.noPause") }}
-          </template>
-        </NSwitch>
+        <NCheckbox v-model:checked="backups.schedulePauseDuringBackup.value">
+          {{ t("backups.schedules.pauseLabel") }}
+        </NCheckbox>
         <NText depth="3">
           {{
             backups.schedulePauseDuringBackup.value
@@ -273,7 +292,18 @@ const backups = inject(resourceBackupsKey)!;
   flex-wrap: wrap;
 }
 
+.schedule-form__cron {
+  display: flex;
+  flex: 1 1 240px;
+  flex-direction: column;
+  gap: var(--space-1);
+  min-width: 200px;
+}
+
 .schedule-pause {
+  flex-direction: column;
+  align-items: flex-start;
+  gap: var(--space-1);
   padding: var(--space-2) var(--space-3);
   border: 1px solid var(--border);
   border-radius: var(--radius-md);

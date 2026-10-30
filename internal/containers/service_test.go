@@ -66,6 +66,9 @@ type mockDockerClient struct {
 	removeVolumeSeen string
 	listResp         *agentv1.ListContainersResponse
 	listErr          error
+	volumesResp      *agentv1.ListVolumesResponse
+	volumesErr       error
+	listVolumes      int
 	actionErr        error
 	pullErr          error
 	runID            string
@@ -96,6 +99,19 @@ func (m *mockDockerClient) ListContainers(context.Context, *agentv1.ListContaine
 		return m.listResp, nil
 	}
 	return &agentv1.ListContainersResponse{}, nil
+}
+
+func (m *mockDockerClient) ListVolumes(context.Context, *agentv1.ListVolumesRequest, ...grpc.CallOption) (*agentv1.ListVolumesResponse, error) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	m.listVolumes++
+	if m.volumesErr != nil {
+		return nil, m.volumesErr
+	}
+	if m.volumesResp != nil {
+		return m.volumesResp, nil
+	}
+	return &agentv1.ListVolumesResponse{}, nil
 }
 
 func (m *mockDockerClient) StartContainer(context.Context, *agentv1.ContainerActionRequest, ...grpc.CallOption) (*agentv1.ContainerActionResponse, error) {

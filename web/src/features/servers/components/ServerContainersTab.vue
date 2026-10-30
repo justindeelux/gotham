@@ -12,10 +12,13 @@ import { useI18n } from "vue-i18n";
 import ContainersTable from "@/features/servers/components/ContainersTable.vue";
 import ContainersToolbar from "@/features/servers/components/ContainersToolbar.vue";
 import LogViewer from "@/features/servers/components/LogViewer.vue";
+import ServerVolumesCard from "@/features/servers/components/ServerVolumesCard.vue";
 import { useContainersPage } from "@/features/servers/composables/useContainersPage";
+import { useAuthStore } from "@/features/auth";
 
 const props = defineProps<{ serverId: string }>();
 const serverId = computed<string>(() => props.serverId);
+const authStore = useAuthStore();
 const { t } = useI18n();
 
 const {
@@ -81,6 +84,8 @@ const emptyDescription = computed<string>(() => {
       @open-logs="openLogs"
     />
   </NCard>
+
+  <ServerVolumesCard v-if="authStore.isOwner" :server-id="serverId" />
 
   <NDrawer v-model:show="drawerOpen" :width="drawerWidth" placement="right">
     <NDrawerContent closable :native-scrollbar="false">

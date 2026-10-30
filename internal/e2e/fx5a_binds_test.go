@@ -35,6 +35,9 @@ func (fakeBindDocker) InspectContainer(context.Context, string) (docker.Containe
 func (fakeBindDocker) ListContainers(context.Context, bool, map[string]string, bool) ([]*agentv1.ContainerInfo, error) {
 	return nil, nil
 }
+func (fakeBindDocker) ListVolumes(context.Context) ([]*agentv1.VolumeInfo, error) {
+	return nil, nil
+}
 func (fakeBindDocker) Start(context.Context, string) error   { return nil }
 func (fakeBindDocker) Stop(context.Context, string) error    { return nil }
 func (fakeBindDocker) Restart(context.Context, string) error { return nil }

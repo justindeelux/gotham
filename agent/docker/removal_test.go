@@ -18,6 +18,7 @@ func TestRemoveVolumeConfinesNames(t *testing.T) {
 	valid := []string{
 		"gotham-db-11111111-2222-3333-4444-555555555555",
 		"gotham-app-11111111-2222-3333-4444-555555555555-uploads",
+		"gotham-11111111-2222-3333-4444-555555555555_data",
 	}
 	for _, name := range valid {
 		if _, err := server.RemoveVolume(context.Background(), &agentv1.VolumeActionRequest{Name: name}); err != nil {
@@ -38,6 +39,9 @@ func TestRemoveVolumeConfinesNames(t *testing.T) {
 		"gotham-app-not-a-uuid-data",
 		"gotham-app-11111111-2222-3333-4444-555555555555",
 		"gotham-app-11111111-2222-3333-4444-555555555555../etc",
+		"gotham-11111111-2222-3333-4444-555555555555",
+		"gotham-11111111-2222-3333-4444-555555555555_",
+		"gotham-11111111-2222-3333-4444-555555555555_../etc",
 		"../../etc",
 		"x-gotham-db-11111111-2222-3333-4444-555555555555",
 		"gotham-db-11111111-2222-3333-4444-555555555555x",
@@ -61,6 +65,33 @@ func TestRemoveVolumeMapsAgentFailure(t *testing.T) {
 		&agentv1.VolumeActionRequest{Name: "gotham-db-11111111-2222-3333-4444-555555555555"})
 	if status.Code(err) != codes.Internal {
 		t.Fatalf("code = %v, want Internal for an unexpected engine error", status.Code(err))
+	}
+}
+
+func TestRemoveVolumeMapsInUse(t *testing.T) {
+	fake := &fakeDockerClient{err: errors.New("remove volume: volume is in use - [abc]")}
+	server := NewDockerServer(fake, discardLogger())
+
+	_, err := server.RemoveVolume(context.Background(),
+		&agentv1.VolumeActionRequest{Name: "gotham-11111111-2222-3333-4444-555555555555_data"})
+	if status.Code(err) != codes.FailedPrecondition {
+		t.Fatalf("code = %v, want FailedPrecondition for an in-use volume", status.Code(err))
+	}
+	if !strings.Contains(status.Convert(err).Message(), "in use") {
+		t.Errorf("message = %q; want an in-use hint", status.Convert(err).Message())
+	}
+}
+
+func TestDockerServerListVolumes(t *testing.T) {
+	fake := &fakeDockerClient{volumes: []*agentv1.VolumeInfo{{Name: "data", SizeBytes: 10}}}
+	client := newDockerServiceClient(t, fake)
+
+	response, err := client.ListVolumes(context.Background(), &agentv1.ListVolumesRequest{})
+	if err != nil {
+		t.Fatalf("ListVolumes: %v", err)
+	}
+	if len(response.GetVolumes()) != 1 || response.GetVolumes()[0].GetName() != "data" {
+		t.Errorf("volumes = %v; want one named data", response.GetVolumes())
 	}
 }
 

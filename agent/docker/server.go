@@ -24,6 +24,7 @@ type Client interface {
 	InspectContainer(ctx context.Context, id string) (ContainerDetails, error)
 	ContainerStats(ctx context.Context, id string) (ContainerStats, error)
 	ListContainers(ctx context.Context, all bool, labels map[string]string, resolveDevices bool) ([]*agentv1.ContainerInfo, error)
+	ListVolumes(ctx context.Context) ([]*agentv1.VolumeInfo, error)
 	Start(ctx context.Context, id string) error
 	Stop(ctx context.Context, id string) error
 	Restart(ctx context.Context, id string) error
@@ -144,15 +145,32 @@ var dbVolumePattern = regexp.MustCompile(`^gotham-db-[0-9a-f]{8}-[0-9a-f]{4}-[0-
 
 var appVolumePattern = regexp.MustCompile(`^gotham-app-[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}-[a-zA-Z0-9][a-zA-Z0-9._-]*$`)
 
+// composeProjectVolumePattern is the default compose volume name of a Gotham project
+// ("gotham-<uuid>_<key>"). A custom `name:` never matches and stays off-limits.
+var composeProjectVolumePattern = regexp.MustCompile(`^gotham-[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}_[a-zA-Z0-9][a-zA-Z0-9_.-]*$`)
+
+func (s *DockerServer) ListVolumes(ctx context.Context, _ *agentv1.ListVolumesRequest) (*agentv1.ListVolumesResponse, error) {
+	volumes, err := s.docker.ListVolumes(ctx)
+	if err != nil {
+		return nil, dockerError("list volumes", err)
+	}
+	return &agentv1.ListVolumesResponse{Volumes: volumes}, nil
+}
+
 func (s *DockerServer) RemoveVolume(ctx context.Context, req *agentv1.VolumeActionRequest) (*agentv1.VolumeActionResponse, error) {
 	name := req.GetName()
 	if strings.TrimSpace(name) == "" {
 		return nil, status.Error(codes.InvalidArgument, "volume name is required")
 	}
-	if !dbVolumePattern.MatchString(name) && !appVolumePattern.MatchString(name) {
+	if !dbVolumePattern.MatchString(name) &&
+		!appVolumePattern.MatchString(name) &&
+		!composeProjectVolumePattern.MatchString(name) {
 		return nil, status.Errorf(codes.InvalidArgument, "remove volume: %q is not a managed volume", name)
 	}
 	if err := s.docker.RemoveVolume(ctx, name); err != nil {
+		if strings.Contains(strings.ToLower(err.Error()), "volume is in use") {
+			return nil, status.Errorf(codes.FailedPrecondition, "remove volume: %s", err)
+		}
 		return nil, dockerError("remove volume", err)
 	}
 	return &agentv1.VolumeActionResponse{}, nil

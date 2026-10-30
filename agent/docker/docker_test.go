@@ -264,6 +264,51 @@ func TestDockerClientListContainers(t *testing.T) {
 	}
 }
 
+func TestDockerClientListVolumes(t *testing.T) {
+	var query string
+	mux := http.NewServeMux()
+	mux.HandleFunc("/system/df", func(w http.ResponseWriter, r *http.Request) {
+		query = r.URL.RawQuery
+		writeJSON(t, w, map[string]any{
+			"Volumes": []map[string]any{
+				{
+					"Name":      "gotham-app-6f1c2f7e-0000-0000-0000-000000000001-data",
+					"CreatedAt": "2026-10-30T08:00:00Z",
+					"UsageData": map[string]any{"Size": 2048, "RefCount": 0},
+				},
+				{"Name": "unused", "CreatedAt": "2026-10-30T09:00:00Z"},
+			},
+		})
+	})
+	server := httptest.NewServer(mux)
+	t.Cleanup(server.Close)
+	client := newFakeDockerClient(t, server.URL)
+
+	volumes, err := client.ListVolumes(context.Background())
+	if err != nil {
+		t.Fatalf("ListVolumes: %v", err)
+	}
+	if query != "type=volume" {
+		t.Errorf("query = %q; want type=volume", query)
+	}
+	if len(volumes) != 2 {
+		t.Fatalf("len(volumes) = %d; want 2", len(volumes))
+	}
+	got := volumes[0]
+	if got.GetName() != "gotham-app-6f1c2f7e-0000-0000-0000-000000000001-data" {
+		t.Errorf("name = %q", got.GetName())
+	}
+	if got.GetSizeBytes() != 2048 || got.GetRefCount() != 0 {
+		t.Errorf("usage = %d/%d; want 2048/0", got.GetSizeBytes(), got.GetRefCount())
+	}
+	if got.GetCreatedAt() == nil || got.GetCreatedAt().AsTime().UTC().Format(time.RFC3339) != "2026-10-30T08:00:00Z" {
+		t.Errorf("CreatedAt = %v", got.GetCreatedAt())
+	}
+	if vols := volumes[1].GetSizeBytes(); vols != 0 {
+		t.Errorf("volume without UsageData size = %d; want 0", vols)
+	}
+}
+
 func TestDockerClientListContainersMountMetadata(t *testing.T) {
 	managed := filepath.Join(t.TempDir(), "app", "data")
 	var inspectCalls int

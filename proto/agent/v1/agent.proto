@@ -35,6 +35,10 @@ service UpdateService {
 // containers on that node.
 service DockerService {
   rpc ListContainers(ListContainersRequest) returns (ListContainersResponse);
+  // ListVolumes reports the node's Docker volumes with their usage. The agent
+  // does not decide ownership; the control plane filters out the volumes a
+  // recorded resource owns.
+  rpc ListVolumes(ListVolumesRequest) returns (ListVolumesResponse);
   rpc StartContainer(ContainerActionRequest) returns (ContainerActionResponse);
   rpc StopContainer(ContainerActionRequest) returns (ContainerActionResponse);
   rpc RestartContainer(ContainerActionRequest) returns (ContainerActionResponse);
@@ -42,13 +46,15 @@ service DockerService {
   // Named volumes are never removed: deleting a resource must not delete its
   // data (Phase 5 database soft delete relies on this).
   rpc RemoveContainer(ContainerActionRequest) returns (ContainerActionResponse);
-  // RemoveVolume deletes one named volume. It exists for the Phase 5 database
-  // grace-window expiry: a soft-deleted database keeps its volume for the
-  // retention window and this is the only way the control plane can remove it.
-  // The agent confines the call to Gotham-managed database volumes (the
-  // "gotham-db-" prefix) so a compromised control plane cannot delete arbitrary
-  // node storage. Removal is idempotent: a volume that is already gone is
-  // reported as success.
+  // RemoveVolume deletes one named volume. It serves the Phase 5 database
+  // grace-window expiry and the orphaned-volume cleanup: a soft-deleted
+  // database keeps its volume for the retention window, and a volume a deleted
+  // resource left behind can be removed from the node view. The agent confines
+  // the call to Gotham-managed names ("gotham-db-", "gotham-app-" and the
+  // compose project form "gotham-<uuid>_") so a compromised control plane
+  // cannot delete arbitrary node storage. A volume in use fails with
+  // codes.FailedPrecondition. Removal is idempotent: a volume that is already
+  // gone is reported as success.
   rpc RemoveVolume(VolumeActionRequest) returns (VolumeActionResponse);
   rpc PullImage(PullImageRequest) returns (PullImageResponse);
   rpc CreateContainer(CreateContainerRequest) returns (ContainerActionResponse);
@@ -1421,6 +1427,23 @@ message ContainerActionRequest {
 
 message ContainerActionResponse {
   string container_id = 1;
+}
+
+message ListVolumesRequest {}
+
+// VolumeInfo describes one Docker volume.
+message VolumeInfo {
+  string name = 1;
+  google.protobuf.Timestamp created_at = 2;
+  // size_bytes is the volume's data size as the engine reports it; 0 when the
+  // engine reports no usage data.
+  int64 size_bytes = 3;
+  // ref_count is the number of containers mounting the volume.
+  int64 ref_count = 4;
+}
+
+message ListVolumesResponse {
+  repeated VolumeInfo volumes = 1;
 }
 
 // VolumeActionRequest targets one named volume.

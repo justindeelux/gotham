@@ -303,6 +303,40 @@ describe("retained failure display", () => {
     expect(store.servers).toEqual([]);
   });
 
+  it("stops polling containers after the view unmounts", async () => {
+    vi.useFakeTimers();
+    try {
+      vi.mocked(listContainers).mockResolvedValue([]);
+      const Child = defineComponent({
+        name: "ContainersPollingProbe",
+        setup() {
+          useContainersPage(computed(() => "srv-1"));
+          return () => h("div");
+        },
+      });
+      const Probe = defineComponent({
+        name: "ContainersPollingProbeHost",
+        render() {
+          return h(NMessageProvider, () => h(Child));
+        },
+      });
+      const wrapper = mount(Probe, { global: { plugins: [i18n] } });
+      await flushPromises();
+      expect(vi.mocked(listContainers)).toHaveBeenCalledTimes(1);
+
+      await vi.advanceTimersByTimeAsync(5_000);
+      await flushPromises();
+      expect(vi.mocked(listContainers)).toHaveBeenCalledTimes(2);
+
+      wrapper.unmount();
+      await vi.advanceTimersByTimeAsync(15_000);
+      await flushPromises();
+      expect(vi.mocked(listContainers)).toHaveBeenCalledTimes(2);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
   it("re-renders the containers banner without refetching or losing draft state", async () => {
     const apiError = { message: "containers: dial failed", status: 500 };
     vi.mocked(listContainers).mockRejectedValueOnce(apiError);

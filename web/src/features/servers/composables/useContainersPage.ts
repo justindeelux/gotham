@@ -12,7 +12,7 @@ import {
   startContainer,
   stopContainer,
 } from "@/features/servers/api/containers";
-import { failureText, getServer } from "@/features/servers/api/servers";
+import { failureText } from "@/features/servers/api/servers";
 import { useMediaQuery } from "@/shared/composables/useMediaQuery";
 import {
   countByFilter,
@@ -35,7 +35,6 @@ export function useContainersPage(serverId: ComputedRef<string>) {
       ? null
       : failureText(fetchFailure.value, locale.value),
   );
-  const serverName = ref<string>("");
   const loaded = ref(false);
 
   const pending = ref<Record<string, boolean>>({});
@@ -106,17 +105,6 @@ export function useContainersPage(serverId: ComputedRef<string>) {
     }
   }
 
-  async function fetchServer(): Promise<void> {
-    if (!serverId.value) {
-      return;
-    }
-    try {
-      const server = await getServer(serverId.value);
-      serverName.value = server.name;
-    } catch {
-    }
-  }
-
   async function runAction(
     row: Container,
     action: ContainerAction,
@@ -161,7 +149,7 @@ export function useContainersPage(serverId: ComputedRef<string>) {
 
   async function initialize(): Promise<void> {
     loaded.value = false;
-    await Promise.all([fetchServer(), fetchContainers(true)]);
+    await fetchContainers(true);
   }
 
   watch(() => serverId.value, () => {
@@ -183,7 +171,6 @@ export function useContainersPage(serverId: ComputedRef<string>) {
     containers,
     loading,
     error,
-    serverName,
     loaded,
     activeFilter,
     searchQuery,

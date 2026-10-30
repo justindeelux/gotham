@@ -17,6 +17,7 @@ import { useI18n } from "vue-i18n";
 import type { Server } from "@/features/servers/api/servers";
 import { describeServerError, failureText, getServer } from "@/features/servers/api/servers";
 import EditServerModal from "@/features/servers/components/EditServerModal.vue";
+import ServerContainersTab from "@/features/servers/components/ServerContainersTab.vue";
 import ServerDetailHeader from "@/features/servers/components/ServerDetailHeader.vue";
 import ServerMetricsTab from "@/features/servers/components/ServerMetricsTab.vue";
 import ServerOverviewTab from "@/features/servers/components/ServerOverviewTab.vue";
@@ -200,28 +201,12 @@ onMounted(() => {
             />
           </NTabPane>
 
-          <NTabPane name="containers" :tab="$t('servers.detail.tabContainers')">
-            <NCard style="margin-top: 16px">
-              <NEmpty
-                :description="$t('servers.detail.containersEmpty')"
-              >
-                <template #extra>
-                  <RouterLink
-                    :to="{
-                      name: 'server-containers',
-                      params: { id: server.id },
-                    }"
-                    custom
-                  >
-                    <template #default="{ navigate }">
-                      <NButton type="primary" @click="navigate">
-                        {{ $t("servers.detail.openContainers") }}
-                      </NButton>
-                    </template>
-                  </RouterLink>
-                </template>
-              </NEmpty>
-            </NCard>
+          <NTabPane
+            name="containers"
+            :tab="$t('servers.detail.tabContainers')"
+            display-directive="if"
+          >
+            <ServerContainersTab :server-id="serverId" />
           </NTabPane>
 
           <NTabPane

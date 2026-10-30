@@ -161,12 +161,6 @@ const resourceRoutes: ResourceRoute[] = [
       "Settings",
     ],
   },
-  {
-    name: "containers",
-    path: "/servers/srv-1/containers",
-    meta: true,
-    title: "Containers",
-  },
 ];
 
 function json(status: number, body: unknown) {
@@ -451,17 +445,19 @@ for (const route of resourceRoutes) {
   });
 }
 
-test("containers page keeps its table card without a card header", async ({
+test("containers tab renders the table inside the server page", async ({
   page,
 }) => {
   await mockApi(page);
   await page.goto(`${baseURL}/servers/srv-1/containers`);
-  await page.locator(".page-head h1").waitFor();
-  await expect(page.locator(".page-head h1")).toHaveText("Containers");
-  await expect(page.locator(".n-card")).toHaveCount(1);
-  await expect(page.locator(".n-card-header")).toHaveCount(0);
+  await expect(page).toHaveURL(`${baseURL}/servers/srv-1?tab=containers`);
+  await expect(page.locator(".page-head h1")).toHaveText(longName);
   await expect(
-    page.locator(".page-head .page-actions button", { hasText: "Refresh" }),
+    page.locator(".n-tabs-tab--active"),
+  ).toHaveText("Containers");
+  await expect(page.locator(".containers-tab .n-data-table")).toBeVisible();
+  await expect(
+    page.locator(".containers-tab .n-card-header button", { hasText: "Refresh" }),
   ).toBeVisible();
 });
 
@@ -471,9 +467,7 @@ test("member views keep the same header and lifecycle controls", async ({
   test.setTimeout(120_000);
   await mockApi(page, "member");
 
-  for (const route of resourceRoutes.filter(
-    (item) => item.name !== "server" && item.name !== "containers",
-  )) {
+  for (const route of resourceRoutes.filter((item) => item.name !== "server")) {
     await page.setViewportSize({ width: 1366, height: 900 });
     await page.goto(`${baseURL}${route.path}`);
     await page.locator(".page-head h1").first().waitFor();

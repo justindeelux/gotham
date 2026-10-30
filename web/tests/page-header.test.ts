@@ -171,13 +171,12 @@ describe("ServerDetailHeader", () => {
     expect(wrapper.find(".page-desc").exists()).toBe(false);
   });
 
-  it("keeps edit, validate and containers actions working", async () => {
+  it("keeps edit and validate actions working", async () => {
     const wrapper = await mountHeader();
     await buttonByText(wrapper, "Edit").trigger("click");
     await buttonByText(wrapper, "Validate").trigger("click");
     expect(wrapper.emitted("edit")).toHaveLength(1);
     expect(wrapper.emitted("validate")).toHaveLength(1);
-    expect(wrapper.text()).toContain("Open containers");
   });
 
   it("keeps the validate button loading while a validation runs", async () => {

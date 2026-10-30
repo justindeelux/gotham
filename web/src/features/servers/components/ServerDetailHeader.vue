@@ -1,7 +1,6 @@
 <script setup lang="ts">
 import { NAvatar, NButton } from "naive-ui";
 import { computed } from "vue";
-import { RouterLink } from "vue-router";
 
 import type { Server } from "@/features/servers/api/servers";
 import ServerStatusTag from "@/features/servers/components/ServerStatusTag.vue";
@@ -44,16 +43,6 @@ const summary = computed<string>(() => summaryLine(props.server));
       <NButton :loading="validating" @click="emit('validate')">
         {{ $t("servers.detail.validateAction") }}
       </NButton>
-      <RouterLink
-        :to="{ name: 'server-containers', params: { id: server.id } }"
-        custom
-      >
-        <template #default="{ navigate }">
-          <NButton type="primary" @click="navigate">
-            {{ $t("servers.detail.openContainers") }}
-          </NButton>
-        </template>
-      </RouterLink>
     </template>
   </PageHeader>
 </template>

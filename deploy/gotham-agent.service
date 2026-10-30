@@ -57,18 +57,12 @@ KillMode=process
 # Hardening. The updater writes the binary under StateDirectory, so that single
 # path stays writable; everything the privileged wrapper needs is root-owned.
 #
-# ProtectSystem=yes (not full): the root-owned host helper runs as a child of
-# this service through sudo and inherits its mount namespace. It writes the
-# network and NTP drop-ins under /etc, which full makes read-only (EROFS), so a
-# timezone change died before timedatectl ran. The service user itself cannot
-# write root-owned /etc files; only the sudo'd helper can.
-#
 # NoNewPrivileges is intentionally NOT set: the agent invokes the fixed
 # root-owned wrapper through `sudo -n` (the only privileged action sudoers
 # grants), and NoNewPrivileges would block setuid sudo entirely.
 StateDirectory=gotham-agent
 StateDirectoryMode=0755
-ProtectSystem=yes
+ProtectSystem=full
 ProtectHome=true
 PrivateTmp=true
 ReadWritePaths=/var/lib/gotham-agent

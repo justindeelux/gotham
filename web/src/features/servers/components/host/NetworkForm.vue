@@ -180,7 +180,7 @@ const { focusTarget, unlocked } = useHostUnlock(() => props.state.capability ===
     <NAlert v-if="state.pending" type="warning" :show-icon="true" class="form-alert">
       {{ t("servers.settings.host.network.pendingNote") }}
     </NAlert>
-    <NAlert v-if="errorMessage" type="error" :show-icon="true" class="form-alert">{{ errorMessage }}</NAlert>
+    <NAlert v-if="errorMessage" type="error" :show-icon="true" class="form-alert form-alert-multiline">{{ errorMessage }}</NAlert>
     <NForm ref="formRef" :model="form" :rules="rules" class="host-form" @submit.prevent="handleSubmit">
       <NFormItem
         path="dns0"

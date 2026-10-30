@@ -8,6 +8,7 @@ import (
 
 	"github.com/go-chi/chi/v5"
 	"github.com/google/uuid"
+	"google.golang.org/grpc/status"
 )
 
 type nodeEnvelope struct {
@@ -141,15 +142,21 @@ func (h *nodeHandler) reply(w http.ResponseWriter, st NodeState, log string, err
 	}
 }
 
-// helperReason strips the ErrHost wrapper so the helper's own diagnostic can
-// be shown to the owner, in the same log field the install flow already uses.
+// helperReason returns the helper's own diagnostic for the owner: the local
+// sudo path carries it after the ErrHost wrapper, an agent node carries it in
+// the gRPC status message. Raw transport text is never shown.
 func helperReason(err error) string {
 	msg := strings.TrimSpace(err.Error())
-	prefix := ErrHost.Error()
-	if !strings.HasPrefix(msg, prefix) {
-		return msg
+	if prefix := ErrHost.Error() + ": "; strings.HasPrefix(msg, prefix) {
+		return strings.TrimSpace(strings.TrimPrefix(msg, prefix))
 	}
-	return strings.TrimLeft(strings.TrimPrefix(msg, prefix), ":\n ")
+	// errors.As finds the *status.Error inside errors.Join without letting
+	// status.FromError replace its message with the full wrapped text.
+	var grpcErr interface{ GRPCStatus() *status.Status }
+	if errors.As(err, &grpcErr) {
+		return strings.TrimSpace(grpcErr.GRPCStatus().Message())
+	}
+	return ""
 }
 
 func serverIDParam(w http.ResponseWriter, r *http.Request) (uuid.UUID, bool) {

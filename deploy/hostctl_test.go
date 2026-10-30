@@ -203,18 +203,80 @@ func TestHostctlApplySystemTimezoneNeedsNoNtpDirectory(t *testing.T) {
 	}
 }
 
-func TestServiceUnitsLeaveEtcWritableForHostHelper(t *testing.T) {
-	// The host helper is a sudo child of these units, so it inherits their
-	// mount namespace. ProtectSystem=full makes /etc read-only and every helper
-	// write under /etc fail with EROFS.
-	for _, name := range []string{"gotham.service", "gotham-agent.service"} {
-		data, err := os.ReadFile(name)
-		if err != nil {
+func TestHostctlReexecsWriteVerbsOnly(t *testing.T) {
+	dir := t.TempDir()
+	record := filepath.Join(dir, "argv")
+	fake := filepath.Join(dir, "fake-systemd-run")
+	body := "#!/bin/sh\nprintf '%s\\n' \"$@\" > \"$FAKE_RECORD\"\nexit 0\n"
+	if err := os.WriteFile(fake, []byte(body), 0o755); err != nil {
+		t.Fatalf("write fake systemd-run: %v", err)
+	}
+	self, err := filepath.Abs("gotham-hostctl.sh")
+	if err != nil {
+		t.Fatalf("abs path: %v", err)
+	}
+
+	for _, verb := range []string{"apply-system", "apply-network", "revert-network"} {
+		if err := os.Remove(record); err != nil && !os.IsNotExist(err) {
 			t.Fatal(err)
 		}
-		if !strings.Contains(string(data), "\nProtectSystem=yes\n") {
-			t.Errorf("%s must keep /etc writable for the root-owned host helper", name)
+		cmd := exec.Command("sh", self, verb)
+		cmd.Env = append(os.Environ(), "GOTHAM_HOSTCTL_SYSTEMD_RUN="+fake, "FAKE_RECORD="+record)
+		cmd.Stdin = strings.NewReader("hostname=\nntp_enabled=true\nntp_servers=\ntimezone=Europe/Berlin\n")
+		if out, err := cmd.CombinedOutput(); err != nil {
+			t.Fatalf("%s re-exec: %v: %s", verb, err, out)
 		}
+		recorded, err := os.ReadFile(record)
+		if err != nil {
+			t.Fatalf("%s did not use systemd-run: %v", verb, err)
+		}
+		for _, want := range []string{
+			"--unit=gotham-hostctl-" + verb + "-",
+			"--property=RuntimeMaxSec=120",
+			"--setenv=GOTHAM_HOSTCTL_INNER=1",
+			self,
+		} {
+			if !strings.Contains(string(recorded), want) {
+				t.Errorf("%s systemd-run argv missing %q: %q", verb, want, recorded)
+			}
+		}
+	}
+
+	// Read-only verbs stay in-process: the fake must never run.
+	if err := os.Remove(record); err != nil && !os.IsNotExist(err) {
+		t.Fatal(err)
+	}
+	root := t.TempDir()
+	extra := stubProbes(t, root)
+	cmd := exec.Command("sh", self, "status")
+	cmd.Env = append(os.Environ(), "GOTHAM_HOSTCTL_SYSTEMD_RUN="+fake, "FAKE_RECORD="+record, "GOTHAM_HOSTCTL_ROOT="+root)
+	cmd.Env = append(cmd.Env, extra...)
+	out, err := cmd.CombinedOutput()
+	if err != nil {
+		t.Fatalf("status: %v: %s", err, out)
+	}
+	if _, err := os.Stat(record); !os.IsNotExist(err) {
+		t.Fatalf("status must not re-exec through systemd-run: %s", out)
+	}
+	if !strings.Contains(string(out), `"hostname":"node-1"`) {
+		t.Errorf("status did not run in-process: %s", out)
+	}
+
+	// The inner marker stops a second re-exec (loop guard).
+	cmd = exec.Command("sh", self, "apply-system")
+	cmd.Env = append(os.Environ(), "GOTHAM_HOSTCTL_SYSTEMD_RUN="+fake, "FAKE_RECORD="+record,
+		"GOTHAM_HOSTCTL_INNER=1", "GOTHAM_HOSTCTL_DRYRUN=1", "GOTHAM_HOSTCTL_ROOT="+root)
+	cmd.Env = append(cmd.Env, extra...)
+	cmd.Stdin = strings.NewReader("hostname=\nntp_enabled=true\nntp_servers=\ntimezone=Europe/Berlin\n")
+	out, err = cmd.CombinedOutput()
+	if err != nil {
+		t.Fatalf("inner apply-system: %v: %s", err, out)
+	}
+	if _, err := os.Stat(record); !os.IsNotExist(err) {
+		t.Fatalf("inner run must not re-exec again: %s", out)
+	}
+	if !strings.Contains(string(out), "timedatectl set-timezone Europe/Berlin") {
+		t.Errorf("inner run did not apply in-process: %s", out)
 	}
 }
 

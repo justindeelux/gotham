@@ -39,15 +39,28 @@
 #
 # Under sudo every GOTHAM_HOSTCTL_* override is ignored; GOTHAM_HOSTCTL_ROOT and
 # GOTHAM_HOSTCTL_DRYRUN exist for tests and are honoured only without sudo.
+#
+# Sandbox: the control-plane and agent units run with ProtectSystem=full, so
+# /etc is read-only in their mount namespace and a `sudo` child inherits that.
+# The write verbs therefore re-execute themselves in a fresh transient unit
+# through systemd-run (as root, outside the sandbox), like gotham-toolctl. The
+# inner run is marked with GOTHAM_HOSTCTL_INNER=1 so it does not re-exec again.
 set -u
 umask 022
 
 SELF="/usr/libexec/gotham/gotham-hostctl"
+SELF_RUN="$0"
+# Bound the transient unit just above the 60s request timeout of both callers:
+# --wait does not stop the unit if the caller is killed.
+RUNTIME_MAX_SEC="120"
 ROOT=""
 DRYRUN="0"
+INNER="${GOTHAM_HOSTCTL_INNER:-0}"
+SYSTEMD_RUN="systemd-run"
 if [ -z "${SUDO_USER:-}${SUDO_UID:-}" ]; then
     ROOT="${GOTHAM_HOSTCTL_ROOT:-}"
     DRYRUN="${GOTHAM_HOSTCTL_DRYRUN:-0}"
+    SYSTEMD_RUN="${GOTHAM_HOSTCTL_SYSTEMD_RUN:-systemd-run}"
 fi
 
 NETD="${ROOT}/etc/systemd/network"
@@ -73,6 +86,30 @@ run() {
 
 [ "$#" -eq 1 ] || die "exactly one verb is required" 2
 VERB="$1"
+
+# ---- re-exec outside the service's systemd sandbox -------------------------
+# Root's systemd-run creates a transient unit with a clean namespace (no
+# ProtectSystem), which is what lets the helper write its drop-ins under /etc.
+# Skip the read-only verbs and any invocation that already runs inside the
+# transient unit. stdin, stdout and the exit code pass through --pipe --wait.
+case "${VERB}" in
+    apply-network | revert-network | apply-system) WRITE=1 ;;
+    *) WRITE=0 ;;
+esac
+case "${SELF_RUN}" in /*) SELF_OK=1 ;; *) SELF_OK=0 ;; esac
+if [ "${DRYRUN}" != "1" ] && [ "${INNER}" != "1" ] && [ "${SELF_OK}" = "1" ] \
+    && [ "${WRITE}" = "1" ] && command -v "${SYSTEMD_RUN}" >/dev/null 2>&1; then
+    UNIT="gotham-hostctl-${VERB}-$$"
+    # shortcut: this trap can be deferred during systemd-run; use an
+    # interruptible background wait when prompt graceful cancellation lands.
+    trap 'systemctl stop "$UNIT" >/dev/null 2>&1 || true; exit 130' TERM INT HUP
+    "${SYSTEMD_RUN}" --quiet --pipe --wait --collect \
+        --unit="${UNIT}" \
+        --property="RuntimeMaxSec=${RUNTIME_MAX_SEC}" \
+        --setenv=GOTHAM_HOSTCTL_INNER=1 \
+        "${SELF_RUN}" "$@"
+    exit $?
+fi
 
 # ---- validation ------------------------------------------------------------
 OCT='(25[0-5]|2[0-4][0-9]|1[0-9][0-9]|[1-9]?[0-9])'
@@ -484,10 +521,9 @@ apply-system)
     is_bool "${K_ntp_enabled}" || die "invalid ntp_enabled" 2
     all_hosts "${K_ntp_servers}" 4 || die "invalid ntp_servers" 2
     { [ -z "${K_timezone}" ] || is_tz "${K_timezone}"; } || die "invalid timezone" 2
-    if [ -n "${K_hostname}" ]; then run hostnamectl set-hostname "${K_hostname}" || die "hostnamectl failed"; fi
-    # Only touch the timesyncd drop-in when NTP servers are set or one is left
-    # to remove: a timezone-only change must not depend on that directory being
-    # writable.
+    # Write the NTP drop-in before the hostname: a failed write must not leave
+    # the host half-applied. Only touch it when servers are set or one is left
+    # to remove, so a timezone-only change never depends on that directory.
     if [ -n "${K_ntp_servers}" ]; then
         mkdir -p "${NTPD}" || die "cannot prepare directories"
         { echo "# Managed by Gotham (gotham-hostctl)."; echo "[Time]"; echo "NTP=$(printf '%s' "${K_ntp_servers}" | tr ',' ' ')"; } >"${NTPFILE}.new" \
@@ -495,7 +531,8 @@ apply-system)
     elif [ -e "${NTPFILE}" ]; then
         rm -f "${NTPFILE}" || die "cannot remove timesyncd file"
     fi
-    if [ "${K_ntp_enabled}" = "true" ]; then run timedatectl set-ntp true; else run timedatectl set-ntp false; fi
+    if [ -n "${K_hostname}" ]; then run hostnamectl set-hostname "${K_hostname}" || die "hostnamectl failed"; fi
+    run timedatectl set-ntp "${K_ntp_enabled}" || die "timedatectl failed"
     run systemctl restart systemd-timesyncd 2>/dev/null
     if [ -n "${K_timezone}" ]; then run timedatectl set-timezone "${K_timezone}" || die "timedatectl failed"; fi
     ;;

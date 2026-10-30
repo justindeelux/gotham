@@ -200,8 +200,6 @@ onMounted(() => {
       <div class="dash-main">
         <NeedsAttentionSection />
 
-        <RecentDeploysPanel />
-
         <ServerHealthSection
           v-if="authStore.isOwner"
           :cards="nodeCards"
@@ -209,6 +207,8 @@ onMounted(() => {
           :total-count="totalCount"
           :hidden-count="hiddenNodeCount"
         />
+
+        <RecentDeploysPanel />
       </div>
 
       <aside v-if="authStore.isOwner" class="dash-aside">

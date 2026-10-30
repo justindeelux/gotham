@@ -33,6 +33,15 @@
   flex-shrink: 0;
 }
 
+.backup-pause {
+  max-width: 240px;
+}
+
+.backup-pause :deep(.n-checkbox__label) {
+  white-space: normal;
+  line-height: var(--leading-body);
+}
+
 .empty-hint {
   color: var(--muted);
   font-size: var(--text-sm);

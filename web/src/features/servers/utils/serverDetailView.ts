@@ -59,14 +59,14 @@ export interface UsageSegments {
   blocks: UsageBlock[];
 }
 
-export const usageBlockCount = 10;
+export const usageBlockCount = 30;
 
-/** Fixed gauge mapping: blocks 1-6 success, 7-8 warning, 9-10 danger. */
+/** Fixed gauge mapping: blocks 1-18 success, 19-24 warning, 25-30 danger. */
 export function usageBlockLevel(index: number): UsageBlockLevel {
-  if (index < 6) {
+  if (index < 18) {
     return "success";
   }
-  return index < 8 ? "warning" : "danger";
+  return index < 24 ? "warning" : "danger";
 }
 
 export function usageSegments(
@@ -76,7 +76,10 @@ export function usageSegments(
     return null;
   }
   const percentage = toPercent(value);
-  const filled = Math.min(usageBlockCount, Math.round(percentage / 10));
+  const filled = Math.min(
+    usageBlockCount,
+    Math.round((percentage * usageBlockCount) / 100),
+  );
   return {
     percentage,
     filled,

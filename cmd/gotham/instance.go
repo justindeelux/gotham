@@ -54,7 +54,7 @@ func instanceSetURL(raw string) error {
 	}
 	defer pool.Close()
 	st := store.New(pool)
-	svc := instance.NewService(instance.NewStoreRepository(st), nil, nil)
+	svc := instance.NewService(instance.NewStoreRepository(st), nil)
 	defer svc.Close()
 	current, err := svc.ControlPlaneURL(ctx)
 	if err != nil {
@@ -119,7 +119,7 @@ func setInstanceURL(ctx context.Context, svc *instance.Service, raw string) (ins
 		return instance.State{}, err
 	}
 	state, err = svc.UpdateGeneral(ctx, uuid.Nil, instance.GeneralInput{
-		ControlPlaneURL: raw, InstanceName: state.General.InstanceName.Value, Timezone: state.General.Timezone.Value,
+		ControlPlaneURL: raw, InstanceName: state.General.InstanceName.Value,
 	})
 	if err != nil {
 		return instance.State{}, err

@@ -4,7 +4,6 @@ import (
 	"context"
 	"log/slog"
 	"os"
-	"reflect"
 	"strings"
 	"sync"
 	"time"
@@ -20,18 +19,16 @@ type Service struct {
 	domainTimer           *time.Timer
 	domainClosed          bool
 	repo                  Repository
-	host                  HostApplier
 	logger                *slog.Logger
 	now                   func() time.Time
 	lookup                func(string) string
-	netLock               sync.Mutex
 }
 
-func NewService(repo Repository, host HostApplier, logger *slog.Logger) *Service {
+func NewService(repo Repository, logger *slog.Logger) *Service {
 	if logger == nil {
 		logger = slog.Default()
 	}
-	return &Service{repo: repo, host: host, logger: logger, now: time.Now, lookup: os.Getenv}
+	return &Service{repo: repo, logger: logger, now: time.Now, lookup: os.Getenv}
 }
 
 func (s *Service) resolve(env string, stored *string, def string) Field {
@@ -48,8 +45,44 @@ func (s *Service) general(rec Stored) General {
 	return General{
 		ControlPlaneURL: s.resolve(EnvPublicURL, rec.ControlPlaneURL, ""),
 		InstanceName:    s.resolve(EnvInstanceName, rec.InstanceName, DefaultInstanceName),
-		Timezone:        s.resolve(EnvTimezone, rec.Timezone, DefaultTimezone),
 	}
+}
+
+// Timezone is the control plane's own timezone: schedules, log display and
+// backups run in it. It is the local node's timezone, kept in the same row as
+// before so no existing value is lost.
+func (s *Service) Timezone(ctx context.Context) (string, error) {
+	field, err := s.TimezoneField(ctx)
+	return field.Value, err
+}
+
+func (s *Service) TimezoneField(ctx context.Context) (Field, error) {
+	rec, err := s.repo.Load(ctx)
+	if err != nil {
+		return Field{}, err
+	}
+	return s.resolve(EnvTimezone, rec.Timezone, DefaultTimezone), nil
+}
+
+// SetTimezone stores the local node's timezone. A GOTHAM_TIMEZONE override
+// wins, so the stored value may not diverge from what the control plane uses.
+func (s *Service) SetTimezone(ctx context.Context, actor uuid.UUID, tz string) error {
+	rec, err := s.repo.Load(ctx)
+	if err != nil {
+		return err
+	}
+	cur := s.resolve(EnvTimezone, rec.Timezone, DefaultTimezone)
+	if cur.Locked {
+		if cur.Value != tz {
+			return FieldErrors{"timezone": "locked by environment variable " + cur.EnvVar}
+		}
+		return nil
+	}
+	if tz == cur.Value {
+		return nil
+	}
+	rec.Timezone = &tz
+	return s.repo.Save(ctx, actor, SectionGeneral, rec, map[string]any{"timezone": map[string]any{"from": cur.Value, "to": tz}})
 }
 
 func (s *Service) ControlPlaneURL(ctx context.Context) (string, error) {
@@ -60,93 +93,19 @@ func (s *Service) ControlPlaneURL(ctx context.Context) (string, error) {
 	return s.general(rec).ControlPlaneURL.Value, nil
 }
 
-func (s *Service) hostState(ctx context.Context) Host {
-	if s.host == nil {
-		return Host{}
-	}
-	return s.host.Probe(ctx)
-}
-
 func (s *Service) Get(ctx context.Context) (State, error) {
 	if err := s.reconcileControlPlaneURL(ctx); err != nil {
 		return State{}, err
 	}
-	rec, err := s.reconcile(ctx)
+	rec, err := s.repo.Load(ctx)
 	if err != nil {
 		return State{}, err
 	}
-	if rec.Pending == nil {
-		if live, ok := s.hostLive(ctx); ok {
-			rec.Network.IPv4, rec.Network.IPv6 = live.IPv4, live.IPv6
-			if len(live.DNSServers) > 0 {
-				rec.Network.DNSServers = live.DNSServers
-			}
-		}
-	}
-	host := s.hostState(ctx)
-	return State{
-		General: s.general(rec), Network: rec.Network, System: rec.System,
-		Capabilities: Capabilities{Network: host.Network, System: host.System},
-		Host:         host, Pending: rec.Pending, PendingControlPlaneURL: rec.PendingControlPlaneURL,
-	}, nil
-}
-
-func (s *Service) hostLive(ctx context.Context) (Network, bool) {
-	if s.host == nil {
-		return Network{}, false
-	}
-	live, ok := s.host.HostNetwork(ctx)
-	if !ok {
-		return Network{}, false
-	}
-	net := Network{IPv4: live.IPv4, IPv6: live.IPv6, DNSServers: live.DNSServers}
-	if net.DNSServers == nil {
-		net.DNSServers = []string{}
-	}
-	return net, true
-}
-
-func sameInterface(live HostNetwork, req Network) bool {
-	return live.IPv4 == req.IPv4 && live.IPv6 == req.IPv6
-}
-
-func riskyInterfaceChange(live HostNetwork, req Network) bool {
-	if live.IPv4.Mode == ModeStatic && live.IPv4.Address != "" {
-		if req.IPv4.Mode != ModeStatic || req.IPv4.Address != live.IPv4.Address ||
-			req.IPv4.Gateway != live.IPv4.Gateway {
-			return true
-		}
-	}
-	if live.IPv6.Enabled && live.IPv6.Mode == ModeStatic && live.IPv6.Address != "" {
-		if !req.IPv6.Enabled || req.IPv6.Mode != ModeStatic ||
-			req.IPv6.Address != live.IPv6.Address || req.IPv6.Gateway != live.IPv6.Gateway {
-			return true
-		}
-	}
-	return false
+	return s.stateLocked(rec), nil
 }
 
 func (s *Service) Reconcile(ctx context.Context) error {
-	if err := s.reconcileControlPlaneURL(ctx); err != nil {
-		return err
-	}
-	_, err := s.reconcile(ctx)
-	return err
-}
-
-func (s *Service) reconcile(ctx context.Context) (Stored, error) {
-	s.netLock.Lock()
-	defer s.netLock.Unlock()
-	rec, err := s.repo.Load(ctx)
-	if err != nil || rec.Pending == nil || s.now().Before(rec.Pending.Deadline) {
-		return rec, err
-	}
-	rec.Network, rec.Pending = rec.Pending.Previous, nil
-	if err := s.repo.Save(ctx, uuid.Nil, SectionNetwork, rec, map[string]any{"event": "auto-reverted: not confirmed in time"}); err != nil {
-		return rec, err
-	}
-	s.logger.Warn("instance network change auto-reverted: not confirmed in time")
-	return rec, nil
+	return s.reconcileControlPlaneURL(ctx)
 }
 
 func (s *Service) UpdateGeneral(ctx context.Context, actor uuid.UUID, in GeneralInput) (State, error) {
@@ -170,7 +129,6 @@ func (s *Service) UpdateGeneral(ctx context.Context, actor uuid.UUID, in General
 	}{
 		"control_plane_url": {cur.ControlPlaneURL, in.ControlPlaneURL},
 		"instance_name":     {cur.InstanceName, in.InstanceName},
-		"timezone":          {cur.Timezone, in.Timezone},
 	} {
 		if f.field.Locked && f.field.Value != f.value {
 			errs[key] = "locked by environment variable " + f.field.EnvVar
@@ -194,11 +152,10 @@ func (s *Service) UpdateGeneral(ctx context.Context, actor uuid.UUID, in General
 	}
 	next.ControlPlaneURL = ptrOrNil(in.ControlPlaneURL, cur.ControlPlaneURL.Locked, rec.ControlPlaneURL)
 	next.InstanceName = ptrOrNil(in.InstanceName, cur.InstanceName.Locked, rec.InstanceName)
-	next.Timezone = ptrOrNil(in.Timezone, cur.Timezone.Locked, rec.Timezone)
 	changes := diff(map[string]any{
-		"control_plane_url": cur.ControlPlaneURL.Value, "instance_name": cur.InstanceName.Value, "timezone": cur.Timezone.Value,
+		"control_plane_url": cur.ControlPlaneURL.Value, "instance_name": cur.InstanceName.Value,
 	}, map[string]any{
-		"control_plane_url": s.general(next).ControlPlaneURL.Value, "instance_name": s.general(next).InstanceName.Value, "timezone": s.general(next).Timezone.Value,
+		"control_plane_url": s.general(next).ControlPlaneURL.Value, "instance_name": s.general(next).InstanceName.Value,
 	})
 	if err := s.repo.Save(ctx, actor, SectionGeneral, next, changes); err != nil {
 		return State{}, err
@@ -220,7 +177,7 @@ func (s *Service) UpdateGeneral(ctx context.Context, actor uuid.UUID, in General
 			}
 		}
 	}
-	return s.stateLocked(ctx, next), nil
+	return s.stateLocked(next), nil
 }
 
 func ptrOrNil(v string, locked bool, stored *string) *string {
@@ -233,149 +190,8 @@ func ptrOrNil(v string, locked bool, stored *string) *string {
 	return &v
 }
 
-func (s *Service) UpdateSystem(ctx context.Context, actor uuid.UUID, in System) (State, error) {
-	in, errs := normalizeSystem(in)
-	if errs != nil {
-		return State{}, errs
-	}
-	if !s.hostState(ctx).System {
-		return State{}, ErrUnsupported
-	}
-	rec, err := s.repo.Load(ctx)
-	if err != nil {
-		return State{}, err
-	}
-	if err := s.host.ApplySystem(ctx, in); err != nil {
-		return State{}, err
-	}
-	changes := diff(rec.System, in)
-	rec.System = in
-	if err := s.repo.Save(ctx, actor, SectionSystem, rec, changes); err != nil {
-		return State{}, err
-	}
-	s.logger.Info("instance system settings updated", "actor", actor, "changes", changes)
-	return s.Get(ctx)
-}
-
-func (s *Service) UpdateNetwork(ctx context.Context, actor uuid.UUID, in NetworkInput) (State, error) {
-	net, errs := normalizeNetwork(in.Network)
-	if errs != nil {
-		return State{}, errs
-	}
-	if !s.hostState(ctx).Network {
-		return State{}, ErrUnsupported
-	}
-	if _, err := s.reconcile(ctx); err != nil {
-		return State{}, err
-	}
-	s.netLock.Lock()
-	defer s.netLock.Unlock()
-	rec, err := s.repo.Load(ctx)
-	if err != nil {
-		return State{}, err
-	}
-	if rec.Pending != nil {
-		return State{}, ErrPending
-	}
-	dnsOnly := false
-	if s.host != nil {
-		if live, ok := s.host.HostNetwork(ctx); ok {
-			switch {
-			case sameInterface(live, net):
-				dnsOnly = true
-			case riskyInterfaceChange(live, net) && !in.ConfirmInterfaceChange:
-				return State{}, ErrRiskyNetwork
-			}
-		}
-	}
-	if err := s.host.ApplyNetwork(ctx, net, NetworkConfirmWindow, dnsOnly); err != nil {
-		return State{}, err
-	}
-	changes := diff(rec.Network, net)
-	rec.Pending = &Pending{Previous: rec.Network, Proposed: net, Deadline: s.now().Add(NetworkConfirmWindow)}
-	rec.Network = net
-	if err := s.repo.Save(ctx, actor, SectionNetwork, rec, changes); err != nil {
-		if rerr := s.host.RevertNetwork(ctx); rerr != nil {
-			s.logger.Error("instance network revert after failed save", "error", rerr)
-		}
-		return State{}, err
-	}
-	s.logger.Info("instance network change applied, awaiting confirmation", "actor", actor, "changes", changes)
-	return s.stateLocked(ctx, rec), nil
-}
-
-func (s *Service) ConfirmNetwork(ctx context.Context, actor uuid.UUID) (State, error) {
-	return s.settle(ctx, actor, true)
-}
-
-func (s *Service) RevertNetwork(ctx context.Context, actor uuid.UUID) (State, error) {
-	return s.settle(ctx, actor, false)
-}
-
-func (s *Service) settle(ctx context.Context, actor uuid.UUID, confirm bool) (State, error) {
-	if _, err := s.reconcile(ctx); err != nil {
-		return State{}, err
-	}
-	s.netLock.Lock()
-	defer s.netLock.Unlock()
-	rec, err := s.repo.Load(ctx)
-	if err != nil {
-		return State{}, err
-	}
-	if rec.Pending == nil {
-		return State{}, ErrNoPending
-	}
-	event := "confirmed"
-	if confirm {
-		err = s.host.ConfirmNetwork(ctx)
-	} else {
-		event = "reverted by operator"
-		if err = s.host.RevertNetwork(ctx); err == nil {
-			rec.Network = rec.Pending.Previous
-		}
-	}
-	if err != nil {
-		return State{}, err
-	}
-	rec.Pending = nil
-	if err := s.repo.Save(ctx, actor, SectionNetwork, rec, map[string]any{"event": event}); err != nil {
-		return State{}, err
-	}
-	s.logger.Info("instance network change settled", "actor", actor, "event", event)
-	return s.stateLocked(ctx, rec), nil
-}
-
-func (s *Service) stateLocked(ctx context.Context, rec Stored) State {
-	host := s.hostState(ctx)
-	return State{
-		General: s.general(rec), Network: rec.Network, System: rec.System,
-		Capabilities: Capabilities{Network: host.Network, System: host.System},
-		Host:         host, Pending: rec.Pending, PendingControlPlaneURL: rec.PendingControlPlaneURL,
-	}
-}
-
-func (s *Service) InstallHostHelper(ctx context.Context, actor uuid.UUID) (State, string, error) {
-	if s.host == nil {
-		return State{}, "", ErrUnsupported
-	}
-	probe := s.host.Probe(ctx)
-	if probe.Helper == HelperReady {
-		st, err := s.Get(ctx)
-		return st, "", err
-	}
-	if !probe.Repair {
-		s.logger.Info("instance host helper install refused: no repair path",
-			"actor", actor, "helper", probe.Helper)
-		return State{}, "", ErrUnsupported
-	}
-	log, err := s.host.InstallHostHelper(ctx)
-	s.logger.Info("instance host helper install",
-		"actor", actor, "ok", err == nil, "helper_before", probe.Helper, "output", strings.TrimSpace(log))
-	if err != nil {
-		return State{}, log, err
-	}
-	st, err := s.Get(ctx)
-	return st, log, err
+func (s *Service) stateLocked(rec Stored) State {
+	return State{General: s.general(rec), PendingControlPlaneURL: rec.PendingControlPlaneURL}
 }
 
 func diff(from, to any) map[string]any {
@@ -388,9 +204,6 @@ func diff(from, to any) map[string]any {
 			}
 		}
 		return out
-	}
-	if reflect.DeepEqual(from, to) {
-		return map[string]any{}
 	}
 	return map[string]any{"from": from, "to": to}
 }

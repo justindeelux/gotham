@@ -122,6 +122,7 @@ owner GET /api/v1/servers/{id}/files/search
 owner GET /api/v1/servers/{id}/files/size
 owner GET /api/v1/servers/{id}/files/stat
 owner GET /api/v1/servers/{id}/files/trash
+owner GET /api/v1/servers/{id}/host
 owner GET /api/v1/servers/{id}/metrics
 public GET /api/v1/servers/{id}/terminal/sessions/{sessionID}/ws
 owner GET /api/v1/servers/{id}/toolchain/jobs
@@ -195,9 +196,6 @@ personal POST /api/v1/incidents/{id}/acknowledge
 personal POST /api/v1/incidents/{id}/snooze
 owner POST /api/v1/instance/settings/control-plane-url/confirm
 owner POST /api/v1/instance/settings/control-plane-url/revert
-owner POST /api/v1/instance/settings/host-helper
-owner POST /api/v1/instance/settings/network/confirm
-owner POST /api/v1/instance/settings/network/revert
 owner POST /api/v1/invites
 project POST /api/v1/mcp/applications
 project POST /api/v1/mcp/applications/{id}/deploy
@@ -228,6 +226,9 @@ owner POST /api/v1/servers/{id}/containers/{containerID}/restart
 owner POST /api/v1/servers/{id}/containers/{containerID}/start
 owner POST /api/v1/servers/{id}/containers/{containerID}/stop
 owner POST /api/v1/servers/{id}/docker-install
+owner POST /api/v1/servers/{id}/host/helper
+owner POST /api/v1/servers/{id}/host/network/confirm
+owner POST /api/v1/servers/{id}/host/network/revert
 owner POST /api/v1/servers/{id}/files/chmod
 owner POST /api/v1/servers/{id}/files/compress
 owner POST /api/v1/servers/{id}/files/copy
@@ -269,13 +270,13 @@ owner PUT /api/v1/applications/{id}/git-credential
 owner PUT /api/v1/applications/{id}/storages
 project PUT /api/v1/environments/{id}/variables
 owner PUT /api/v1/instance/settings/general
-owner PUT /api/v1/instance/settings/network
-owner PUT /api/v1/instance/settings/system
 owner PUT /api/v1/monitoring/settings
 owner PUT /api/v1/projects/{id}/members
 project PUT /api/v1/projects/{id}/variables
 project PUT /api/v1/services/{id}/domains/{domainId}
 owner PUT /api/v1/servers/{id}/files/content
+owner PUT /api/v1/servers/{id}/host/network
+owner PUT /api/v1/servers/{id}/host/system
 owner PUT /api/v1/updates/schedule
 owner PUT /api/v1/users/{id}/projects
 owner DELETE /api/v1/backups/providers/{id}

@@ -96,6 +96,12 @@ func (f *fakeServerService) Get(_ context.Context, id uuid.UUID) (*servers.Serve
 	return &item, nil
 }
 
+// DialHostClient keeps the fake reusable for the per-server host settings
+// routes; like other agent calls it reports a missing node.
+func (f *fakeServerService) DialHostClient(context.Context, uuid.UUID, ...servers.DockerDialOption) (*servers.HostClient, error) {
+	return nil, servers.ErrNotFound
+}
+
 func (f *fakeServerService) Delete(_ context.Context, id uuid.UUID) error {
 	f.mu.Lock()
 	defer f.mu.Unlock()

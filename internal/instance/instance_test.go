@@ -9,7 +9,6 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"testing"
-	"time"
 
 	"github.com/go-chi/chi/v5"
 	"github.com/google/uuid"
@@ -27,70 +26,20 @@ func (f *fakeRepo) Save(_ context.Context, _ uuid.UUID, section string, rec Stor
 	return nil
 }
 
-type fakeHost struct {
-	caps                        Capabilities
-	host                        Host
-	installLog                  string
-	installErr                  error
-	installs                    int
-	live                        HostNetwork
-	hasLive                     bool
-	applied, confirmed, reverts int
-	dnsOnlys                    []bool
-	err                         error
-}
-
-func (h *fakeHost) Probe(context.Context) Host {
-	if h.host.Helper != "" {
-		return h.host
-	}
-	return Host{Helper: HelperReady, Network: h.caps.Network, System: h.caps.System, Repair: true, NetworkStack: true, SystemStack: true}
-}
-func (h *fakeHost) InstallHostHelper(context.Context) (string, error) {
-	h.installs++
-	return h.installLog, h.installErr
-}
-func (h *fakeHost) HostNetwork(context.Context) (HostNetwork, bool) {
-	return h.live, h.hasLive
-}
-func (h *fakeHost) ApplyNetwork(_ context.Context, _ Network, _ time.Duration, dnsOnly bool) error {
-	h.applied++
-	h.dnsOnlys = append(h.dnsOnlys, dnsOnly)
-	return h.err
-}
-func (h *fakeHost) ConfirmNetwork(context.Context) error      { h.confirmed++; return nil }
-func (h *fakeHost) RevertNetwork(context.Context) error       { h.reverts++; return nil }
-func (h *fakeHost) ApplySystem(context.Context, System) error { return h.err }
-
-func newSvc(host *fakeHost) (*Service, *fakeRepo) {
-	repo := &fakeRepo{rec: Stored{Network: Network{
-		IPv4: IPConfig{Mode: ModeDHCP}, IPv6: IPv6Config{Enabled: true, Mode: ModeDHCP},
-	}}}
-	svc := NewService(repo, host, slog.New(slog.NewTextHandler(io.Discard, nil)))
-	svc.lookup = func(string) string { return "" }
-	return svc, repo
-}
-
-func goodNet() Network {
-	return Network{
-		DNSServers: []string{"1.1.1.1", "2606:4700:4700::1111"},
-		IPv4:       IPConfig{Mode: ModeStatic, Address: "10.0.0.5/24", Gateway: "10.0.0.1"},
-		IPv6:       IPv6Config{Enabled: true, Mode: ModeDHCP},
-	}
-}
+func quietLogger() *slog.Logger { return slog.New(slog.NewTextHandler(io.Discard, nil)) }
 
 func TestValidation(t *testing.T) {
-	_, errs := normalizeGeneral(GeneralInput{ControlPlaneURL: "ftp://x", InstanceName: "", Timezone: "Mars/Base"})
-	for _, k := range []string{"control_plane_url", "instance_name", "timezone"} {
+	_, errs := normalizeGeneral(GeneralInput{ControlPlaneURL: "ftp://x", InstanceName: ""})
+	for _, k := range []string{"control_plane_url", "instance_name"} {
 		if errs[k] == "" {
 			t.Errorf("expected error for %s: %v", k, errs)
 		}
 	}
-	in, errs := normalizeGeneral(GeneralInput{ControlPlaneURL: "https://g.example.com/", InstanceName: "prod", Timezone: "Europe/Berlin"})
+	in, errs := normalizeGeneral(GeneralInput{ControlPlaneURL: "https://g.example.com/", InstanceName: "prod"})
 	if errs != nil || in.ControlPlaneURL != "https://g.example.com" {
 		t.Fatalf("good general rejected: %v %v", in, errs)
 	}
-	if _, errs := normalizeGeneral(GeneralInput{ControlPlaneURL: "https://u:p@h", InstanceName: "a", Timezone: "UTC"}); errs["control_plane_url"] == "" {
+	if _, errs := normalizeGeneral(GeneralInput{ControlPlaneURL: "https://u:p@h", InstanceName: "a"}); errs["control_plane_url"] == "" {
 		t.Error("credentials in URL accepted")
 	}
 
@@ -107,281 +56,70 @@ func TestValidation(t *testing.T) {
 	if _, errs := normalizeNetwork(goodNet()); errs != nil {
 		t.Fatalf("good network rejected: %v", errs)
 	}
-	if _, errs := normalizeSystem(System{Hostname: "-bad-", NTPServers: []string{"a b"}}); errs["hostname"] == "" || errs["ntp_servers"] == "" {
+	sys, errs := normalizeSystem(System{Hostname: "-bad-", NTPServers: []string{"a b"}, Timezone: "Mars/Base"})
+	if errs["hostname"] == "" || errs["ntp_servers"] == "" || errs["timezone"] == "" {
 		t.Errorf("system errors missing: %v", errs)
+	}
+	if _, errs := normalizeSystem(sys); errs == nil {
+		t.Fatal("invalid system accepted")
+	}
+	if _, errs := normalizeSystem(System{Hostname: "gotham-1", NTPEnabled: true, Timezone: "Europe/Berlin"}); errs != nil {
+		t.Fatalf("good system rejected: %v", errs)
 	}
 }
 
 func TestEnvLocksGeneral(t *testing.T) {
-	svc, _ := newSvc(&fakeHost{})
+	svc := NewService(&fakeRepo{}, quietLogger())
 	svc.lookup = func(k string) string {
 		if k == EnvInstanceName {
 			return "from-env"
 		}
 		return ""
 	}
-	_, err := svc.UpdateGeneral(context.Background(), uuid.Nil, GeneralInput{InstanceName: "other", Timezone: "UTC"})
+	_, err := svc.UpdateGeneral(context.Background(), uuid.Nil, GeneralInput{InstanceName: "other"})
 	var fe FieldErrors
 	if !errors.As(err, &fe) || fe["instance_name"] == "" {
 		t.Fatalf("locked field edit not rejected: %v", err)
 	}
-	st, err := svc.UpdateGeneral(context.Background(), uuid.Nil, GeneralInput{InstanceName: "from-env", Timezone: "Asia/Tokyo"})
-	if err != nil || st.General.Timezone.Value != "Asia/Tokyo" || !st.General.InstanceName.Locked {
+	st, err := svc.UpdateGeneral(context.Background(), uuid.Nil, GeneralInput{InstanceName: "from-env"})
+	if err != nil || !st.General.InstanceName.Locked {
 		t.Fatalf("unexpected: %+v %v", st.General, err)
 	}
 }
 
-func TestNetworkConfirmAndRevert(t *testing.T) {
-	host := &fakeHost{caps: Capabilities{Network: true, System: true}}
-	svc, repo := newSvc(host)
-	ctx := context.Background()
-	now := time.Now()
-	svc.now = func() time.Time { return now }
-
-	st, err := svc.UpdateNetwork(ctx, uuid.Nil, NetworkInput{Network: goodNet()})
-	if err != nil || st.Pending == nil || host.applied != 1 {
-		t.Fatalf("apply: %+v %v", st, err)
-	}
-	if _, err := svc.UpdateNetwork(ctx, uuid.Nil, NetworkInput{Network: goodNet()}); !errors.Is(err, ErrPending) {
-		t.Fatalf("second change while pending: %v", err)
-	}
-	if st, err = svc.ConfirmNetwork(ctx, uuid.Nil); err != nil || st.Pending != nil || host.confirmed != 1 {
-		t.Fatalf("confirm: %+v %v", st, err)
-	}
-	if _, err := svc.ConfirmNetwork(ctx, uuid.Nil); !errors.Is(err, ErrNoPending) {
-		t.Fatalf("confirm without pending: %v", err)
-	}
-
-	next := goodNet()
-	next.IPv4.Address = "10.0.0.6/24"
-	if _, err := svc.UpdateNetwork(ctx, uuid.Nil, NetworkInput{Network: next}); err != nil {
-		t.Fatal(err)
-	}
-	svc.now = func() time.Time { return now.Add(NetworkConfirmWindow + time.Second) }
-	st, err = svc.Get(ctx)
-	if err != nil || st.Pending != nil || st.Network.IPv4.Address != "10.0.0.5/24" {
-		t.Fatalf("auto-revert: %+v %v", st.Network, err)
-	}
-
-	svc.now = func() time.Time { return now }
-	if _, err := svc.UpdateNetwork(ctx, uuid.Nil, NetworkInput{Network: next}); err != nil {
-		t.Fatal(err)
-	}
-	if st, err = svc.RevertNetwork(ctx, uuid.Nil); err != nil || st.Network.IPv4.Address != "10.0.0.5/24" || host.reverts != 1 {
-		t.Fatalf("revert: %+v %v", st.Network, err)
-	}
-	if len(repo.sections) == 0 {
-		t.Fatal("no audit saves")
-	}
-}
-
-func staticLive() (HostNetwork, Stored) {
-	live := HostNetwork{
-		Interface:  "ens160",
-		DNSServers: []string{"1.1.1.1"},
-		IPv4:       IPConfig{Mode: ModeStatic, Address: "103.176.22.225/24", Gateway: "103.176.22.1"},
-		IPv6:       IPv6Config{Enabled: false, Mode: ModeDHCP},
-	}
-	stored := Stored{Network: Network{
-		DNSServers: []string{"1.1.1.1"},
-		IPv4:       IPConfig{Mode: ModeDHCP}, IPv6: IPv6Config{Enabled: false, Mode: ModeDHCP},
-	}}
-	return live, stored
-}
-
-func liveNet(live HostNetwork, dns ...string) Network {
-	if len(dns) > 0 {
-		live.DNSServers = dns
-	}
-	return Network{DNSServers: live.DNSServers, IPv4: live.IPv4, IPv6: live.IPv6}
-}
-
-func TestNetworkDNSOnlyOnStaticHost(t *testing.T) {
-	host := &fakeHost{caps: Capabilities{Network: true, System: true}, hasLive: true}
-	host.live, _ = staticLive()
-	_, stored := staticLive()
-	repo := &fakeRepo{rec: stored}
-	svc := NewService(repo, host, slog.New(slog.NewTextHandler(io.Discard, nil)))
+func TestTimezoneStoredForControlPlane(t *testing.T) {
+	repo := &fakeRepo{}
+	svc := NewService(repo, quietLogger())
 	svc.lookup = func(string) string { return "" }
 
-	req := liveNet(host.live, "9.9.9.9")
-	st, err := svc.UpdateNetwork(context.Background(), uuid.Nil, NetworkInput{Network: req})
-	if err != nil || st.Pending == nil {
-		t.Fatalf("dns-only apply: %+v %v", st, err)
+	tz, err := svc.Timezone(context.Background())
+	if err != nil || tz != DefaultTimezone {
+		t.Fatalf("default timezone: %q %v", tz, err)
 	}
-	if len(host.dnsOnlys) != 1 || !host.dnsOnlys[0] {
-		t.Fatalf("dns-only change must take the minimal path: %v", host.dnsOnlys)
-	}
-	if st.Network.IPv4.Mode != ModeStatic || st.Network.IPv4.Address != "103.176.22.225/24" {
-		t.Fatalf("desired state lost the static address: %+v", st.Network.IPv4)
-	}
-}
-
-func TestNetworkRiskyChangeNeedsConfirmation(t *testing.T) {
-	host := &fakeHost{caps: Capabilities{Network: true, System: true}, hasLive: true}
-	host.live, _ = staticLive()
-	newSvcLive := func() *Service {
-		_, stored := staticLive()
-		repo := &fakeRepo{rec: stored}
-		svc := NewService(repo, host, slog.New(slog.NewTextHandler(io.Discard, nil)))
-		svc.lookup = func(string) string { return "" }
-		return svc
-	}
-
-	svc := newSvcLive()
-	risky := liveNet(host.live)
-	risky.IPv4 = IPConfig{Mode: ModeDHCP}
-	if _, err := svc.UpdateNetwork(context.Background(), uuid.Nil, NetworkInput{Network: risky}); !errors.Is(err, ErrRiskyNetwork) {
-		t.Fatalf("static->dhcp without confirmation: %v", err)
-	}
-	if host.applied != 0 {
-		t.Fatal("refused change reached the host")
-	}
-
-	svc = newSvcLive()
-	moved := liveNet(host.live)
-	moved.IPv4.Address = "103.176.22.99/24"
-	if _, err := svc.UpdateNetwork(context.Background(), uuid.Nil, NetworkInput{Network: moved}); !errors.Is(err, ErrRiskyNetwork) {
-		t.Fatalf("address change without confirmation: %v", err)
-	}
-
-	svc = newSvcLive()
-	if _, err := svc.UpdateNetwork(context.Background(), uuid.Nil, NetworkInput{Network: risky, ConfirmInterfaceChange: true}); err != nil {
-		t.Fatalf("confirmed change rejected: %v", err)
-	}
-	if len(host.dnsOnlys) == 0 || host.dnsOnlys[len(host.dnsOnlys)-1] {
-		t.Fatalf("interface change must take the full path: %v", host.dnsOnlys)
-	}
-}
-
-func TestGetReportsHostTruth(t *testing.T) {
-	host := &fakeHost{caps: Capabilities{Network: true, System: true}, hasLive: true}
-	host.live, _ = staticLive()
-	_, stored := staticLive()
-	repo := &fakeRepo{rec: stored}
-	svc := NewService(repo, host, slog.New(slog.NewTextHandler(io.Discard, nil)))
-	svc.lookup = func(string) string { return "" }
-	st, err := svc.Get(context.Background())
-	if err != nil {
+	if err := svc.SetTimezone(context.Background(), uuid.Nil, "Europe/Berlin"); err != nil {
 		t.Fatal(err)
 	}
-	if st.Network.IPv4.Mode != ModeStatic || st.Network.IPv4.Address != "103.176.22.225/24" ||
-		st.Network.IPv4.Gateway != "103.176.22.1" {
-		t.Fatalf("form would show stale defaults: %+v", st.Network.IPv4)
-	}
-	if _, err := svc.UpdateNetwork(context.Background(), uuid.Nil, NetworkInput{Network: liveNet(host.live, "9.9.9.9")}); err != nil {
-		t.Fatal(err)
-	}
-	st, _ = svc.Get(context.Background())
-	if len(st.Network.DNSServers) != 1 || st.Network.DNSServers[0] != "9.9.9.9" {
-		t.Fatalf("pending desired state hidden: %+v", st.Network.DNSServers)
-	}
-}
-
-func TestGetReportsEffectiveLinkDNS(t *testing.T) {
-	host := &fakeHost{caps: Capabilities{Network: true, System: true}, hasLive: true}
-	host.live, _ = staticLive()
-	host.live.DNSServers = []string{"8.8.8.8", "8.8.4.4"}
-	_, stored := staticLive()
-	repo := &fakeRepo{rec: stored}
-	svc := NewService(repo, host, slog.New(slog.NewTextHandler(io.Discard, nil)))
-	svc.lookup = func(string) string { return "" }
-	st, err := svc.Get(context.Background())
-	if err != nil {
-		t.Fatal(err)
-	}
-	if len(st.Network.DNSServers) != 2 || st.Network.DNSServers[0] != "8.8.8.8" ||
-		st.Network.DNSServers[1] != "8.8.4.4" {
-		t.Fatalf("form would show shadowed servers: %+v", st.Network.DNSServers)
-	}
-}
-
-func TestUnsupportedHostAndHelperFailure(t *testing.T) {
-	host := &fakeHost{}
-	svc, _ := newSvc(host)
-	if _, err := svc.UpdateNetwork(context.Background(), uuid.Nil, NetworkInput{Network: goodNet()}); !errors.Is(err, ErrUnsupported) {
-		t.Fatalf("want unsupported: %v", err)
-	}
-	host.caps, host.err = Capabilities{Network: true, System: true}, ErrHost
-	if _, err := svc.UpdateSystem(context.Background(), uuid.Nil, System{Hostname: "gotham-1", NTPEnabled: true}); !errors.Is(err, ErrHost) {
-		t.Fatalf("want host error: %v", err)
-	}
-}
-
-func TestHostStates(t *testing.T) {
-	cases := []struct {
-		name        string
-		host        Host
-		wantNetwork bool
-		wantInstall bool
-		wantHelper  HelperState
-	}{
-		{"ready", Host{Helper: HelperReady, Repair: true, NetworkStack: true, SystemStack: true, Network: true, System: true}, true, false, HelperReady},
-		{"missing-with-stack", Host{Helper: HelperMissing, Repair: true, NetworkStack: true}, false, true, HelperMissing},
-		{"denied-with-stack", Host{Helper: HelperDenied, Repair: true, NetworkStack: true}, false, false, HelperDenied},
-		{"missing-without-stack", Host{Helper: HelperMissing, Repair: true, NetworkStack: false}, false, false, HelperMissing},
-		{"missing-no-repair", Host{Helper: HelperMissing, Repair: false, NetworkStack: true}, false, false, HelperMissing},
-		{"missing-system-only", Host{Helper: HelperMissing, Repair: true, NetworkStack: false, SystemStack: true}, false, true, HelperMissing},
-	}
-	for _, tc := range cases {
-		t.Run(tc.name, func(t *testing.T) {
-			svc, _ := newSvc(&fakeHost{host: tc.host})
-			st, err := svc.Get(context.Background())
-			if err != nil {
-				t.Fatal(err)
-			}
-			if st.Host != tc.host {
-				t.Fatalf("host not reported verbatim: %+v", st.Host)
-			}
-			if st.Capabilities.Network != tc.wantNetwork {
-				t.Fatalf("network capability: %v", st.Capabilities.Network)
-			}
-			if st.Host.Installable() != tc.wantInstall {
-				t.Fatalf("installable: %v", st.Host.Installable())
-			}
-			if st.Host.Helper != tc.wantHelper {
-				t.Fatalf("helper: %q", st.Host.Helper)
-			}
-		})
-	}
-}
-
-func TestInstallHostHelper(t *testing.T) {
-	host := &fakeHost{host: Host{Helper: HelperMissing, Repair: true, NetworkStack: true}, installLog: "installed gotham-hostctl\n"}
-	svc, _ := newSvc(host)
-	st, log, err := svc.InstallHostHelper(context.Background(), uuid.Nil)
-	if err != nil || host.installs != 1 || log == "" {
-		t.Fatalf("install: %+v %q %v", st, log, err)
+	if tz, _ := svc.Timezone(context.Background()); tz != "Europe/Berlin" {
+		t.Fatalf("stored timezone not kept: %q", tz)
 	}
 
-	host.installLog, host.installErr = "", ErrHost
-	if _, _, err := svc.InstallHostHelper(context.Background(), uuid.Nil); !errors.Is(err, ErrHost) {
-		t.Fatalf("want host error: %v", err)
+	svc.lookup = func(k string) string {
+		if k == EnvTimezone {
+			return "Asia/Tokyo"
+		}
+		return ""
 	}
-
-	denied := &fakeHost{host: Host{Helper: HelperDenied, Repair: false, NetworkStack: true}}
-	svc = NewService(&fakeRepo{}, denied, slog.New(slog.NewTextHandler(io.Discard, nil)))
-	svc.lookup = func(string) string { return "" }
-	if _, _, err := svc.InstallHostHelper(context.Background(), uuid.Nil); !errors.Is(err, ErrUnsupported) {
-		t.Fatalf("denied install = %v, want ErrUnsupported", err)
+	if tz, _ := svc.Timezone(context.Background()); tz != "Asia/Tokyo" {
+		t.Fatalf("env timezone must win: %q", tz)
 	}
-	if denied.installs != 0 {
-		t.Fatalf("denied host must not attempt an install: %d", denied.installs)
-	}
-
-	ready := &fakeHost{host: Host{Helper: HelperReady, Network: true, System: true}}
-	svc = NewService(&fakeRepo{}, ready, slog.New(slog.NewTextHandler(io.Discard, nil)))
-	svc.lookup = func(string) string { return "" }
-	if _, _, err := svc.InstallHostHelper(context.Background(), uuid.Nil); err != nil {
-		t.Fatalf("ready helper install: %v", err)
-	}
-	if ready.installs != 0 {
-		t.Fatalf("ready helper must not reinstall: %d", ready.installs)
+	if err := svc.SetTimezone(context.Background(), uuid.Nil, "Europe/Berlin"); err == nil {
+		t.Fatal("env-locked timezone change must be refused")
 	}
 }
 
 func TestRoutesStatusCodes(t *testing.T) {
-	svc, _ := newSvc(&fakeHost{})
+	svc := NewService(&fakeRepo{}, quietLogger())
+	svc.lookup = func(string) string { return "" }
 	deny := func(http.Handler) http.Handler {
 		return http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) { w.WriteHeader(http.StatusForbidden) })
 	}
@@ -397,13 +135,28 @@ func TestRoutesStatusCodes(t *testing.T) {
 	Mount(ok, func(n http.Handler) http.Handler { return n }, func(context.Context) (uuid.UUID, bool) { return uuid.Nil, false }, svc)
 	rec = httptest.NewRecorder()
 	ok.ServeHTTP(rec, httptest.NewRequest(http.MethodPut, "/v1/instance/settings/general",
-		bytes.NewBufferString(`{"control_plane_url":"nope","instance_name":"x","timezone":"UTC"}`)))
+		bytes.NewBufferString(`{"control_plane_url":"nope","instance_name":"x"}`)))
 	if rec.Code != http.StatusBadRequest || !bytes.Contains(rec.Body.Bytes(), []byte(`"control_plane_url"`)) {
 		t.Fatalf("invalid input: %d %s", rec.Code, rec.Body)
 	}
 	rec = httptest.NewRecorder()
-	ok.ServeHTTP(rec, httptest.NewRequest(http.MethodPost, "/v1/instance/settings/network/confirm", nil))
-	if rec.Code != http.StatusConflict {
-		t.Fatalf("confirm w/o pending: %d", rec.Code)
+	ok.ServeHTTP(rec, httptest.NewRequest(http.MethodPut, "/v1/instance/settings/general",
+		bytes.NewBufferString(`{"control_plane_url":"https://g.example.com","instance_name":"x","timezone":"UTC"}`)))
+	if rec.Code != http.StatusBadRequest {
+		t.Fatalf("dropped timezone field accepted: %d %s", rec.Code, rec.Body)
 	}
+	rec = httptest.NewRecorder()
+	ok.ServeHTTP(rec, httptest.NewRequest(http.MethodPost, "/v1/instance/settings/network/confirm", nil))
+	if rec.Code != http.StatusNotFound && rec.Code != http.StatusMethodNotAllowed {
+		t.Fatalf("removed instance network route still answers: %d", rec.Code)
+	}
+}
+
+// newSvc keeps the general-settings tests focused on the URL flow; the node
+// fixture below builds the host-settings service.
+func newSvc(*fakeHost) (*Service, *fakeRepo) {
+	repo := &fakeRepo{}
+	svc := NewService(repo, quietLogger())
+	svc.lookup = func(string) string { return "" }
+	return svc, repo
 }

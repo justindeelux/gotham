@@ -15,17 +15,13 @@ import (
 	"github.com/justindeelux/gotham/toolcatalog"
 )
 
-type HostNetwork struct {
-	Interface  string     `json:"interface"`
-	DNSServers []string   `json:"dns_servers"`
-	IPv4       IPConfig   `json:"ipv4"`
-	IPv6       IPv6Config `json:"ipv6"`
-}
-
+// HostApplier reads and changes one node's host settings. The local node uses
+// the control plane's sudo helper; every other node uses the agent's
+// HostService. Both re-validate every value on the host, so this interface is
+// transport, not a trust boundary.
 type HostApplier interface {
-	Probe(ctx context.Context) Host
+	Status(ctx context.Context) (HostStatus, error)
 	InstallHostHelper(ctx context.Context) (string, error)
-	HostNetwork(ctx context.Context) (live HostNetwork, ok bool)
 	ApplyNetwork(ctx context.Context, net Network, revertAfter time.Duration, dnsOnly bool) error
 	ConfirmNetwork(ctx context.Context) error
 	RevertNetwork(ctx context.Context) error
@@ -82,26 +78,31 @@ func (a *sudoApplier) run(ctx context.Context, verb, stdin string) (string, erro
 	return out.String(), nil
 }
 
-func (a *sudoApplier) Probe(ctx context.Context) Host {
-	h := Host{
-		Helper:       HelperReady,
-		NetworkStack: networkStackAvailable(),
-		SystemStack:  systemStackAvailable(),
-	}
+func (a *sudoApplier) Status(ctx context.Context) (HostStatus, error) {
 	if _, err := os.Stat(a.path); err != nil {
-		h.Helper = HelperMissing
-		h.Repair = a.repairPossible(ctx)
-		return h
+		return HostStatus{Capability: CapabilityHelperMissing, Repair: a.repairPossible(ctx)}, nil
 	}
 	p, ok := a.fetchStatus(ctx)
 	if !ok {
-		h.Helper = HelperDenied
-		h.Repair = a.repairPossible(ctx)
-		return h
+		return HostStatus{Capability: CapabilityHelperDenied, Repair: a.repairPossible(ctx)}, nil
 	}
-	h.Network = p.Network
-	h.System = p.System
-	return h
+	if p.Timezone == nil {
+		return HostStatus{
+			Capability: CapabilityUnsupportedStack,
+			Reason:     "this server's host helper is too old for host settings; repair it or re-run the Gotham installer",
+			Repair:     a.repairPossible(ctx),
+		}, nil
+	}
+	if !p.Network || !p.System || !networkStackAvailable() || !systemStackAvailable() {
+		return HostStatus{Capability: CapabilityUnsupportedStack}, nil
+	}
+	return HostStatus{
+		Capability: CapabilityReady,
+		Network:    networkFromHost(p.HostNetwork),
+		System: System{
+			Hostname: p.Hostname, NTPEnabled: p.NTPEnabled, NTPServers: nonNil(p.NTPServers), Timezone: *p.Timezone,
+		},
+	}, nil
 }
 
 func (a *sudoApplier) repairPossible(ctx context.Context) bool {
@@ -151,8 +152,29 @@ func systemStackAvailable() bool {
 }
 
 type statusPayload struct {
-	Capabilities
-	HostNetwork *HostNetwork `json:"host_network"`
+	Network     bool         `json:"network"`
+	System      bool         `json:"system"`
+	HostNetwork *hostNetwork `json:"host_network"`
+	Hostname    string       `json:"hostname"`
+	NTPEnabled  bool         `json:"ntp_enabled"`
+	NTPServers  []string     `json:"ntp_servers"`
+	// Timezone stays a pointer: a helper that predates it has no timezone key
+	// and no timezone key on apply-system either, so it cannot apply it.
+	Timezone *string `json:"timezone"`
+}
+
+type hostNetwork struct {
+	Interface  string     `json:"interface"`
+	DNSServers []string   `json:"dns_servers"`
+	IPv4       IPConfig   `json:"ipv4"`
+	IPv6       IPv6Config `json:"ipv6"`
+}
+
+func networkFromHost(h *hostNetwork) Network {
+	if h == nil || h.Interface == "" {
+		return Network{}
+	}
+	return Network{DNSServers: nonNil(h.DNSServers), IPv4: h.IPv4, IPv6: h.IPv6}
 }
 
 func (a *sudoApplier) fetchStatus(ctx context.Context) (*statusPayload, bool) {
@@ -165,17 +187,6 @@ func (a *sudoApplier) fetchStatus(ctx context.Context) (*statusPayload, bool) {
 		return nil, false
 	}
 	return &p, true
-}
-
-func (a *sudoApplier) HostNetwork(ctx context.Context) (HostNetwork, bool) {
-	if _, err := os.Stat(a.path); err != nil {
-		return HostNetwork{}, false
-	}
-	p, ok := a.fetchStatus(ctx)
-	if !ok || p.HostNetwork == nil || p.HostNetwork.Interface == "" {
-		return HostNetwork{}, false
-	}
-	return *p.HostNetwork, true
 }
 
 func (a *sudoApplier) ApplyNetwork(ctx context.Context, n Network, revertAfter time.Duration, dnsOnly bool) error {
@@ -208,7 +219,8 @@ func (a *sudoApplier) RevertNetwork(ctx context.Context) error {
 func (a *sudoApplier) ApplySystem(ctx context.Context, s System) error {
 	in := "hostname=" + s.Hostname + "\n" +
 		"ntp_enabled=" + strconv.FormatBool(s.NTPEnabled) + "\n" +
-		"ntp_servers=" + strings.Join(s.NTPServers, ",") + "\n"
+		"ntp_servers=" + strings.Join(s.NTPServers, ",") + "\n" +
+		"timezone=" + s.Timezone + "\n"
 	_, err := a.run(ctx, "apply-system", in)
 	return err
 }

@@ -15,7 +15,6 @@ func normalizeGeneral(in GeneralInput) (GeneralInput, FieldErrors) {
 	errs := FieldErrors{}
 	in.ControlPlaneURL = strings.TrimRight(strings.TrimSpace(in.ControlPlaneURL), "/")
 	in.InstanceName = strings.TrimSpace(in.InstanceName)
-	in.Timezone = strings.TrimSpace(in.Timezone)
 
 	if in.ControlPlaneURL != "" {
 		if msg := checkURL(in.ControlPlaneURL); msg != "" {
@@ -26,9 +25,6 @@ func normalizeGeneral(in GeneralInput) (GeneralInput, FieldErrors) {
 		errs["instance_name"] = "must be 1-64 characters"
 	} else if strings.IndexFunc(in.InstanceName, unicode.IsControl) >= 0 {
 		errs["instance_name"] = "must not contain control characters"
-	}
-	if msg := checkTimezone(in.Timezone); msg != "" {
-		errs["timezone"] = msg
 	}
 	return in, nonEmpty(errs)
 }
@@ -145,6 +141,12 @@ func normalizeSystem(s System) (System, FieldErrors) {
 			errs["ntp_servers"] = "duplicate server: " + srv
 		}
 		seen[strings.ToLower(srv)] = true
+	}
+	s.Timezone = strings.TrimSpace(s.Timezone)
+	if s.Timezone != "" {
+		if msg := checkTimezone(s.Timezone); msg != "" {
+			errs["timezone"] = msg
+		}
 	}
 	return s, nonEmpty(errs)
 }

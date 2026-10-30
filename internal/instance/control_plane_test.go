@@ -27,7 +27,7 @@ func domainFixture(t *testing.T) (*Service, *fakeRepo, GeneralInput) {
 			svc.domainTimer.Stop()
 		}
 	})
-	return svc, repo, GeneralInput{ControlPlaneURL: "https://new.example.com", InstanceName: "Gotham", Timezone: "UTC"}
+	return svc, repo, GeneralInput{ControlPlaneURL: "https://new.example.com", InstanceName: "Gotham"}
 }
 
 func TestControlPlaneURLTrial(t *testing.T) {
@@ -128,7 +128,7 @@ func TestControlPlaneURLRollbackBranches(t *testing.T) {
 			} else {
 				now = state.PendingControlPlaneURL.Deadline
 				if mode == "restart-expired" {
-					restarted := NewService(repo, nil, svc.logger)
+					restarted := NewService(repo, svc.logger)
 					restarted.lookup, restarted.now, restarted.ResyncProxy = svc.lookup, svc.now, svc.ResyncProxy
 					svc = restarted
 				}
@@ -186,7 +186,7 @@ func (r *timerRepo) Save(_ context.Context, _ uuid.UUID, _ string, rec Stored, _
 func TestControlPlaneURLRestartRearmsAutomaticRollback(t *testing.T) {
 	old, next := "https://old.example.com", "https://new.example.com"
 	repo := &timerRepo{rec: Stored{ControlPlaneURL: &next, PendingControlPlaneURL: &PendingControlPlaneURL{Previous: &old, Proposed: next, Deadline: time.Now().Add(20 * time.Millisecond), Synced: true}}}
-	svc := NewService(repo, nil, nil)
+	svc := NewService(repo, nil)
 	svc.lookup = func(string) string { return "" }
 	done := make(chan struct{}, 1)
 	svc.ResyncProxy = func(context.Context) error { done <- struct{}{}; return nil }
@@ -298,7 +298,7 @@ func TestControlPlaneURLSerializesWithDomainWrites(t *testing.T) {
 func TestControlPlaneURLClosePreservesTrialForRestart(t *testing.T) {
 	old, next := "https://old.example.com", "https://new.example.com"
 	repo := &timerRepo{rec: Stored{ControlPlaneURL: &next, PendingControlPlaneURL: &PendingControlPlaneURL{Previous: &old, Proposed: next, Deadline: time.Now().Add(20 * time.Millisecond), Synced: true}}}
-	svc := NewService(repo, nil, nil)
+	svc := NewService(repo, nil)
 	synced := make(chan struct{}, 1)
 	svc.ResyncProxy = func(context.Context) error { synced <- struct{}{}; return nil }
 	if err := svc.Reconcile(context.Background()); err != nil {
@@ -314,7 +314,7 @@ func TestControlPlaneURLClosePreservesTrialForRestart(t *testing.T) {
 	if rec.PendingControlPlaneURL == nil {
 		t.Fatal("shutdown discarded the persisted trial")
 	}
-	restarted := NewService(repo, nil, nil)
+	restarted := NewService(repo, nil)
 	defer restarted.Close()
 	restarted.ResyncProxy = func(context.Context) error { return nil }
 	if err := restarted.Reconcile(context.Background()); err != nil {
@@ -336,7 +336,7 @@ func TestPanelCertificateReconciliationSerializesURLChanges(t *testing.T) {
 					Previous: &old, Proposed: proposed, Deadline: time.Now().Add(time.Minute), Synced: true,
 				},
 			}}
-			svc := NewService(repo, nil, nil)
+			svc := NewService(repo, nil)
 			t.Cleanup(svc.Close)
 			svc.ResyncProxy = func(context.Context) error { return nil }
 			entered, release := make(chan struct{}), make(chan struct{})

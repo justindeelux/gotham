@@ -22,7 +22,7 @@ func TestGeneralProxyResync(t *testing.T) {
 		}
 		return errors.New("agent offline")
 	}
-	input := GeneralInput{ControlPlaneURL: "https://panel.example.com", InstanceName: "Gotham", Timezone: "UTC"}
+	input := GeneralInput{ControlPlaneURL: "https://panel.example.com", InstanceName: "Gotham"}
 	state, err := svc.UpdateGeneral(context.Background(), uuid.Nil, input)
 	if err != nil || state.General.ControlPlaneURL.Value != input.ControlPlaneURL || calls != 1 {
 		t.Fatalf("save=%+v err=%v calls=%d", state, err, calls)
@@ -46,7 +46,7 @@ func TestGeneralFailedSaveDoesNotResync(t *testing.T) {
 	svc, repo := newSvc(&fakeHost{})
 	svc.repo = failingGeneralRepo{repo}
 	svc.ResyncProxy = func(context.Context) error { t.Fatal("resync after failed save"); return nil }
-	_, err := svc.UpdateGeneral(context.Background(), uuid.Nil, GeneralInput{ControlPlaneURL: "https://panel.example.com", InstanceName: "Gotham", Timezone: "UTC"})
+	_, err := svc.UpdateGeneral(context.Background(), uuid.Nil, GeneralInput{ControlPlaneURL: "https://panel.example.com", InstanceName: "Gotham"})
 	if err == nil {
 		t.Fatal("save failure swallowed")
 	}

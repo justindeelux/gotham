@@ -903,7 +903,7 @@ func TestOAuthRedirectBaseControlPlaneURL(t *testing.T) {
 			},
 		}
 		s := newOAuthTestServer(t, cfg, &fakeOAuthService{})
-		s.instanceSvc = instance.NewService(stubInstanceRepo{}, nil, slog.New(slog.NewTextHandler(io.Discard, nil)))
+		s.instanceSvc = instance.NewService(stubInstanceRepo{}, slog.New(slog.NewTextHandler(io.Discard, nil)))
 		return s
 	}
 

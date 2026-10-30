@@ -34,7 +34,7 @@ func TestInstanceSetURL(t *testing.T) {
 		t.Run(tc.name, func(t *testing.T) {
 			name, zone := "My instance", "Asia/Ho_Chi_Minh"
 			repo := &instanceCLIRepo{rec: instance.Stored{InstanceName: &name, Timezone: &zone}}
-			svc := instance.NewService(repo, nil, nil)
+			svc := instance.NewService(repo, nil)
 			defer svc.Close()
 			syncs := 0
 			svc.ResyncProxy = func(context.Context) error { syncs++; return tc.syncErr }

@@ -404,7 +404,7 @@ func (s *Server) routes() (http.Handler, error) {
 			terminal.Mount(api, platformOnly, s.terminal, s.auth, s.terminalAuthorizer(), UserIDFromContext, s.logger)
 		}
 		if s.persistence != nil {
-			instanceSvc := instance.NewService(instance.NewStoreRepository(s.persistence), instance.NewSudoApplier(), s.logger)
+			instanceSvc := instance.NewService(instance.NewStoreRepository(s.persistence), s.logger)
 			if panel, ok := s.proxy.(interface {
 				ReconcilePanelCertificates(context.Context, []string) error
 			}); ok {
@@ -431,6 +431,13 @@ func (s *Server) routes() (http.Handler, error) {
 				s.logger.Warn("instance settings reconcile failed", "error", err)
 			}
 			instance.Mount(api, platformOnly, UserIDFromContext, instanceSvc)
+			if dialer, ok := s.servers.(hostDialer); ok {
+				nodeHosts := instance.NewNodeService(
+					instance.NewStoreNodeRepository(s.persistence),
+					nodeHostResolver{nodes: s.servers, dialer: dialer},
+					instanceSvc, s.logger)
+				instance.MountNode(api, platformOnly, UserIDFromContext, nodeHosts)
+			}
 			if setter, ok := s.oauth.(interface{ SetGitHubControlPlaneURLSource(func() string) }); ok {
 				setter.SetGitHubControlPlaneURLSource(s.controlPlaneURL)
 			}
@@ -973,11 +980,11 @@ func (s *Server) updatesService() updates.Service {
 	}
 	if s.instanceSvc != nil {
 		config.Timezone = func() string {
-			st, err := s.instanceSvc.Get(context.Background())
+			tz, err := s.instanceSvc.Timezone(context.Background())
 			if err != nil {
 				return ""
 			}
-			return st.General.Timezone.Value
+			return tz
 		}
 	}
 	if err != nil {

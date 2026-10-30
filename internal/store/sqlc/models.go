@@ -797,6 +797,13 @@ type Server struct {
 	AgentLegacyLeaf     *bool              `json:"agent_legacy_leaf"`
 }
 
+type ServerHostPending struct {
+	ServerID  pgtype.UUID        `json:"server_id"`
+	Pending   []byte             `json:"pending"`
+	Deadline  pgtype.Timestamptz `json:"deadline"`
+	UpdatedAt pgtype.Timestamptz `json:"updated_at"`
+}
+
 type ServerMetric struct {
 	ServerID       pgtype.UUID        `json:"server_id"`
 	RecordedAt     pgtype.Timestamptz `json:"recorded_at"`

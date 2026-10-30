@@ -200,7 +200,7 @@ func (s *Service) ConfirmControlPlaneURL(ctx context.Context, actor uuid.UUID, r
 	if err := s.syncControlPlaneURL(ctx); err != nil {
 		s.logger.Warn("instance confirmed URL; proxy cleanup failed", "error", err)
 	}
-	return s.stateLocked(ctx, rec), nil
+	return s.stateLocked(rec), nil
 }
 
 func (s *Service) RevertControlPlaneURL(ctx context.Context, actor uuid.UUID) (State, error) {
@@ -217,7 +217,7 @@ func (s *Service) RevertControlPlaneURL(ctx context.Context, actor uuid.UUID) (S
 		return State{}, err
 	}
 	rec, err = s.repo.Load(ctx)
-	return s.stateLocked(ctx, rec), err
+	return s.stateLocked(rec), err
 }
 
 func (s *Service) Close() {

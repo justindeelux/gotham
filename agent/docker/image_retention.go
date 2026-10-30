@@ -22,6 +22,8 @@ type dockerImageSummary struct {
 	ID       string   `json:"Id"`
 	RepoTags []string `json:"RepoTags"`
 	Created  int64    `json:"Created"`
+	// Size is the image's uncompressed size in bytes.
+	Size int64 `json:"Size"`
 }
 
 func (c *DockerClient) listImages(ctx context.Context, all bool) ([]dockerImageSummary, error) {
@@ -37,10 +39,21 @@ func (c *DockerClient) listImages(ctx context.Context, all bool) ([]dockerImageS
 }
 
 func (c *DockerClient) removeImage(ctx context.Context, ref string) error {
+	return c.removeImageWithForce(ctx, ref, true)
+}
+
+func (c *DockerClient) removeImageUnforced(ctx context.Context, ref string) error {
+	return c.removeImageWithForce(ctx, ref, false)
+}
+
+func (c *DockerClient) removeImageWithForce(ctx context.Context, ref string, force bool) error {
 	if strings.TrimSpace(ref) == "" {
 		return fmt.Errorf("docker: image reference is required")
 	}
-	path := "/images/" + ref + "?force=1&noprune=1"
+	path := "/images/" + ref + "?noprune=1"
+	if force {
+		path += "&force=1"
+	}
 	response, err := c.doRaw(ctx, http.MethodDelete, path, nil, "")
 	if err != nil {
 		return err
@@ -49,6 +62,10 @@ func (c *DockerClient) removeImage(ctx context.Context, ref string) error {
 	if response.StatusCode == http.StatusNotFound {
 		_, _ = io.Copy(io.Discard, response.Body)
 		return nil
+	}
+	if response.StatusCode == http.StatusConflict {
+		raw, _ := io.ReadAll(io.LimitReader(response.Body, 4<<10))
+		return fmt.Errorf("%w: %s", ErrDockerImageInUse, strings.TrimSpace(string(raw)))
 	}
 	if !dockerOK(response.StatusCode) {
 		return statusError(http.MethodDelete, path, response)
@@ -97,6 +114,11 @@ func (c *DockerClient) activeImageRefs(ctx context.Context) (map[string]struct{}
 	if err := c.doJSON(ctx, http.MethodGet, "/containers/json?all=1", nil, &summaries); err != nil {
 		return nil, err
 	}
+	return activeImageRefsFrom(summaries), nil
+}
+
+// activeImageRefsFrom indexes the images a container references by id and tag.
+func activeImageRefsFrom(summaries []dockerContainerSummary) map[string]struct{} {
 	active := make(map[string]struct{}, len(summaries))
 	for _, summary := range summaries {
 		if summary.ImageID != "" {
@@ -106,7 +128,7 @@ func (c *DockerClient) activeImageRefs(ctx context.Context) (map[string]struct{}
 			active[summary.Image] = struct{}{}
 		}
 	}
-	return active, nil
+	return active
 }
 
 func selectStaleImages(images []appImage, keepTag string, active map[string]struct{}, history int) []appImage {

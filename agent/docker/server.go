@@ -8,6 +8,7 @@ import (
 	"path/filepath"
 	"regexp"
 	"strings"
+	"time"
 
 	"github.com/justindeelux/gotham/agent/proxy"
 	agentv1 "github.com/justindeelux/gotham/proto/agent/v1"
@@ -25,6 +26,8 @@ type Client interface {
 	ContainerStats(ctx context.Context, id string) (ContainerStats, error)
 	ListContainers(ctx context.Context, all bool, labels map[string]string, resolveDevices bool) ([]*agentv1.ContainerInfo, error)
 	ListVolumes(ctx context.Context) ([]*agentv1.VolumeInfo, error)
+	ScanCleanup(ctx context.Context, minAge time.Duration) ([]*agentv1.CleanupItem, error)
+	Clean(ctx context.Context, ids []string, minAge time.Duration) ([]*agentv1.CleanupItemResult, error)
 	Start(ctx context.Context, id string) error
 	Stop(ctx context.Context, id string) error
 	Restart(ctx context.Context, id string) error
@@ -155,6 +158,22 @@ func (s *DockerServer) ListVolumes(ctx context.Context, _ *agentv1.ListVolumesRe
 		return nil, dockerError("list volumes", err)
 	}
 	return &agentv1.ListVolumesResponse{Volumes: volumes}, nil
+}
+
+func (s *DockerServer) ScanCleanup(ctx context.Context, req *agentv1.CleanupScanRequest) (*agentv1.CleanupScanResponse, error) {
+	items, err := s.docker.ScanCleanup(ctx, time.Duration(req.GetMinAgeSeconds())*time.Second)
+	if err != nil {
+		return nil, dockerError("scan cleanup", err)
+	}
+	return &agentv1.CleanupScanResponse{Items: items}, nil
+}
+
+func (s *DockerServer) Clean(ctx context.Context, req *agentv1.CleanupCleanRequest) (*agentv1.CleanupCleanResponse, error) {
+	results, err := s.docker.Clean(ctx, req.GetIds(), time.Duration(req.GetMinAgeSeconds())*time.Second)
+	if err != nil {
+		return nil, dockerError("clean", err)
+	}
+	return &agentv1.CleanupCleanResponse{Results: results}, nil
 }
 
 func (s *DockerServer) RemoveVolume(ctx context.Context, req *agentv1.VolumeActionRequest) (*agentv1.VolumeActionResponse, error) {

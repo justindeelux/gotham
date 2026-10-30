@@ -38,6 +38,8 @@ var ErrDockerUnavailable = errors.New("docker: daemon unavailable")
 
 var ErrDockerImageNotFound = errors.New("docker: image not found")
 
+var ErrDockerImageInUse = errors.New("docker: image is in use")
+
 var ErrDockerVolumeNotFound = errors.New("docker: volume not found")
 
 var ErrDockerContainerNotRunning = errors.New("docker: container is not running")
@@ -366,10 +368,19 @@ func (c *DockerClient) Restart(ctx context.Context, id string) error {
 }
 
 func (c *DockerClient) Remove(ctx context.Context, id string) error {
+	return c.removeContainer(ctx, id, true)
+}
+
+// removeContainer deletes a container. Anonymous volumes are removed only when
+// removeVolumes is set; a cleanup never removes them so user data survives.
+func (c *DockerClient) removeContainer(ctx context.Context, id string, removeVolumes bool) error {
 	if strings.TrimSpace(id) == "" {
 		return errors.New("docker: container id is required")
 	}
-	path := "/containers/" + url.PathEscape(id) + "?force=true&v=true"
+	path := "/containers/" + url.PathEscape(id) + "?force=true"
+	if removeVolumes {
+		path += "&v=true"
+	}
 	response, err := c.doRaw(ctx, http.MethodDelete, path, nil, "")
 	if err != nil {
 		return err
@@ -1703,16 +1714,19 @@ func report(ctx context.Context, out chan<- LogMessage, err error) {
 }
 
 type dockerContainerSummary struct {
-	ID      string               `json:"Id"`
-	Names   []string             `json:"Names"`
-	Image   string               `json:"Image"`
-	ImageID string               `json:"ImageID"`
-	Status  string               `json:"Status"`
-	State   string               `json:"State"`
-	Created int64                `json:"Created"`
-	Labels  map[string]string    `json:"Labels"`
-	Ports   []dockerPortSummary  `json:"Ports"`
-	Mounts  []dockerMountSummary `json:"Mounts"`
+	ID      string   `json:"Id"`
+	Names   []string `json:"Names"`
+	Image   string   `json:"Image"`
+	ImageID string   `json:"ImageID"`
+	Status  string   `json:"Status"`
+	State   string   `json:"State"`
+	Created int64    `json:"Created"`
+	// SizeRw is the writable layer size; the engine reports it only when the
+	// listing asks with size=1.
+	SizeRw int64                `json:"SizeRw"`
+	Labels map[string]string    `json:"Labels"`
+	Ports  []dockerPortSummary  `json:"Ports"`
+	Mounts []dockerMountSummary `json:"Mounts"`
 }
 
 type dockerMountSummary struct {

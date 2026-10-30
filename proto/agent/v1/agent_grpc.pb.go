@@ -322,6 +322,8 @@ var UpdateService_ServiceDesc = grpc.ServiceDesc{
 const (
 	DockerService_ListContainers_FullMethodName            = "/agent.v1.DockerService/ListContainers"
 	DockerService_ListVolumes_FullMethodName               = "/agent.v1.DockerService/ListVolumes"
+	DockerService_ScanCleanup_FullMethodName               = "/agent.v1.DockerService/ScanCleanup"
+	DockerService_Clean_FullMethodName                     = "/agent.v1.DockerService/Clean"
 	DockerService_StartContainer_FullMethodName            = "/agent.v1.DockerService/StartContainer"
 	DockerService_StopContainer_FullMethodName             = "/agent.v1.DockerService/StopContainer"
 	DockerService_RestartContainer_FullMethodName          = "/agent.v1.DockerService/RestartContainer"
@@ -348,6 +350,17 @@ type DockerServiceClient interface {
 	// does not decide ownership; the control plane filters out the volumes a
 	// recorded resource owns.
 	ListVolumes(ctx context.Context, in *ListVolumesRequest, opts ...grpc.CallOption) (*ListVolumesResponse, error)
+	// ScanCleanup lists reclaimable Docker objects on the node without removing
+	// anything. The agent decides eligibility from its own state (image tags,
+	// container mounts and Docker's build cache report), so the keep rules hold
+	// for manual, scheduled and threshold runs alike. An agent that predates
+	// this RPC answers codes.Unimplemented; the control plane then reports the
+	// node as skipped, never as failed.
+	ScanCleanup(ctx context.Context, in *CleanupScanRequest, opts ...grpc.CallOption) (*CleanupScanResponse, error)
+	// Clean removes exactly the selected cleanup ids. Every id is re-checked
+	// against the current node state first: an item that is now in use, too new
+	// or already gone is reported as skipped instead of being removed.
+	Clean(ctx context.Context, in *CleanupCleanRequest, opts ...grpc.CallOption) (*CleanupCleanResponse, error)
 	StartContainer(ctx context.Context, in *ContainerActionRequest, opts ...grpc.CallOption) (*ContainerActionResponse, error)
 	StopContainer(ctx context.Context, in *ContainerActionRequest, opts ...grpc.CallOption) (*ContainerActionResponse, error)
 	RestartContainer(ctx context.Context, in *ContainerActionRequest, opts ...grpc.CallOption) (*ContainerActionResponse, error)
@@ -411,6 +424,26 @@ func (c *dockerServiceClient) ListVolumes(ctx context.Context, in *ListVolumesRe
 	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
 	out := new(ListVolumesResponse)
 	err := c.cc.Invoke(ctx, DockerService_ListVolumes_FullMethodName, in, out, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
+func (c *dockerServiceClient) ScanCleanup(ctx context.Context, in *CleanupScanRequest, opts ...grpc.CallOption) (*CleanupScanResponse, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	out := new(CleanupScanResponse)
+	err := c.cc.Invoke(ctx, DockerService_ScanCleanup_FullMethodName, in, out, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
+func (c *dockerServiceClient) Clean(ctx context.Context, in *CleanupCleanRequest, opts ...grpc.CallOption) (*CleanupCleanResponse, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	out := new(CleanupCleanResponse)
+	err := c.cc.Invoke(ctx, DockerService_Clean_FullMethodName, in, out, cOpts...)
 	if err != nil {
 		return nil, err
 	}
@@ -570,6 +603,17 @@ type DockerServiceServer interface {
 	// does not decide ownership; the control plane filters out the volumes a
 	// recorded resource owns.
 	ListVolumes(context.Context, *ListVolumesRequest) (*ListVolumesResponse, error)
+	// ScanCleanup lists reclaimable Docker objects on the node without removing
+	// anything. The agent decides eligibility from its own state (image tags,
+	// container mounts and Docker's build cache report), so the keep rules hold
+	// for manual, scheduled and threshold runs alike. An agent that predates
+	// this RPC answers codes.Unimplemented; the control plane then reports the
+	// node as skipped, never as failed.
+	ScanCleanup(context.Context, *CleanupScanRequest) (*CleanupScanResponse, error)
+	// Clean removes exactly the selected cleanup ids. Every id is re-checked
+	// against the current node state first: an item that is now in use, too new
+	// or already gone is reported as skipped instead of being removed.
+	Clean(context.Context, *CleanupCleanRequest) (*CleanupCleanResponse, error)
 	StartContainer(context.Context, *ContainerActionRequest) (*ContainerActionResponse, error)
 	StopContainer(context.Context, *ContainerActionRequest) (*ContainerActionResponse, error)
 	RestartContainer(context.Context, *ContainerActionRequest) (*ContainerActionResponse, error)
@@ -624,6 +668,12 @@ func (UnimplementedDockerServiceServer) ListContainers(context.Context, *ListCon
 }
 func (UnimplementedDockerServiceServer) ListVolumes(context.Context, *ListVolumesRequest) (*ListVolumesResponse, error) {
 	return nil, status.Error(codes.Unimplemented, "method ListVolumes not implemented")
+}
+func (UnimplementedDockerServiceServer) ScanCleanup(context.Context, *CleanupScanRequest) (*CleanupScanResponse, error) {
+	return nil, status.Error(codes.Unimplemented, "method ScanCleanup not implemented")
+}
+func (UnimplementedDockerServiceServer) Clean(context.Context, *CleanupCleanRequest) (*CleanupCleanResponse, error) {
+	return nil, status.Error(codes.Unimplemented, "method Clean not implemented")
 }
 func (UnimplementedDockerServiceServer) StartContainer(context.Context, *ContainerActionRequest) (*ContainerActionResponse, error) {
 	return nil, status.Error(codes.Unimplemented, "method StartContainer not implemented")
@@ -714,6 +764,42 @@ func _DockerService_ListVolumes_Handler(srv interface{}, ctx context.Context, de
 	}
 	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
 		return srv.(DockerServiceServer).ListVolumes(ctx, req.(*ListVolumesRequest))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
+func _DockerService_ScanCleanup_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(CleanupScanRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(DockerServiceServer).ScanCleanup(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: DockerService_ScanCleanup_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(DockerServiceServer).ScanCleanup(ctx, req.(*CleanupScanRequest))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
+func _DockerService_Clean_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(CleanupCleanRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(DockerServiceServer).Clean(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: DockerService_Clean_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(DockerServiceServer).Clean(ctx, req.(*CleanupCleanRequest))
 	}
 	return interceptor(ctx, in, info, handler)
 }
@@ -923,6 +1009,14 @@ var DockerService_ServiceDesc = grpc.ServiceDesc{
 		{
 			MethodName: "ListVolumes",
 			Handler:    _DockerService_ListVolumes_Handler,
+		},
+		{
+			MethodName: "ScanCleanup",
+			Handler:    _DockerService_ScanCleanup_Handler,
+		},
+		{
+			MethodName: "Clean",
+			Handler:    _DockerService_Clean_Handler,
 		},
 		{
 			MethodName: "StartContainer",

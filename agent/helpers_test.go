@@ -6,10 +6,19 @@ import (
 	"log/slog"
 	"strings"
 	"sync"
+	"time"
 
 	"github.com/justindeelux/gotham/agent/docker"
 	agentv1 "github.com/justindeelux/gotham/proto/agent/v1"
 )
+
+func (f *fakeDockerClient) ScanCleanup(context.Context, time.Duration) ([]*agentv1.CleanupItem, error) {
+	return nil, nil
+}
+
+func (f *fakeDockerClient) Clean(context.Context, []string, time.Duration) ([]*agentv1.CleanupItemResult, error) {
+	return nil, nil
+}
 
 func discardLogger() *slog.Logger {
 	return slog.New(slog.NewTextHandler(io.Discard, nil))

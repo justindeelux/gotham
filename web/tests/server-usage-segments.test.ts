@@ -10,18 +10,19 @@ import {
 } from "../src/features/servers/utils/serverDetailView";
 
 describe("usageSegments", () => {
-  it("fills round(percentage / 10) blocks", () => {
+  it("fills round(percentage * 30 / 100) blocks", () => {
     const cases: Array<[number, number]> = [
       [0, 0],
-      [4, 0],
-      [5, 1],
-      [60, 6],
-      [61, 6],
-      [70, 7],
-      [80, 8],
-      [85, 9],
-      [95, 10],
-      [100, 10],
+      [2, 1],
+      [4, 1],
+      [50, 15],
+      [60, 18],
+      [61, 18],
+      [70, 21],
+      [80, 24],
+      [85, 26],
+      [95, 29],
+      [100, 30],
     ];
     for (const [value, filled] of cases) {
       expect({ value, filled: usageSegments(value)?.filled }, `${value}%`).toEqual({
@@ -33,39 +34,31 @@ describe("usageSegments", () => {
 
   it("keeps the gauge colours fixed by block position", () => {
     const blocks = usageSegments(100)?.blocks ?? [];
-    expect(blocks.map((block) => block.level)).toEqual([
-      "success",
-      "success",
-      "success",
-      "success",
-      "success",
-      "success",
-      "warning",
-      "warning",
-      "danger",
-      "danger",
-    ]);
+    const levels = blocks.map((block) => block.level);
+    expect(levels.filter((level) => level === "success")).toHaveLength(18);
+    expect(levels.filter((level) => level === "warning")).toHaveLength(6);
+    expect(levels.filter((level) => level === "danger")).toHaveLength(6);
     expect(usageBlockLevel(0)).toBe("success");
-    expect(usageBlockLevel(5)).toBe("success");
-    expect(usageBlockLevel(6)).toBe("warning");
-    expect(usageBlockLevel(7)).toBe("warning");
-    expect(usageBlockLevel(8)).toBe("danger");
-    expect(usageBlockLevel(9)).toBe("danger");
+    expect(usageBlockLevel(17)).toBe("success");
+    expect(usageBlockLevel(18)).toBe("warning");
+    expect(usageBlockLevel(23)).toBe("warning");
+    expect(usageBlockLevel(24)).toBe("danger");
+    expect(usageBlockLevel(29)).toBe("danger");
   });
 
   it("marks only the filled blocks at 45%", () => {
     const view = usageSegments(45);
-    expect(view?.filled).toBe(5);
-    expect(view?.blocks.filter((block) => block.filled)).toHaveLength(5);
+    expect(view?.filled).toBe(14);
+    expect(view?.blocks.filter((block) => block.filled)).toHaveLength(14);
     expect(
       view?.blocks.filter((block) => block.filled).map((block) => block.level),
-    ).toEqual(["success", "success", "success", "success", "success"]);
+    ).toEqual(Array.from({ length: 14 }, () => "success"));
   });
 
   it("accepts backend fractions and clamps out-of-range values", () => {
     expect(usageSegments(0.69)?.percentage).toBe(69);
     expect(usageSegments(120)?.percentage).toBe(100);
-    expect(usageSegments(120)?.filled).toBe(10);
+    expect(usageSegments(120)?.filled).toBe(30);
     expect(usageSegments(-0.2)?.percentage).toBe(0);
     expect(usageSegments(-0.2)?.filled).toBe(0);
   });
@@ -98,7 +91,7 @@ describe("isUsageStale", () => {
 });
 
 describe("ServerUsageSegments", () => {
-  it("renders ten positioned blocks and a labelled meter", () => {
+  it("renders thirty positioned blocks and a labelled meter", () => {
     const wrapper = mount(ServerUsageSegments, {
       props: { label: "CPU usage", value: 62 },
     });
@@ -110,11 +103,11 @@ describe("ServerUsageSegments", () => {
     expect(wrapper.text()).toContain("62%");
 
     const blocks = wrapper.findAll(".usage-block");
-    expect(blocks).toHaveLength(10);
-    expect(wrapper.findAll(".usage-block.is-filled")).toHaveLength(6);
+    expect(blocks).toHaveLength(30);
+    expect(wrapper.findAll(".usage-block.is-filled")).toHaveLength(19);
     expect(blocks[0]?.classes()).toContain("is-success");
-    expect(blocks[6]?.classes()).toContain("is-warning");
-    expect(blocks[9]?.classes()).toContain("is-danger");
+    expect(blocks[18]?.classes()).toContain("is-warning");
+    expect(blocks[24]?.classes()).toContain("is-danger");
   });
 
   it("shows a dash and no filled blocks when no value was reported", () => {
@@ -124,7 +117,7 @@ describe("ServerUsageSegments", () => {
     expect(wrapper.find('[role="meter"]').exists()).toBe(false);
     expect(wrapper.text()).toContain("—");
     expect(wrapper.text()).not.toContain("0%");
-    expect(wrapper.findAll(".usage-block")).toHaveLength(10);
+    expect(wrapper.findAll(".usage-block")).toHaveLength(30);
     expect(wrapper.findAll(".usage-block.is-filled")).toHaveLength(0);
   });
 

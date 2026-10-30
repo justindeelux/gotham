@@ -1,7 +1,7 @@
 <script setup lang="ts">
 import { computed } from "vue";
 
-import { usageSegments } from "@/features/servers/utils/serverDetailView";
+import { usageBlockCount, usageSegments } from "@/features/servers/utils/serverDetailView";
 
 interface Props {
   label: string;
@@ -36,7 +36,7 @@ const view = computed(() => usageSegments(props.value));
       />
     </div>
     <div v-else class="usage-segments" aria-hidden="true">
-      <span v-for="index in 10" :key="index" class="usage-block" />
+      <span v-for="index in usageBlockCount" :key="index" class="usage-block" />
     </div>
   </div>
 </template>
@@ -68,11 +68,12 @@ const view = computed(() => usageSegments(props.value));
 
 .usage-segments {
   display: grid;
-  grid-template-columns: repeat(10, minmax(0, 1fr));
+  grid-template-columns: repeat(30, minmax(0, 1fr));
   gap: var(--space-1);
 }
 
 .usage-block {
+  min-width: 0;
   height: 10px;
   border-radius: var(--radius-sm);
   background: var(--border-soft);

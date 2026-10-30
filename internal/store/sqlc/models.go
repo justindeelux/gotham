@@ -171,6 +171,27 @@ type BackupTargetSecret struct {
 	CreatedAt  pgtype.Timestamptz `json:"created_at"`
 }
 
+type CleanupRun struct {
+	ID             pgtype.UUID        `json:"id"`
+	ServerID       pgtype.UUID        `json:"server_id"`
+	ActorUserID    pgtype.UUID        `json:"actor_user_id"`
+	Trigger        string             `json:"trigger"`
+	StartedAt      pgtype.Timestamptz `json:"started_at"`
+	FinishedAt     pgtype.Timestamptz `json:"finished_at"`
+	ReclaimedBytes int64              `json:"reclaimed_bytes"`
+}
+
+type CleanupRunItem struct {
+	ID             pgtype.UUID `json:"id"`
+	RunID          pgtype.UUID `json:"run_id"`
+	ItemID         string      `json:"item_id"`
+	Category       string      `json:"category"`
+	Name           string      `json:"name"`
+	Status         string      `json:"status"`
+	Message        string      `json:"message"`
+	ReclaimedBytes int64       `json:"reclaimed_bytes"`
+}
+
 type Database struct {
 	ID            pgtype.UUID        `json:"id"`
 	UserID        pgtype.UUID        `json:"user_id"`

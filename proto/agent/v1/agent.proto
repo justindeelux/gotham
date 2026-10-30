@@ -39,6 +39,17 @@ service DockerService {
   // does not decide ownership; the control plane filters out the volumes a
   // recorded resource owns.
   rpc ListVolumes(ListVolumesRequest) returns (ListVolumesResponse);
+  // ScanCleanup lists reclaimable Docker objects on the node without removing
+  // anything. The agent decides eligibility from its own state (image tags,
+  // container mounts and Docker's build cache report), so the keep rules hold
+  // for manual, scheduled and threshold runs alike. An agent that predates
+  // this RPC answers codes.Unimplemented; the control plane then reports the
+  // node as skipped, never as failed.
+  rpc ScanCleanup(CleanupScanRequest) returns (CleanupScanResponse);
+  // Clean removes exactly the selected cleanup ids. Every id is re-checked
+  // against the current node state first: an item that is now in use, too new
+  // or already gone is reported as skipped instead of being removed.
+  rpc Clean(CleanupCleanRequest) returns (CleanupCleanResponse);
   rpc StartContainer(ContainerActionRequest) returns (ContainerActionResponse);
   rpc StopContainer(ContainerActionRequest) returns (ContainerActionResponse);
   rpc RestartContainer(ContainerActionRequest) returns (ContainerActionResponse);
@@ -1455,6 +1466,54 @@ message VolumeActionRequest {
 }
 
 message VolumeActionResponse {}
+
+// CleanupScanRequest asks for the node's reclaimable objects.
+message CleanupScanRequest {
+  // min_age_seconds excludes anything younger than this. Zero lists everything
+  // the category rules already allow.
+  int64 min_age_seconds = 1;
+}
+
+// CleanupItem is one reclaimable object.
+message CleanupItem {
+  // id is opaque and category-prefixed: "image:<sha256>", "container:<id>",
+  // "volume:<name>" or "build-cache".
+  string id = 1;
+  // category is one of the stable keys build_cache, dangling_images,
+  // stopped_containers, unused_images or orphaned_volumes.
+  string category = 2;
+  // name is the human label: an image tag, a container name or "Build cache".
+  string name = 3;
+  int64 size_bytes = 4;
+  int64 created_unix = 5;
+  // reason is a short explanation, e.g. "dangling" or "not used by any
+  // container".
+  string reason = 6;
+}
+
+message CleanupScanResponse {
+  repeated CleanupItem items = 1;
+}
+
+// CleanupCleanRequest selects the objects to remove.
+message CleanupCleanRequest {
+  repeated string ids = 1;
+  int64 min_age_seconds = 2;
+}
+
+// CleanupItemResult reports one requested id's outcome.
+message CleanupItemResult {
+  string id = 1;
+  // status is "removed", "skipped" or "failed".
+  string status = 2;
+  // message explains a skip or failure, e.g. "in use" or "too new".
+  string message = 3;
+  int64 reclaimed_bytes = 4;
+}
+
+message CleanupCleanResponse {
+  repeated CleanupItemResult results = 1;
+}
 
 // VolumeArchiveCapabilitiesRequest is empty: the capability is node-local.
 message VolumeArchiveCapabilitiesRequest {}

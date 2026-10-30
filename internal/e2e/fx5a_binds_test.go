@@ -6,6 +6,7 @@ import (
 	"net"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/google/uuid"
 	"google.golang.org/grpc"
@@ -36,6 +37,12 @@ func (fakeBindDocker) ListContainers(context.Context, bool, map[string]string, b
 	return nil, nil
 }
 func (fakeBindDocker) ListVolumes(context.Context) ([]*agentv1.VolumeInfo, error) {
+	return nil, nil
+}
+func (fakeBindDocker) ScanCleanup(context.Context, time.Duration) ([]*agentv1.CleanupItem, error) {
+	return nil, nil
+}
+func (fakeBindDocker) Clean(context.Context, []string, time.Duration) ([]*agentv1.CleanupItemResult, error) {
 	return nil, nil
 }
 func (fakeBindDocker) Start(context.Context, string) error   { return nil }

@@ -22,6 +22,8 @@ type dockerImageSummary struct {
 	ID       string   `json:"Id"`
 	RepoTags []string `json:"RepoTags"`
 	Created  int64    `json:"Created"`
+	// Size is the image's uncompressed size in bytes.
+	Size int64 `json:"Size"`
 }
 
 func (c *DockerClient) listImages(ctx context.Context, all bool) ([]dockerImageSummary, error) {
@@ -97,6 +99,11 @@ func (c *DockerClient) activeImageRefs(ctx context.Context) (map[string]struct{}
 	if err := c.doJSON(ctx, http.MethodGet, "/containers/json?all=1", nil, &summaries); err != nil {
 		return nil, err
 	}
+	return activeImageRefsFrom(summaries), nil
+}
+
+// activeImageRefsFrom indexes the images a container references by id and tag.
+func activeImageRefsFrom(summaries []dockerContainerSummary) map[string]struct{} {
 	active := make(map[string]struct{}, len(summaries))
 	for _, summary := range summaries {
 		if summary.ImageID != "" {
@@ -106,7 +113,7 @@ func (c *DockerClient) activeImageRefs(ctx context.Context) (map[string]struct{}
 			active[summary.Image] = struct{}{}
 		}
 	}
-	return active, nil
+	return active
 }
 
 func selectStaleImages(images []appImage, keepTag string, active map[string]struct{}, history int) []appImage {

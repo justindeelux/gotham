@@ -10,6 +10,7 @@ import (
 	"net"
 	"path"
 	"testing"
+	"time"
 
 	agentv1 "github.com/justindeelux/gotham/proto/agent/v1"
 	"google.golang.org/grpc"
@@ -44,6 +45,27 @@ type fakeDockerClient struct {
 	mountpointErr      error
 	exports            map[string][]byte
 	exportErr          error
+	cleanupItems       []*agentv1.CleanupItem
+	cleanupResults     []*agentv1.CleanupItemResult
+	cleanedIDs         []string
+	cleanupMinAge      time.Duration
+}
+
+func (f *fakeDockerClient) ScanCleanup(_ context.Context, minAge time.Duration) ([]*agentv1.CleanupItem, error) {
+	f.cleanupMinAge = minAge
+	if f.err != nil {
+		return nil, f.err
+	}
+	return f.cleanupItems, nil
+}
+
+func (f *fakeDockerClient) Clean(_ context.Context, ids []string, minAge time.Duration) ([]*agentv1.CleanupItemResult, error) {
+	f.cleanedIDs = ids
+	f.cleanupMinAge = minAge
+	if f.err != nil {
+		return nil, f.err
+	}
+	return f.cleanupResults, nil
 }
 
 func (f *fakeDockerClient) Version(context.Context) (string, error) {

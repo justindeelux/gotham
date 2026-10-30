@@ -2899,6 +2899,294 @@ var ToolService_ServiceDesc = grpc.ServiceDesc{
 }
 
 const (
+	HostService_Status_FullMethodName         = "/agent.v1.HostService/Status"
+	HostService_ApplyNetwork_FullMethodName   = "/agent.v1.HostService/ApplyNetwork"
+	HostService_ConfirmNetwork_FullMethodName = "/agent.v1.HostService/ConfirmNetwork"
+	HostService_RevertNetwork_FullMethodName  = "/agent.v1.HostService/RevertNetwork"
+	HostService_ApplySystem_FullMethodName    = "/agent.v1.HostService/ApplySystem"
+)
+
+// HostServiceClient is the client API for HostService service.
+//
+// For semantics around ctx use and closing/ending streaming RPCs, please refer to https://pkg.go.dev/google.golang.org/grpc/?tab=doc#ClientConn.NewStream.
+//
+// HostService runs on the node agent. The control plane dials it to read and
+// change this node's host settings through the root-owned gotham-hostctl
+// helper, which the agent reaches through a verb-pinned sudoers drop-in. The
+// helper re-validates every value, so this service is a transport, not a
+// trust boundary of its own. A node that predates this service answers
+// codes.Unimplemented; the control plane reports it as an outdated agent.
+type HostServiceClient interface {
+	// Status reports the helper capability and the live host settings: the
+	// default-route network, hostname, NTP state and timezone.
+	Status(ctx context.Context, in *HostStatusRequest, opts ...grpc.CallOption) (*HostStatusResponse, error)
+	// ApplyNetwork applies network and DNS values and arms the host-side revert
+	// timer; the host restores the previous state when nothing confirms in
+	// time, even when the link to the control plane is gone.
+	ApplyNetwork(ctx context.Context, in *HostApplyNetworkRequest, opts ...grpc.CallOption) (*HostApplyNetworkResponse, error)
+	// ConfirmNetwork cancels the pending revert and keeps the applied values.
+	ConfirmNetwork(ctx context.Context, in *HostConfirmNetworkRequest, opts ...grpc.CallOption) (*HostConfirmNetworkResponse, error)
+	// RevertNetwork restores the state snapshotted by ApplyNetwork. It is
+	// idempotent: reverting with no pending change succeeds.
+	RevertNetwork(ctx context.Context, in *HostRevertNetworkRequest, opts ...grpc.CallOption) (*HostRevertNetworkResponse, error)
+	// ApplySystem applies the hostname, NTP and timezone. An empty hostname or
+	// timezone leaves that value unchanged.
+	ApplySystem(ctx context.Context, in *HostApplySystemRequest, opts ...grpc.CallOption) (*HostApplySystemResponse, error)
+}
+
+type hostServiceClient struct {
+	cc grpc.ClientConnInterface
+}
+
+func NewHostServiceClient(cc grpc.ClientConnInterface) HostServiceClient {
+	return &hostServiceClient{cc}
+}
+
+func (c *hostServiceClient) Status(ctx context.Context, in *HostStatusRequest, opts ...grpc.CallOption) (*HostStatusResponse, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	out := new(HostStatusResponse)
+	err := c.cc.Invoke(ctx, HostService_Status_FullMethodName, in, out, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
+func (c *hostServiceClient) ApplyNetwork(ctx context.Context, in *HostApplyNetworkRequest, opts ...grpc.CallOption) (*HostApplyNetworkResponse, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	out := new(HostApplyNetworkResponse)
+	err := c.cc.Invoke(ctx, HostService_ApplyNetwork_FullMethodName, in, out, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
+func (c *hostServiceClient) ConfirmNetwork(ctx context.Context, in *HostConfirmNetworkRequest, opts ...grpc.CallOption) (*HostConfirmNetworkResponse, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	out := new(HostConfirmNetworkResponse)
+	err := c.cc.Invoke(ctx, HostService_ConfirmNetwork_FullMethodName, in, out, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
+func (c *hostServiceClient) RevertNetwork(ctx context.Context, in *HostRevertNetworkRequest, opts ...grpc.CallOption) (*HostRevertNetworkResponse, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	out := new(HostRevertNetworkResponse)
+	err := c.cc.Invoke(ctx, HostService_RevertNetwork_FullMethodName, in, out, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
+func (c *hostServiceClient) ApplySystem(ctx context.Context, in *HostApplySystemRequest, opts ...grpc.CallOption) (*HostApplySystemResponse, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	out := new(HostApplySystemResponse)
+	err := c.cc.Invoke(ctx, HostService_ApplySystem_FullMethodName, in, out, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
+// HostServiceServer is the server API for HostService service.
+// All implementations must embed UnimplementedHostServiceServer
+// for forward compatibility.
+//
+// HostService runs on the node agent. The control plane dials it to read and
+// change this node's host settings through the root-owned gotham-hostctl
+// helper, which the agent reaches through a verb-pinned sudoers drop-in. The
+// helper re-validates every value, so this service is a transport, not a
+// trust boundary of its own. A node that predates this service answers
+// codes.Unimplemented; the control plane reports it as an outdated agent.
+type HostServiceServer interface {
+	// Status reports the helper capability and the live host settings: the
+	// default-route network, hostname, NTP state and timezone.
+	Status(context.Context, *HostStatusRequest) (*HostStatusResponse, error)
+	// ApplyNetwork applies network and DNS values and arms the host-side revert
+	// timer; the host restores the previous state when nothing confirms in
+	// time, even when the link to the control plane is gone.
+	ApplyNetwork(context.Context, *HostApplyNetworkRequest) (*HostApplyNetworkResponse, error)
+	// ConfirmNetwork cancels the pending revert and keeps the applied values.
+	ConfirmNetwork(context.Context, *HostConfirmNetworkRequest) (*HostConfirmNetworkResponse, error)
+	// RevertNetwork restores the state snapshotted by ApplyNetwork. It is
+	// idempotent: reverting with no pending change succeeds.
+	RevertNetwork(context.Context, *HostRevertNetworkRequest) (*HostRevertNetworkResponse, error)
+	// ApplySystem applies the hostname, NTP and timezone. An empty hostname or
+	// timezone leaves that value unchanged.
+	ApplySystem(context.Context, *HostApplySystemRequest) (*HostApplySystemResponse, error)
+	mustEmbedUnimplementedHostServiceServer()
+}
+
+// UnimplementedHostServiceServer must be embedded to have
+// forward compatible implementations.
+//
+// NOTE: this should be embedded by value instead of pointer to avoid a nil
+// pointer dereference when methods are called.
+type UnimplementedHostServiceServer struct{}
+
+func (UnimplementedHostServiceServer) Status(context.Context, *HostStatusRequest) (*HostStatusResponse, error) {
+	return nil, status.Error(codes.Unimplemented, "method Status not implemented")
+}
+func (UnimplementedHostServiceServer) ApplyNetwork(context.Context, *HostApplyNetworkRequest) (*HostApplyNetworkResponse, error) {
+	return nil, status.Error(codes.Unimplemented, "method ApplyNetwork not implemented")
+}
+func (UnimplementedHostServiceServer) ConfirmNetwork(context.Context, *HostConfirmNetworkRequest) (*HostConfirmNetworkResponse, error) {
+	return nil, status.Error(codes.Unimplemented, "method ConfirmNetwork not implemented")
+}
+func (UnimplementedHostServiceServer) RevertNetwork(context.Context, *HostRevertNetworkRequest) (*HostRevertNetworkResponse, error) {
+	return nil, status.Error(codes.Unimplemented, "method RevertNetwork not implemented")
+}
+func (UnimplementedHostServiceServer) ApplySystem(context.Context, *HostApplySystemRequest) (*HostApplySystemResponse, error) {
+	return nil, status.Error(codes.Unimplemented, "method ApplySystem not implemented")
+}
+func (UnimplementedHostServiceServer) mustEmbedUnimplementedHostServiceServer() {}
+func (UnimplementedHostServiceServer) testEmbeddedByValue()                     {}
+
+// UnsafeHostServiceServer may be embedded to opt out of forward compatibility for this service.
+// Use of this interface is not recommended, as added methods to HostServiceServer will
+// result in compilation errors.
+type UnsafeHostServiceServer interface {
+	mustEmbedUnimplementedHostServiceServer()
+}
+
+func RegisterHostServiceServer(s grpc.ServiceRegistrar, srv HostServiceServer) {
+	// If the following call panics, it indicates UnimplementedHostServiceServer was
+	// embedded by pointer and is nil.  This will cause panics if an
+	// unimplemented method is ever invoked, so we test this at initialization
+	// time to prevent it from happening at runtime later due to I/O.
+	if t, ok := srv.(interface{ testEmbeddedByValue() }); ok {
+		t.testEmbeddedByValue()
+	}
+	s.RegisterService(&HostService_ServiceDesc, srv)
+}
+
+func _HostService_Status_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(HostStatusRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(HostServiceServer).Status(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: HostService_Status_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(HostServiceServer).Status(ctx, req.(*HostStatusRequest))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
+func _HostService_ApplyNetwork_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(HostApplyNetworkRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(HostServiceServer).ApplyNetwork(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: HostService_ApplyNetwork_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(HostServiceServer).ApplyNetwork(ctx, req.(*HostApplyNetworkRequest))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
+func _HostService_ConfirmNetwork_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(HostConfirmNetworkRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(HostServiceServer).ConfirmNetwork(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: HostService_ConfirmNetwork_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(HostServiceServer).ConfirmNetwork(ctx, req.(*HostConfirmNetworkRequest))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
+func _HostService_RevertNetwork_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(HostRevertNetworkRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(HostServiceServer).RevertNetwork(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: HostService_RevertNetwork_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(HostServiceServer).RevertNetwork(ctx, req.(*HostRevertNetworkRequest))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
+func _HostService_ApplySystem_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(HostApplySystemRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(HostServiceServer).ApplySystem(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: HostService_ApplySystem_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(HostServiceServer).ApplySystem(ctx, req.(*HostApplySystemRequest))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
+// HostService_ServiceDesc is the grpc.ServiceDesc for HostService service.
+// It's only intended for direct use with grpc.RegisterService,
+// and not to be introspected or modified (even as a copy)
+var HostService_ServiceDesc = grpc.ServiceDesc{
+	ServiceName: "agent.v1.HostService",
+	HandlerType: (*HostServiceServer)(nil),
+	Methods: []grpc.MethodDesc{
+		{
+			MethodName: "Status",
+			Handler:    _HostService_Status_Handler,
+		},
+		{
+			MethodName: "ApplyNetwork",
+			Handler:    _HostService_ApplyNetwork_Handler,
+		},
+		{
+			MethodName: "ConfirmNetwork",
+			Handler:    _HostService_ConfirmNetwork_Handler,
+		},
+		{
+			MethodName: "RevertNetwork",
+			Handler:    _HostService_RevertNetwork_Handler,
+		},
+		{
+			MethodName: "ApplySystem",
+			Handler:    _HostService_ApplySystem_Handler,
+		},
+	},
+	Streams:  []grpc.StreamDesc{},
+	Metadata: "agent/v1/agent.proto",
+}
+
+const (
 	TerminalService_OpenTerminal_FullMethodName = "/agent.v1.TerminalService/OpenTerminal"
 )
 

@@ -1947,7 +1947,7 @@ fi
 # Install over the CA-protected loopback channel. Platform/config checks above
 # already passed; an agent failure below must make this install fail.
 {
-        for agent_sibling in install-agent.sh install-agent-lib.sh gotham-agent-updater.conf install-agent-sudoers.sh gotham-agent.service gotham-toolctl.sh install-toolctl-sudoers.sh; do
+        for agent_sibling in install-agent.sh install-agent-lib.sh gotham-agent-updater.conf install-agent-sudoers.sh gotham-agent.service gotham-toolctl.sh install-toolctl-sudoers.sh gotham-hostbootstrap.sh gotham-hostbootstrap-fetch.sh gotham-hostctl.sh gotham-signing-key.pub; do
             if [ ! -f "${SCRIPT_DIR}/${agent_sibling}" ]; then
                 die "install.sh: ${agent_sibling} must be next to this script for the localhost agent install"
             fi

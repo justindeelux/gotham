@@ -50,10 +50,11 @@ sandbox), `GOTHAM_INSTALL_TEST=1` (honour OS/agent-env seams, only with
 
 Run by the operator as root on each node. Installs the agent binary into
 `/var/lib/gotham-agent/bin`, writes `/etc/gotham/agent.env`, installs the shared
-update wrapper as `gotham-agent-update`, its sudoers rule and the unit, then
-starts it. Re-running is a safe reinstall: keys the invocation does not set
-keep their previous value. It verifies the same signed manifest as the control
-plane and **fails closed without a CA**.
+update wrapper as `gotham-agent-update`, its sudoers rule, the host helper
+(`gotham-hostctl` with a five-verb sudoers rule for the agent user) and the
+unit, then starts it. Re-running is a safe reinstall: keys the invocation does
+not set keep their previous value. It verifies the same signed manifest as the
+control plane and **fails closed without a CA**.
 
 Flags: `--ca <path>` (or `GOTHAM_AGENT_CA_FILE`), `--enrollment-token-file
 <path>` (first registration), `--insecure` (local development only),
@@ -159,14 +160,18 @@ wrapper, the root-owned release public key and the fetch helper. Run by
 
 ```sh
 sudo sh deploy/gotham-hostbootstrap.sh create <control-plane-user> <version> [--allow-downgrade]
+sudo sh deploy/gotham-hostbootstrap.sh create-agent <agent-user> <version>
 ```
 
 Writes fixed root-owned paths under `/usr/libexec/gotham/` and a sudoers drop-in
-for the control-plane user, validates sudoers with `visudo`, is idempotent,
-refuses symlinked destinations, and records a root-owned high-water mark so a
-replayed older signed payload is refused. `apply` reapplies the local payload;
-`apply-release <dir> <version>` applies a verified payload; `version-cmp <a>
-<b>` prints `-1/0/1`. Test seam: `GOTHAM_HOST_BOOTSTRAP_ROOT` (only without
+for the recorded users: the control-plane user gets the five host-control verbs
+plus the pinned repair verb, the node agent user gets exactly the five
+host-control verbs. `create` and `create-agent` keep each other's grantee, so
+the control-plane machine can carry both. Validates sudoers with `visudo`, is
+idempotent, refuses symlinked destinations, and records a root-owned high-water
+mark so a replayed older signed payload is refused. `apply` reapplies the local
+payload; `apply-release <dir> <version>` applies a verified payload; `version-cmp
+<a> <b>` prints `-1/0/1`. Test seam: `GOTHAM_HOST_BOOTSTRAP_ROOT` (only without
 sudo).
 
 ### `gotham-hostbootstrap-fetch.sh` — verified helper-payload fetch
@@ -190,8 +195,10 @@ Values arrive on stdin as `key=value` and are re-validated. Only
 systemd-networkd, systemd-resolved and systemd-timesyncd are supported, and it
 owns only its `05-gotham.*` drop-ins. A network change is tentative: a systemd
 timer reverts it (30–600 s window) unless the operator confirms. `status` also
-reports the live default-route interface. Test seams: `GOTHAM_HOSTCTL_ROOT`,
-`GOTHAM_HOSTCTL_DRYRUN` (only without sudo).
+reports the live default-route interface, hostname, NTP state and timezone;
+`apply-system` accepts a `timezone` key (an IANA zone name, checked against
+tzdata) in addition to `hostname`, `ntp_enabled` and `ntp_servers`. Test seams:
+`GOTHAM_HOSTCTL_ROOT`, `GOTHAM_HOSTCTL_DRYRUN` (only without sudo).
 
 ### `gotham-toolctl.sh` — host build-tool installer
 

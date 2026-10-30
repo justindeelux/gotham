@@ -1185,6 +1185,123 @@ message ListToolsResponse {
   repeated ToolInfo tools = 1;
 }
 
+// HostService runs on the node agent. The control plane dials it to read and
+// change this node's host settings through the root-owned gotham-hostctl
+// helper, which the agent reaches through a verb-pinned sudoers drop-in. The
+// helper re-validates every value, so this service is a transport, not a
+// trust boundary of its own. A node that predates this service answers
+// codes.Unimplemented; the control plane reports it as an outdated agent.
+service HostService {
+  // Status reports the helper capability and the live host settings: the
+  // default-route network, hostname, NTP state and timezone.
+  rpc Status(HostStatusRequest) returns (HostStatusResponse);
+  // ApplyNetwork applies network and DNS values and arms the host-side revert
+  // timer; the host restores the previous state when nothing confirms in
+  // time, even when the link to the control plane is gone.
+  rpc ApplyNetwork(HostApplyNetworkRequest) returns (HostApplyNetworkResponse);
+  // ConfirmNetwork cancels the pending revert and keeps the applied values.
+  rpc ConfirmNetwork(HostConfirmNetworkRequest) returns (HostConfirmNetworkResponse);
+  // RevertNetwork restores the state snapshotted by ApplyNetwork. It is
+  // idempotent: reverting with no pending change succeeds.
+  rpc RevertNetwork(HostRevertNetworkRequest) returns (HostRevertNetworkResponse);
+  // ApplySystem applies the hostname, NTP and timezone. An empty hostname or
+  // timezone leaves that value unchanged.
+  rpc ApplySystem(HostApplySystemRequest) returns (HostApplySystemResponse);
+}
+
+// HostCapability is the overall host-control state of this node. Anything but
+// READY means the control plane shows read-only host forms with a reason.
+enum HostCapability {
+  HOST_CAPABILITY_UNSPECIFIED = 0;
+  HOST_CAPABILITY_READY = 1;
+  // UNSUPPORTED_STACK: the helper works, but this host lacks the systemd
+  // stack (networkd/resolved/timesyncd) the platform needs.
+  HOST_CAPABILITY_UNSUPPORTED_STACK = 2;
+  // HELPER_MISSING: gotham-hostctl is not installed on this node.
+  HOST_CAPABILITY_HELPER_MISSING = 3;
+  // HELPER_DENIED: the helper exists but the agent may not run it.
+  HOST_CAPABILITY_HELPER_DENIED = 4;
+}
+
+// HostStatusRequest is empty: the host is the one the agent runs on.
+message HostStatusRequest {}
+
+// HostNetworkConfig is the default-route interface as the host sees it.
+message HostNetworkConfig {
+  string interface = 1;
+  repeated string dns_servers = 2;
+  HostIPv4Config ipv4 = 3;
+  HostIPv6Config ipv6 = 4;
+}
+
+message HostIPv4Config {
+  // mode is "dhcp" or "static".
+  string mode = 1;
+  // address is CIDR, empty in DHCP mode.
+  string address = 2;
+  string gateway = 3;
+}
+
+message HostIPv6Config {
+  bool enabled = 1;
+  string mode = 2;
+  string address = 3;
+  string gateway = 4;
+}
+
+// HostStatusResponse reports the live host settings. Empty hostname or
+// timezone means the host could not report it.
+message HostStatusResponse {
+  HostCapability capability = 1;
+  // network is null when the host has no usable default-route network
+  // configuration to report.
+  HostNetworkConfig network = 2;
+  string hostname = 3;
+  bool ntp_enabled = 4;
+  repeated string ntp_servers = 5;
+  string timezone = 6;
+}
+
+// HostApplyNetworkRequest carries the whole desired network state, exactly as
+// the local host helper takes it.
+message HostApplyNetworkRequest {
+  repeated string dns_servers = 1;
+  string ipv4_mode = 2;
+  string ipv4_address = 3;
+  string ipv4_gateway = 4;
+  bool ipv6_enabled = 5;
+  string ipv6_mode = 6;
+  string ipv6_address = 7;
+  string ipv6_gateway = 8;
+  // revert_after is the revert countdown in seconds; the helper accepts
+  // 30..600.
+  uint32 revert_after = 9;
+  // dns_only changes only the resolver, never the interface file.
+  bool dns_only = 10;
+}
+
+// HostApplyNetworkResponse is empty: a failure is a gRPC error.
+message HostApplyNetworkResponse {}
+
+message HostConfirmNetworkRequest {}
+
+message HostConfirmNetworkResponse {}
+
+message HostRevertNetworkRequest {}
+
+message HostRevertNetworkResponse {}
+
+message HostApplySystemRequest {
+  // hostname is left unchanged when empty.
+  string hostname = 1;
+  bool ntp_enabled = 2;
+  repeated string ntp_servers = 3;
+  // timezone is an IANA zone name; empty leaves it unchanged.
+  string timezone = 4;
+}
+
+message HostApplySystemResponse {}
+
 // InstallToolRequest names the catalog tool to install or uninstall.
 message InstallToolRequest {
   string id = 1;

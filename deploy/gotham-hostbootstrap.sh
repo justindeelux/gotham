@@ -2,7 +2,8 @@
 #
 # gotham-hostbootstrap: installs the fixed, root-owned host helper
 # (gotham-hostctl) and host-tool installer (gotham-toolctl) with the
-# verb+id-pinned sudoers drop-in for the control-plane user (JUS-185).
+# verb+id-pinned sudoers drop-in for the control-plane user and, on a node that
+# runs the agent, for the agent user (JUS-185).
 #
 # It is the single source of the host-helper payload. It runs only from a
 # root-trusted source: `install.sh` (run by the operator as root, from the
@@ -15,6 +16,8 @@
 #
 #   gotham-hostbootstrap create <cp-user> <version> [--allow-downgrade]
 #                                          install payload + trust anchor + apply
+#   gotham-hostbootstrap create-agent <agent-user> <version>
+#                                          add the node agent's helper grant
 #   gotham-hostbootstrap apply             apply the payload only
 #   gotham-hostbootstrap apply-release <dir> <version>
 #                                          apply a verified released payload
@@ -30,6 +33,11 @@
 # version so it can seed the high-water mark: a bridge without a marked version
 # could never accept a refresh. A re-run that would lower the mark is refused
 # unless the operator passes --allow-downgrade.
+#
+# `create-agent` records the node agent user the same way and applies the same
+# payload, but keeps the control-plane grantee: on the control-plane machine both
+# users run the helper, and each keeps exactly its own rules. The agent user gets
+# the five host-control verbs only, never the tool-installer repair verb.
 #
 # `apply-release` refuses to install a payload whose signature-verified version
 # is lower than the installed one (a root-owned high-water mark) or when that
@@ -71,10 +79,12 @@ HOSTCTL_DROPIN="${SUDOERS_DIR}/gotham-hostctl"
 SIGNING_KEY="${HELPER_DIR}/gotham-signing-key.pub"
 FETCH_SCRIPT="${HELPER_DIR}/gotham-hostbootstrap-fetch.sh"
 WRAPPER="${HELPER_DIR}/gotham-update"
-# Root-owned records in the installed payload: the control-plane user (so a
-# release refresh can regenerate the drop-in without it being in the release)
-# and the monotonic high-water mark of the applied helper version.
+# Root-owned records in the installed payload: the users that may run the host
+# helper (the control plane, and on every node its agent) so a release refresh
+# can regenerate the drop-in without the users being in the release, and the
+# monotonic high-water mark of the applied helper version.
 CP_USER_FILE="${PAYLOAD_DIR}/cp-user"
+AGENT_USER_FILE="${PAYLOAD_DIR}/agent-user"
 VERSION_FILE="${PAYLOAD_DIR}/version"
 
 # install_optional src dst mode: install a script only when this checkout ships
@@ -248,17 +258,30 @@ version_cmp() {
     fi
 }
 
-# payload_cp_user prints the recorded control-plane user (root-owned record, or
-# the one in the installed drop-in), or fails when none is usable.
+# payload_cp_user prints the recorded control-plane user, or the one an older
+# payload granted without recording it. That fallback reads the installed
+# drop-in: the pinned tool-installer repair verb is granted to the control-plane
+# user only, so it names them even when an agent grantee is present too.
+read_user_record() { # file: the recorded user, or empty.
+    [ -f "$1" ] && [ ! -L "$1" ] || return 0
+    u="$(sed -n '1p' "$1" 2>/dev/null | tr -d '\r\n')"
+    valid_user "${u}" && printf '%s' "${u}"
+    return 0
+}
+
 payload_cp_user() {
-    u=""
-    if [ -f "${CP_USER_FILE}" ]; then
-        u="$(sed -n '1p' "${CP_USER_FILE}" 2>/dev/null | tr -d '\r\n')"
-    fi
+    u="$(read_user_record "${CP_USER_FILE}")"
     if [ -z "${u}" ] && [ -f "${PAYLOAD_DIR}/gotham-hostctl.sudoers" ]; then
-        u="$(sed -n 's/^\([A-Za-z0-9_-]\{1,\}\) ALL=(root).*/\1/p' "${PAYLOAD_DIR}/gotham-hostctl.sudoers" 2>/dev/null | head -n 1)"
+        u="$(sed -n 's|^\([A-Za-z0-9_-]\{1,\}\) ALL=(root) NOPASSWD: /usr/libexec/gotham/gotham-toolctl install-tool gotham-hostctl$|\1|p' "${PAYLOAD_DIR}/gotham-hostctl.sudoers" 2>/dev/null | head -n 1)"
     fi
+    [ -n "${u}" ] || return 1
     valid_user "${u}" || return 1
+    printf '%s' "${u}"
+}
+
+payload_agent_user() {
+    u="$(read_user_record "${AGENT_USER_FILE}")"
+    [ -n "${u}" ] || return 0
     printf '%s' "${u}"
 }
 
@@ -292,15 +315,19 @@ ensure_dir() {
     fi
 }
 
-# hostctl_sudoers user: the control-plane drop-in (five verbs + repair). The
-# rules always name the fixed production paths, never the test root prefix.
-hostctl_sudoers() {
-    echo "# Allow the Gotham control plane to run its fixed host helper verbs,"
-    echo "# plus the one pinned tool-installer verb used to repair the helper."
+# sudoers_for cp_user agent_user: the host-helper drop-in. Every recorded user
+# gets the five fixed host-control verbs; the control-plane user additionally
+# gets the one pinned tool-installer verb used to repair the helper, so an
+# agent cannot reinstall root payloads. Both may be empty (the other is then
+# the only grantee). The rules always name the fixed production paths, never
+# the test root prefix.
+sudoers_for() {
+    echo "# Allow the Gotham control plane and node agent to run its fixed host helper verbs."
     for verb in ${HOSTCTL_VERBS}; do
-        echo "$1 ALL=(root) NOPASSWD: /usr/libexec/gotham/gotham-hostctl ${verb}"
+        [ -z "$1" ] || echo "$1 ALL=(root) NOPASSWD: /usr/libexec/gotham/gotham-hostctl ${verb}"
+        [ -z "$2" ] || echo "$2 ALL=(root) NOPASSWD: /usr/libexec/gotham/gotham-hostctl ${verb}"
     done
-    echo "$1 ALL=(root) NOPASSWD: /usr/libexec/gotham/gotham-toolctl install-tool gotham-hostctl"
+    [ -z "$1" ] || echo "$1 ALL=(root) NOPASSWD: /usr/libexec/gotham/gotham-toolctl install-tool gotham-hostctl"
 }
 
 # apply_payload: install the live helpers and the hostctl drop-in from the
@@ -320,37 +347,36 @@ apply_payload() {
     install_sudoers "${PAYLOAD_DIR}/gotham-hostctl.sudoers" "${HOSTCTL_DROPIN}"
 }
 
-# create writes the payload (root-owned) from this directory's scripts, then
-# applies it. cp_user is validated here and again by the caller.
-create() {
-    cp_user="$1"
-    cp_version="${2:-}"
-    allow_downgrade="${3:-}"
-    valid_user "${cp_user}" || die "invalid control-plane user: ${cp_user}" 2
-    # The bridge must seed the high-water mark: a host left without one could
-    # only ever refuse a refresh (a missing mark is never "version 0, anything
-    # goes"), so require the version at the one-time install.
-    [ -n "${cp_version}" ] || die "create needs the release version: gotham-hostbootstrap create <cp-user> <version>" 2
-    valid_version "${cp_version}" \
-        || die "invalid control-plane version: '${cp_version}' (expected vMAJOR.MINOR.PATCH[-prerelease][+build])" 2
-    # A re-run must not silently lower the mark: the operator has to ask for it.
-    # A malformed existing mark is repaired instead (a valid version can only
-    # improve it), so a broken seed is not a dead end.
+# check_version version allow_downgrade: validate the release version and refuse
+# to lower the installed high-water mark. The bridge must seed the mark: a host
+# left without one could only ever refuse a refresh (a missing mark is never
+# "version 0, anything goes"), so the version is required at install time. A
+# malformed existing mark is repaired instead (a valid version can only improve
+# it), so a broken seed is not a dead end.
+check_version() {
+    v="$1"
+    allow_downgrade="${2:-}"
+    [ -n "${v}" ] || die "the release version is required: gotham-hostbootstrap create <user> <version>" 2
+    valid_version "${v}" \
+        || die "invalid version: '${v}' (expected vMAJOR.MINOR.PATCH[-prerelease][+build])" 2
     if [ -f "${VERSION_FILE}" ] && [ ! -L "${VERSION_FILE}" ]; then
         prev="$(sed -n '1p' "${VERSION_FILE}" 2>/dev/null | tr -d '\r\n')"
         if [ -n "${prev}" ] && ! valid_version "${prev}"; then
             echo "gotham-hostbootstrap: replacing the malformed host-helper high-water mark '${prev}'" >&2
         elif [ -n "${prev}" ] && [ "${allow_downgrade}" != "--allow-downgrade" ] \
-            && [ "$(version_cmp "${cp_version}" "${prev}")" = "-1" ]; then
-            die "create would lower the host-helper version from ${prev} to ${cp_version}; pass --allow-downgrade to force it" 2
+            && [ "$(version_cmp "${v}" "${prev}")" = "-1" ]; then
+            die "would lower the host-helper version from ${prev} to ${v}; pass --allow-downgrade to force it" 2
         fi
     fi
-    if [ -z "${ROOT}" ] && ! id -u "${cp_user}" >/dev/null 2>&1; then
-        die "control-plane user does not exist: ${cp_user}" 2
-    fi
-    # The one-time bridge is only complete with its trust anchor and fetch
-    # helper: refuse rather than silently install a helper that can never be
-    # refreshed (the reviewer's "no anchor" case).
+}
+
+# write_payload version: install the fixed payload (root-owned) from this
+# directory's scripts with a drop-in for every recorded user, then apply it.
+write_payload() {
+    version="$1"
+    # The bridge is only complete with its trust anchor and fetch helper:
+    # refuse rather than silently install a helper that can never be refreshed
+    # (the reviewer's "no anchor" case).
     for sibling in gotham-hostctl.sh gotham-toolctl.sh gotham-hostbootstrap.sh \
         gotham-hostbootstrap-fetch.sh gotham-update.sh gotham-signing-key.pub; do
         [ -f "${SELF_DIR}/${sibling}" ] || die "${SELF_DIR}/${sibling} is missing" 2
@@ -364,20 +390,22 @@ create() {
 
     # A dedicated name: install_file assigns its own global `tmp`, so reusing that
     # name here would leave this temp behind on the way out.
+    # payload_cp_user falls back to the installed drop-in, so a host whose older
+    # install predates the cp-user record keeps its control-plane grantee.
+    cp_user="$(payload_cp_user)" || cp_user=""
+    agent_user="$(payload_agent_user)"
+    [ -n "${cp_user}${agent_user}" ] || die "no host-helper user is recorded" 2
     dropin_tmp="$(mktemp "${PAYLOAD_DIR}/.sudoers.XXXXXX")" || die "cannot create a payload temp file"
     trap 'rm -f "${dropin_tmp}" 2>/dev/null || true' EXIT
-    hostctl_sudoers "${cp_user}" >"${dropin_tmp}"
+    sudoers_for "${cp_user}" "${agent_user}" >"${dropin_tmp}"
     chmod 0644 "${dropin_tmp}"
     install_file "${dropin_tmp}" "${PAYLOAD_DIR}/gotham-hostctl.sudoers" 0644
     rm -f "${dropin_tmp}" 2>/dev/null || true
     trap - EXIT
 
-    # Record the control-plane user (root-owned) so a release refresh can
-    # regenerate the drop-in without the user being in the release.
-    write_record "${CP_USER_FILE}" "${cp_user}"
     # Seed the high-water mark from the installer's release version, so the very
     # first self-update cannot be steered below what the installer installed.
-    write_record "${VERSION_FILE}" "${cp_version}"
+    write_record "${VERSION_FILE}" "${version}"
 
     apply_payload
     # One-time bridge (JUS-188): install the root-owned release public key, the
@@ -386,7 +414,42 @@ create() {
     install_file "${SELF_DIR}/gotham-hostbootstrap-fetch.sh" "${FETCH_SCRIPT}" 0755
     install_file "${SELF_DIR}/gotham-update.sh" "${WRAPPER}" 0755
     install_file "${SELF_DIR}/gotham-signing-key.pub" "${SIGNING_KEY}" 0644
+}
+
+# create adds the control-plane user to the payload and applies it. cp_user is
+# validated here and again by the caller.
+create() {
+    cp_user="$1"
+    cp_version="${2:-}"
+    allow_downgrade="${3:-}"
+    valid_user "${cp_user}" || die "invalid control-plane user: ${cp_user}" 2
+    check_version "${cp_version}" "${allow_downgrade}"
+    if [ -z "${ROOT}" ] && ! id -u "${cp_user}" >/dev/null 2>&1; then
+        die "control-plane user does not exist: ${cp_user}" 2
+    fi
+    # Record the user (root-owned) so a release refresh can regenerate the
+    # drop-in without the user being in the release.
+    ensure_dir "${PAYLOAD_DIR}" 0755
+    write_record "${CP_USER_FILE}" "${cp_user}"
+    write_payload "${cp_version}"
     echo "gotham-hostbootstrap: installed the host helper for ${cp_user}"
+}
+
+# create-agent adds the node agent user to the payload and applies it. It keeps
+# the control-plane grantee of the same host: on the control-plane machine both
+# users exist, and neither may silently replace the other's drop-in.
+create_agent() {
+    agent_user="$1"
+    agent_version="${2:-}"
+    valid_user "${agent_user}" || die "invalid agent user: ${agent_user}" 2
+    check_version "${agent_version}"
+    if [ -z "${ROOT}" ] && ! id -u "${agent_user}" >/dev/null 2>&1; then
+        die "agent user does not exist: ${agent_user}" 2
+    fi
+    ensure_dir "${PAYLOAD_DIR}" 0755
+    write_record "${AGENT_USER_FILE}" "${agent_user}"
+    write_payload "${agent_version}"
+    echo "gotham-hostbootstrap: installed the host helper for ${agent_user}"
 }
 
 apply() {
@@ -423,8 +486,10 @@ apply_release() {
     ensure_dir "${PAYLOAD_DIR}" 0755
     ensure_dir "${SUDOERS_DIR}" 0750
 
-    cp_user="$(payload_cp_user)" \
-        || die "no control-plane user recorded in ${PAYLOAD_DIR}; run create first" 2
+    cp_user="$(payload_cp_user)" || cp_user=""
+    agent_user="$(payload_agent_user)"
+    [ -n "${cp_user}${agent_user}" ] \
+        || die "no host-helper user recorded in ${PAYLOAD_DIR}; run create or create-agent first" 2
 
     # Anti-rollback: refuse a version below the installed high-water mark, and
     # refuse when the mark is missing or not a regular root-owned record.
@@ -444,13 +509,13 @@ apply_release() {
         *) die "cannot compare ${rel_version} with the installed ${hwm}" 2 ;;
     esac
 
-    # Regenerate the drop-in for the recorded user from this (released)
+    # Regenerate the drop-in for the recorded users from this (released)
     # hostbootstrap and validate it BEFORE any file is written, so a bad release
     # cannot leave a mixed state. The temp is removed on any exit, so a visudo
     # failure cannot leak it into the root-owned payload directory.
     dropin_tmp="$(mktemp "${PAYLOAD_DIR}/.sudoers.XXXXXX")" || die "cannot create a payload temp file"
     trap 'rm -f "${dropin_tmp}" 2>/dev/null || true' EXIT
-    hostctl_sudoers "${cp_user}" >"${dropin_tmp}"
+    sudoers_for "${cp_user}" "${agent_user}" >"${dropin_tmp}"
     chmod 0644 "${dropin_tmp}"
     validate_dropin "${dropin_tmp}"
 
@@ -472,7 +537,7 @@ apply_release() {
 }
 
 MODE="${1:-}"
-[ "$#" -ge 1 ] || die "usage: gotham-hostbootstrap create <cp-user> <version> | apply | apply-release <dir> <version>" 2
+[ "$#" -ge 1 ] || die "usage: gotham-hostbootstrap create <cp-user> <version> | create-agent <agent-user> <version> | apply | apply-release <dir> <version>" 2
 
 # A root-owned operation: refuse a non-root caller unless the test root seam is
 # in use (which writes only under that test root). version-cmp is a pure
@@ -486,6 +551,10 @@ case "${MODE}" in
     create)
         [ "$#" -ge 3 ] || die "usage: gotham-hostbootstrap create <cp-user> <version> [--allow-downgrade]" 2
         create "$2" "$3" "${4:-}"
+        ;;
+    create-agent)
+        [ "$#" -ge 3 ] || die "usage: gotham-hostbootstrap create-agent <agent-user> <version>" 2
+        create_agent "$2" "$3"
         ;;
     apply)
         apply

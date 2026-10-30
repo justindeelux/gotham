@@ -134,6 +134,8 @@ func capabilityFromAgent(c agentv1.HostCapability) NodeCapability {
 		return CapabilityReady
 	case agentv1.HostCapability_HOST_CAPABILITY_UNSUPPORTED_STACK:
 		return CapabilityUnsupportedStack
+	case agentv1.HostCapability_HOST_CAPABILITY_HELPER_OUTDATED:
+		return CapabilityHelperOutdated
 	case agentv1.HostCapability_HOST_CAPABILITY_HELPER_MISSING:
 		return CapabilityHelperMissing
 	case agentv1.HostCapability_HOST_CAPABILITY_HELPER_DENIED:

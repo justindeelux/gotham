@@ -99,7 +99,9 @@ type statusPayload struct {
 	Hostname    string         `json:"hostname"`
 	NTPEnabled  bool           `json:"ntp_enabled"`
 	NTPServers  []string       `json:"ntp_servers"`
-	Timezone    string         `json:"timezone"`
+	// Timezone stays a pointer: a helper that predates it has no timezone key,
+	// which is how an outdated helper is told apart from a missing stack.
+	Timezone *string `json:"timezone"`
 }
 
 type networkConfig struct {
@@ -150,9 +152,14 @@ func (s *Server) Status(ctx context.Context, _ *agentv1.HostStatusRequest) (*age
 		Hostname:   payload.Hostname,
 		NtpEnabled: payload.NTPEnabled,
 		NtpServers: payload.NTPServers,
-		Timezone:   payload.Timezone,
 	}
-	if !payload.Network || !payload.System {
+	if payload.Timezone != nil {
+		response.Timezone = *payload.Timezone
+	}
+	switch {
+	case payload.Timezone == nil:
+		response.Capability = agentv1.HostCapability_HOST_CAPABILITY_HELPER_OUTDATED
+	case !payload.Network || !payload.System:
 		// The platform manages network and system settings together, so a host
 		// that lacks either stack is reported as unsupported.
 		response.Capability = agentv1.HostCapability_HOST_CAPABILITY_UNSUPPORTED_STACK

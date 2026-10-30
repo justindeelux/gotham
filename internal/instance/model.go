@@ -123,6 +123,7 @@ type NodeCapability string
 const (
 	CapabilityReady            NodeCapability = "ready"
 	CapabilityUnsupportedStack NodeCapability = "unsupported_stack"
+	CapabilityHelperOutdated   NodeCapability = "helper_outdated"
 	CapabilityHelperMissing    NodeCapability = "helper_missing"
 	CapabilityHelperDenied     NodeCapability = "helper_denied"
 	CapabilityAgentOutdated    NodeCapability = "agent_outdated"

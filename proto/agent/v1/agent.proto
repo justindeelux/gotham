@@ -1221,6 +1221,9 @@ enum HostCapability {
   HOST_CAPABILITY_HELPER_MISSING = 3;
   // HELPER_DENIED: the helper exists but the agent may not run it.
   HOST_CAPABILITY_HELPER_DENIED = 4;
+  // HELPER_OUTDATED: gotham-hostctl predates the fields this control plane
+  // reads (its status has no timezone), so the helper needs an update.
+  HOST_CAPABILITY_HELPER_OUTDATED = 5;
 }
 
 // HostStatusRequest is empty: the host is the one the agent runs on.

@@ -88,8 +88,7 @@ func (a *sudoApplier) Status(ctx context.Context) (HostStatus, error) {
 	}
 	if p.Timezone == nil {
 		return HostStatus{
-			Capability: CapabilityUnsupportedStack,
-			Reason:     "this server's host helper is too old for host settings; repair it or re-run the Gotham installer",
+			Capability: CapabilityHelperOutdated,
 			Repair:     a.repairPossible(ctx),
 		}, nil
 	}

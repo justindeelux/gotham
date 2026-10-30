@@ -25,6 +25,7 @@ export const useServersStore = defineStore("servers", () => {
   );
 
   let pollTimer: ReturnType<typeof setInterval> | null = null;
+  let pollSubscribers = 0;
 
   const listSync = createServerListSync();
 
@@ -68,19 +69,30 @@ export const useServersStore = defineStore("servers", () => {
     }
   }
 
+  function clearPollTimer(): void {
+    if (pollTimer !== null) {
+      clearInterval(pollTimer);
+      pollTimer = null;
+    }
+  }
+
   function pollServers(): void {
+    pollSubscribers += 1;
     if (pollTimer !== null) {
       return;
     }
     pollTimer = setInterval(() => {
+      if (typeof document !== "undefined" && document.hidden) {
+        return;
+      }
       void refreshServers();
     }, pollIntervalMs);
   }
 
   function stopPolling(): void {
-    if (pollTimer !== null) {
-      clearInterval(pollTimer);
-      pollTimer = null;
+    pollSubscribers = Math.max(0, pollSubscribers - 1);
+    if (pollSubscribers === 0) {
+      clearPollTimer();
     }
   }
 
@@ -114,7 +126,8 @@ export const useServersStore = defineStore("servers", () => {
   }
 
   function reset(): void {
-    stopPolling();
+    pollSubscribers = 0;
+    clearPollTimer();
     listSync.markMutation();
     servers.value = [];
     loading.value = false;

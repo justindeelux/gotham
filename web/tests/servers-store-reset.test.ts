@@ -1,3 +1,4 @@
+/* global document:readonly */
 import { createPinia, setActivePinia } from "pinia";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
@@ -85,6 +86,38 @@ describe("servers store reset (JUS-143)", () => {
 
     expect(setIntervalSpy).toHaveBeenCalledTimes(1);
     store.stopPolling();
+    store.stopPolling();
     setIntervalSpy.mockRestore();
+  });
+
+  it("keeps the timer for other subscribers and pauses while the tab is hidden", async () => {
+    vi.useFakeTimers();
+    const store = useServersStore();
+    vi.mocked(listServers).mockResolvedValue([server("srv-1", "alpha")]);
+
+    store.pollServers();
+    store.pollServers();
+    store.stopPolling();
+
+    await vi.advanceTimersByTimeAsync(5_000);
+    expect(listServers).toHaveBeenCalledTimes(1);
+
+    Object.defineProperty(document, "hidden", {
+      configurable: true,
+      get: () => true,
+    });
+    await vi.advanceTimersByTimeAsync(5_000);
+    expect(listServers).toHaveBeenCalledTimes(1);
+
+    Object.defineProperty(document, "hidden", {
+      configurable: true,
+      get: () => false,
+    });
+    await vi.advanceTimersByTimeAsync(5_000);
+    expect(listServers).toHaveBeenCalledTimes(2);
+
+    store.stopPolling();
+    delete (document as unknown as { hidden?: boolean }).hidden;
+    vi.useRealTimers();
   });
 });

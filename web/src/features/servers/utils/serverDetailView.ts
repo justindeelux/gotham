@@ -46,26 +46,56 @@ export function authLabel(server: Server, locale?: string | null): string {
   return "—";
 }
 
-export type UsageIndicatorLevel = "normal" | "warning" | "critical";
+export type UsageBlockLevel = "success" | "warning" | "danger";
 
-export interface UsageIndicator {
-  percentage: number;
-  level: UsageIndicatorLevel;
-  color: string;
+export interface UsageBlock {
+  filled: boolean;
+  level: UsageBlockLevel;
 }
 
-export function usageIndicator(
+export interface UsageSegments {
+  percentage: number;
+  filled: number;
+  blocks: UsageBlock[];
+}
+
+export const usageBlockCount = 10;
+
+/** Fixed gauge mapping: blocks 1-6 success, 7-8 warning, 9-10 danger. */
+export function usageBlockLevel(index: number): UsageBlockLevel {
+  if (index < 6) {
+    return "success";
+  }
+  return index < 8 ? "warning" : "danger";
+}
+
+export function usageSegments(
   value: number | null | undefined,
-): UsageIndicator | null {
+): UsageSegments | null {
   if (value === null || value === undefined || Number.isNaN(value)) {
     return null;
   }
   const percentage = toPercent(value);
-  if (percentage >= 90) {
-    return { percentage, level: "critical", color: "var(--danger)" };
+  const filled = Math.min(usageBlockCount, Math.round(percentage / 10));
+  return {
+    percentage,
+    filled,
+    blocks: Array.from({ length: usageBlockCount }, (_, index) => ({
+      filled: index < filled,
+      level: usageBlockLevel(index),
+    })),
+  };
+}
+
+export const usageStaleAfterMs = 3 * 60_000;
+
+export function isUsageStale(
+  lastSeen: string | null | undefined,
+  now = Date.now(),
+): boolean {
+  if (!lastSeen) {
+    return false;
   }
-  if (percentage >= 70) {
-    return { percentage, level: "warning", color: "var(--warn)" };
-  }
-  return { percentage, level: "normal", color: "var(--success)" };
+  const seen = Date.parse(lastSeen);
+  return !Number.isNaN(seen) && now - seen > usageStaleAfterMs;
 }

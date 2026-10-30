@@ -171,6 +171,7 @@ interface ApiOverrides {
   application?: Record<string, unknown>;
   database?: Record<string, unknown>;
   service?: Record<string, unknown>;
+  server?: Record<string, unknown>;
   deploys?: Record<string, unknown>[];
 }
 
@@ -226,6 +227,7 @@ async function mockApi(
   const app = { ...application, ...overrides.application };
   const db = { ...database, ...overrides.database };
   const svc = { ...service, ...overrides.service };
+  const srv = { ...server, ...overrides.server };
   const deploys = overrides.deploys ?? [];
   await page.addInitScript((value) => {
     window.localStorage.setItem("gotham.auth.session", value);
@@ -248,11 +250,11 @@ async function mockApi(
       return;
     }
     if (get && path === "/servers") {
-      await route.fulfill(json(200, { servers: [server] }));
+      await route.fulfill(json(200, { servers: [srv] }));
       return;
     }
     if (get && path === "/servers/srv-1") {
-      await route.fulfill(json(200, { server }));
+      await route.fulfill(json(200, { server: srv }));
       return;
     }
     if (get && path === "/servers/srv-1/containers") {
@@ -628,6 +630,117 @@ for (const bannerCase of bannerCases) {
     }
   });
 }
+
+test("server overview puts usage beside node info and stacks on phones", async ({
+  page,
+}) => {
+  test.setTimeout(120_000);
+  await mockApi(page);
+
+  await page.setViewportSize({ width: 1366, height: 900 });
+  await page.goto(`${baseURL}/servers/srv-1`);
+  await page.locator(".overview-grid").waitFor();
+
+  const desktop = await page.evaluate(() => {
+    const grid = document.querySelector<HTMLElement>(".overview-grid")!;
+    const usage = grid.querySelector<HTMLElement>(".usage-panel")!;
+    const node = grid.querySelector<HTMLElement>(".node-info-panel")!;
+    const usageRect = usage.getBoundingClientRect();
+    const nodeRect = node.getBoundingClientRect();
+    return {
+      usageWidth: usageRect.width,
+      nodeWidth: nodeRect.width,
+      usageTop: usageRect.top,
+      nodeTop: nodeRect.top,
+      usageRight: usageRect.right,
+      nodeLeft: nodeRect.left,
+    };
+  });
+
+  expect(desktop.nodeWidth / desktop.usageWidth, "usage is 1/3 of the row").toBeGreaterThan(1.8);
+  expect(desktop.nodeWidth / desktop.usageWidth, "usage is 1/3 of the row").toBeLessThan(2.2);
+  expect(desktop.usageTop, "usage and node info share a row").toBeCloseTo(desktop.nodeTop, 0);
+  expect(desktop.usageRight).toBeLessThanOrEqual(desktop.nodeLeft + 1);
+
+  const usageRows = page.locator(".usage-panel .usage-row");
+  await expect(usageRows).toHaveCount(3);
+  await expect(usageRows.first().locator(".usage-block")).toHaveCount(10);
+  await expect(usageRows.first().locator(".usage-block.is-filled")).toHaveCount(1);
+  await expect(page.locator(".node-info-panel")).not.toContainText("CPU usage");
+  await expect(page.locator(".node-info-panel")).not.toContainText("Memory usage");
+  await expect(page.locator(".node-info-panel")).not.toContainText("Disk usage");
+  await expect(page.locator(".usage-panel")).toContainText("Stale");
+
+  await page.setViewportSize({ width: 390, height: 844 });
+  const mobile = await page.evaluate(() => {
+    const grid = document.querySelector<HTMLElement>(".overview-grid")!;
+    const usage = grid.querySelector<HTMLElement>(".usage-panel")!;
+    const node = grid.querySelector<HTMLElement>(".node-info-panel")!;
+    const usageRect = usage.getBoundingClientRect();
+    const nodeRect = node.getBoundingClientRect();
+    return {
+      usageTop: usageRect.top,
+      nodeTop: nodeRect.top,
+      usageLeft: usageRect.left,
+      nodeLeft: nodeRect.left,
+      usageRight: usageRect.right,
+      nodeRight: nodeRect.right,
+      overflow:
+        document.documentElement.scrollWidth >
+        document.documentElement.clientWidth + 1,
+    };
+  });
+
+  expect(mobile.usageTop, "usage stacks above node info").toBeLessThan(
+    mobile.nodeTop,
+  );
+  expect(mobile.usageLeft).toBeCloseTo(mobile.nodeLeft, 0);
+  expect(mobile.usageRight).toBeCloseTo(mobile.nodeRight, 0);
+  expect(mobile.overflow, "no horizontal overflow at 390px").toBe(false);
+});
+
+test("server usage shows a dash instead of a fake zero when nothing was reported", async ({
+  page,
+}) => {
+  await mockApi(page, "owner", {
+    server: { cpu_usage: null, mem_usage: null, disk_usage: null },
+  });
+  await page.setViewportSize({ width: 1366, height: 900 });
+  await page.goto(`${baseURL}/servers/srv-1`);
+  await page.locator(".overview-grid").waitFor();
+
+  const usageRows = page.locator(".usage-panel .usage-row");
+  await expect(usageRows).toHaveCount(3);
+  for (let index = 0; index < 3; index += 1) {
+    await expect(usageRows.nth(index)).toContainText("—");
+    await expect(usageRows.nth(index).locator('[role="meter"]')).toHaveCount(0);
+    await expect(usageRows.nth(index).locator(".usage-block.is-filled")).toHaveCount(0);
+  }
+  await expect(page.locator(".usage-panel")).not.toContainText("0%");
+});
+
+test("server usage refreshes in place from the shared poll", async ({ page }) => {
+  test.setTimeout(120_000);
+  await mockApi(page);
+
+  let reads = 0;
+  await page.route("**/api/v1/servers", async (route) => {
+    reads += 1;
+    const current = reads === 1 ? server : { ...server, cpu_usage: 0.62 };
+    await route.fulfill(json(200, { servers: [current] }));
+  });
+
+  await page.setViewportSize({ width: 1366, height: 900 });
+  await page.goto(`${baseURL}/servers/srv-1`);
+  const cpuRow = page.locator(".usage-panel .usage-row").first();
+  await expect(cpuRow).toContainText("12%");
+
+  await expect(cpuRow).toContainText("62%", { timeout: 15_000 });
+  await expect(cpuRow.locator('[role="meter"]')).toHaveAttribute(
+    "aria-valuenow",
+    "62",
+  );
+});
 
 test("a page without banners keeps its header position", async ({ page }) => {
   await mockApi(page);

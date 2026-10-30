@@ -106,14 +106,6 @@ const vi: ServersMessages = {
     deleteConfirm: "Xóa máy chủ {name}?",
   },
   settings: {
-    title: "Cài đặt nút",
-    identityNote: "Định danh do control plane ghi lại. Sửa bằng thao tác sửa của nút.",
-    name: "Tên",
-    address: "Địa chỉ",
-    sshUser: "Người dùng SSH",
-    credential: "Thông tin đăng nhập",
-    registered: "Đã đăng ký",
-    updated: "Đã cập nhật",
     host: {
       forbidden: "Chỉ chủ sở hữu mới xem hoặc thay đổi được cài đặt máy chủ của nút này.",
       helper: {

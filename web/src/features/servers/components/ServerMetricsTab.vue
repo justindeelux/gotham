@@ -159,13 +159,6 @@ const {
           </NCard>
         </div>
       </NSpin>
-
-      <NText depth="3">
-        Values come from the node agent's heartbeats, aggregated by
-        <span class="mono">GET /api/v1/servers/{id}/metrics?from&amp;to&amp;step</span>.
-        The control plane never invents a point for a bucket the node
-        did not report.
-      </NText>
     </template>
   </NSpace>
 </template>

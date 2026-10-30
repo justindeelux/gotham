@@ -3,6 +3,7 @@ import {
   NAlert,
   NButton,
   NCard,
+  NCheckbox,
   NEmpty,
   NInput,
   NInputNumber,
@@ -230,17 +231,9 @@ const backups = inject(resourceBackupsKey)!;
         v-if="backups.resource.value.resource_type !== 'database'"
         class="schedule-form__row schedule-pause"
       >
-        <NSwitch
-          v-model:value="backups.schedulePauseDuringBackup.value"
-          :aria-label="t('backups.resourceTab.pauseDuringBackup')"
-        >
-          <template #checked>
-            {{ t("backups.resourceTab.pauseDuringBackup") }}
-          </template>
-          <template #unchecked>
-            {{ t("backups.resourceTab.noPause") }}
-          </template>
-        </NSwitch>
+        <NCheckbox v-model:checked="backups.schedulePauseDuringBackup.value">
+          {{ t("backups.schedules.pauseLabel") }}
+        </NCheckbox>
         <NText depth="3">
           {{
             backups.schedulePauseDuringBackup.value
@@ -274,6 +267,9 @@ const backups = inject(resourceBackupsKey)!;
 }
 
 .schedule-pause {
+  flex-direction: column;
+  align-items: flex-start;
+  gap: var(--space-1);
   padding: var(--space-2) var(--space-3);
   border: 1px solid var(--border);
   border-radius: var(--radius-md);

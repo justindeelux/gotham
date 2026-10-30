@@ -87,6 +87,18 @@ describe("ResourceBackupsTab contents", () => {
     );
   });
 
+  it("offers the stop-resource option as a checkbox on schedules", async () => {
+    const wrapper = mountTab();
+    await flushPromises();
+
+    const pause = wrapper.get(".schedule-pause");
+    expect(pause.find(".n-checkbox").exists()).toBe(true);
+    expect(pause.find(".n-switch").exists()).toBe(false);
+    expect(pause.text()).toContain("Stop the resource during backup");
+    expect(pause.text()).toContain("The backup is consistent");
+    wrapper.unmount();
+  });
+
   it("labels a run that was taken without stopping", async () => {
     state.backups = [
       {

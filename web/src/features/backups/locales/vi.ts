@@ -59,6 +59,7 @@ const vi = {
       "Giữ mọi bản sao lưu theo lịch — sửa lịch để đặt giới hạn",
     keepLast: "Giữ {count} bản sao lưu theo lịch gần nhất",
     keepLastInvalid: "Số bản giữ lại phải từ 1 đến 365.",
+    pauseLabel: "Dừng tài nguyên khi sao lưu",
   },
   errors: {
     noSpace: "Không đủ dung lượng trống trên đĩa sao lưu",

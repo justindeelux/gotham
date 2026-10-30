@@ -58,6 +58,7 @@ const en = {
       "Keeps every scheduled backup — edit the schedule to set a limit",
     keepLast: "Keeps the last {count} scheduled backups",
     keepLastInvalid: "Keep the last must be between 1 and 365 backups.",
+    pauseLabel: "Stop the resource during backup",
   },
   errors: {
     noSpace: "Not enough free space on the backup disk",

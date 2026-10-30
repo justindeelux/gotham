@@ -447,6 +447,31 @@ test("schedule form reads vertically and fits at 390px", async ({ page }) => {
   );
   expect(Math.abs(desktopLabel.y - desktopInput.y)).toBeLessThanOrEqual(1);
 
+  await page.setViewportSize({ width: 700, height: 900 });
+  await cronInput.fill("0 2 * *");
+  const invalidLabel = form.locator(".schedule-form__cron-label");
+  await expect(invalidLabel.getByRole("alert")).toContainText(
+    "Enter a cron expression with 5 fields",
+  );
+  expect(
+    await invalidLabel.evaluate(
+      (element) => element.scrollWidth > element.clientWidth + 1,
+    ),
+    "the invalid cron label wraps instead of clipping at 700px",
+  ).toBe(false);
+  expect(
+    await invalidLabel
+      .getByRole("alert")
+      .evaluate((element) => element.scrollWidth > element.clientWidth + 1),
+    "the invalid cron error is fully visible at 700px",
+  ).toBe(false);
+  expect(
+    await page.evaluate(
+      () => document.documentElement.scrollWidth - window.innerWidth,
+    ),
+    "no horizontal overflow at 700px",
+  ).toBeLessThanOrEqual(1);
+
   await page.setViewportSize({ width: 390, height: 844 });
   await page.reload();
   await page.locator(".page-head h1").first().waitFor();

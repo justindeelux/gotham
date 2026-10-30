@@ -343,9 +343,8 @@ function isPresetActive(preset: string): boolean {
 
 .schedule-form__cron-label {
   max-width: 55%;
-  overflow: hidden;
-  white-space: nowrap;
-  text-overflow: ellipsis;
+  white-space: normal;
+  overflow-wrap: anywhere;
 }
 
 .schedule-form__actions {

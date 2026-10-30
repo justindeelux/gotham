@@ -80,6 +80,28 @@ describe("cron in plain language", () => {
     );
   });
 
+  it("returns the sentence alone for the short form", () => {
+    expect(describeCron(CRON_PRESETS[0], { short: true })).toBe(
+      "Every day at 02:00",
+    );
+    expect(describeCron("0 5 * * *", { short: true })).toBe(
+      "Every day at 05:00",
+    );
+    expect(describeCron("0 * * * *", { short: true })).toBe(
+      "Every hour at :00",
+    );
+    expect(describeCron("0 */6 * * *", { short: true })).toBe(
+      "Every 6 hours at :00",
+    );
+    expect(describeCron("0 3 * * 0", { short: true })).toBe(
+      "Every Sunday at 03:00",
+    );
+    expect(describeCron("0 2 1,15 * *", { short: true })).toBe(
+      "Custom schedule",
+    );
+    expect(describeCron("not a cron", { short: true })).toBe("");
+  });
+
   it("explains the other accepted forms", () => {
     expect(describeCron("*/5 * * * *")).toBe(
       "Every 5 minutes (*/5 * * * *) · Server local time",
@@ -112,6 +134,9 @@ describe("cron in plain language", () => {
     setLocale("vi", null);
     expect(describeCron(CRON_PRESETS[0])).toBe(
       "Mỗi ngày lúc 02:00 (0 2 * * *) · Giờ máy chủ",
+    );
+    expect(describeCron(CRON_PRESETS[0], { short: true })).toBe(
+      "Mỗi ngày lúc 02:00",
     );
   });
 });

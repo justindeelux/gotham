@@ -61,6 +61,21 @@ describe("databases catalog", () => {
     );
   });
 
+  it("describes the empty backups state without naming a database", () => {
+    const enHint = String(
+      i18n.global.t("databases.backups.runs.emptyHint"),
+    ).toLowerCase();
+    expect(enHint).not.toContain("database");
+    expect(enHint).toContain("resource");
+    setLocale("vi", null);
+    const viHint = String(
+      i18n.global.t("databases.backups.runs.emptyHint"),
+    ).toLowerCase();
+    expect(viHint).not.toContain("database");
+    expect(viHint).not.toContain("cơ sở dữ liệu");
+    expect(viHint).toContain("tài nguyên");
+  });
+
   it("needs no library pluralization today; parity guards any future plural", () => {
     const pluralLeaves = leafEntries(
       en as unknown as Record<string, unknown>,

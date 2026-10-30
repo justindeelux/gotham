@@ -5,7 +5,7 @@ import { dirname, extname, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 
 import { expect, test } from "@playwright/test";
-import type { Page } from "@playwright/test";
+import type { Locator, Page } from "@playwright/test";
 
 /* global URL, document, getComputedStyle, window:readonly, Element, HTMLElement */
 
@@ -771,3 +771,156 @@ test("a page without banners keeps its header position", async ({ page }) => {
     "header starts right where the empty banner container ends",
   ).toBeLessThanOrEqual(0.5);
 });
+
+interface SettingsCardBox {
+  x: number;
+  y: number;
+  width: number;
+  height: number;
+  overflows: boolean;
+}
+
+async function settingsCardBox(locator: Locator): Promise<SettingsCardBox> {
+  const box = await locator.boundingBox();
+  if (box === null) {
+    throw new Error("expected a visible settings card");
+  }
+  const overflows = await locator.evaluate(
+    (element) => element.scrollWidth > element.clientWidth + 1,
+  );
+  return { ...box, overflows };
+}
+
+async function openSettings(page: Page, path: string): Promise<void> {
+  await page.goto(`${baseURL}${path}`);
+  await page.locator(".page-head h1").first().waitFor();
+  await page.locator(".n-tabs-tab").filter({ hasText: /^Settings$/ }).click();
+  await expect(page.locator(".settings-grid")).toBeVisible();
+}
+
+test("Resource settings places Server and environment beside Runtime health", async ({
+  page,
+}) => {
+  test.setTimeout(120_000);
+  await mockApi(page);
+
+  for (const width of [769, 1024, 1280]) {
+    await page.setViewportSize({ width, height: 900 });
+    await openSettings(page, detailPaths.application);
+    const move = page
+      .locator(".settings-grid .n-card")
+      .filter({ hasText: "Server and environment" });
+    const runtime = page
+      .locator(".settings-grid .n-card")
+      .filter({ hasText: "Runtime health" });
+    await expect(move).toHaveCount(1);
+    await expect(runtime).toHaveCount(1);
+
+    const [moveBox, runtimeBox] = await Promise.all([
+      settingsCardBox(move),
+      settingsCardBox(runtime),
+    ]);
+    expect(
+      Math.abs(moveBox.y - runtimeBox.y),
+      `cards share a row at ${width}px`,
+    ).toBeLessThanOrEqual(1);
+    expect(
+      Math.abs(moveBox.width - runtimeBox.width),
+      `cards are equal width at ${width}px`,
+    ).toBeLessThanOrEqual(1);
+    expect(
+      Math.abs(moveBox.height - runtimeBox.height),
+      `cards share a row height at ${width}px`,
+    ).toBeLessThanOrEqual(1);
+    expect(
+      runtimeBox.x,
+      `Runtime health sits right of Server and environment at ${width}px`,
+    ).toBeGreaterThan(moveBox.x);
+    expect(moveBox.overflows, `move card fits at ${width}px`).toBe(false);
+    expect(runtimeBox.overflows, `runtime card fits at ${width}px`).toBe(false);
+
+    const save = await move.locator(".actions .n-button").boundingBox();
+    if (save === null) {
+      throw new Error("expected the move card save button");
+    }
+    expect(
+      save.y - moveBox.y,
+      `move save button stays at the card bottom at ${width}px`,
+    ).toBeGreaterThan(moveBox.height / 2);
+    expect(save.y + save.height).toBeLessThanOrEqual(
+      moveBox.y + moveBox.height,
+    );
+  }
+
+  await page.setViewportSize({ width: 390, height: 844 });
+  await openSettings(page, detailPaths.application);
+  const move = page
+    .locator(".settings-grid .n-card")
+    .filter({ hasText: "Server and environment" });
+  const runtime = page
+    .locator(".settings-grid .n-card")
+    .filter({ hasText: "Runtime health" });
+  const [moveBox, runtimeBox] = await Promise.all([
+    settingsCardBox(move),
+    settingsCardBox(runtime),
+  ]);
+  expect(
+    runtimeBox.y,
+    "Runtime health stacks under Server and environment at 390px",
+  ).toBeGreaterThanOrEqual(moveBox.y + moveBox.height - 1);
+  expect(Math.abs(moveBox.x - runtimeBox.x)).toBeLessThanOrEqual(1);
+  expect(
+    await page.evaluate(
+      () => document.documentElement.scrollWidth - window.innerWidth,
+    ),
+  ).toBeLessThanOrEqual(1);
+});
+
+test("Database settings keeps its extra cards inside the same grid", async ({
+  page,
+}) => {
+  test.setTimeout(120_000);
+  await mockApi(page);
+  await page.setViewportSize({ width: 1280, height: 900 });
+  await openSettings(page, detailPaths.database);
+  await expect(
+    page
+      .locator(".settings-grid .n-card")
+      .filter({ hasText: "Server and environment" }),
+  ).toHaveCount(1);
+  await expect(
+    page.locator(".settings-grid .n-card").filter({ hasText: "Runtime health" }),
+  ).toHaveCount(1);
+  await expect(
+    page.locator(".settings-grid .n-card").filter({ hasText: "Rename database" }),
+  ).toHaveCount(1);
+
+  await page.setViewportSize({ width: 390, height: 844 });
+  await openSettings(page, detailPaths.database);
+  expect(
+    await page.evaluate(
+      () => document.documentElement.scrollWidth - window.innerWidth,
+    ),
+  ).toBeLessThanOrEqual(1);
+});
+
+test("A settings tab without slot content keeps the move card full width", async ({
+  page,
+}) => {
+  test.setTimeout(120_000);
+  await mockApi(page);
+  await page.setViewportSize({ width: 1280, height: 900 });
+  await openSettings(page, detailPaths.service);
+
+  await expect(page.locator(".settings-grid__slot")).toHaveCount(0);
+  const gridBox = await page.locator(".settings-grid").boundingBox();
+  const moveBox = await page
+    .locator(".settings-grid .n-card")
+    .filter({ hasText: "Server and environment" })
+    .boundingBox();
+  if (gridBox === null || moveBox === null) {
+    throw new Error("expected the settings grid and move card");
+  }
+  expect(Math.abs(moveBox.width - gridBox.width)).toBeLessThanOrEqual(1);
+});
+

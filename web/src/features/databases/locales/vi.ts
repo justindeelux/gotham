@@ -139,7 +139,7 @@ const vi: typeof en = {
         "Xóa bản sao lưu này? Artifact lưu trữ bị xóa trước, rồi đến dòng dữ liệu. Không thể hoàn tác.",
       empty: "Chưa có bản sao lưu",
       emptyHint:
-        "Tạo sao lưu thủ công ở trên, hoặc thêm lịch để control plane tự dump database này.",
+        "Tạo bản sao lưu thủ công ở trên, hoặc thêm lịch để tài nguyên này được sao lưu tự động.",
       queued: "Đã xếp hàng sao lưu · dump chạy trong container tạm",
       deleted: "Đã xóa bản sao lưu",
     },
@@ -187,6 +187,7 @@ const vi: typeof en = {
       cronAria: "Biểu thức cron",
       destinationAria: "Đích lưu trữ của lịch",
       enableNewAria: "Bật lịch mới",
+      enableLabel: "Bật",
       add: "Thêm lịch",
       save: "Lưu lịch",
       saved: "Đã lưu lịch · lần chạy tiếp tính từ {cron}",

@@ -234,10 +234,18 @@ func (m *BackupManager) storeAndKey(
 	runID uuid.UUID,
 	extension string,
 ) (ObjectStore, string, error) {
-	if strings.TrimSpace(extension) == "" {
+	extension = strings.TrimSpace(extension)
+	if extension == "" {
 		return nil, "", fmt.Errorf("%w: the backup driver reported no artifact extension", ErrValidation)
 	}
-	key := fmt.Sprintf("%ss/%s/%s.%s.gz", resource.Type, resource.ID, runID, extension)
+	// Volume captures already report "tar.gz"; suffixing it again produces
+	// "<run>.tar.gz.gz". The core gzips every capture, so the stored bytes stay
+	// gzip over that archive and the location keeps the driver's extension.
+	suffix := ".gz"
+	if strings.HasSuffix(extension, ".gz") {
+		suffix = ""
+	}
+	key := fmt.Sprintf("%ss/%s/%s.%s%s", resource.Type, resource.ID, runID, extension, suffix)
 	if m.objects != nil {
 		return m.objects, key, nil
 	}

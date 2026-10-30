@@ -136,7 +136,7 @@ const en = {
         "Delete this backup? The stored artifact goes first, then the row. This cannot be undone.",
       empty: "No backups yet",
       emptyHint:
-        "Queue a manual backup above, or add a schedule so the control plane dumps this database automatically.",
+        "Queue a manual backup above, or add a schedule so this resource is backed up automatically.",
       queued: "Backup queued · the dump runs in a temporary container",
       deleted: "Backup deleted",
     },

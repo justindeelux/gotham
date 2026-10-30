@@ -159,7 +159,7 @@ volumes:
 		t.Fatalf("volume data did not survive the restart: %q", marker)
 	}
 
-	if err := h.compose.Delete(ctx, h.userID, created.ID); err != nil {
+	if _, err := h.compose.Delete(ctx, h.userID, created.ID); err != nil {
 		t.Fatalf("Delete: %v", err)
 	}
 	if !p7VolumeExists(t, ctx, volume) {

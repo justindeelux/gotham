@@ -213,29 +213,30 @@ type composeVolumeDefinition struct {
 	External any    `yaml:"external"`
 }
 
-// projectVolumeNames lists the Docker volumes the recorded document creates
-// for the project. External volumes belong to another owner; a declared name
-// overrides the project-prefixed default.
-func projectVolumeNames(project string, document []byte) []string {
+// projectVolumePlan splits the document's non-external volumes into the ones
+// this project owns and the ones it only references. Only the project-prefixed
+// default is owned: a declared name may belong to another resource, so it is
+// kept and reported instead of removed.
+func projectVolumePlan(project string, document []byte) (owned, kept []string) {
 	var doc struct {
 		Volumes map[string]composeVolumeDefinition `yaml:"volumes"`
 	}
 	if err := yaml.Unmarshal(document, &doc); err != nil {
-		return nil
+		return nil, nil
 	}
-	names := make([]string, 0, len(doc.Volumes))
 	for key, definition := range doc.Volumes {
 		if externalVolume(definition.External) {
 			continue
 		}
-		name := strings.TrimSpace(definition.Name)
-		if name == "" {
-			name = project + "_" + key
+		if name := strings.TrimSpace(definition.Name); name != "" {
+			kept = append(kept, name)
+			continue
 		}
-		names = append(names, name)
+		owned = append(owned, project+"_"+key)
 	}
-	sort.Strings(names)
-	return names
+	sort.Strings(owned)
+	sort.Strings(kept)
+	return owned, kept
 }
 
 func externalVolume(raw any) bool {
@@ -248,12 +249,17 @@ func externalVolume(raw any) bool {
 	return false
 }
 
-// removeProjectVolumes removes the project's declared volumes after the
-// project is down. A volume that is gone already is not a warning; one that
-// is still in use is, and the teardown itself still succeeded.
+// removeProjectVolumes removes the project's own volumes after the project is
+// down. A volume that is gone already is not a warning; one that is still in
+// use, or a volume the document only references by a custom name, is, and the
+// teardown itself still succeeded.
 func (s *ComposeServer) removeProjectVolumes(ctx context.Context, project string, document []byte) []string {
+	owned, kept := projectVolumePlan(project, document)
 	var warnings []string
-	for _, name := range projectVolumeNames(project, document) {
+	for _, name := range kept {
+		warnings = append(warnings, "kept volume "+name+": it has a custom name")
+	}
+	for _, name := range owned {
 		if err := s.removeVolume(ctx, name); err != nil {
 			warnings = append(warnings, name+": "+err.Error())
 		}

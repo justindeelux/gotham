@@ -632,8 +632,17 @@ export function useApplicationDetail() {
     }
     deleting.value = true;
     try {
-      await appsStore.remove(targetId);
-      message.success(tr("applications.detail.deleted", { name: current.name }));
+      const warnings = await appsStore.remove(targetId);
+      if (warnings.length > 0) {
+        message.warning(
+          tr("applications.detail.deletedWithWarnings", {
+            name: current.name,
+            warnings: warnings.join("; "),
+          }),
+        );
+      } else {
+        message.success(tr("applications.detail.deleted", { name: current.name }));
+      }
       deleteOpen.value = false;
       await refreshProjectCounts([current.project_id]);
       if (targetId !== appId.value) {

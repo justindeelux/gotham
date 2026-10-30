@@ -152,7 +152,7 @@ func TestP7TemplateWordPressProduction(t *testing.T) {
 	t.Cleanup(func() {
 		cleanupCtx, cleanupCancel := context.WithTimeout(context.Background(), 90*time.Second)
 		defer cleanupCancel()
-		if err := h.compose.Delete(cleanupCtx, h.userID, created.ID); err != nil && !errors.Is(err, services.ErrNotFound) {
+		if _, err := h.compose.Delete(cleanupCtx, h.userID, created.ID); err != nil && !errors.Is(err, services.ErrNotFound) {
 			t.Logf("cleanup service: %v", err)
 		}
 		for _, volume := range volumes {
@@ -178,7 +178,7 @@ func TestP7TemplateWordPressProduction(t *testing.T) {
 	}
 	p7WaitForWordPress(t, domain)
 
-	if err := h.compose.Delete(ctx, h.userID, created.ID); err != nil {
+	if _, err := h.compose.Delete(ctx, h.userID, created.ID); err != nil {
 		t.Fatalf("Delete: %v", err)
 	}
 }

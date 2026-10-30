@@ -610,6 +610,28 @@ func TestRoutesDeleteApplication(t *testing.T) {
 	}
 }
 
+func TestRoutesDeleteApplicationReportsKeptVolumes(t *testing.T) {
+	userID, appID := uuid.New(), uuid.New()
+	svc := &fakeDeployService{deleteWarnings: []string{"kept volume shared-data: it has a custom name"}}
+	srv := newRouteServer(svc, alwaysUser(userID))
+
+	rec := httptest.NewRecorder()
+	srv.ServeHTTP(rec, httptest.NewRequest(http.MethodDelete, applicationsPath+"/"+appID.String(), nil))
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status = %d, want 200 with the warning body (body %s)", rec.Code, rec.Body.String())
+	}
+	var body struct {
+		Warnings []string `json:"warnings"`
+	}
+	if err := json.Unmarshal(rec.Body.Bytes(), &body); err != nil {
+		t.Fatalf("decode body: %v", err)
+	}
+	if len(body.Warnings) != 1 || body.Warnings[0] != svc.deleteWarnings[0] {
+		t.Errorf("warnings = %v, want %v", body.Warnings, svc.deleteWarnings)
+	}
+}
+
 func TestRoutesDeleteApplicationFailsClosedOnHookFailure(t *testing.T) {
 	userID := uuid.New()
 	app := testApplication(userID)

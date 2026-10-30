@@ -483,7 +483,7 @@ func TestDeleteRemovesManagedDomainsAndResyncs(t *testing.T) {
 	}); err != nil {
 		t.Fatalf("AddDomain: %v", err)
 	}
-	if err := svc.Delete(ctx, userID, service.ID); err != nil {
+	if _, err := svc.Delete(ctx, userID, service.ID); err != nil {
 		t.Fatalf("Delete: %v", err)
 	}
 	if domains, err := repo.ListServiceDomains(ctx, service.ID); err != nil || len(domains) != 0 {

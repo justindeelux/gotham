@@ -166,12 +166,13 @@ export const useServicesStore = defineStore("services", () => {
     return updated;
   }
 
-  async function remove(id: string): Promise<void> {
-    await deleteService(id);
+  async function remove(id: string): Promise<string[]> {
+    const warnings = await deleteService(id);
     services.value = services.value.filter((item) => item.id !== id);
     const remaining = { ...histories.value };
     delete remaining[id];
     histories.value = remaining;
+    return warnings;
   }
 
   async function deploy(id: string): Promise<DeployOutcome> {

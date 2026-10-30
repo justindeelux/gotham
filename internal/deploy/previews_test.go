@@ -359,7 +359,7 @@ func TestDeleteApplicationOfAPreviewKeepsTheRemoteKey(t *testing.T) {
 	if err != nil {
 		t.Fatalf("CreatePreviewApplication: %v", err)
 	}
-	if err := svc.DeleteApplication(context.Background(), preview.UserID, preview.ID); err != nil {
+	if _, err := svc.DeleteApplication(context.Background(), preview.UserID, preview.ID); err != nil {
 		t.Fatalf("DeleteApplication(preview): %v", err)
 	}
 	registrar.mu.Lock()
@@ -399,7 +399,7 @@ func TestDeleteApplicationTearsDownPreviewsFirst(t *testing.T) {
 	t.Cleanup(func() { _ = svc.Close() })
 
 	cleanupErr = errors.New("preview teardown failed")
-	if err := svc.DeleteApplication(context.Background(), app.UserID, app.ID); err == nil {
+	if _, err := svc.DeleteApplication(context.Background(), app.UserID, app.ID); err == nil {
 		t.Fatal("DeleteApplication with a failing preview cleanup: no error, want one")
 	}
 	if _, err := repo.GetApplication(context.Background(), app.ID); err != nil {
@@ -410,7 +410,7 @@ func TestDeleteApplicationTearsDownPreviewsFirst(t *testing.T) {
 	}
 
 	cleanupErr = nil
-	if err := svc.DeleteApplication(context.Background(), app.UserID, app.ID); err != nil {
+	if _, err := svc.DeleteApplication(context.Background(), app.UserID, app.ID); err != nil {
 		t.Fatalf("DeleteApplication(retry): %v", err)
 	}
 	if cleaned != 2 {

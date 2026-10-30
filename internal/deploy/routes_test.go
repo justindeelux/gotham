@@ -31,6 +31,7 @@ type fakeDeployService struct {
 	seenRecentLimit   int
 	updateErr         error
 	deleteErr         error
+	deleteWarnings    []string
 	env               []EnvEntry
 	envErr            error
 	storages          []Storage
@@ -124,9 +125,9 @@ func (f *fakeDeployService) UpdateApplication(_ context.Context, userID, appID u
 	return f.application, nil
 }
 
-func (f *fakeDeployService) DeleteApplication(_ context.Context, userID, appID uuid.UUID) error {
+func (f *fakeDeployService) DeleteApplication(_ context.Context, userID, appID uuid.UUID) ([]string, error) {
 	f.seenUser, f.seenApplication = userID, appID
-	return f.deleteErr
+	return f.deleteWarnings, f.deleteErr
 }
 
 func (f *fakeDeployService) InstallHook(_ context.Context, userID, appID uuid.UUID, _ *http.Request) (bool, error) {

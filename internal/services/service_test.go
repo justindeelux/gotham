@@ -346,7 +346,7 @@ func TestDeleteStopsThenSoftDeletes(t *testing.T) {
 	created := createService(t, svc, repo, userID)
 
 	agent.downErr = fmt.Errorf("%w: down: node unreachable", ErrAgentUnavailable)
-	if err := svc.Delete(context.Background(), userID, created.ID); !errors.Is(err, ErrAgentUnavailable) {
+	if _, err := svc.Delete(context.Background(), userID, created.ID); !errors.Is(err, ErrAgentUnavailable) {
 		t.Fatalf("Delete = %v, want ErrAgentUnavailable", err)
 	}
 	if _, err := svc.Get(context.Background(), userID, created.ID); err != nil {
@@ -354,7 +354,7 @@ func TestDeleteStopsThenSoftDeletes(t *testing.T) {
 	}
 
 	agent.downErr = nil
-	if err := svc.Delete(context.Background(), userID, created.ID); err != nil {
+	if _, err := svc.Delete(context.Background(), userID, created.ID); err != nil {
 		t.Fatalf("Delete: %v", err)
 	}
 	if _, err := svc.Get(context.Background(), userID, created.ID); !errors.Is(err, ErrNotFound) {
@@ -366,7 +366,7 @@ func TestDeleteStopsThenSoftDeletes(t *testing.T) {
 	repo.mu.Lock()
 	repo.services[broken.ID] = broken
 	repo.mu.Unlock()
-	if err := svc.Delete(context.Background(), userID, broken.ID); !errors.Is(err, ErrValidation) {
+	if _, err := svc.Delete(context.Background(), userID, broken.ID); !errors.Is(err, ErrValidation) {
 		t.Fatalf("Delete(unrenderable, no snapshot) = %v, want ErrValidation", err)
 	}
 	if _, err := svc.Get(context.Background(), userID, broken.ID); err != nil {
@@ -379,7 +379,7 @@ func TestDeleteStopsThenSoftDeletes(t *testing.T) {
 	}); err != nil {
 		t.Fatalf("CreateServiceDeploy: %v", err)
 	}
-	if err := svc.Delete(context.Background(), userID, broken.ID); err != nil {
+	if _, err := svc.Delete(context.Background(), userID, broken.ID); err != nil {
 		t.Fatalf("Delete(snapshot fallback) = %v", err)
 	}
 	if _, err := svc.Get(context.Background(), userID, broken.ID); !errors.Is(err, ErrNotFound) {
@@ -404,8 +404,12 @@ func TestDeleteSucceedsWhenAVolumeCannotBeRemoved(t *testing.T) {
 	userID := uuid.New()
 	created := createService(t, svc, repo, userID)
 
-	if err := svc.Delete(context.Background(), userID, created.ID); err != nil {
+	warnings, err := svc.Delete(context.Background(), userID, created.ID)
+	if err != nil {
 		t.Fatalf("Delete = %v, want success despite the volume warning", err)
+	}
+	if len(warnings) != 1 || warnings[0] != "gotham-data: volume is in use" {
+		t.Errorf("warnings = %v, want the kept volume reported to the caller", warnings)
 	}
 	if _, err := svc.Get(context.Background(), userID, created.ID); !errors.Is(err, ErrNotFound) {
 		t.Fatalf("Get after delete = %v, want ErrNotFound", err)
@@ -511,7 +515,7 @@ func TestLifecycleActionsConflictWhileDeploying(t *testing.T) {
 	if _, err := svc.Restart(context.Background(), userID, created.ID); !errors.Is(err, ErrDeployInFlight) {
 		t.Errorf("Restart during a deploy = %v, want ErrDeployInFlight", err)
 	}
-	if err := svc.Delete(context.Background(), userID, created.ID); !errors.Is(err, ErrDeployInFlight) {
+	if _, err := svc.Delete(context.Background(), userID, created.ID); !errors.Is(err, ErrDeployInFlight) {
 		t.Errorf("Delete during a deploy = %v, want ErrDeployInFlight", err)
 	}
 
@@ -610,7 +614,10 @@ func TestQueuedRestartAfterDeleteDoesNotResurrect(t *testing.T) {
 	created := createService(t, svc, repo, userID)
 
 	deleteDone := make(chan error, 1)
-	go func() { deleteDone <- svc.Delete(context.Background(), userID, created.ID) }()
+	go func() {
+		_, err := svc.Delete(context.Background(), userID, created.ID)
+		deleteDone <- err
+	}()
 	waitForDown(t, agent)
 
 	restartDone := make(chan error, 1)
@@ -644,7 +651,10 @@ func TestQueuedDeployAfterDeleteDoesNotResurrect(t *testing.T) {
 	created := createService(t, svc, repo, userID)
 
 	deleteDone := make(chan error, 1)
-	go func() { deleteDone <- svc.Delete(context.Background(), userID, created.ID) }()
+	go func() {
+		_, err := svc.Delete(context.Background(), userID, created.ID)
+		deleteDone <- err
+	}()
 	waitForDown(t, agent)
 
 	deployDone := make(chan error, 1)
@@ -775,7 +785,8 @@ func TestNodeOperationErrorsRedactEnvironment(t *testing.T) {
 		"delete": {
 			prime: func(a *fakeAgent) { a.downErr = fmt.Errorf("%w: down: bad %s", ErrDeployFailed, secret) },
 			call: func(svc ServiceService, userID, id uuid.UUID) error {
-				return svc.Delete(context.Background(), userID, id)
+				_, err := svc.Delete(context.Background(), userID, id)
+				return err
 			},
 			want: ErrDeployFailed,
 		},
@@ -854,7 +865,7 @@ func TestAgentConnectionsAreClosed(t *testing.T) {
 			}
 		}},
 		{"delete", func(t *testing.T, svc ServiceService, userID, id uuid.UUID) {
-			if err := svc.Delete(context.Background(), userID, id); err != nil {
+			if _, err := svc.Delete(context.Background(), userID, id); err != nil {
 				t.Fatalf("Delete: %v", err)
 			}
 		}},
@@ -932,7 +943,10 @@ func TestLifecycleChangesResyncTheProxy(t *testing.T) {
 			_, err := svc.Restart(context.Background(), userID, created.ID)
 			return err
 		}},
-		{"delete", func() error { return svc.Delete(context.Background(), userID, created.ID) }},
+		{"delete", func() error {
+			_, err := svc.Delete(context.Background(), userID, created.ID)
+			return err
+		}},
 	} {
 		if err := step.call(); err != nil {
 			t.Fatalf("%s: %v", step.name, err)

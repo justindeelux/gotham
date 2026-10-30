@@ -247,7 +247,9 @@ const vi: typeof en = {
     stopped: "Đã dừng dịch vụ. Các volume có tên được giữ lại.",
     restartSent: "Đã gửi lệnh khởi động lại tới node agent.",
     started: "Đã gửi lệnh khởi động tới node agent.",
-    deleted: "Đã xóa dịch vụ cùng các volume dữ liệu của nó.",
+    deleted: "Đã xóa dịch vụ. Các volume dữ liệu của nó đã được gỡ.",
+    deletedWithWarnings:
+      "Đã xóa dịch vụ, nhưng một số volume dữ liệu được giữ lại: {warnings}",
     domainAdded: "Đã thêm tên miền.",
     domainSaved: "Đã lưu tên miền.",
     domainRemoved: "Đã gỡ tên miền.",

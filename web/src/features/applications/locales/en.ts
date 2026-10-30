@@ -703,7 +703,9 @@ const en = {
     certCreated: "Certificate configuration created.",
     certRerecorded: "Certificate re-recorded the current application domain.",
     certDeleted: "Certificate configuration deleted. The route stays HTTP-only.",
-    deleted: "Application {name} deleted.",
+    deleted: "Application {name} deleted. Its data volumes are removed.",
+    deletedWithWarnings:
+      "Application {name} deleted, but some data volumes were kept: {warnings}",
     redeployTitle: "Redeploy to apply changes",
     redeployBody:
       "This application has pending changes that only take effect in a new container: {changes}.",

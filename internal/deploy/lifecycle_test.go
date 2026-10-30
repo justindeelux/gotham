@@ -71,7 +71,7 @@ func TestDeleteApplicationRefusedWhileDeploying(t *testing.T) {
 	svc := newNodeService(t, repo, node)
 	seedDeployment(t, repo, app, Deployment{Kind: KindDeploy, State: StateStarting, ContainerID: node.containerID})
 
-	err := svc.DeleteApplication(context.Background(), userID, app.ID)
+	_, err := svc.DeleteApplication(context.Background(), userID, app.ID)
 	if !errors.Is(err, ErrConflict) {
 		t.Fatalf("err = %v, want ErrConflict while a deployment is in flight", err)
 	}
@@ -308,7 +308,7 @@ func TestDeleteApplicationRemovesEveryLabeledContainer(t *testing.T) {
 	svc := newNodeService(t, repo, node)
 	seedDeployment(t, repo, app, Deployment{Kind: KindDeploy, State: StateRunning, ContainerID: "recorded-container"})
 
-	if err := svc.DeleteApplication(context.Background(), userID, app.ID); err != nil {
+	if _, err := svc.DeleteApplication(context.Background(), userID, app.ID); err != nil {
 		t.Fatalf("delete: %v", err)
 	}
 	for _, want := range []string{"orphan-1", "orphan-2", "recorded-container"} {
@@ -334,7 +334,7 @@ func TestDeleteApplicationRemovesRecordedNamedVolumes(t *testing.T) {
 		{ApplicationID: app.ID, Name: "bind", HostPath: filepath.Join(managedVolumeRoot(), app.ID.String(), "bind"), ContainerPath: "/bind"},
 	}
 
-	if err := svc.DeleteApplication(context.Background(), userID, app.ID); err != nil {
+	if _, err := svc.DeleteApplication(context.Background(), userID, app.ID); err != nil {
 		t.Fatalf("delete: %v", err)
 	}
 	want := []string{prefix + "data", prefix + "shared-cache"}
@@ -363,7 +363,7 @@ func TestDeleteApplicationKeepsAnotherApplicationsVolume(t *testing.T) {
 		{ApplicationID: other, Name: "data", HostPath: "data", ContainerPath: "/data"},
 	}
 
-	if err := svc.DeleteApplication(context.Background(), userID, app.ID); err != nil {
+	if _, err := svc.DeleteApplication(context.Background(), userID, app.ID); err != nil {
 		t.Fatalf("delete: %v", err)
 	}
 	foreign := appNamedVolumePrefix + other.String() + "-data"

@@ -116,6 +116,12 @@ type applicationListEnvelope struct {
 	Applications []applicationListItem `json:"applications"`
 }
 
+// deleteWarningsEnvelope reports data the delete could not remove. It is only
+// returned when there is something to report, so a clean delete stays a 204.
+type deleteWarningsEnvelope struct {
+	Warnings []string `json:"warnings"`
+}
+
 type applicationListItem struct {
 	ID                    string               `json:"id"`
 	Name                  string               `json:"name"`
@@ -520,8 +526,13 @@ func (h *handler) deleteApplication(w http.ResponseWriter, r *http.Request) {
 	if !ok {
 		return
 	}
-	if err := h.svc.DeleteApplication(r.Context(), userID, appID); err != nil {
+	warnings, err := h.svc.DeleteApplication(r.Context(), userID, appID)
+	if err != nil {
 		h.writeServiceError(w, err)
+		return
+	}
+	if len(warnings) > 0 {
+		writeJSON(w, http.StatusOK, deleteWarningsEnvelope{Warnings: warnings})
 		return
 	}
 	w.WriteHeader(http.StatusNoContent)

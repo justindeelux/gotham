@@ -704,7 +704,9 @@ const vi: ApplicationsMessages = {
     certCreated: "Đã tạo cấu hình chứng chỉ.",
     certRerecorded: "Đã ghi nhận lại tên miền hiện tại của ứng dụng.",
     certDeleted: "Đã xóa cấu hình chứng chỉ. Tuyến vẫn chỉ dùng HTTP.",
-    deleted: "Đã xóa ứng dụng {name}.",
+    deleted: "Đã xóa ứng dụng {name}. Các volume dữ liệu của nó đã được gỡ.",
+    deletedWithWarnings:
+      "Đã xóa ứng dụng {name}, nhưng một số volume dữ liệu được giữ lại: {warnings}",
     redeployTitle: "Triển khai lại để áp dụng thay đổi",
     redeployBody:
       "Ứng dụng này có thay đổi đang chờ chỉ có hiệu lực trong container mới: {changes}.",

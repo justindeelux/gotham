@@ -245,7 +245,9 @@ const en = {
     stopped: "Service stopped. Named volumes were kept.",
     restartSent: "Restart sent to the node agent.",
     started: "Start sent to the node agent.",
-    deleted: "Service deleted with its data volumes.",
+    deleted: "Service deleted. Its data volumes are removed.",
+    deletedWithWarnings:
+      "Service deleted, but some data volumes were kept: {warnings}",
     domainAdded: "Domain added.",
     domainSaved: "Domain saved.",
     domainRemoved: "Domain removed.",

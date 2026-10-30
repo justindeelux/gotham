@@ -228,6 +228,7 @@ func TestComposeUpDownCommands(t *testing.T) {
 func TestComposeDownRemovesRecordedVolumesOnly(t *testing.T) {
 	logPath := fakeDockerCLI(t, `exit 0`)
 	server := newTestComposeServer(t, ComposeServerConfig{})
+	otherProject := "gotham-00000000-0000-0000-0000-000000000001"
 	document := []byte(`services:
   web:
     image: nginx:1.23
@@ -238,8 +239,8 @@ volumes:
   data:
   shared:
     external: true
-  named:
-    name: acme-shared
+  foreign:
+    name: ` + otherProject + `_data
 `)
 
 	response, err := server.ComposeDown(context.Background(), &agentv1.ComposeDownRequest{
@@ -251,8 +252,9 @@ volumes:
 	if err != nil {
 		t.Fatalf("ComposeDown: %v", err)
 	}
-	if len(response.GetVolumeWarnings()) != 0 {
-		t.Errorf("volume warnings = %v, want none", response.GetVolumeWarnings())
+	warnings := response.GetVolumeWarnings()
+	if len(warnings) != 1 || warnings[0] != "kept volume "+otherProject+"_data: it has a custom name" {
+		t.Errorf("volume warnings = %v, want the custom-name volume reported", warnings)
 	}
 
 	removed := map[string]bool{}
@@ -261,17 +263,11 @@ volumes:
 			removed[fields[2]] = true
 		}
 	}
-	want := []string{composeTestProject + "_data", "acme-shared"}
-	if len(removed) != len(want) {
-		t.Fatalf("removed volumes = %v, want exactly %v", removed, want)
+	if len(removed) != 1 || !removed[composeTestProject+"_data"] {
+		t.Fatalf("removed volumes = %v, want only %s_data", removed, composeTestProject)
 	}
-	for _, name := range want {
-		if !removed[name] {
-			t.Errorf("removed volumes = %v, want %q", removed, name)
-		}
-	}
-	if removed[composeTestProject+"_shared"] || removed["shared"] {
-		t.Errorf("removed volumes = %v, must not remove an external volume", removed)
+	if removed[otherProject+"_data"] || removed[composeTestProject+"_shared"] || removed["shared"] {
+		t.Errorf("removed volumes = %v, must not remove a custom-name or external volume", removed)
 	}
 }
 

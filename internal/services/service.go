@@ -63,7 +63,7 @@ type ServiceService interface {
 	List(ctx context.Context, userID uuid.UUID, filter ServiceFilter) ([]Service, error)
 	Get(ctx context.Context, userID, serviceID uuid.UUID) (Service, error)
 	Update(ctx context.Context, userID, serviceID uuid.UUID, req UpdateRequest) (Service, error)
-	Delete(ctx context.Context, userID, serviceID uuid.UUID) error
+	Delete(ctx context.Context, userID, serviceID uuid.UUID) ([]string, error)
 	Deploy(ctx context.Context, userID, serviceID uuid.UUID) (Service, Deploy, error)
 	Stop(ctx context.Context, userID, serviceID uuid.UUID) (Service, error)
 	Restart(ctx context.Context, userID, serviceID uuid.UUID) (Service, error)
@@ -465,13 +465,13 @@ func (s *service) Update(ctx context.Context, userID, serviceID uuid.UUID, req U
 	return decorated[0], nil
 }
 
-func (s *service) Delete(ctx context.Context, userID, serviceID uuid.UUID) error {
+func (s *service) Delete(ctx context.Context, userID, serviceID uuid.UUID) ([]string, error) {
 	if err := s.refuseDuringDeploy(ctx, serviceID); err != nil {
-		return err
+		return nil, err
 	}
 	service, release, err := s.lifecycle(ctx, userID, serviceID)
 	if err != nil {
-		return err
+		return nil, err
 	}
 	defer release()
 
@@ -480,16 +480,16 @@ func (s *service) Delete(ctx context.Context, userID, serviceID uuid.UUID) error
 	if renderErr == nil {
 		warnings, err := s.down(ctx, service, []byte(rendered.ComposeYAML), true)
 		if err != nil {
-			return err
+			return nil, err
 		}
 		volumeWarnings = warnings
 	} else {
 		snapshot, snapshotErr := s.latestRunningSnapshot(ctx, service)
 		if snapshotErr != nil {
-			return snapshotErr
+			return nil, snapshotErr
 		}
 		if snapshot == nil {
-			return fmt.Errorf(
+			return nil, fmt.Errorf(
 				"%w: the stored document no longer renders (%s) and there is no successful deploy snapshot to stop it; fix the document or redeploy first",
 				ErrValidation, Redact(renderErr.Error(), service.Env))
 		}
@@ -497,25 +497,25 @@ func (s *service) Delete(ctx context.Context, userID, serviceID uuid.UUID) error
 			"service_id", service.ID.String(), "deploy_id", snapshot.ID.String())
 		warnings, err := s.down(ctx, service, []byte(snapshot.ComposeYAML), true)
 		if err != nil {
-			return err
+			return nil, err
 		}
 		volumeWarnings = warnings
 	}
 	if _, err := s.repo.SoftDeleteService(ctx, service.ID); err != nil {
-		return err
+		return nil, err
 	}
 	if err := s.repo.DeleteServiceDomains(ctx, service.ID); err != nil {
 		s.logger.Warn("services: could not delete managed domains of a deleted service",
 			"service_id", service.ID.String(), "error", err)
 	}
 	for _, warning := range volumeWarnings {
-		s.logger.Warn("services: a named volume could not be removed during delete; it may still be in use",
-			"service_id", service.ID.String(), "error", warning)
+		s.logger.Warn("services: a named volume was kept during delete",
+			"service_id", service.ID.String(), "warning", warning)
 	}
-	s.logger.Info("services: deleted with its named volumes",
+	s.logger.Info("services: deleted",
 		"service_id", service.ID.String(), "project", ProjectName(service.ID))
 	s.syncProxy(ctx, service.ServerID)
-	return nil
+	return volumeWarnings, nil
 }
 
 // renderService renders the stored document with the derived GOTHAM_DOMAIN

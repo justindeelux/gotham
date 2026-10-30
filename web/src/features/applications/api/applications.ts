@@ -507,8 +507,13 @@ export async function updateApplication(
   return response.data.application;
 }
 
-export async function deleteApplication(id: string): Promise<void> {
-  await http.delete(`/applications/${id}`);
+export interface DeleteWarnings {
+  warnings?: string[];
+}
+
+export async function deleteApplication(id: string): Promise<string[]> {
+  const response = await http.delete<DeleteWarnings>(`/applications/${id}`);
+  return response.data?.warnings ?? [];
 }
 
 export async function getEnv(appId: string): Promise<EnvVar[]> {

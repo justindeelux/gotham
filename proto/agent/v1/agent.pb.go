@@ -8450,9 +8450,10 @@ type ComposeDownRequest struct {
 	// but the document still replaces the on-disk project file, so the same
 	// scope rule applies.
 	Unconfined bool `protobuf:"varint,3,opt,name=unconfined,proto3" json:"unconfined,omitempty"`
-	// remove_volumes removes the project's named volumes once the project is
-	// down. Only volumes declared by compose_yaml are removed; external volumes
-	// and volumes of other projects are never touched.
+	// remove_volumes removes the project's own named volumes once the project
+	// is down: the project-prefixed defaults declared by compose_yaml. External
+	// volumes and volumes with a custom `name:` are kept, because another
+	// resource may own them, and are reported in volume_warnings.
 	RemoveVolumes bool `protobuf:"varint,4,opt,name=remove_volumes,json=removeVolumes,proto3" json:"remove_volumes,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache

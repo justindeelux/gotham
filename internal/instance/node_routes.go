@@ -157,9 +157,10 @@ func (h *nodeHandler) reply(w http.ResponseWriter, st NodeState, log string, err
 		writeJSON(w, http.StatusBadRequest, errorBody{Message: "validation failed", Errors: fe})
 	case errors.As(err, &unsupported):
 		writeJSON(w, http.StatusConflict, errorBody{Message: unsupported.Error()})
+	case errors.Is(err, ErrAgentRestarting):
+		writeJSON(w, http.StatusConflict, errorBody{Message: err.Error(), Code: "agent_restarting"})
 	case errors.Is(err, ErrPending), errors.Is(err, ErrNoPending), errors.Is(err, ErrRiskyNetwork),
-		errors.Is(err, ErrUnsupported), errors.Is(err, ErrAgentOutdated), errors.Is(err, ErrNodeOffline),
-		errors.Is(err, ErrAgentRestarting):
+		errors.Is(err, ErrUnsupported), errors.Is(err, ErrAgentOutdated), errors.Is(err, ErrNodeOffline):
 		writeJSON(w, http.StatusConflict, errorBody{Message: err.Error()})
 	case errors.Is(err, ErrHost):
 		h.logger.Error("node host helper failed", "error", err)

@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"strings"
 	"time"
 
 	"google.golang.org/grpc/codes"
@@ -140,19 +141,36 @@ func (a *agentApplier) ApplySystem(ctx context.Context, s System) error {
 	return classifyApplyError("system", err)
 }
 
-func (a *agentApplier) ApplySSH(ctx context.Context, in SSHInput) error {
+func (a *agentApplier) ApplySSH(ctx context.Context, in SSHInput, sshUser string) error {
 	callCtx, client, closeFn, err := a.client(ctx)
 	if err != nil {
 		return err
 	}
 	defer closeFn()
 	_, err = client.ApplySSH(callCtx, &agentv1.HostApplySSHRequest{
-		Port: in.Port, PasswordAuthentication: in.PasswordAuthentication,
+		Port: in.Port, PasswordAuthentication: in.PasswordAuthentication, SshUser: sshUser,
 	})
 	if err != nil && status.Code(err) == codes.FailedPrecondition {
-		return fmt.Errorf("%w: %s", ErrUnsupported, status.Convert(err).Message())
+		msg := status.Convert(err).Message()
+		if strings.Contains(msg, "cannot disable password login") {
+			return FieldErrors{"password_authentication": sshRefusalText(msg)}
+		}
+		if strings.Contains(msg, "another sshd configuration sets Port") {
+			return FieldErrors{"port": sshRefusalText(msg)}
+		}
+		return fmt.Errorf("%w: %s", ErrUnsupported, msg)
 	}
 	return classifyApplyError("ssh", err)
+}
+
+// sshRefusalText drops the helper's fixed prefix before showing its reason in
+// the password field.
+func sshRefusalText(msg string) string {
+	const prefix = "gotham-hostctl: "
+	if i := strings.LastIndex(msg, prefix); i >= 0 {
+		return strings.TrimSpace(msg[i+len(prefix):])
+	}
+	return strings.TrimSpace(msg)
 }
 
 func (a *agentApplier) ConfirmSSH(ctx context.Context) error {

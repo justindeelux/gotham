@@ -64,7 +64,12 @@ watch(() => authStore.isOwner, loadIfOwner);
         <div class="settings-grid">
           <NetworkForm :server-id="server.id" :state="state" @saved="apply" />
           <SystemForm :server-id="server.id" :state="state" @saved="apply" />
-          <SSHForm :server-id="server.id" :state="state" @saved="handleSSHSaved" />
+          <SSHForm
+            :server-id="server.id"
+            :ssh-user="server.ssh_user"
+            :state="state"
+            @saved="handleSSHSaved"
+          />
           <AgentRootForm :server-id="server.id" :state="state" @saved="apply" />
         </div>
       </template>

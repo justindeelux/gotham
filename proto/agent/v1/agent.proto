@@ -2101,6 +2101,9 @@ message HostApplySSHRequest {
   uint32 port = 1;
   // password_authentication is the desired PasswordAuthentication value.
   bool password_authentication = 2;
+  // ssh_user is the user the control plane connects as. A password-login
+  // disable is only accepted when this user has a usable authorized key.
+  string ssh_user = 3;
 }
 
 message HostApplySSHResponse {}

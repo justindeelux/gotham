@@ -11145,8 +11145,11 @@ type HostApplySSHRequest struct {
 	Port uint32 `protobuf:"varint,1,opt,name=port,proto3" json:"port,omitempty"`
 	// password_authentication is the desired PasswordAuthentication value.
 	PasswordAuthentication bool `protobuf:"varint,2,opt,name=password_authentication,json=passwordAuthentication,proto3" json:"password_authentication,omitempty"`
-	unknownFields          protoimpl.UnknownFields
-	sizeCache              protoimpl.SizeCache
+	// ssh_user is the user the control plane connects as. A password-login
+	// disable is only accepted when this user has a usable authorized key.
+	SshUser       string `protobuf:"bytes,3,opt,name=ssh_user,json=sshUser,proto3" json:"ssh_user,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
 }
 
 func (x *HostApplySSHRequest) Reset() {
@@ -11191,6 +11194,13 @@ func (x *HostApplySSHRequest) GetPasswordAuthentication() bool {
 		return x.PasswordAuthentication
 	}
 	return false
+}
+
+func (x *HostApplySSHRequest) GetSshUser() string {
+	if x != nil {
+		return x.SshUser
+	}
+	return ""
 }
 
 type HostApplySSHResponse struct {
@@ -12246,10 +12256,11 @@ const file_agent_v1_agent_proto_rawDesc = "" +
 	"\tavailable\x18\x01 \x01(\bR\tavailable\x12\x12\n" +
 	"\x04port\x18\x02 \x01(\rR\x04port\x127\n" +
 	"\x17password_authentication\x18\x03 \x01(\bR\x16passwordAuthentication\x12,\n" +
-	"\x12key_auth_available\x18\x04 \x01(\bR\x10keyAuthAvailable\"b\n" +
+	"\x12key_auth_available\x18\x04 \x01(\bR\x10keyAuthAvailable\"}\n" +
 	"\x13HostApplySSHRequest\x12\x12\n" +
 	"\x04port\x18\x01 \x01(\rR\x04port\x127\n" +
-	"\x17password_authentication\x18\x02 \x01(\bR\x16passwordAuthentication\"\x16\n" +
+	"\x17password_authentication\x18\x02 \x01(\bR\x16passwordAuthentication\x12\x19\n" +
+	"\bssh_user\x18\x03 \x01(\tR\asshUser\"\x16\n" +
 	"\x14HostApplySSHResponse\"\x17\n" +
 	"\x15HostConfirmSSHRequest\"\x18\n" +
 	"\x16HostConfirmSSHResponse\"\x16\n" +

@@ -424,6 +424,12 @@ ssh_available() { command -v sshd >/dev/null 2>&1; }
 ssh_effective() { sshd -T 2>/dev/null; }
 
 ssh_live_port() {
+    # Gotham's drop-in wins: its last Port is the one this change manages. The
+    # main file or another drop-in may add more Port lines (they accumulate).
+    if [ -f "${SSHD_DROPIN}" ]; then
+        p="$(awk 'tolower($1) == "port" { v = $2 } END { if (v != "") print v }' "${SSHD_DROPIN}" 2>/dev/null)"
+        [ -n "${p}" ] && { printf '%s' "${p}"; return; }
+    fi
     ssh_effective | awk 'tolower($1) == "port" { p = $2 } END { if (p != "") print p }'
 }
 
@@ -435,14 +441,81 @@ ssh_pubkey_enabled() {
     [ "$(ssh_effective | awk 'tolower($1) == "pubkeyauthentication" { print tolower($2); exit }')" != "no" ]
 }
 
-# ssh_key_auth_available: at least one authorized key exists for root or a
-# home-directory user. Password login is only switched off when this is true.
+# ssh_external_ports: Port directives outside Gotham's drop-in. OpenSSH adds
+# every Port line, so a hidden one would keep listening after confirm.
+ssh_external_ports() {
+    for f in "${ROOT}/etc/ssh/sshd_config" "${SSHD_DIR}"/*.conf; do
+        [ -f "${f}" ] || continue
+        [ "${f}" = "${SSHD_DROPIN}" ] && continue
+        awk 'tolower($1) == "port" { print $2 }' "${f}" 2>/dev/null
+    done
+}
+
+key_file_has_key() {
+    [ -f "$1" ] || return 1
+    grep -Eq '^[[:space:]]*(ssh-|ecdsa-sha2-|sk-)[A-Za-z0-9@._-]+[[:space:]]' "$1" && return 0
+    grep -Eq '^[[:space:]]*[^#[:space:]].*[[:space:]](ssh-|ecdsa-sha2-|sk-)[A-Za-z0-9@._-]+[[:space:]]' "$1" && return 0
+    return 1
+}
+
+user_home() {
+    if [ -f "${ROOT}/etc/passwd" ]; then
+        awk -F: -v u="$1" '$1 == u { print $6; exit }' "${ROOT}/etc/passwd"
+    elif command -v getent >/dev/null 2>&1; then
+        getent passwd "$1" 2>/dev/null | cut -d: -f6 | head -n 1
+    fi
+}
+
+user_login_shell() {
+    if [ -f "${ROOT}/etc/passwd" ]; then
+        awk -F: -v u="$1" '$1 == u { print $7; exit }' "${ROOT}/etc/passwd"
+    elif command -v getent >/dev/null 2>&1; then
+        getent passwd "$1" 2>/dev/null | cut -d: -f7 | head -n 1
+    fi
+}
+
+# ssh_authorized_keys_files user home: the effective AuthorizedKeysFile list,
+# with %h / %u expanded, or the OpenSSH default when sshd reports none.
+ssh_authorized_keys_files() {
+    files="$(ssh_effective | awk 'tolower($1) == "authorizedkeysfile" { $1 = ""; sub(/^[ \t]+/, ""); print; exit }')"
+    [ -n "${files}" ] || files=".ssh/authorized_keys .ssh/authorized_keys2"
+    for pattern in ${files}; do
+        case "${pattern}" in
+            %h/*) pattern="$2/${pattern#%h/}" ;;
+            %u/*) pattern="$1/${pattern#%u/}" ;;
+            /*) pattern="$(printf '%s' "${pattern}" | sed "s|%h|$2|g; s|%u|$1|g")" ;;
+            *) pattern="$2/${pattern}" ;;
+        esac
+        printf '%s\n' "${pattern}"
+    done
+}
+
+# ssh_key_auth_available [user]: at least one usable authorized key exists.
+# With a user, it honours PermitRootLogin and the effective AuthorizedKeysFile
+# list and refuses a nologin/false shell. Without a user it is only the generic
+# hint for status; apply-ssh always passes the server record's SSH user.
 ssh_key_auth_available() {
     ssh_pubkey_enabled || return 1
+    user="${1:-}"
+    if [ -n "${user}" ]; then
+        if [ "${user}" = "root" ]; then
+            case "$(ssh_effective | awk 'tolower($1) == "permitrootlogin" { print tolower($2); exit }')" in
+                no) return 1 ;;
+            esac
+        fi
+        home="$(user_home "${user}")"
+        [ -n "${home}" ] || return 1
+        shell="$(user_login_shell "${user}")"
+        case "${shell}" in "" | */nologin | */false) return 1 ;; esac
+        files="$(ssh_authorized_keys_files "${user}" "${home}")"
+        [ -n "${files}" ] || return 1
+        for f in ${files}; do
+            key_file_has_key "${f}" && return 0
+        done
+        return 1
+    fi
     for f in "${ROOT}/root/.ssh/authorized_keys" "${ROOT}"/home/*/.ssh/authorized_keys; do
-        [ -f "${f}" ] || continue
-        grep -Eq '^[[:space:]]*(ssh-|ecdsa-sha2-|sk-)[A-Za-z0-9@._-]+[[:space:]]' "${f}" && return 0
-        grep -Eq '^[[:space:]]*[^#[:space:]].*[[:space:]](ssh-|ecdsa-sha2-|sk-)[A-Za-z0-9@._-]+[[:space:]]' "${f}" && return 0
+        key_file_has_key "${f}" && return 0
     done
     return 1
 }
@@ -471,8 +544,19 @@ sshd_validate() {
     sshd -t 2>/dev/null
 }
 
+ssh_socket_activated() {
+    systemctl is-enabled --quiet ssh.socket 2>/dev/null || systemctl is-active --quiet ssh.socket 2>/dev/null
+}
+
 ssh_reload() {
     [ "${DRYRUN}" = "1" ] && { echo "+ systemctl reload ssh"; return 0; }
+    if ssh_socket_activated; then
+        # Ubuntu 22.10+ / 24.04: ssh.socket owns the listening ports. The
+        # generator rebuilds them from sshd_config only on daemon-reload.
+        systemctl daemon-reload || return 1
+        systemctl restart ssh.socket
+        return $?
+    fi
     if systemctl is-active --quiet ssh 2>/dev/null; then
         systemctl reload ssh 2>/dev/null || systemctl restart ssh
         return $?
@@ -829,19 +913,32 @@ cleanup-package-cache)
 
 apply-ssh)
     ssh_available || die "sshd is not installed on this host" 3
-    K_port=""; K_password_authentication=""
-    read_kv "port password_authentication"
+    K_port=""; K_password_authentication=""; K_ssh_user=""
+    read_kv "port password_authentication ssh_user"
     printf '%s\n' "${K_port}" | grep -Eq '^[0-9]{1,5}$' || die "invalid port" 2
     K_port="$(printf '%s' "${K_port}" | sed 's/^0*//')"
     [ -n "${K_port}" ] || K_port=0
     [ "${K_port}" -ge 1 ] && [ "${K_port}" -le 65535 ] || die "port out of range" 2
     is_bool "${K_password_authentication}" || die "invalid password_authentication" 2
+    if [ -n "${K_ssh_user}" ]; then
+        printf '%s\n' "${K_ssh_user}" | grep -Eq '^[A-Za-z0-9_][A-Za-z0-9_.-]{0,31}$' \
+            || die "invalid ssh_user" 2
+    fi
     [ ! -e "${SSH_PENDING}" ] || die "an SSH change is already pending" 4
     live_port="$(ssh_live_port)"
     printf '%s\n' "${live_port}" | grep -Eq '^[0-9]{1,5}$' || die "cannot read the live SSH port" 3
     live_password="$(ssh_password_auth)"
     if [ "${K_password_authentication}" = "false" ] && [ "${live_password}" != "no" ]; then
-        ssh_key_auth_available || die "cannot disable password login: no authorized key is configured" 5
+        if [ -n "${K_ssh_user}" ]; then
+            ssh_key_auth_available "${K_ssh_user}" \
+                || die "cannot disable password login: no authorized key for user '${K_ssh_user}'" 6
+        else
+            ssh_key_auth_available || die "cannot disable password login: no authorized key is configured" 6
+        fi
+    fi
+    if [ "${K_port}" != "${live_port}" ]; then
+        external="$(ssh_external_ports | tr '\n' ' ' | sed 's/[[:space:]]*$//')"
+        [ -z "${external}" ] || die "another sshd configuration sets Port ${external}; remove it before changing the SSH port from Gotham" 5
     fi
     ssh_snapshot
     if [ "${K_port}" = "${live_port}" ]; then

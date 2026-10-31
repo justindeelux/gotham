@@ -18,6 +18,7 @@ type UserIDFunc func(ctx context.Context) (uuid.UUID, bool)
 
 type errorBody struct {
 	Message string      `json:"message"`
+	Code    string      `json:"code,omitempty"`
 	Errors  FieldErrors `json:"errors,omitempty"`
 	Log     string      `json:"log,omitempty"`
 }

@@ -62,6 +62,23 @@ func TestStatusRepairViaSudoPolicy(t *testing.T) {
 	}
 }
 
+func TestSudoApplierMapsPasswordRefusalToFieldError(t *testing.T) {
+	dir := t.TempDir()
+	bin := filepath.Join(dir, "bin")
+	if err := os.MkdirAll(bin, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	writeExec(t, filepath.Join(bin, "sudo"),
+		"#!/bin/sh\necho 'gotham-hostctl: cannot disable password login: no authorized key for user deploy' >&2\nexit 6\n")
+	t.Setenv("PATH", bin)
+	applier := &sudoApplier{path: filepath.Join(dir, "gotham-hostctl")}
+	err := applier.ApplySSH(context.Background(), SSHInput{Port: 22, PasswordAuthentication: false}, "deploy")
+	var fields FieldErrors
+	if !errors.As(err, &fields) || !strings.Contains(fields["password_authentication"], "deploy") {
+		t.Fatalf("refusal = %v, want a password field error", err)
+	}
+}
+
 func TestStatusReportsOutdatedHelper(t *testing.T) {
 	dir := t.TempDir()
 	bin := filepath.Join(dir, "bin")

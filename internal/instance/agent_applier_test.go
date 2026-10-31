@@ -3,6 +3,7 @@ package instance
 import (
 	"context"
 	"errors"
+	"strings"
 	"testing"
 	"time"
 
@@ -245,10 +246,10 @@ func TestAgentApplierSettleRefusals(t *testing.T) {
 func TestAgentApplierAppliesSSHAndAgentRoot(t *testing.T) {
 	fake := &fakeHostClient{}
 	applier := newAgentApplier(fake)
-	if err := applier.ApplySSH(context.Background(), SSHInput{Port: 2222, PasswordAuthentication: false}); err != nil {
+	if err := applier.ApplySSH(context.Background(), SSHInput{Port: 2222, PasswordAuthentication: false}, "deploy"); err != nil {
 		t.Fatal(err)
 	}
-	if fake.ssh.GetPort() != 2222 || fake.ssh.GetPasswordAuthentication() {
+	if fake.ssh.GetPort() != 2222 || fake.ssh.GetPasswordAuthentication() || fake.ssh.GetSshUser() != "deploy" {
 		t.Fatalf("ssh request = %+v", fake.ssh)
 	}
 	if err := applier.ApplyAgentRoot(context.Background(), true); err != nil {
@@ -259,7 +260,15 @@ func TestAgentApplierAppliesSSHAndAgentRoot(t *testing.T) {
 	}
 
 	refused := &fakeHostClient{sshErr: status.Error(codes.FailedPrecondition, "no authorized key")}
-	if err := newAgentApplier(refused).ApplySSH(context.Background(), SSHInput{Port: 22}); !errors.Is(err, ErrUnsupported) {
+	if err := newAgentApplier(refused).ApplySSH(context.Background(), SSHInput{Port: 22}, "root"); !errors.Is(err, ErrUnsupported) {
 		t.Fatalf("ssh refusal = %v, want unsupported", err)
+	}
+
+	noKey := &fakeHostClient{sshErr: status.Error(codes.FailedPrecondition,
+		"gotham-hostctl: cannot disable password login: no authorized key for user 'deploy'")}
+	err := newAgentApplier(noKey).ApplySSH(context.Background(), SSHInput{Port: 22}, "deploy")
+	var fields FieldErrors
+	if !errors.As(err, &fields) || !strings.Contains(fields["password_authentication"], "no authorized key for user") {
+		t.Fatalf("key refusal = %v, want a password field error", err)
 	}
 }

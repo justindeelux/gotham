@@ -247,6 +247,11 @@ a {
   flex-direction: column;
 }
 
+/* Standard app-modal width, shared by dialogs that do not need a custom size. */
+.app-modal.standard-width.n-modal.n-card {
+  width: min(var(--modal-width), 96vw);
+}
+
 .app-modal.n-modal.n-card > .n-card-header,
 .app-modal.n-modal.n-card > .n-card__footer,
 .app-modal.n-modal.n-card > .n-card__action,

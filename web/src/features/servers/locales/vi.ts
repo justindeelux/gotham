@@ -188,11 +188,12 @@ const vi: ServersMessages = {
         port: "Cổng SSH",
         portHint: "1–65535. Cổng cũ vẫn mở cho tới khi cổng mới nhận được kết nối.",
         passwordLogin: "Đăng nhập bằng mật khẩu",
+        anyUser: "một người dùng đã ghi nhận",
         passwordHint:
-          "Đăng nhập bằng khóa luôn được phép. Chỉ tắt được đăng nhập bằng mật khẩu khi đã có khóa được ủy quyền.",
+          "Đăng nhập bằng khóa luôn được phép. Chỉ tắt được đăng nhập bằng mật khẩu khi người dùng SSH {user} có khóa được ủy quyền dùng được; Gotham kiểm tra khi bạn lưu.",
         unavailable: "Máy chủ này không cài sshd, nên cài đặt SSH chỉ để xem.",
         noKeys:
-          "Máy chủ này chưa có khóa được ủy quyền. Hãy thêm khóa SSH trước khi tắt đăng nhập bằng mật khẩu.",
+          "Người dùng SSH {user} chưa có khóa được ủy quyền. Hãy thêm khóa trước khi tắt đăng nhập bằng mật khẩu.",
         submit: "Lưu cài đặt SSH",
         saved: "Đã lưu cài đặt SSH.",
         confirmTitle: "Áp dụng thay đổi SSH?",
@@ -220,6 +221,7 @@ const vi: ServersMessages = {
           "Agent trở lại người dùng không đặc quyền gotham-agent. Trình quản lý tệp và terminal vẫn hoạt động, nhưng không có quyền root.",
         restartHint:
           "Agent sẽ khởi động lại và kết nối lại trong giây lát; trang này có thể tạm thời không dùng được.",
+        restarting: "Agent đang khởi động lại. Hãy đợi một lát rồi tải lại trang này.",
         cancel: "Hủy",
         confirm: "Đổi quyền",
       },

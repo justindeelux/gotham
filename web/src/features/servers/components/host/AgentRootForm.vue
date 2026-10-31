@@ -5,6 +5,7 @@ import { useI18n } from "vue-i18n";
 
 import { saveNodeAgentRoot } from "@/features/servers/api/host";
 import type { NodeHostState } from "@/features/servers/api/host";
+import { errorCode } from "@/shared/api/errors";
 import { useSectionForm } from "@/shared/composables/useSectionForm";
 
 const props = defineProps<{ serverId: string; state: NodeHostState }>();
@@ -16,8 +17,19 @@ const pending = ref<boolean | null>(null);
 
 const disabled = computed(() => props.state.capability !== "ready");
 
+async function saveAgentRoot(): Promise<NodeHostState> {
+  try {
+    return await saveNodeAgentRoot(props.serverId, pending.value ?? props.state.agent_root);
+  } catch (error) {
+    if (errorCode(error) === "agent_restarting") {
+      throw new Error(t("servers.settings.host.agentRoot.restarting"), { cause: error });
+    }
+    throw error;
+  }
+}
+
 const { submitting, errorMessage, submit } = useSectionForm(
-  () => saveNodeAgentRoot(props.serverId, pending.value ?? props.state.agent_root),
+  saveAgentRoot,
   (next) => emit("saved", props.serverId, next),
   () =>
     t(
@@ -67,8 +79,7 @@ async function confirmToggle(): Promise<void> {
       v-model:show="showConfirm"
       preset="card"
       :title="t('servers.settings.host.agentRoot.confirmTitle')"
-      class="app-modal"
-      style="width: 540px; max-width: 96vw"
+      class="app-modal standard-width"
     >
       <NAlert v-if="pending === true" type="error" :show-icon="true" class="form-alert">
         {{ t("servers.settings.host.agentRoot.rootWarning") }}

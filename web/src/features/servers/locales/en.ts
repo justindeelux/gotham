@@ -186,11 +186,12 @@ const en = {
         port: "SSH port",
         portHint: "1–65535. The old port stays open until the new one accepts a connection.",
         passwordLogin: "Password login",
+        anyUser: "any recorded user",
         passwordHint:
-          "Key login is always allowed. Password login can only be disabled when an authorized key exists.",
+          "Key login is always allowed. Password login can only be disabled when SSH user {user} has a usable authorized key; Gotham checks it when you save.",
         unavailable: "sshd is not installed on this server, so SSH settings are read-only.",
         noKeys:
-          "No authorized key is configured on this server. Add an SSH key before disabling password login.",
+          "No authorized key is configured for SSH user {user}. Add one before disabling password login.",
         submit: "Save SSH settings",
         saved: "SSH settings saved.",
         confirmTitle: "Apply SSH changes?",
@@ -218,6 +219,7 @@ const en = {
           "The agent returns to the unprivileged gotham-agent user. The file manager and terminal keep working, without root access.",
         restartHint:
           "The agent restarts and reconnects in a moment; this page may be briefly unavailable.",
+        restarting: "The agent is restarting. Wait a moment, then reload this page.",
         cancel: "Cancel",
         confirm: "Change access",
       },

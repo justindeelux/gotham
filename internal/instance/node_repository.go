@@ -25,6 +25,9 @@ type NodeRepository interface {
 	// ServerAddress is the node's SSH address, used to verify a new port
 	// before it is written to the server record.
 	ServerAddress(ctx context.Context, serverID uuid.UUID) (string, error)
+	// ServerSSHUser is the user Gotham connects as, used to prove a usable
+	// authorized key before password login is disabled.
+	ServerSSHUser(ctx context.Context, serverID uuid.UUID) (string, error)
 	// SetSSHPort saves the verified SSH port on the server record.
 	SetSSHPort(ctx context.Context, serverID uuid.UUID, port int) error
 }
@@ -81,6 +84,17 @@ func (r *storeNodeRepository) ServerAddress(ctx context.Context, serverID uuid.U
 		return "", fmt.Errorf("instance: load server address: %w", err)
 	}
 	return row.Ip, nil
+}
+
+func (r *storeNodeRepository) ServerSSHUser(ctx context.Context, serverID uuid.UUID) (string, error) {
+	row, err := r.store.GetServerByID(ctx, pgtype.UUID{Bytes: serverID, Valid: true})
+	if err != nil {
+		if errors.Is(err, pgx.ErrNoRows) {
+			return "", ErrNodeNotFound
+		}
+		return "", fmt.Errorf("instance: load server SSH user: %w", err)
+	}
+	return row.SshUser, nil
 }
 
 func (r *storeNodeRepository) SetSSHPort(ctx context.Context, serverID uuid.UUID, port int) error {

@@ -217,12 +217,12 @@ func TestSSHAndAgentRootVerbsPassOnlyFixedKeys(t *testing.T) {
 	server := NewServer(withRunner(runner))
 
 	if _, err := server.ApplySSH(context.Background(), &agentv1.HostApplySSHRequest{
-		Port: 2222, PasswordAuthentication: false,
+		Port: 2222, PasswordAuthentication: false, SshUser: "deploy",
 	}); err != nil {
 		t.Fatal(err)
 	}
 	if last := runner.last(); last.verb != "apply-ssh" ||
-		last.stdin != "port=2222\npassword_authentication=false\n" {
+		last.stdin != "port=2222\npassword_authentication=false\nssh_user=deploy\n" {
 		t.Fatalf("apply-ssh call = %q %q", last.verb, last.stdin)
 	}
 	if _, err := server.ConfirmSSH(context.Background(), &agentv1.HostConfirmSSHRequest{}); err != nil {

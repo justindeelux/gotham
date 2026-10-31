@@ -39,12 +39,14 @@ type fakeHost struct {
 	reclaimed     int64
 	cleaned       []string
 
-	sshApplied   []SSHInput
-	sshConfirmed int
-	sshReverted  int
-	sshApplyErr  error
-	agentApplied []bool
-	agentStays   bool
+	sshApplied    []SSHInput
+	sshUsers      []string
+	sshConfirmed  int
+	sshReverted   int
+	sshApplyErr   error
+	sshConfirmErr error
+	agentApplied  []bool
+	agentStays    bool
 }
 
 func (h *fakeHost) Status(context.Context) (HostStatus, error) {
@@ -76,13 +78,17 @@ func (h *fakeHost) ApplySystem(_ context.Context, in System) error {
 	return h.applyErr
 }
 
-func (h *fakeHost) ApplySSH(_ context.Context, in SSHInput) error {
+func (h *fakeHost) ApplySSH(_ context.Context, in SSHInput, sshUser string) error {
 	h.sshApplied = append(h.sshApplied, in)
+	h.sshUsers = append(h.sshUsers, sshUser)
 	return h.sshApplyErr
 }
 
-func (h *fakeHost) ConfirmSSH(context.Context) error { h.sshConfirmed++; return nil }
-func (h *fakeHost) RevertSSH(context.Context) error  { h.sshReverted++; return nil }
+func (h *fakeHost) ConfirmSSH(context.Context) error {
+	h.sshConfirmed++
+	return h.sshConfirmErr
+}
+func (h *fakeHost) RevertSSH(context.Context) error { h.sshReverted++; return nil }
 func (h *fakeHost) ApplyAgentRoot(_ context.Context, enabled bool) error {
 	h.agentApplied = append(h.agentApplied, enabled)
 	if !h.agentStays {
@@ -104,6 +110,7 @@ type fakeNodeRepo struct {
 	pending map[uuid.UUID]Pending
 	audits  []string
 	address string
+	sshUser string
 	port    int
 	ports   []int
 	portErr error
@@ -142,6 +149,13 @@ func (r *fakeNodeRepo) ServerAddress(context.Context, uuid.UUID) (string, error)
 		return "127.0.0.1", nil
 	}
 	return r.address, nil
+}
+
+func (r *fakeNodeRepo) ServerSSHUser(context.Context, uuid.UUID) (string, error) {
+	if r.sshUser == "" {
+		return "root", nil
+	}
+	return r.sshUser, nil
 }
 
 func (r *fakeNodeRepo) SetSSHPort(_ context.Context, _ uuid.UUID, port int) error {
@@ -323,6 +337,7 @@ func TestNodeSSHPortChangeVerifiesAndSaves(t *testing.T) {
 
 	host := &fakeHost{status: HostStatus{SSH: sshStatus()}}
 	f := newNodeFixture(t, host, nil)
+	f.repo.sshUser = "deploy"
 	st, err := f.svc.UpdateSSH(context.Background(), uuid.Nil, f.servers[0], SSHInput{
 		Port: port, PasswordAuthentication: true,
 	})
@@ -331,6 +346,9 @@ func TestNodeSSHPortChangeVerifiesAndSaves(t *testing.T) {
 	}
 	if len(host.sshApplied) != 1 || host.sshApplied[0].Port != port {
 		t.Fatalf("apply = %+v", host.sshApplied)
+	}
+	if len(host.sshUsers) != 1 || host.sshUsers[0] != "deploy" {
+		t.Fatalf("apply user = %v, want the server record's SSH user", host.sshUsers)
 	}
 	if host.sshConfirmed != 1 || host.sshReverted != 0 {
 		t.Fatalf("confirm=%d revert=%d", host.sshConfirmed, host.sshReverted)
@@ -365,6 +383,51 @@ func TestNodeSSHPortChangeRollsBackWhenDialFails(t *testing.T) {
 	}
 	if len(f.repo.ports) != 0 {
 		t.Fatalf("a failed port change reached the server record: %v", f.repo.ports)
+	}
+}
+
+func TestNodeSSHConfirmFailureRollsBackRecord(t *testing.T) {
+	listener, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer listener.Close()
+	port := uint32(listener.Addr().(*net.TCPAddr).Port)
+	go func() {
+		conn, acceptErr := listener.Accept()
+		if acceptErr != nil {
+			return
+		}
+		_, _ = conn.Write([]byte("SSH-2.0-test\r\n"))
+		_ = conn.Close()
+	}()
+
+	host := &fakeHost{status: HostStatus{SSH: sshStatus()}, sshConfirmErr: errors.New("confirm failed")}
+	f := newNodeFixture(t, host, nil)
+	if _, err := f.svc.UpdateSSH(context.Background(), uuid.Nil, f.servers[0], SSHInput{
+		Port: port, PasswordAuthentication: true,
+	}); err == nil {
+		t.Fatal("confirm failure must fail the change")
+	}
+	if host.sshReverted != 1 {
+		t.Fatalf("reverts = %d, want 1", host.sshReverted)
+	}
+	if len(f.repo.ports) != 2 || f.repo.ports[0] != int(port) || f.repo.ports[1] != 22 {
+		t.Fatalf("record rollback = %v, want [%d 22]", f.repo.ports, port)
+	}
+}
+
+func TestNodeSSHRevertUsesDetachedContext(t *testing.T) {
+	host := &fakeHost{}
+	f := newNodeFixture(t, host, nil)
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+	f.svc.revertSSH(ctx, NodeHost{Applier: host}, f.servers[0], SSHSettings{Port: 22}, true)
+	if host.sshReverted != 1 {
+		t.Fatalf("a cancelled request must still run the host revert: %d", host.sshReverted)
+	}
+	if len(f.repo.ports) != 1 || f.repo.ports[0] != 22 {
+		t.Fatalf("record rollback = %v, want [22]", f.repo.ports)
 	}
 }
 

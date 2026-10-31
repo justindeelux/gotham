@@ -19,7 +19,7 @@ import { sshPortSchema } from "@/features/servers/schemas/host";
 import { useSectionForm } from "@/shared/composables/useSectionForm";
 import { ruleFrom } from "@/shared/validation/naiveAdapter";
 
-const props = defineProps<{ serverId: string; state: NodeHostState }>();
+const props = defineProps<{ serverId: string; sshUser: string; state: NodeHostState }>();
 const emit = defineEmits<{ saved: [serverId: string, state: NodeHostState] }>();
 const { t } = useI18n();
 
@@ -43,6 +43,9 @@ const rules: FormRules = {
   port: ruleFrom(sshPortSchema, { required: true }),
 };
 
+const sshUserLabel = computed(
+  () => props.sshUser || t("servers.settings.host.ssh.anyUser"),
+);
 const disabled = computed(
   () => props.state.capability !== "ready" || !props.state.ssh.available,
 );
@@ -78,7 +81,7 @@ async function requestApply(): Promise<void> {
     return;
   }
   if (passwordBlocked.value) {
-    errorMessage.value = t("servers.settings.host.ssh.noKeys");
+    errorMessage.value = t("servers.settings.host.ssh.noKeys", { user: sshUserLabel.value });
     return;
   }
   showConfirm.value = true;
@@ -105,7 +108,7 @@ function status(path: string): "error" | undefined {
       :show-icon="true"
       class="form-alert"
     >
-      {{ t("servers.settings.host.ssh.noKeys") }}
+      {{ t("servers.settings.host.ssh.noKeys", { user: sshUserLabel }) }}
     </NAlert>
     <NAlert v-if="errorMessage" type="error" :show-icon="true" class="form-alert form-alert-multiline">
       {{ errorMessage }}
@@ -132,7 +135,7 @@ function status(path: string): "error" | undefined {
       <NFormItem :label="t('servers.settings.host.ssh.passwordLogin')">
         <NSwitch v-model:value="form.passwordAuth" :disabled="disabled" />
         <template #feedback>
-          {{ t("servers.settings.host.ssh.passwordHint") }}
+          {{ t("servers.settings.host.ssh.passwordHint", { user: sshUserLabel }) }}
         </template>
       </NFormItem>
       <NButton
@@ -149,8 +152,7 @@ function status(path: string): "error" | undefined {
       v-model:show="showConfirm"
       preset="card"
       :title="t('servers.settings.host.ssh.confirmTitle')"
-      class="app-modal"
-      style="width: 520px; max-width: 96vw"
+      class="app-modal standard-width"
     >
       <p>{{ t("servers.settings.host.ssh.confirmIntro") }}</p>
       <ul>

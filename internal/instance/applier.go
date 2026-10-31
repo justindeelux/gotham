@@ -29,7 +29,7 @@ type HostApplier interface {
 	ApplySystem(ctx context.Context, sys System) error
 	// ApplySSH changes SSH access. A port change stays tentative until
 	// ConfirmSSH, so a failed verification can always RevertSSH.
-	ApplySSH(ctx context.Context, in SSHInput) error
+	ApplySSH(ctx context.Context, in SSHInput, sshUser string) error
 	ConfirmSSH(ctx context.Context) error
 	RevertSSH(ctx context.Context) error
 	// ApplyAgentRoot switches the agent between its service user and root.
@@ -318,10 +318,20 @@ func (a *sudoApplier) ApplySystem(ctx context.Context, s System) error {
 	return err
 }
 
-func (a *sudoApplier) ApplySSH(ctx context.Context, in SSHInput) error {
+func (a *sudoApplier) ApplySSH(ctx context.Context, in SSHInput, sshUser string) error {
 	body := "port=" + strconv.FormatUint(uint64(in.Port), 10) + "\n" +
-		"password_authentication=" + strconv.FormatBool(in.PasswordAuthentication) + "\n"
+		"password_authentication=" + strconv.FormatBool(in.PasswordAuthentication) + "\n" +
+		"ssh_user=" + sshUser + "\n"
 	_, err := a.run(ctx, "apply-ssh", body)
+	var exit *helperExit
+	if errors.As(err, &exit) {
+		switch exit.code {
+		case 5:
+			return FieldErrors{"port": sshRefusalText(exit.err.Error())}
+		case 6:
+			return FieldErrors{"password_authentication": sshRefusalText(exit.err.Error())}
+		}
+	}
 	return err
 }
 

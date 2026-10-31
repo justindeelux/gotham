@@ -197,9 +197,19 @@ func (s *NodeService) UpdateSSH(ctx context.Context, actor, serverID uuid.UUID, 
 	if !status.SSH.Available {
 		return NodeState{}, FieldErrors{"port": "sshd is not installed on this server"}
 	}
+	sshUser, err := s.repo.ServerSSHUser(ctx, serverID)
+	if err != nil {
+		return NodeState{}, err
+	}
 	if status.SSH.PasswordAuthentication && !in.PasswordAuthentication && !status.SSH.KeyAuthAvailable {
+		user := sshUser
+		if user == "" {
+			user = "a recorded user"
+		}
 		return NodeState{}, FieldErrors{
-			"password_authentication": "cannot disable password login: no authorized key is configured on this server",
+			"password_authentication": fmt.Sprintf(
+				"cannot disable password login: no authorized key is configured for SSH user %q", user,
+			),
 		}
 	}
 	portChanged := in.Port != status.SSH.Port
@@ -207,18 +217,23 @@ func (s *NodeService) UpdateSSH(ctx context.Context, actor, serverID uuid.UUID, 
 	if !portChanged && !passwordChanged {
 		return s.state(ctx, serverID)
 	}
-	if err := host.Applier.ApplySSH(ctx, in); err != nil {
+	// A browser disconnect must not abort the trial commit or its rollback:
+	// the host is mid-change and a failed confirm would leave both ports open
+	// until the revert timer fires.
+	applyCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), 180*time.Second)
+	defer cancel()
+	if err := host.Applier.ApplySSH(applyCtx, in, sshUser); err != nil {
 		return NodeState{}, err
 	}
 	previous := status.SSH
 	if portChanged {
-		ip, err := s.repo.ServerAddress(ctx, serverID)
+		ip, err := s.repo.ServerAddress(applyCtx, serverID)
 		if err != nil {
-			s.revertSSH(ctx, host, serverID, previous, false)
+			s.revertSSH(applyCtx, host, serverID, previous, false)
 			return NodeState{}, err
 		}
-		if err := verifySSHPort(ctx, ip, int(in.Port)); err != nil {
-			s.revertSSH(ctx, host, serverID, previous, false)
+		if err := verifySSHPort(applyCtx, ip, int(in.Port)); err != nil {
+			s.revertSSH(applyCtx, host, serverID, previous, false)
 			return NodeState{}, FieldErrors{
 				"port": fmt.Sprintf(
 					"the server did not accept a connection on port %d; the previous port was restored", in.Port,
@@ -227,31 +242,33 @@ func (s *NodeService) UpdateSSH(ctx context.Context, actor, serverID uuid.UUID, 
 		}
 		saved := !host.Local
 		if saved {
-			if err := s.repo.SetSSHPort(ctx, serverID, int(in.Port)); err != nil {
-				s.revertSSH(ctx, host, serverID, previous, false)
+			if err := s.repo.SetSSHPort(applyCtx, serverID, int(in.Port)); err != nil {
+				s.revertSSH(applyCtx, host, serverID, previous, false)
 				return NodeState{}, err
 			}
 		}
-		if err := host.Applier.ConfirmSSH(ctx); err != nil {
-			s.revertSSH(ctx, host, serverID, previous, saved)
+		if err := host.Applier.ConfirmSSH(applyCtx); err != nil {
+			s.revertSSH(applyCtx, host, serverID, previous, saved)
 			return NodeState{}, err
 		}
 	}
-	s.audit(ctx, actor, NodeSectionSSH, serverID, map[string]any{
+	s.audit(applyCtx, actor, NodeSectionSSH, serverID, map[string]any{
 		"port": in.Port, "password_authentication": in.PasswordAuthentication,
 	})
 	s.logger.Info("node SSH settings updated", "actor", actor, "server_id", serverID, "port", in.Port)
-	return s.state(ctx, serverID)
+	return s.state(applyCtx, serverID)
 }
 
 // revertSSH restores the previous SSH state and, when it was already saved,
 // the previous port on the server record.
 func (s *NodeService) revertSSH(ctx context.Context, host NodeHost, serverID uuid.UUID, previous SSHSettings, saved bool) {
-	if err := host.Applier.RevertSSH(ctx); err != nil {
+	rollbackCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), 45*time.Second)
+	defer cancel()
+	if err := host.Applier.RevertSSH(rollbackCtx); err != nil {
 		s.logger.Error("node SSH revert failed", "server_id", serverID, "error", err)
 	}
 	if saved {
-		if err := s.repo.SetSSHPort(ctx, serverID, int(previous.Port)); err != nil {
+		if err := s.repo.SetSSHPort(rollbackCtx, serverID, int(previous.Port)); err != nil {
 			s.logger.Error("node SSH port rollback failed", "server_id", serverID, "error", err)
 		}
 	}

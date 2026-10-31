@@ -364,7 +364,8 @@ func (s *Server) CleanupHost(ctx context.Context, request *agentv1.HostCleanupRe
 // tentative on the host until ConfirmSSH, so the old port remains reachable.
 func (s *Server) ApplySSH(ctx context.Context, request *agentv1.HostApplySSHRequest) (*agentv1.HostApplySSHResponse, error) {
 	in := "port=" + strconv.FormatUint(uint64(request.GetPort()), 10) + "\n" +
-		"password_authentication=" + strconv.FormatBool(request.GetPasswordAuthentication()) + "\n"
+		"password_authentication=" + strconv.FormatBool(request.GetPasswordAuthentication()) + "\n" +
+		"ssh_user=" + request.GetSshUser() + "\n"
 	if _, err := s.runner.Run(ctx, "apply-ssh", in); err != nil {
 		return nil, helperStatus("apply-ssh", err)
 	}
@@ -425,7 +426,7 @@ func helperStatus(verb string, err error) error {
 			return status.Error(codes.FailedPrecondition, "no SSH change is pending")
 		}
 		return status.Error(codes.FailedPrecondition, "no network change is pending")
-	case 5:
+	case 5, 6:
 		if helperErr.reason != "" {
 			return status.Error(codes.FailedPrecondition, helperErr.reason)
 		}

@@ -112,7 +112,7 @@ func stubProbes(t *testing.T, root string) []string {
 	return []string{"PATH=" + bin + ":" + os.Getenv("PATH")}
 }
 
-func sshTestStubs(t *testing.T, root string, livePassword string) ([]string, string) {
+func sshTestStubs(t *testing.T, root string) ([]string, string) {
 	t.Helper()
 	bin := filepath.Join(root, "bin")
 	if err := os.MkdirAll(bin, 0o755); err != nil {
@@ -127,9 +127,11 @@ func sshTestStubs(t *testing.T, root string, livePassword string) ([]string, str
 		"    grep -i '^PasswordAuthentication ' \"$SSHD_DROPIN\"\n" +
 		"  else\n" +
 		"    echo 'port 22'\n" +
-		"    printf 'passwordauthentication %s\\n' \"" + livePassword + "\"\n" +
+		"    echo 'passwordauthentication yes'\n" +
 		"  fi\n" +
 		"  echo 'pubkeyauthentication yes'\n" +
+		"  [ -n \"${SSHD_AUTHKEYS:-}\" ] && echo \"authorizedkeysfile ${SSHD_AUTHKEYS}\"\n" +
+		"  [ -n \"${SSHD_ROOTLOGIN:-}\" ] && echo \"permitrootlogin ${SSHD_ROOTLOGIN}\"\n" +
 		"  exit 0\n" +
 		"fi\n"
 	writeStub(t, bin, "sshd", sshd)
@@ -141,7 +143,18 @@ func sshTestStubs(t *testing.T, root string, livePassword string) ([]string, str
 		"esac\n" +
 		"exit 0\n"
 	writeStub(t, bin, "ufw", ufw)
-	writeStub(t, bin, "systemctl", "#!/bin/sh\nexit 0\n")
+	systemctlLog := filepath.Join(root, "systemctl.log")
+	systemctl := "#!/bin/sh\n" +
+		"case \"$*\" in\n" +
+		"  'is-enabled --quiet ssh.socket'|'is-active --quiet ssh.socket')\n" +
+		"    [ \"${SSH_SOCKET:-0}\" = '1' ]; exit $? ;;\n" +
+		"  'is-active --quiet ssh'|'is-active --quiet sshd')\n" +
+		"    [ \"${SSH_SOCKET:-0}\" = '1' ] && exit 1; exit 0 ;;\n" +
+		"  'show -p MainPID --value gotham-agent') echo 0; exit 0 ;;\n" +
+		"esac\n" +
+		"printf '%s\\n' \"$*\" >>\"$SYSTEMCTL_LOG\"\n" +
+		"exit 0\n"
+	writeStub(t, bin, "systemctl", systemctl)
 	systemdLog := filepath.Join(root, "systemd-run.log")
 	writeStub(t, bin, "systemd-run", "#!/bin/sh\nprintf '%s\\n' \"$*\" >>\"$SYSTEMD_LOG\"\nexit 0\n")
 	writeStub(t, bin, "ps", "#!/bin/sh\necho gotham-agent\n")
@@ -150,12 +163,13 @@ func sshTestStubs(t *testing.T, root string, livePassword string) ([]string, str
 		"SSHD_DROPIN=" + dropin,
 		"UFW_LOG=" + ufwLog,
 		"SYSTEMD_LOG=" + systemdLog,
+		"SYSTEMCTL_LOG=" + systemctlLog,
 	}, dropin
 }
 
 func TestHostctlSSHStatusReportsState(t *testing.T) {
 	root := t.TempDir()
-	extra, _ := sshTestStubs(t, root, "yes")
+	extra, _ := sshTestStubs(t, root)
 	if err := os.MkdirAll(filepath.Join(root, "root/.ssh"), 0o700); err != nil {
 		t.Fatal(err)
 	}
@@ -179,7 +193,7 @@ func TestHostctlSSHStatusReportsState(t *testing.T) {
 
 func TestHostctlApplySSHKeepsOldPortUntilConfirm(t *testing.T) {
 	root := t.TempDir()
-	extra, dropin := sshTestStubs(t, root, "yes")
+	extra, dropin := sshTestStubs(t, root)
 	if err := os.MkdirAll(filepath.Join(root, "root/.ssh"), 0o700); err != nil {
 		t.Fatal(err)
 	}
@@ -242,15 +256,154 @@ func TestHostctlApplySSHKeepsOldPortUntilConfirm(t *testing.T) {
 	}
 }
 
+func TestHostctlSSHReloadUsesSocketActivation(t *testing.T) {
+	root := t.TempDir()
+	extra, _ := sshTestStubs(t, root)
+	extra = append(extra, "SSH_SOCKET=1")
+	if err := os.MkdirAll(filepath.Join(root, "root/.ssh"), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(root, "root/.ssh/authorized_keys"),
+		[]byte("ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAITestKey gotham@test\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	out, err := runHostctlReal(t, root, "port=2222\npassword_authentication=true\n", "apply-ssh", extra)
+	if err != nil {
+		t.Fatalf("apply-ssh on a socket-activated host failed: %v\n%s", err, out)
+	}
+	log, _ := os.ReadFile(filepath.Join(root, "systemctl.log"))
+	for _, want := range []string{"daemon-reload", "restart ssh.socket"} {
+		if !strings.Contains(string(log), want) {
+			t.Fatalf("socket reload misses %q:\n%s", want, log)
+		}
+	}
+	if strings.Contains(string(log), "reload ssh\n") {
+		t.Fatalf("socket activation must not use ssh.service:\n%s", log)
+	}
+	if out, err := runHostctlReal(t, root, "", "confirm-ssh", extra); err != nil {
+		t.Fatalf("confirm-ssh failed: %v\n%s", err, out)
+	}
+	log, _ = os.ReadFile(filepath.Join(root, "systemctl.log"))
+	if got := strings.Count(string(log), "restart ssh.socket"); got < 2 {
+		t.Fatalf("confirm must reload the socket too, got %d:\n%s", got, log)
+	}
+}
+
+func TestHostctlSSHRefusesExternalPort(t *testing.T) {
+	root := t.TempDir()
+	extra, dropin := sshTestStubs(t, root)
+	if err := os.MkdirAll(filepath.Join(root, "root/.ssh"), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(root, "root/.ssh/authorized_keys"),
+		[]byte("ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAITestKey gotham@test\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.MkdirAll(filepath.Join(root, "etc/ssh"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(root, "etc/ssh/sshd_config"), []byte("Port 22\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	out, err := runHostctlReal(t, root, "port=2222\npassword_authentication=true\n", "apply-ssh", extra)
+	if err == nil {
+		t.Fatalf("apply-ssh must refuse an external Port:\n%s", out)
+	}
+	if code := exitCode(t, err); code != 5 {
+		t.Fatalf("exit = %d, want 5:\n%s", code, out)
+	}
+	if !strings.Contains(out, "another sshd configuration sets Port 22") {
+		t.Fatalf("refusal does not name the external port:\n%s", out)
+	}
+	if _, err := os.Stat(dropin); !os.IsNotExist(err) {
+		t.Fatalf("a refused change wrote the drop-in: %v", err)
+	}
+}
+
+func TestHostctlSSHDisablePasswordChecksServerUser(t *testing.T) {
+	newRoot := func(t *testing.T) (string, []string, string) {
+		t.Helper()
+		root := t.TempDir()
+		extra, dropin := sshTestStubs(t, root)
+		if err := os.MkdirAll(filepath.Join(root, "etc"), 0o755); err != nil {
+			t.Fatal(err)
+		}
+		passwd := "root:x:0:0:root:" + root + "/root:/bin/bash\n" +
+			"deploy:x:1000:1000::" + root + "/home/deploy:/bin/bash\n" +
+			"nologin:x:1001:1001::" + root + "/home/nologin:/usr/sbin/nologin\n"
+		if err := os.WriteFile(filepath.Join(root, "etc/passwd"), []byte(passwd), 0o644); err != nil {
+			t.Fatal(err)
+		}
+		return root, extra, dropin
+	}
+	writeKey := func(t *testing.T, path string) {
+		t.Helper()
+		if err := os.MkdirAll(filepath.Dir(path), 0o700); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(path, []byte("ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAITestKey gotham@test\n"), 0o600); err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	t.Run("key for another user does not count", func(t *testing.T) {
+		root, extra, dropin := newRoot(t)
+		writeKey(t, filepath.Join(root, "root/.ssh/authorized_keys"))
+		out, err := runHostctlReal(t, root, "port=22\npassword_authentication=false\nssh_user=deploy\n", "apply-ssh", extra)
+		if err == nil || exitCode(t, err) != 6 {
+			t.Fatalf("another user's key must not count: %v\n%s", err, out)
+		}
+		if _, err := os.Stat(dropin); !os.IsNotExist(err) {
+			t.Fatalf("a refused change wrote the drop-in: %v", err)
+		}
+		writeKey(t, filepath.Join(root, "home/deploy/.ssh/authorized_keys"))
+		if out, err := runHostctlReal(t, root, "port=22\npassword_authentication=false\nssh_user=deploy\n", "apply-ssh", extra); err != nil {
+			t.Fatalf("the server user's key was not accepted: %v\n%s", err, out)
+		}
+	})
+
+	t.Run("nologin shell does not count", func(t *testing.T) {
+		root, extra, _ := newRoot(t)
+		writeKey(t, filepath.Join(root, "home/nologin/.ssh/authorized_keys"))
+		out, err := runHostctlReal(t, root, "port=22\npassword_authentication=false\nssh_user=nologin\n", "apply-ssh", extra)
+		if err == nil || exitCode(t, err) != 6 {
+			t.Fatalf("a nologin user must not count: %v\n%s", err, out)
+		}
+	})
+
+	t.Run("PermitRootLogin no is honoured", func(t *testing.T) {
+		root, extra, _ := newRoot(t)
+		writeKey(t, filepath.Join(root, "root/.ssh/authorized_keys"))
+		extra = append(extra, "SSHD_ROOTLOGIN=no")
+		out, err := runHostctlReal(t, root, "port=22\npassword_authentication=false\nssh_user=root\n", "apply-ssh", extra)
+		if err == nil || exitCode(t, err) != 6 {
+			t.Fatalf("PermitRootLogin=no must block the root key: %v\n%s", err, out)
+		}
+		extra = append(extra[:len(extra)-1], "SSHD_ROOTLOGIN=prohibit-password")
+		if out, err := runHostctlReal(t, root, "port=22\npassword_authentication=false\nssh_user=root\n", "apply-ssh", extra); err != nil {
+			t.Fatalf("root key with prohibit-password rejected: %v\n%s", err, out)
+		}
+	})
+
+	t.Run("AuthorizedKeysFile is honoured", func(t *testing.T) {
+		root, extra, _ := newRoot(t)
+		writeKey(t, filepath.Join(root, "etc/ssh/authorized_keys/deploy"))
+		extra = append(extra, "SSHD_AUTHKEYS="+filepath.Join(root, "etc/ssh/authorized_keys")+"/%u")
+		if out, err := runHostctlReal(t, root, "port=22\npassword_authentication=false\nssh_user=deploy\n", "apply-ssh", extra); err != nil {
+			t.Fatalf("AuthorizedKeysFile override not honoured: %v\n%s", err, out)
+		}
+	})
+}
+
 func TestHostctlSSHDisablePasswordNeedsKeys(t *testing.T) {
 	root := t.TempDir()
-	extra, dropin := sshTestStubs(t, root, "yes")
+	extra, dropin := sshTestStubs(t, root)
 	out, err := runHostctlReal(t, root, "port=22\npassword_authentication=false\n", "apply-ssh", extra)
 	if err == nil {
 		t.Fatalf("disabling password login without an authorized key must be refused:\n%s", out)
 	}
-	if code := exitCode(t, err); code != 5 {
-		t.Fatalf("exit = %d, want 5:\n%s", code, out)
+	if code := exitCode(t, err); code != 6 {
+		t.Fatalf("exit = %d, want 6:\n%s", code, out)
 	}
 	if _, err := os.Stat(dropin); !os.IsNotExist(err) {
 		t.Fatalf("a refused change wrote the drop-in: %v", err)

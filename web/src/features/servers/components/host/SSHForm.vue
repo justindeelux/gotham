@@ -7,6 +7,7 @@ import {
   NFormItem,
   NInputNumber,
   NModal,
+  NSpace,
   NSwitch,
 } from "naive-ui";
 import type { FormInst, FormRules } from "naive-ui";
@@ -188,12 +189,14 @@ function status(path: string): "error" | undefined {
         {{ t("servers.settings.host.ssh.portWarning") }}
       </NAlert>
       <template #footer>
-        <NButton @click="showConfirm = false">
-          {{ t("servers.settings.host.ssh.cancel") }}
-        </NButton>
-        <NButton type="primary" :loading="submitting" @click="confirmApply">
-          {{ t("servers.settings.host.ssh.confirmApply") }}
-        </NButton>
+        <NSpace justify="end" :size="8">
+          <NButton @click="showConfirm = false">
+            {{ t("servers.settings.host.ssh.cancel") }}
+          </NButton>
+          <NButton type="primary" :loading="submitting" @click="confirmApply">
+            {{ t("servers.settings.host.ssh.confirmApply") }}
+          </NButton>
+        </NSpace>
       </template>
     </NModal>
   </NCard>

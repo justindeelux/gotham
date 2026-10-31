@@ -58,6 +58,19 @@ beforeEach(() => {
 });
 
 describe("AgentRootForm", () => {
+  it("uses one checkbox and marks root mode in red", async () => {
+    const wrapper = mountForm(stateWith(true));
+    await flushUi();
+
+    const checkbox = wrapper.find('[role="checkbox"]');
+    expect(checkbox.attributes("aria-checked")).toBe("true");
+    expect(wrapper.find(".agent-root-label--on").text()).toBe("Run the node agent as root");
+    expect(wrapper.text()).not.toContain("Agent runs as");
+    const firstChild = wrapper.find(".n-card-content").element.firstElementChild;
+    expect(firstChild?.getAttribute("role")).toBe("checkbox");
+    wrapper.unmount();
+  });
+
   it("translates the agent-restarting conflict", async () => {
     mockSave.mockRejectedValue({
       status: 409,
@@ -67,7 +80,7 @@ describe("AgentRootForm", () => {
     const wrapper = mountForm(stateWith(false));
     await flushUi();
 
-    await wrapper.find('[role="switch"]').trigger("click");
+    await wrapper.find('[role="checkbox"]').trigger("click");
     await flushUi();
     const confirm = wrapper.findAll("button").find((button) => button.text().includes("Change access"));
     expect(confirm).toBeTruthy();

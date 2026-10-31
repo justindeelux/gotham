@@ -994,6 +994,12 @@ test("dashboard keeps projects and servers in the main column and deploys beside
   expect(desktop.sideTop, "deploys start beside the main content").toBeCloseTo(desktop.mainTop, 0);
 
   await expect(page.locator(".project-grid .project-card-link")).toHaveCount(6);
+  const projectColumns = await page.locator(".project-grid").evaluate((grid) => {
+    return getComputedStyle(grid).gridTemplateColumns
+      .split(" ")
+      .filter((part) => part.length > 0).length;
+  });
+  expect(projectColumns, "several projects share the main column").toBeGreaterThan(1);
   const firstProject = page.getByRole("link", {
     name: "Open project project-1",
     exact: true,
@@ -1017,12 +1023,6 @@ test("dashboard keeps projects and servers in the main column and deploys beside
 
   const meter = serverLink.locator(".usage-segments").first();
   await expect(meter.locator(".usage-block")).toHaveCount(50);
-  const block = await meter.locator(".usage-block").first().boundingBox();
-  if (block === null) {
-    throw new Error("expected a usage block");
-  }
-  expect(Math.abs(block.width - block.height), "usage blocks are square").toBeLessThanOrEqual(1);
-  expect(await meter.evaluate((element) => getComputedStyle(element).gap)).toBe("2px");
 
   await firstProject.click();
   await expect(page).toHaveURL(new RegExp(`/projects/${dashboardProjects[0].id}$`));
@@ -1042,19 +1042,44 @@ test("dashboard keeps projects and servers in the main column and deploys beside
     const layout = await page.evaluate(() => {
       const main = document.querySelector<HTMLElement>(".dash-main")!;
       const side = document.querySelector<HTMLElement>(".dash-side")!;
+      const card = document.querySelector<HTMLElement>(".node-card-link")!;
+      const meter = card.querySelector<HTMLElement>(".usage-segments")!;
+      const block = meter.querySelector<HTMLElement>(".usage-block")!;
       const mainRect = main.getBoundingClientRect();
       const sideRect = side.getBoundingClientRect();
+      const cardRect = card.getBoundingClientRect();
+      const blockRect = block.getBoundingClientRect();
       return {
         overflow:
           document.documentElement.scrollWidth >
           document.documentElement.clientWidth + 1,
         mainTop: mainRect.top,
         mainLeft: mainRect.left,
+        mainWidth: mainRect.width,
         sideTop: sideRect.top,
         sideLeft: sideRect.left,
+        cardWidth: cardRect.width,
+        blockWidth: blockRect.width,
+        blockHeight: blockRect.height,
+        gap: getComputedStyle(meter).gap,
       };
     });
     expect(layout.overflow, `no horizontal overflow at ${width}px`).toBe(false);
+    expect(layout.gap, `segment gap at ${width}px`).toBe("2px");
+    expect(
+      Math.abs(layout.blockWidth - layout.blockHeight),
+      `usage blocks are square at ${width}px`,
+    ).toBeLessThanOrEqual(0.5);
+    if (width >= 1280) {
+      expect(
+        layout.blockWidth,
+        `usage blocks are readable at ${width}px`,
+      ).toBeGreaterThanOrEqual(6);
+      expect(
+        layout.cardWidth,
+        `the single server card fills more than half the main column at ${width}px`,
+      ).toBeGreaterThan(layout.mainWidth / 2);
+    }
     if (width <= 1024) {
       expect(layout.sideTop, `deploys stack under the main column at ${width}px`).toBeGreaterThan(
         layout.mainTop,

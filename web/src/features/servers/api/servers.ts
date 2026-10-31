@@ -214,6 +214,7 @@ const errorPrefixPackages = new Set([
   "builds",
   "cleanup",
   "containers",
+  "cronexpr",
   "databases",
   "deploy",
   "docker",

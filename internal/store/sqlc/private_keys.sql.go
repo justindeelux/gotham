@@ -11,27 +11,68 @@ import (
 	"github.com/jackc/pgx/v5/pgtype"
 )
 
+const countApplicationDeployKeysByPrivateKeyID = `-- name: CountApplicationDeployKeysByPrivateKeyID :one
+SELECT count(*) FROM application_deploy_keys WHERE private_key_id = $1
+`
+
+func (q *Queries) CountApplicationDeployKeysByPrivateKeyID(ctx context.Context, privateKeyID pgtype.UUID) (int64, error) {
+	row := q.db.QueryRow(ctx, countApplicationDeployKeysByPrivateKeyID, privateKeyID)
+	var count int64
+	err := row.Scan(&count)
+	return count, err
+}
+
+const countServersBySSHKeyID = `-- name: CountServersBySSHKeyID :one
+SELECT count(*) FROM servers WHERE ssh_key_id = $1
+`
+
+func (q *Queries) CountServersBySSHKeyID(ctx context.Context, sshKeyID pgtype.UUID) (int64, error) {
+	row := q.db.QueryRow(ctx, countServersBySSHKeyID, sshKeyID)
+	var count int64
+	err := row.Scan(&count)
+	return count, err
+}
+
 const createPrivateKey = `-- name: CreatePrivateKey :one
-INSERT INTO private_keys (name, encrypted_key)
-VALUES ($1, $2)
-RETURNING id, name, created_at
+INSERT INTO private_keys (name, encrypted_key, type, description, public_key)
+VALUES ($1, $2, $3, $4, $5)
+RETURNING id, name, type, description, public_key, created_at
 `
 
 type CreatePrivateKeyParams struct {
-	Name         string `json:"name"`
-	EncryptedKey string `json:"encrypted_key"`
+	Name         string  `json:"name"`
+	EncryptedKey string  `json:"encrypted_key"`
+	Type         *string `json:"type"`
+	Description  *string `json:"description"`
+	PublicKey    *string `json:"public_key"`
 }
 
 type CreatePrivateKeyRow struct {
-	ID        pgtype.UUID        `json:"id"`
-	Name      string             `json:"name"`
-	CreatedAt pgtype.Timestamptz `json:"created_at"`
+	ID          pgtype.UUID        `json:"id"`
+	Name        string             `json:"name"`
+	Type        *string            `json:"type"`
+	Description *string            `json:"description"`
+	PublicKey   *string            `json:"public_key"`
+	CreatedAt   pgtype.Timestamptz `json:"created_at"`
 }
 
 func (q *Queries) CreatePrivateKey(ctx context.Context, arg CreatePrivateKeyParams) (CreatePrivateKeyRow, error) {
-	row := q.db.QueryRow(ctx, createPrivateKey, arg.Name, arg.EncryptedKey)
+	row := q.db.QueryRow(ctx, createPrivateKey,
+		arg.Name,
+		arg.EncryptedKey,
+		arg.Type,
+		arg.Description,
+		arg.PublicKey,
+	)
 	var i CreatePrivateKeyRow
-	err := row.Scan(&i.ID, &i.Name, &i.CreatedAt)
+	err := row.Scan(
+		&i.ID,
+		&i.Name,
+		&i.Type,
+		&i.Description,
+		&i.PublicKey,
+		&i.CreatedAt,
+	)
 	return i, err
 }
 
@@ -45,7 +86,7 @@ func (q *Queries) DeletePrivateKey(ctx context.Context, id pgtype.UUID) error {
 }
 
 const getPrivateKeyByID = `-- name: GetPrivateKeyByID :one
-SELECT id, name, encrypted_key, created_at FROM private_keys WHERE id = $1
+SELECT id, name, encrypted_key, created_at, type, description, public_key FROM private_keys WHERE id = $1
 `
 
 func (q *Queries) GetPrivateKeyByID(ctx context.Context, id pgtype.UUID) (PrivateKey, error) {
@@ -56,20 +97,26 @@ func (q *Queries) GetPrivateKeyByID(ctx context.Context, id pgtype.UUID) (Privat
 		&i.Name,
 		&i.EncryptedKey,
 		&i.CreatedAt,
+		&i.Type,
+		&i.Description,
+		&i.PublicKey,
 	)
 	return i, err
 }
 
 const listPrivateKeys = `-- name: ListPrivateKeys :many
-SELECT id, name, created_at
+SELECT id, name, type, description, public_key, created_at
 FROM private_keys
 ORDER BY created_at DESC, id DESC
 `
 
 type ListPrivateKeysRow struct {
-	ID        pgtype.UUID        `json:"id"`
-	Name      string             `json:"name"`
-	CreatedAt pgtype.Timestamptz `json:"created_at"`
+	ID          pgtype.UUID        `json:"id"`
+	Name        string             `json:"name"`
+	Type        *string            `json:"type"`
+	Description *string            `json:"description"`
+	PublicKey   *string            `json:"public_key"`
+	CreatedAt   pgtype.Timestamptz `json:"created_at"`
 }
 
 func (q *Queries) ListPrivateKeys(ctx context.Context) ([]ListPrivateKeysRow, error) {
@@ -81,7 +128,14 @@ func (q *Queries) ListPrivateKeys(ctx context.Context) ([]ListPrivateKeysRow, er
 	items := []ListPrivateKeysRow{}
 	for rows.Next() {
 		var i ListPrivateKeysRow
-		if err := rows.Scan(&i.ID, &i.Name, &i.CreatedAt); err != nil {
+		if err := rows.Scan(
+			&i.ID,
+			&i.Name,
+			&i.Type,
+			&i.Description,
+			&i.PublicKey,
+			&i.CreatedAt,
+		); err != nil {
 			return nil, err
 		}
 		items = append(items, i)
@@ -90,4 +144,54 @@ func (q *Queries) ListPrivateKeys(ctx context.Context) ([]ListPrivateKeysRow, er
 		return nil, err
 	}
 	return items, nil
+}
+
+const setPrivateKeyMetadata = `-- name: SetPrivateKeyMetadata :exec
+UPDATE private_keys SET type = $2, public_key = $3 WHERE id = $1
+`
+
+type SetPrivateKeyMetadataParams struct {
+	ID        pgtype.UUID `json:"id"`
+	Type      *string     `json:"type"`
+	PublicKey *string     `json:"public_key"`
+}
+
+func (q *Queries) SetPrivateKeyMetadata(ctx context.Context, arg SetPrivateKeyMetadataParams) error {
+	_, err := q.db.Exec(ctx, setPrivateKeyMetadata, arg.ID, arg.Type, arg.PublicKey)
+	return err
+}
+
+const updatePrivateKeyProfile = `-- name: UpdatePrivateKeyProfile :one
+UPDATE private_keys SET name = $2, description = $3
+WHERE id = $1
+RETURNING id, name, type, description, public_key, created_at
+`
+
+type UpdatePrivateKeyProfileParams struct {
+	ID          pgtype.UUID `json:"id"`
+	Name        string      `json:"name"`
+	Description *string     `json:"description"`
+}
+
+type UpdatePrivateKeyProfileRow struct {
+	ID          pgtype.UUID        `json:"id"`
+	Name        string             `json:"name"`
+	Type        *string            `json:"type"`
+	Description *string            `json:"description"`
+	PublicKey   *string            `json:"public_key"`
+	CreatedAt   pgtype.Timestamptz `json:"created_at"`
+}
+
+func (q *Queries) UpdatePrivateKeyProfile(ctx context.Context, arg UpdatePrivateKeyProfileParams) (UpdatePrivateKeyProfileRow, error) {
+	row := q.db.QueryRow(ctx, updatePrivateKeyProfile, arg.ID, arg.Name, arg.Description)
+	var i UpdatePrivateKeyProfileRow
+	err := row.Scan(
+		&i.ID,
+		&i.Name,
+		&i.Type,
+		&i.Description,
+		&i.PublicKey,
+		&i.CreatedAt,
+	)
+	return i, err
 }

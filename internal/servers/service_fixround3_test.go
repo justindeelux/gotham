@@ -20,7 +20,7 @@ func TestLegacyAttachedKeyStillValidates(t *testing.T) {
 	host, port := target(t, addr)
 
 	suffix := time.Now().UnixNano()
-	legacyKey, err := service.AddPrivateKey(ctx, fmt.Sprintf("r3-legacy-%d", suffix), string(testPrivateKeyPEM(t)))
+	legacyKey, err := service.AddPrivateKey(ctx, fmt.Sprintf("r3-legacy-%d", suffix), string(testPrivateKeyPEM(t)), "", "")
 	if err != nil {
 		t.Fatalf("AddPrivateKey legacy: %v", err)
 	}

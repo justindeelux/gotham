@@ -22,6 +22,7 @@ import (
 type sshProbeServer struct {
 	listener      net.Listener
 	password      string
+	authorizedKey ssh.PublicKey
 	dockerMissing bool
 	uid           string
 	osRelease     string
@@ -58,7 +59,10 @@ func startSSHServer(t *testing.T, server *sshProbeServer) (string, string, func(
 	}
 
 	config := &ssh.ServerConfig{
-		PublicKeyCallback: func(ssh.ConnMetadata, ssh.PublicKey) (*ssh.Permissions, error) {
+		PublicKeyCallback: func(_ ssh.ConnMetadata, key ssh.PublicKey) (*ssh.Permissions, error) {
+			if server.authorizedKey != nil && !bytes.Equal(key.Marshal(), server.authorizedKey.Marshal()) {
+				return nil, errors.New("public key rejected")
+			}
 			return nil, nil
 		},
 	}

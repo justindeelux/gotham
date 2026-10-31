@@ -588,3 +588,19 @@ func (s *Store) GetPrivateKeyByID(ctx context.Context, id pgtype.UUID) (sqlc.Pri
 func (s *Store) ListPrivateKeys(ctx context.Context) ([]sqlc.ListPrivateKeysRow, error) {
 	return s.queries.ListPrivateKeys(ctx)
 }
+
+func (s *Store) SetPrivateKeyMetadata(ctx context.Context, params sqlc.SetPrivateKeyMetadataParams) error {
+	return s.queries.SetPrivateKeyMetadata(ctx, params)
+}
+
+func (s *Store) UpdatePrivateKeyProfile(ctx context.Context, params sqlc.UpdatePrivateKeyProfileParams) (sqlc.UpdatePrivateKeyProfileRow, error) {
+	return s.queries.UpdatePrivateKeyProfile(ctx, params)
+}
+
+func (s *Store) CountServersBySSHKeyID(ctx context.Context, sshKeyID pgtype.UUID) (int64, error) {
+	return s.queries.CountServersBySSHKeyID(ctx, sshKeyID)
+}
+
+func (s *Store) CountApplicationDeployKeysByPrivateKeyID(ctx context.Context, privateKeyID pgtype.UUID) (int64, error) {
+	return s.queries.CountApplicationDeployKeysByPrivateKeyID(ctx, privateKeyID)
+}

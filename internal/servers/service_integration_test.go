@@ -19,7 +19,7 @@ func TestServiceLifecycleWithValidation(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 	defer cancel()
 
-	key, err := service.AddPrivateKey(ctx, "deploy-key", string(testPrivateKeyPEM(t)))
+	key, err := service.AddPrivateKey(ctx, "deploy-key", string(testPrivateKeyPEM(t)), "", "")
 	if err != nil {
 		t.Fatalf("AddPrivateKey: %v", err)
 	}
@@ -242,7 +242,7 @@ func TestServiceStoredPasswordAndUpdate(t *testing.T) {
 		t.Errorf("Status = %q, want pending after address change", updated.Status)
 	}
 
-	key, err := service.AddPrivateKey(ctx, "update-key", string(testPrivateKeyPEM(t)))
+	key, err := service.AddPrivateKey(ctx, "update-key", string(testPrivateKeyPEM(t)), "", "")
 	if err != nil {
 		t.Fatalf("AddPrivateKey: %v", err)
 	}
@@ -399,7 +399,7 @@ func TestServiceValidateFailsClosedWhenPinWriteFails(t *testing.T) {
 	defer stop()
 	host, port := target(t, addr)
 
-	key, err := service.AddPrivateKey(ctx, "cas-fail-key", string(testPrivateKeyPEM(t)))
+	key, err := service.AddPrivateKey(ctx, "cas-fail-key", string(testPrivateKeyPEM(t)), "", "")
 	if err != nil {
 		t.Fatalf("AddPrivateKey: %v", err)
 	}

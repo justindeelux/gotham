@@ -61,9 +61,12 @@ type Server struct {
 }
 
 type PrivateKey struct {
-	ID        uuid.UUID
-	Name      string
-	CreatedAt time.Time
+	ID          uuid.UUID
+	Name        string
+	Type        string
+	Description *string
+	PublicKey   string
+	CreatedAt   time.Time
 }
 
 type ValidationResult struct {
@@ -625,36 +628,6 @@ func sameSecret(a, b *string) bool {
 		return a == nil && b == nil
 	}
 	return *a == *b
-}
-
-func (s *ServerService) AddPrivateKey(ctx context.Context, name, privateKeyPEM string) (*PrivateKey, error) {
-	name = strings.TrimSpace(name)
-	if name == "" {
-		return nil, fmt.Errorf("%w: name is required", ErrValidation)
-	}
-	if strings.TrimSpace(privateKeyPEM) == "" {
-		return nil, fmt.Errorf("%w: private_key is required", ErrValidation)
-	}
-
-	encrypted, err := EncryptKey(privateKeyPEM, s.secret)
-	if err != nil {
-		return nil, err
-	}
-
-	row, err := s.store.CreatePrivateKey(ctx, sqlc.CreatePrivateKeyParams{
-		Name:         name,
-		EncryptedKey: encrypted,
-	})
-	if err != nil {
-		return nil, fmt.Errorf("create private key: %w", err)
-	}
-
-	s.logger.Debug("servers: private key added", "private_key_id", row.ID.String())
-	return &PrivateKey{
-		ID:        uuidFromPG(row.ID),
-		Name:      row.Name,
-		CreatedAt: row.CreatedAt.Time,
-	}, nil
 }
 
 func (s *ServerService) keyByID(ctx context.Context, id uuid.UUID) (sqlc.PrivateKey, error) {

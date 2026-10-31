@@ -109,6 +109,7 @@ type Server struct {
 	realtime          *ws.Realtime
 	authLimiter       *ipRateLimiter
 	refreshLimiter    *ipRateLimiter
+	sshLimiter        *ipRateLimiter
 	mcpBaseURL        string
 	router            http.Handler
 	closer            func()
@@ -137,6 +138,7 @@ func New(cfg *config.Config, logger *slog.Logger, authService AuthService, oauth
 	redisClient := newRedisPinger(snap.Redis.Addr)
 	limiter := newDefaultAuthLimiter()
 	refreshLimiter := newDefaultRefreshLimiter()
+	sshLimiter := newDefaultSSHLimiter()
 
 	trustedProxies, err := clientip.Parse(snap.Server.TrustedProxies)
 	if err != nil {
@@ -167,6 +169,7 @@ func New(cfg *config.Config, logger *slog.Logger, authService AuthService, oauth
 		persistence:     st,
 		authLimiter:     limiter,
 		refreshLimiter:  refreshLimiter,
+		sshLimiter:      sshLimiter,
 		trustedProxies:  trustedProxies,
 		jobLeases:       databases.NewJobLeases(),
 	}
@@ -222,6 +225,7 @@ func New(cfg *config.Config, logger *slog.Logger, authService AuthService, oauth
 		_ = redisClient.Close()
 		limiter.Close()
 		refreshLimiter.Close()
+		sshLimiter.Close()
 		if oauthService != nil {
 			oauthService.Close()
 		}

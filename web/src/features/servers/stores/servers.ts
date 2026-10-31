@@ -5,6 +5,7 @@ import {
   createServer,
   deleteServer,
   failureText,
+  installServerKey,
   listServers,
   updateServer,
   validateServer,
@@ -118,6 +119,15 @@ export const useServersStore = defineStore("servers", () => {
     return outcome;
   }
 
+  async function installKey(id: string, password: string): Promise<ValidateOutcome> {
+    const outcome = await installServerKey(id, password);
+    if (outcome.server) {
+      listSync.markMutation();
+      applyServer(outcome.server);
+    }
+    return outcome;
+  }
+
   async function updateServerById(id: string, input: UpdateServerInput): Promise<Server> {
     const updated = await updateServer(id, input);
     listSync.markMutation();
@@ -145,6 +155,7 @@ export const useServersStore = defineStore("servers", () => {
     addServer,
     removeServer,
     validate,
+    installKey,
     updateServer: updateServerById,
   };
 });

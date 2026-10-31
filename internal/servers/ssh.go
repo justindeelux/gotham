@@ -343,6 +343,79 @@ func nonEmptyLines(out string) []string {
 	return lines
 }
 
+// InstallAuthorizedKey appends publicKey to the SSH user's authorized_keys
+// using the user's password. The password stays in memory for this call.
+func InstallAuthorizedKey(ctx context.Context, ip string, port int, user, password, publicKey string, policy HostKeyPolicy) error {
+	if ip == "" {
+		return fmt.Errorf("%w: ip is required", ErrValidation)
+	}
+	if user == "" {
+		return fmt.Errorf("%w: ssh user is required", ErrValidation)
+	}
+	if password == "" {
+		return fmt.Errorf("%w: ssh password is required", ErrValidation)
+	}
+	if port <= 0 {
+		port = 22
+	}
+
+	command, err := authorizedKeysCommand(publicKey)
+	if err != nil {
+		return err
+	}
+
+	verifier := &hostKeyVerifier{pinned: policy.Pinned, acceptUnpinned: policy.AcceptUnpinned}
+	cfg, err := sshClientConfig(user, SSHAuth{Password: password}, verifier)
+	if err != nil {
+		return err
+	}
+
+	ctx, cancel := context.WithTimeout(ctx, sshDialTimeout)
+	defer cancel()
+
+	addr := net.JoinHostPort(ip, strconv.Itoa(port))
+	client, _, err := dialSSH(ctx, addr, cfg)
+	if err != nil {
+		if isSSHAuthError(err) {
+			return fmt.Errorf("%w: the SSH password for %s@%s was rejected", ErrValidation, user, ip)
+		}
+		return fmt.Errorf("ssh dial %s: %w", addr, err)
+	}
+	defer func() { _ = client.Close() }()
+
+	out, err := runRemote(ctx, client, command)
+	if err != nil {
+		return fmt.Errorf("%w: could not install the public key: %s", ErrValidation, detailOrError(out, err))
+	}
+	return nil
+}
+
+func authorizedKeysCommand(publicKey string) (string, error) {
+	parsed, _, _, _, err := ssh.ParseAuthorizedKey([]byte(strings.TrimSpace(publicKey)))
+	if err != nil {
+		return "", fmt.Errorf("%w: invalid public key: %v", ErrValidation, err)
+	}
+	fields := strings.Fields(string(ssh.MarshalAuthorizedKey(parsed)))
+	if len(fields) < 2 {
+		return "", fmt.Errorf("%w: invalid public key", ErrValidation)
+	}
+	blob := fields[1]
+	line := fields[0] + " " + blob
+	// authorized_keys lines are newline-delimited; the leading newline protects
+	// an existing last line that has no trailing newline.
+	return `umask 077; mkdir -p "$HOME/.ssh" && chmod 700 "$HOME/.ssh" && touch "$HOME/.ssh/authorized_keys" && chmod 600 "$HOME/.ssh/authorized_keys" && { grep -qF -- '` +
+		blob + `' "$HOME/.ssh/authorized_keys" || printf '\n%s\n' '` + line + `' >> "$HOME/.ssh/authorized_keys"; }`, nil
+}
+
+func isSSHAuthError(err error) bool {
+	if err == nil {
+		return false
+	}
+	msg := strings.ToLower(err.Error())
+	return strings.Contains(msg, "unable to authenticate") ||
+		strings.Contains(msg, "no supported methods remain")
+}
+
 func InstallDockerNode(ctx context.Context, ip string, port int, user string, auth SSHAuth, policy HostKeyPolicy, out io.Writer) error {
 	if ip == "" {
 		return fmt.Errorf("%w: ip is required", ErrValidation)

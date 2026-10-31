@@ -54,6 +54,9 @@ export interface CheckResult {
 export interface PrivateKeyMeta {
   id: string;
   name: string;
+  type: string;
+  description: string | null;
+  public_key: string;
   created_at: string;
 }
 
@@ -83,6 +86,13 @@ export interface ValidateOptions {
 export interface CreatePrivateKeyInput {
   name: string;
   private_key: string;
+  public_key?: string;
+}
+
+export interface GeneratePrivateKeyInput {
+  name: string;
+  type?: string;
+  description?: string;
 }
 
 export interface ValidateOutcome {
@@ -90,6 +100,7 @@ export interface ValidateOutcome {
   checks: CheckResult[];
   server: Server | null;
   message: string;
+  authFailed: boolean;
 }
 
 interface ServerEnvelope {
@@ -104,6 +115,11 @@ interface ValidateResponse {
   message?: string;
   checks?: CheckResult[];
   server?: Server;
+  auth_failed?: boolean;
+}
+
+interface PrivateKeyListEnvelope {
+  private_keys?: PrivateKeyMeta[];
 }
 
 const validateTimeoutMs = 45_000;
@@ -156,6 +172,26 @@ export async function validateServer(
     checks: response.data.checks ?? [],
     server: response.data.server ?? null,
     message: response.data.message ?? "",
+    authFailed: response.data.auth_failed === true,
+  };
+}
+
+export async function installServerKey(id: string, password: string): Promise<ValidateOutcome> {
+  const response: AxiosResponse<ValidateResponse> = await http.post<ValidateResponse>(
+    `/servers/${id}/install-key`,
+    { password },
+    {
+      timeout: validateTimeoutMs,
+      validateStatus: (status) => status === 200 || status === 422,
+    },
+  );
+
+  return {
+    ok: response.status === 200,
+    checks: response.data.checks ?? [],
+    server: response.data.server ?? null,
+    message: response.data.message ?? "",
+    authFailed: response.data.auth_failed === true,
   };
 }
 
@@ -173,6 +209,18 @@ export async function createPrivateKey(
 ): Promise<PrivateKeyMeta> {
   const response = await http.post<PrivateKeyMeta>("/private-keys", input);
   return response.data;
+}
+
+export async function generatePrivateKey(
+  input: GeneratePrivateKeyInput,
+): Promise<PrivateKeyMeta> {
+  const response = await http.post<PrivateKeyMeta>("/private-keys/generate", input);
+  return response.data;
+}
+
+export async function listPrivateKeys(): Promise<PrivateKeyMeta[]> {
+  const response = await http.get<PrivateKeyListEnvelope>("/private-keys");
+  return response.data.private_keys ?? [];
 }
 
 export function isApiError(error: unknown): error is ApiError {

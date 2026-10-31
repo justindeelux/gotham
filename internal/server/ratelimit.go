@@ -6,6 +6,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/go-chi/chi/v5"
 	"golang.org/x/time/rate"
 
 	"github.com/justindeelux/gotham/internal/clientip"
@@ -14,6 +15,11 @@ import (
 const (
 	authRateBurst    = 5
 	authRateInterval = 12 * time.Second
+)
+
+const (
+	sshRateBurst    = 5
+	sshRateInterval = 12 * time.Second
 )
 
 const (
@@ -46,6 +52,10 @@ func newDefaultAuthLimiter() *ipRateLimiter {
 
 func newDefaultRefreshLimiter() *ipRateLimiter {
 	return newIPRateLimiter(rate.Every(refreshRateInterval), refreshRateBurst)
+}
+
+func newDefaultSSHLimiter() *ipRateLimiter {
+	return newIPRateLimiter(rate.Every(sshRateInterval), sshRateBurst)
 }
 
 func newIPRateLimiter(limit rate.Limit, burst int) *ipRateLimiter {
@@ -123,6 +133,22 @@ func (s *Server) rateLimit(next http.Handler) http.Handler {
 func (s *Server) refreshRateLimit(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if !s.refreshLimiter.allow(limiterKey(clientip.ClientIP(r, s.trustedProxies))) {
+			writeJSON(w, http.StatusTooManyRequests, apiError{Message: "too many requests"})
+			return
+		}
+		next.ServeHTTP(w, r)
+	})
+}
+
+func (s *Server) sshRateLimit(next http.Handler) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		// Per server so checking every node at once still works; validation and
+		// key install share the bucket because both may carry a password.
+		key := chi.URLParam(r, "id")
+		if key == "" {
+			key = limiterKey(clientip.ClientIP(r, s.trustedProxies))
+		}
+		if !s.sshLimiter.allow(key) {
 			writeJSON(w, http.StatusTooManyRequests, apiError{Message: "too many requests"})
 			return
 		}

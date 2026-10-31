@@ -1,16 +1,17 @@
 <script setup lang="ts">
 import {
   NAlert,
-  NCheckbox,
+  NButton,
   NForm,
   NFormItem,
   NInput,
   NInputNumber,
   NRadioButton,
   NRadioGroup,
+  NSelect,
 } from "naive-ui";
 import type { FormInst } from "naive-ui";
-import { inject, onUnmounted, ref, watch } from "vue";
+import { computed, inject, onUnmounted, ref, watch } from "vue";
 
 import { WizardKey } from "@/features/servers/composables/useAddServerWizard";
 
@@ -26,6 +27,13 @@ watch(formRef, (instance) => {
 onUnmounted(() => {
   wizard.setFormRef(null);
 });
+
+const keyOptions = computed(() =>
+  wizard.privateKeys.value.map((key) => ({
+    label: key.type ? `${key.name} (${key.type})` : key.name,
+    value: key.id,
+  })),
+);
 </script>
 
 <template>
@@ -111,40 +119,45 @@ onUnmounted(() => {
             size="small"
             :aria-label="$t('servers.wizard.authMethod')"
           >
-            <NRadioButton value="key">{{ $t("servers.wizard.keyModeLabel") }}</NRadioButton>
-            <NRadioButton value="password">{{ $t("servers.wizard.authPassword") }}</NRadioButton>
+            <NRadioButton value="managed">{{ $t("servers.wizard.authManaged") }}</NRadioButton>
+            <NRadioButton value="manual">{{ $t("servers.wizard.authManual") }}</NRadioButton>
           </NRadioGroup>
           <span class="field-hint">{{ $t("servers.wizard.authHint") }}</span>
-        </NFormItem>
-        <NFormItem v-if="wizard.form.authMode === 'key'" :label="$t('servers.wizard.keyModeLabel')">
-          <NRadioGroup
-            v-model:value="wizard.form.keyMode"
-            size="small"
-            :aria-label="$t('servers.wizard.keyModeName')"
-          >
-            <NRadioButton value="new">{{ $t("servers.wizard.keyNew") }}</NRadioButton>
-            <NRadioButton value="existing">{{ $t("servers.wizard.keyExisting") }}</NRadioButton>
-          </NRadioGroup>
-          <span class="field-hint">{{ $t("servers.wizard.keyModeHint") }}</span>
         </NFormItem>
       </section>
 
       <section class="connect-group" :aria-label="$t('servers.wizard.connectCredentials')">
         <h4 class="connect-group__title">{{ $t("servers.wizard.connectCredentials") }}</h4>
 
-        <template v-if="wizard.form.authMode === 'key' && wizard.form.keyMode === 'new'">
+        <template v-if="wizard.form.authMode === 'managed'">
           <NFormItem
-            :label="$t('servers.wizard.keyName')"
-            path="keyName"
-            :label-props="{ for: 'add-server-key-name' }"
+            :label="$t('servers.wizard.keySelectLabel')"
+            path="keyId"
+            :label-props="{ for: 'add-server-key-id' }"
           >
-            <NInput
-              v-model:value="wizard.form.keyName"
-              placeholder="deploy-key"
-              :input-props="{ id: 'add-server-key-name', 'aria-label': $t('servers.wizard.keyName') }"
-            />
-            <span class="field-hint">{{ $t("servers.wizard.keyNameHint") }}</span>
+            <div class="key-picker">
+              <NSelect
+                v-model:value="wizard.form.keyId"
+                :options="keyOptions"
+                :loading="wizard.keysLoading.value"
+                :placeholder="$t('servers.wizard.keySelectPlaceholder')"
+                :aria-label="$t('servers.wizard.keySelectLabel')"
+                :input-props="{ id: 'add-server-key-id' }"
+              />
+              <NButton
+                secondary
+                :loading="wizard.generatingKey.value"
+                :disabled="wizard.keysLoading.value"
+                @click="wizard.generateKey"
+              >
+                {{ $t("servers.wizard.keyGenerate") }}
+              </NButton>
+            </div>
+            <span class="field-hint">{{ $t("servers.wizard.keySelectHint") }}</span>
           </NFormItem>
+        </template>
+
+        <template v-else>
           <NFormItem
             :label="$t('servers.wizard.privateKey')"
             path="privateKey"
@@ -160,66 +173,43 @@ onUnmounted(() => {
             <span class="field-hint">{{ $t("servers.wizard.privateKeyHint") }}</span>
           </NFormItem>
           <NFormItem
-            :label="$t('servers.wizard.passphrase')"
-            path="passphrase"
-            :label-props="{ for: 'add-server-passphrase' }"
+            :label="$t('servers.wizard.publicKey')"
+            path="publicKey"
+            :label-props="{ for: 'add-server-public-key' }"
           >
             <NInput
-              v-model:value="wizard.form.passphrase"
-              type="password"
-              show-password-on="click"
-              :placeholder="$t('servers.wizard.passphraseHint')"
-              :input-props="{ id: 'add-server-passphrase', 'aria-label': $t('servers.wizard.passphrase') }"
+              v-model:value="wizard.form.publicKey"
+              type="textarea"
+              :autosize="{ minRows: 2, maxRows: 4 }"
+              placeholder="ssh-ed25519 AAAA…"
+              :input-props="{ id: 'add-server-public-key', 'aria-label': $t('servers.wizard.publicKey') }"
             />
-            <span class="field-hint">{{ $t("servers.wizard.passphraseHint") }}</span>
+            <span class="field-hint">{{ $t("servers.wizard.publicKeyHint") }}</span>
           </NFormItem>
         </template>
 
-        <NFormItem
-          v-else-if="wizard.form.authMode === 'key'"
-          :label="$t('servers.wizard.keyId')"
-          path="keyId"
-          :label-props="{ for: 'add-server-key-id' }"
-        >
-          <NInput
-            v-model:value="wizard.form.keyId"
-            placeholder="00000000-0000-0000-0000-000000000000"
-            :input-props="{ id: 'add-server-key-id', 'aria-label': $t('servers.wizard.keyId') }"
-          />
-          <span class="field-hint">{{ $t("servers.wizard.keyIdHint") }}</span>
-        </NFormItem>
-
-        <template v-else>
-          <NFormItem
-            :label="$t('servers.wizard.nodePassword')"
-            path="password"
-            :label-props="{ for: 'add-server-password' }"
-          >
-            <NInput
-              v-model:value="wizard.form.password"
-              type="password"
-              show-password-on="click"
-              :placeholder="$t('servers.wizard.nodePasswordHint')"
-              :input-props="{ id: 'add-server-password', 'aria-label': $t('servers.wizard.nodePassword'), autocomplete: 'new-password' }"
-            />
-            <span class="field-hint">{{ $t("servers.wizard.nodePasswordHint") }}</span>
-          </NFormItem>
-        </template>
-      </section>
-
-      <section
-        v-if="wizard.form.authMode === 'password'"
-        class="connect-group"
-        :aria-label="$t('servers.wizard.connectTrust')"
-      >
-        <h4 class="connect-group__title">{{ $t("servers.wizard.connectTrust") }}</h4>
-        <NFormItem :label="$t('servers.wizard.firstConnection')" :show-feedback="false">
-          <NCheckbox v-model:checked="wizard.form.trustHostKey">
-            {{ $t("servers.wizard.trustHostKey") }}
-          </NCheckbox>
-          <span class="field-hint">{{ $t("servers.wizard.trustHint") }}</span>
-        </NFormItem>
+        <NAlert v-if="wizard.keyErrorMessage.value" type="error" :show-icon="true">
+          {{ wizard.keyErrorMessage.value }}
+        </NAlert>
       </section>
     </div>
   </NForm>
 </template>
+
+<style scoped>
+.key-picker {
+  display: flex;
+  gap: var(--space-2);
+  width: 100%;
+  align-items: center;
+}
+
+.key-picker :deep(.n-select) {
+  flex: 1;
+  min-width: 0;
+}
+
+.key-picker :deep(.n-button) {
+  flex: 0 0 auto;
+}
+</style>

@@ -8,14 +8,22 @@ import { useI18n } from "vue-i18n";
 import {
   createPrivateKey,
   failureText,
+  generatePrivateKey,
+  listPrivateKeys,
 } from "@/features/servers/api/servers";
-import type { CheckResult, Server, ServerCheckName } from "@/features/servers/api/servers";
+import type {
+  CheckResult,
+  PrivateKeyMeta,
+  Server,
+  ServerCheckName,
+} from "@/features/servers/api/servers";
 import {
   connectionRules,
 } from "@/features/servers/schemas/servers";
 import { useServersStore } from "@/features/servers/stores/servers";
 import { useDockerInstall } from "@/features/servers/composables/useDockerInstall";
 import type { DockerInstallState } from "@/features/servers/composables/useDockerInstall";
+import { generateKeyName } from "@/features/servers/utils/keyName";
 import { useInFlightGuard } from "@/shared/composables/useInFlightGuard";
 import { onLocaleChange } from "@/shared/i18n";
 import { formatBytes } from "@/shared/utils/format";
@@ -25,14 +33,10 @@ export interface ConnectionForm {
   ip: string;
   port: number | null;
   sshUser: string;
-  authMode: "key" | "password";
-  keyMode: "new" | "existing";
-  keyName: string;
-  privateKey: string;
-  passphrase: string;
+  authMode: "managed" | "manual";
   keyId: string;
-  password: string;
-  trustHostKey: boolean;
+  privateKey: string;
+  publicKey: string;
 }
 
 export type CheckState = "idle" | "running" | "ok" | "fail";
@@ -68,8 +72,19 @@ export interface AddServerWizardContext {
   hasRunChecks: ComputedRef<boolean>;
   nodeInitials: ComputedRef<string>;
   resourceSummary: ComputedRef<string>;
+  privateKeys: Ref<PrivateKeyMeta[]>;
+  keysLoading: Ref<boolean>;
+  generatingKey: Ref<boolean>;
+  keyErrorMessage: ComputedRef<string>;
+  loadPrivateKeys: () => Promise<void>;
+  generateKey: () => Promise<void>;
+  keyInstallNeeded: Ref<boolean>;
+  installPassword: Ref<string>;
+  installingKey: Ref<boolean>;
+  keyInstallError: Ref<string>;
   handleCreate: () => Promise<void>;
   handleValidate: () => Promise<void>;
+  handleInstallKey: () => Promise<void>;
   closeWizard: () => void;
   handleShowChange: (_value: boolean) => void;
   dockerInstall: DockerInstallState;
@@ -134,22 +149,61 @@ export function useAddServerWizard(emit: WizardEmit): AddServerWizardContext {
     ip: "",
     port: 22,
     sshUser: "root",
-    authMode: "key",
-    keyMode: "new",
-    keyName: "",
-    privateKey: "",
-    passphrase: "",
+    authMode: "managed",
     keyId: "",
-    password: "",
-    trustHostKey: false,
+    privateKey: "",
+    publicKey: "",
   });
 
-  const rules = computed<FormRules>(() => connectionRules(form));
+  const privateKeys = ref<PrivateKeyMeta[]>([]);
+  const keysLoading = ref(false);
+  const generatingKey = ref(false);
+  const keyFailure = ref<unknown>(null);
+  const keyErrorMessage = computed<string>(() =>
+    keyFailure.value === null || keyFailure.value === undefined
+      ? ""
+      : failureText(keyFailure.value, locale.value),
+  );
+  const keyInstallNeeded = ref(false);
+  const installPassword = ref("");
+  const installingKey = ref(false);
+  const keyInstallError = ref("");
+  let manualKeyId = "";
+
+  const rules = computed<FormRules>(() => connectionRules({ authMode: form.authMode }));
+
+  async function loadPrivateKeys(): Promise<void> {
+    keysLoading.value = true;
+    keyFailure.value = null;
+    try {
+      privateKeys.value = await listPrivateKeys();
+      if (form.keyId === "" && privateKeys.value.length > 0) {
+        form.keyId = privateKeys.value[0].id;
+      }
+    } catch (error) {
+      keyFailure.value = error;
+    } finally {
+      keysLoading.value = false;
+    }
+  }
+
+  async function generateKey(): Promise<void> {
+    generatingKey.value = true;
+    keyFailure.value = null;
+    try {
+      const key = await generatePrivateKey({ name: generateKeyName(), type: "ed25519" });
+      privateKeys.value = [key, ...privateKeys.value];
+      form.authMode = "managed";
+      form.keyId = key.id;
+    } catch (error) {
+      keyFailure.value = error;
+    } finally {
+      generatingKey.value = false;
+    }
+  }
 
   const dockerInstall = useDockerInstall({
     serverId: computed<string>(() => createdServer.value?.id ?? ""),
-    passphrase: computed<string>(() => form.passphrase),
-    trustHostKey: computed<boolean>(() => form.trustHostKey),
   });
   const dockerInstallOpen = ref(false);
   const dockerInstallOffer = computed<boolean>(() => {
@@ -271,11 +325,9 @@ export function useAddServerWizard(emit: WizardEmit): AddServerWizardContext {
       form.port,
       form.sshUser,
       form.authMode,
-      form.keyMode,
-      form.keyName,
-      form.privateKey,
       form.keyId,
-      form.password !== "",
+      form.privateKey,
+      form.publicKey,
     ]),
   );
   watch(connectionSnapshot, () => {
@@ -284,8 +336,17 @@ export function useAddServerWizard(emit: WizardEmit): AddServerWizardContext {
     }
     validationPassed.value = false;
     probeFailure.value = null;
+    keyInstallNeeded.value = false;
+    keyInstallError.value = "";
     fixedChecks.value = makeIdleChecks();
   });
+
+  watch(
+    () => [form.privateKey, form.publicKey],
+    () => {
+      manualKeyId = "";
+    },
+  );
 
   function makeIdleChecks(): FixedCheck[] {
     return FIXED_CHECK_NAMES.map((name) => ({
@@ -349,18 +410,18 @@ export function useAddServerWizard(emit: WizardEmit): AddServerWizardContext {
     const token = inFlight.begin();
     creating.value = true;
     try {
-      let keyId: string | null = null;
-      let password: string | undefined;
-      if (form.authMode === "password") {
-        password = form.password;
-      } else if (form.keyMode === "new") {
-        const key = await createPrivateKey({
-          name: form.keyName.trim(),
-          private_key: form.privateKey,
-        });
-        keyId = key.id;
-      } else {
-        keyId = form.keyId.trim() || null;
+      let keyId = form.keyId.trim();
+      if (form.authMode === "manual") {
+        if (manualKeyId === "") {
+          const key = await createPrivateKey({
+            name: generateKeyName(),
+            private_key: form.privateKey,
+            public_key: form.publicKey,
+          });
+          manualKeyId = key.id;
+          privateKeys.value = [key, ...privateKeys.value];
+        }
+        keyId = manualKeyId;
       }
 
       const server = await serversStore.addServer({
@@ -369,7 +430,6 @@ export function useAddServerWizard(emit: WizardEmit): AddServerWizardContext {
         port: form.port ?? 22,
         ssh_user: form.sshUser.trim(),
         ssh_key_id: keyId,
-        ...(password ? { password } : {}),
       });
 
       if (!inFlight.isCurrent(token)) {
@@ -400,6 +460,8 @@ export function useAddServerWizard(emit: WizardEmit): AddServerWizardContext {
     validating.value = true;
     probeFailure.value = null;
     validationPassed.value = false;
+    keyInstallNeeded.value = false;
+    keyInstallError.value = "";
     fixedChecks.value = FIXED_CHECK_NAMES.map((name) => ({
       name,
       label: checkLabel(name),
@@ -408,15 +470,14 @@ export function useAddServerWizard(emit: WizardEmit): AddServerWizardContext {
       installable: false,
     }));
     try {
-      const outcome = await serversStore.validate(server.id, form.passphrase || undefined, {
-        trustHostKey: form.trustHostKey,
-      });
+      const outcome = await serversStore.validate(server.id);
       if (!inFlight.isCurrent(token)) {
         return;
       }
       applyCheckResults(outcome.checks);
       probeFailure.value = outcome.message;
       validationPassed.value = outcome.ok;
+      keyInstallNeeded.value = !outcome.ok && outcome.authFailed;
       if (outcome.ok) {
         message.success(t("servers.toasts.validationOk"));
       }
@@ -430,6 +491,50 @@ export function useAddServerWizard(emit: WizardEmit): AddServerWizardContext {
     } finally {
       if (inFlight.isCurrent(token)) {
         validating.value = false;
+      }
+    }
+  }
+
+  async function handleInstallKey(): Promise<void> {
+    const server = createdServer.value;
+    if (!server || installPassword.value === "") {
+      return;
+    }
+
+    const token = inFlight.begin();
+    installingKey.value = true;
+    keyInstallError.value = "";
+    try {
+      const outcome = await serversStore.installKey(server.id, installPassword.value);
+      if (!inFlight.isCurrent(token)) {
+        return;
+      }
+      applyCheckResults(outcome.checks);
+      if (outcome.ok) {
+        validationPassed.value = true;
+        keyInstallNeeded.value = false;
+        probeFailure.value = null;
+        message.success(t("servers.toasts.validationOk"));
+      } else if (outcome.authFailed) {
+        keyInstallError.value = outcome.message || t("servers.wizard.keyInstallFailed");
+      } else if (outcome.checks.length > 0) {
+        // The key install worked and the re-check ran; show its real failures
+        // (for example Docker missing) instead of asking for the password again.
+        keyInstallNeeded.value = false;
+        probeFailure.value = outcome.message;
+      } else {
+        keyInstallError.value = outcome.message || t("servers.wizard.keyInstallFailed");
+      }
+    } catch (error) {
+      if (!inFlight.isCurrent(token)) {
+        return;
+      }
+      keyInstallError.value = failureText(error, locale.value);
+    } finally {
+      // The password is for this one install attempt only.
+      installPassword.value = "";
+      if (inFlight.isCurrent(token)) {
+        installingKey.value = false;
       }
     }
   }
@@ -453,14 +558,16 @@ export function useAddServerWizard(emit: WizardEmit): AddServerWizardContext {
     form.ip = "";
     form.port = 22;
     form.sshUser = "root";
-    form.authMode = "key";
-    form.keyMode = "new";
-    form.keyName = "";
-    form.privateKey = "";
-    form.passphrase = "";
+    form.authMode = "managed";
     form.keyId = "";
-    form.password = "";
-    form.trustHostKey = false;
+    form.privateKey = "";
+    form.publicKey = "";
+    manualKeyId = "";
+    installPassword.value = "";
+    installingKey.value = false;
+    keyInstallNeeded.value = false;
+    keyInstallError.value = "";
+    keyFailure.value = null;
     createFailure.value = null;
     probeFailure.value = null;
     validationPassed.value = false;
@@ -507,8 +614,19 @@ export function useAddServerWizard(emit: WizardEmit): AddServerWizardContext {
     hasRunChecks,
     nodeInitials,
     resourceSummary,
+    privateKeys,
+    keysLoading,
+    generatingKey,
+    keyErrorMessage,
+    loadPrivateKeys,
+    generateKey,
+    keyInstallNeeded,
+    installPassword,
+    installingKey,
+    keyInstallError,
     handleCreate,
     handleValidate,
+    handleInstallKey,
     closeWizard,
     handleShowChange,
     dockerInstall,

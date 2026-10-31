@@ -2,7 +2,6 @@
 import {
   NAlert,
   NButton,
-  NCard,
   NEmpty,
   NForm,
   NFormItem,
@@ -13,11 +12,10 @@ import {
   NText,
 } from "naive-ui";
 import type { FormInst } from "naive-ui";
-import { RouterLink } from "vue-router";
 import { onUnmounted, ref } from "vue";
 
 import { createVisibleValidation } from "@/features/auth";
-import { projectResourceTotal, resourceSummary } from "@/features/projects/api/projects";
+import ProjectCard from "@/features/projects/components/ProjectCard.vue";
 import { useProjectsPage } from "@/features/projects/composables/useProjectsPage";
 import {
   isProjectDescriptionValid,
@@ -59,10 +57,6 @@ onUnmounted(() => {
 function t(key: string, params?: Record<string, string | number>): string {
   void activeLocale.value;
   return String(i18n.global.t(key, params ?? {}));
-}
-
-function unit(one: string, other: string, count: number): string {
-  return t(count === 1 ? one : other, { count });
 }
 </script>
 
@@ -120,35 +114,11 @@ function unit(one: string, other: string, count: number): string {
       />
 
       <div v-else class="project-grid">
-        <RouterLink
+        <ProjectCard
           v-for="project in filtered"
           :key="project.id"
-          class="project-card-link"
-          :to="{ name: 'project-detail', params: { projectId: project.id } }"
-          :aria-label="t('projects.list.openProject', { name: project.name })"
-        >
-          <NCard :title="project.name" hoverable>
-            <template #header-extra>
-              <span class="avatar" aria-hidden="true">{{
-                project.name.charAt(0).toUpperCase()
-              }}</span>
-            </template>
-            <NSpace vertical :size="8">
-              <NText v-if="project.description" depth="3" class="desc">
-                {{ project.description }}
-              </NText>
-              <NText depth="3" class="counts">
-                {{ unit("projects.list.environmentsOne", "projects.list.environmentsOther", project.environment_count) }}
-              </NText>
-              <NText depth="3" class="counts">
-                {{ resourceSummary(project.resource_counts) }}
-              </NText>
-              <NText depth="3" class="counts">
-                {{ unit("projects.list.resourcesTotalOne", "projects.list.resourcesTotalOther", projectResourceTotal(project)) }}
-              </NText>
-            </NSpace>
-          </NCard>
-        </RouterLink>
+          :project="project"
+        />
       </div>
     </template>
 
@@ -235,31 +205,6 @@ function unit(one: string, other: string, count: number): string {
   display: grid;
   grid-template-columns: repeat(3, minmax(0, 1fr));
   gap: var(--space-4);
-}
-
-.project-card-link {
-  text-decoration: none;
-  color: inherit;
-  min-width: 0;
-}
-
-.avatar {
-  display: inline-flex;
-  align-items: center;
-  justify-content: center;
-  width: 28px;
-  height: 28px;
-  border-radius: var(--radius-pill);
-  background: var(--surface-warm);
-  border: 1px solid var(--border);
-  color: var(--fg-2);
-  font-weight: 600;
-}
-
-.desc,
-.counts {
-  overflow: hidden;
-  text-overflow: ellipsis;
 }
 
 @container (max-width: 700px) {

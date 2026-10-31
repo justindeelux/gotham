@@ -7,6 +7,8 @@ import { fileURLToPath } from "node:url";
 import { expect, test } from "@playwright/test";
 import type { Locator, Page } from "@playwright/test";
 
+import { waitForLayoutSettled } from "./support";
+
 /* global URL, document, getComputedStyle, window:readonly, Element, HTMLElement */
 
 const testsDir = dirname(fileURLToPath(import.meta.url));
@@ -122,6 +124,16 @@ const service = {
   updated_at: "2026-01-02T00:00:00Z",
 };
 
+const dashboardProjects = Array.from({ length: 7 }, (_, index) => ({
+  id: `00000000-0000-4000-8000-00000000000${index + 1}`,
+  name: `project-${index + 1}`,
+  description: `Product number ${index + 1}`,
+  created_at: "2026-01-01T00:00:00Z",
+  updated_at: "2026-01-02T00:00:00Z",
+  environment_count: 1,
+  resource_counts: { applications: 1, services: 0, databases: 0 },
+}));
+
 interface ResourceRoute {
   name: string;
   path: string;
@@ -173,6 +185,7 @@ interface ApiOverrides {
   service?: Record<string, unknown>;
   server?: Record<string, unknown>;
   deploys?: Record<string, unknown>[];
+  projects?: Array<Record<string, unknown>>;
 }
 
 function color(value: string): string {
@@ -229,6 +242,7 @@ async function mockApi(
   const svc = { ...service, ...overrides.service };
   const srv = { ...server, ...overrides.server };
   const deploys = overrides.deploys ?? [];
+  const projects = overrides.projects ?? dashboardProjects;
   await page.addInitScript((value) => {
     window.localStorage.setItem("gotham.auth.session", value);
   }, JSON.stringify({ ...session, user: { ...session.user, role } }));
@@ -251,6 +265,30 @@ async function mockApi(
     }
     if (get && path === "/servers") {
       await route.fulfill(json(200, { servers: [srv] }));
+      return;
+    }
+    if (get && path === "/projects") {
+      await route.fulfill(json(200, { projects }));
+      return;
+    }
+    if (get && path === "/applications") {
+      await route.fulfill(json(200, { applications: [] }));
+      return;
+    }
+    if (get && path === "/deployments") {
+      await route.fulfill(json(200, { deployments: [] }));
+      return;
+    }
+    if (get && path === "/incidents") {
+      await route.fulfill(json(200, { incidents: [], active_count: 0 }));
+      return;
+    }
+    if (get && path === "/notifications") {
+      await route.fulfill(json(200, { notifications: [], unread_count: 0 }));
+      return;
+    }
+    if (get && path === "/notification-channels/failures") {
+      await route.fulfill(json(200, { failures: [] }));
       return;
     }
     if (get && path === "/servers/srv-1") {
@@ -664,8 +702,8 @@ test("server overview puts usage beside node info and stacks on phones", async (
 
   const usageRows = page.locator(".usage-panel .usage-row");
   await expect(usageRows).toHaveCount(3);
-  await expect(usageRows.first().locator(".usage-block")).toHaveCount(30);
-  await expect(usageRows.first().locator(".usage-block.is-filled")).toHaveCount(4);
+  await expect(usageRows.first().locator(".usage-block")).toHaveCount(50);
+  await expect(usageRows.first().locator(".usage-block.is-filled")).toHaveCount(6);
   await expect(page.locator(".node-info-panel")).not.toContainText("CPU usage");
   await expect(page.locator(".node-info-panel")).not.toContainText("Memory usage");
   await expect(page.locator(".node-info-panel")).not.toContainText("Disk usage");
@@ -924,3 +962,160 @@ test("A settings tab without slot content keeps the move card full width", async
   expect(Math.abs(moveBox.width - gridBox.width)).toBeLessThanOrEqual(1);
 });
 
+
+test("dashboard keeps projects and servers in the main column and deploys beside them", async ({
+  page,
+}) => {
+  test.setTimeout(120_000);
+  await mockApi(page);
+  await page.setViewportSize({ width: 1366, height: 900 });
+  await page.goto(`${baseURL}/dashboard`);
+  await page.locator(".dash-columns").waitFor();
+  await page.locator(".project-card-link").first().waitFor();
+
+  const desktop = await page.evaluate(() => {
+    const main = document.querySelector<HTMLElement>(".dash-main")!;
+    const side = document.querySelector<HTMLElement>(".dash-side")!;
+    const mainRect = main.getBoundingClientRect();
+    const sideRect = side.getBoundingClientRect();
+    return {
+      mainWidth: mainRect.width,
+      sideWidth: sideRect.width,
+      mainRight: mainRect.right,
+      sideLeft: sideRect.left,
+      mainTop: mainRect.top,
+      sideTop: sideRect.top,
+    };
+  });
+
+  expect(desktop.mainWidth / desktop.sideWidth, "main column is 2/3").toBeGreaterThan(1.8);
+  expect(desktop.mainWidth / desktop.sideWidth, "deploys column is 1/3").toBeLessThan(2.2);
+  expect(desktop.mainRight).toBeLessThanOrEqual(desktop.sideLeft + 1);
+  expect(desktop.sideTop, "deploys start beside the main content").toBeCloseTo(desktop.mainTop, 0);
+
+  await expect(page.locator(".project-grid .project-card-link")).toHaveCount(6);
+  const projectColumns = await page.locator(".project-grid").evaluate((grid) => {
+    return getComputedStyle(grid).gridTemplateColumns
+      .split(" ")
+      .filter((part) => part.length > 0).length;
+  });
+  expect(projectColumns, "several projects share the main column").toBeGreaterThan(1);
+  const firstProject = page.getByRole("link", {
+    name: "Open project project-1",
+    exact: true,
+  });
+  await expect(firstProject).toBeVisible();
+  await expect(
+    page.getByRole("link", { name: "Open project project-7", exact: true }),
+  ).toHaveCount(0);
+  await expect(
+    page.getByRole("link", { name: "view all projects", exact: true }),
+  ).toHaveAttribute("href", "/projects");
+
+  const serverLink = page.getByRole("link", {
+    name: `Open server ${longName}`,
+    exact: true,
+  });
+  await expect(serverLink).toBeVisible();
+  await expect(serverLink).toHaveAttribute("href", "/servers/srv-1");
+  await expect(page.locator(".dash-side")).toContainText("Recent deploys");
+  await expect(page.locator(".dash-main")).not.toContainText("Recent deploys");
+
+  const meter = serverLink.locator(".usage-segments").first();
+  await expect(meter.locator(".usage-block")).toHaveCount(50);
+
+  await firstProject.click();
+  await expect(page).toHaveURL(new RegExp(`/projects/${dashboardProjects[0].id}$`));
+  await page.goBack();
+  await page.locator(".dash-columns").waitFor();
+  await page.getByRole("link", {
+    name: `Open server ${longName}`,
+    exact: true,
+  }).click();
+  await expect(page).toHaveURL(/\/servers\/srv-1$/);
+
+  for (const width of [1366, 1280, 480, 390]) {
+    await page.goto(`${baseURL}/dashboard`);
+    await page.locator(".dash-columns").waitFor();
+    await page.setViewportSize({ width, height: 900 });
+    await waitForLayoutSettled(page);
+    const layout = await page.evaluate(() => {
+      const main = document.querySelector<HTMLElement>(".dash-main")!;
+      const side = document.querySelector<HTMLElement>(".dash-side")!;
+      const card = document.querySelector<HTMLElement>(".node-card-link")!;
+      const meter = card.querySelector<HTMLElement>(".usage-segments")!;
+      const block = meter.querySelector<HTMLElement>(".usage-block")!;
+      const mainRect = main.getBoundingClientRect();
+      const sideRect = side.getBoundingClientRect();
+      const cardRect = card.getBoundingClientRect();
+      const blockRect = block.getBoundingClientRect();
+      return {
+        overflow:
+          document.documentElement.scrollWidth >
+          document.documentElement.clientWidth + 1,
+        mainTop: mainRect.top,
+        mainLeft: mainRect.left,
+        mainWidth: mainRect.width,
+        sideTop: sideRect.top,
+        sideLeft: sideRect.left,
+        cardWidth: cardRect.width,
+        blockWidth: blockRect.width,
+        blockHeight: blockRect.height,
+        gap: getComputedStyle(meter).gap,
+      };
+    });
+    expect(layout.overflow, `no horizontal overflow at ${width}px`).toBe(false);
+    expect(layout.gap, `segment gap at ${width}px`).toBe("2px");
+    expect(
+      Math.abs(layout.blockWidth - layout.blockHeight),
+      `usage blocks are square at ${width}px`,
+    ).toBeLessThanOrEqual(0.5);
+    if (width >= 1280) {
+      expect(
+        layout.blockWidth,
+        `usage blocks are readable at ${width}px`,
+      ).toBeGreaterThanOrEqual(6);
+      expect(
+        layout.cardWidth,
+        `the single server card fills more than half the main column at ${width}px`,
+      ).toBeGreaterThan(layout.mainWidth / 2);
+    }
+    if (width <= 1024) {
+      expect(layout.sideTop, `deploys stack under the main column at ${width}px`).toBeGreaterThan(
+        layout.mainTop,
+      );
+      expect(layout.sideLeft, `columns share the left edge at ${width}px`).toBeCloseTo(
+        layout.mainLeft,
+        0,
+      );
+    } else {
+      expect(layout.sideTop, `deploys stay beside the main column at ${width}px`).toBeCloseTo(
+        layout.mainTop,
+        0,
+      );
+    }
+  }
+});
+
+test("dashboard hides the projects section at zero and shows a single card at one", async ({
+  page,
+}) => {
+  await mockApi(page, "owner", { projects: [] });
+  await page.setViewportSize({ width: 1280, height: 900 });
+  await page.goto(`${baseURL}/dashboard`);
+  await page.locator(".dash-columns").waitFor();
+  await expect(page.locator('[data-test="projects"]')).toHaveCount(0);
+  await expect(page.locator(".project-card-link")).toHaveCount(0);
+
+  await mockApi(page, "owner", { projects: [dashboardProjects[0]!] });
+  await page.goto(`${baseURL}/dashboard`);
+  await page.locator(".project-card-link").first().waitFor();
+  await expect(page.locator('[data-test="projects"]')).toHaveCount(1);
+  await expect(page.locator(".project-card-link")).toHaveCount(1);
+  await expect(
+    page.getByRole("link", { name: "Open project project-1", exact: true }),
+  ).toBeVisible();
+  await expect(
+    page.getByRole("link", { name: "Open project project-2", exact: true }),
+  ).toHaveCount(0);
+});

@@ -24,8 +24,8 @@ import { useServersStore } from "@/features/servers";
 import { applicationTileView, buildApplicationTileInput } from "@/features/dashboard/utils/dashboard";
 import type { ServerNodeCardModel } from "@/features/dashboard/utils/serverNode";
 import { buildServerNodeCard } from "@/features/dashboard/utils/serverNode";
-import { usageView } from "@/shared/utils/format";
 import DashboardHeader from "@/features/dashboard/components/DashboardHeader.vue";
+import DashboardProjectsSection from "@/features/dashboard/components/DashboardProjectsSection.vue";
 import RecentDeploysPanel from "@/features/dashboard/components/RecentDeploysPanel.vue";
 import ServerHealthSection from "@/features/dashboard/components/ServerHealthSection.vue";
 import NeedsAttentionSection from "@/features/incidents/components/NeedsAttentionSection.vue";
@@ -178,13 +178,7 @@ const hiddenNodeCount = computed<number>(() =>
 );
 
 const nodeCards = computed<ServerNodeCardModel[]>(() =>
-  visibleNodes.value.map((server) =>
-    buildServerNodeCard(server, {
-      cpu: usageView(server.cpu_usage, "var(--accent)"),
-      ram: usageView(server.mem_usage, "var(--success)"),
-      disk: usageView(server.disk_usage, "var(--success)"),
-    }),
-  ),
+  visibleNodes.value.map((server) => buildServerNodeCard(server)),
 );
 
 onMounted(() => {
@@ -309,15 +303,23 @@ onMounted(() => {
         </div>
       </NCard>
 
-      <NeedsAttentionSection />
+      <div class="dash-columns">
+        <div class="dash-main">
+          <NeedsAttentionSection />
 
-      <ServerHealthSection
-        v-if="authStore.isOwner && totalCount > 0"
-        :cards="nodeCards"
-        :hidden-count="hiddenNodeCount"
-      />
+          <DashboardProjectsSection />
 
-      <RecentDeploysPanel />
+          <ServerHealthSection
+            v-if="authStore.isOwner && totalCount > 0"
+            :cards="nodeCards"
+            :hidden-count="hiddenNodeCount"
+          />
+        </div>
+
+        <div class="dash-side">
+          <RecentDeploysPanel />
+        </div>
+      </div>
     </template>
   </div>
 </template>
@@ -332,6 +334,27 @@ onMounted(() => {
 
 .dash-alert {
   max-width: 720px;
+}
+
+.dash-columns {
+  display: grid;
+  grid-template-columns: minmax(0, 2fr) minmax(0, 1fr);
+  gap: var(--space-5);
+  align-items: start;
+}
+
+.dash-main,
+.dash-side {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-5);
+  min-width: 0;
+}
+
+@media (max-width: 1024px) {
+  .dash-columns {
+    grid-template-columns: minmax(0, 1fr);
+  }
 }
 
 .status-inner {

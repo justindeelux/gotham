@@ -68,14 +68,14 @@ const view = computed(() => usageSegments(props.value));
 
 .usage-segments {
   display: grid;
-  grid-template-columns: repeat(30, minmax(0, 1fr));
-  gap: var(--space-1);
+  grid-template-columns: repeat(50, minmax(0, 1fr));
+  gap: 2px;
+  min-width: 0;
 }
 
 .usage-block {
   min-width: 0;
-  height: 10px;
-  border-radius: var(--radius-sm);
+  aspect-ratio: 1 / 1;
   background: var(--border-soft);
   transition: background-color var(--motion-base) var(--ease-standard);
 }

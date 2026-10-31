@@ -208,17 +208,15 @@ const en = {
       },
       agentRoot: {
         title: "Agent access",
-        hint: "The agent runs as the unprivileged gotham-agent user by default. Running it as root lets the file manager browse and edit every file and opens the terminal as root.",
-        toggleLabel: "Run the node agent as root",
-        on: "Agent runs as root",
-        off: "Agent runs as gotham-agent",
+        hint: "The agent runs without root access by default. Running it as root lets the file manager browse and edit every file and opens the terminal as root.",
+        label: "Run the node agent as root",
         enabledSaved: "Root mode enabled. The agent reconnected.",
         disabledSaved: "Root mode disabled. The agent reconnected.",
         confirmTitle: "Change the agent's user?",
         rootWarning:
           "Running the agent as root removes the permission barrier: the file manager and terminal get full control of this server. Enable this only if you trust every Gotham owner account.",
         disableBody:
-          "The agent returns to the unprivileged gotham-agent user. The file manager and terminal keep working, without root access.",
+          "The agent returns to running without root access. The file manager and terminal keep working, without root privileges.",
         restartHint:
           "The agent restarts and reconnects in a moment; this page may be briefly unavailable.",
         restarting: "The agent is restarting. Wait a moment, then reload this page.",

@@ -210,17 +210,15 @@ const vi: ServersMessages = {
       },
       agentRoot: {
         title: "Quyền của agent",
-        hint: "Mặc định agent chạy bằng người dùng không đặc quyền gotham-agent. Chạy agent bằng root cho phép trình quản lý tệp duyệt và sửa mọi tệp, và mở terminal bằng root.",
-        toggleLabel: "Chạy agent của nút bằng root",
-        on: "Agent chạy bằng root",
-        off: "Agent chạy bằng gotham-agent",
+        hint: "Mặc định agent chạy không có quyền root. Chạy agent bằng root cho phép trình quản lý tệp duyệt và sửa mọi tệp, và mở terminal bằng root.",
+        label: "Chạy agent của nút bằng root",
         enabledSaved: "Đã bật chế độ root. Agent đã kết nối lại.",
         disabledSaved: "Đã tắt chế độ root. Agent đã kết nối lại.",
         confirmTitle: "Đổi người dùng của agent?",
         rootWarning:
           "Chạy agent bằng root gỡ bỏ rào cản quyền: trình quản lý tệp và terminal có toàn quyền trên máy chủ này. Chỉ bật khi bạn tin tưởng mọi tài khoản chủ sở hữu Gotham.",
         disableBody:
-          "Agent trở lại người dùng không đặc quyền gotham-agent. Trình quản lý tệp và terminal vẫn hoạt động, nhưng không có quyền root.",
+          "Agent trở lại chạy không có quyền root. Trình quản lý tệp và terminal vẫn hoạt động, nhưng không có quyền root.",
         restartHint:
           "Agent sẽ khởi động lại và kết nối lại trong giây lát; trang này có thể tạm thời không dùng được.",
         restarting: "Agent đang khởi động lại. Hãy đợi một lát rồi tải lại trang này.",

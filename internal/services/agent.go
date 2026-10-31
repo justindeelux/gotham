@@ -58,7 +58,6 @@ func (a *GRPCComposeAgent) Validate(ctx context.Context, projectName string, com
 	response, err := a.client.ComposeValidate(ctx, &agentv1.ComposeValidateRequest{
 		ProjectName: projectName,
 		ComposeYaml: composeYAML,
-		Unconfined:  true,
 	})
 	if err != nil {
 		return nil, mapAgentError("validate", err)
@@ -71,7 +70,6 @@ func (a *GRPCComposeAgent) Up(ctx context.Context, projectName string, composeYA
 		ProjectName: projectName,
 		ComposeYaml: composeYAML,
 		Restart:     restart,
-		Unconfined:  true,
 	})
 	return mapAgentError("up", err)
 }
@@ -80,7 +78,6 @@ func (a *GRPCComposeAgent) Down(ctx context.Context, projectName string, compose
 	response, err := a.client.ComposeDown(ctx, &agentv1.ComposeDownRequest{
 		ProjectName:   projectName,
 		ComposeYaml:   composeYAML,
-		Unconfined:    true,
 		RemoveVolumes: removeVolumes,
 	})
 	if err != nil {

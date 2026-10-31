@@ -4,8 +4,11 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/google/uuid"
+
 	builtin "github.com/justindeelux/gotham/templates"
 
+	"github.com/justindeelux/gotham/composeguard"
 	"github.com/justindeelux/gotham/internal/services"
 )
 
@@ -309,5 +312,35 @@ func TestNewDefaultService(t *testing.T) {
 	t.Setenv(services.FeatureEnv, "false")
 	if svc := NewDefaultService(nil); svc != nil {
 		t.Fatal("NewDefaultService is not nil with FEATURE_SERVICES=false")
+	}
+}
+
+func TestBuiltinTemplatesPassServiceConfinement(t *testing.T) {
+	catalog, err := Load(builtin.FS)
+	if err != nil {
+		t.Fatalf("Load(builtin.FS): %v", err)
+	}
+	for slug, values := range builtinSamples {
+		t.Run(slug, func(t *testing.T) {
+			result, err := catalog.Render(slug, values)
+			if err != nil {
+				t.Fatalf("Render: %v", err)
+			}
+			rendered, _, err := services.RenderService(result.ComposeYAML, result.Env, nil)
+			if err != nil {
+				t.Fatalf("RenderService: %v", err)
+			}
+			if err := composeguard.CheckNoInterpolation(rendered.ComposeYAML); err != nil {
+				t.Fatalf("CheckNoInterpolation: %v", err)
+			}
+			opts := composeguard.Options{
+				AppID:              uuid.NewString(),
+				ManagedRoot:        t.TempDir(),
+				ServiceRouteLabels: true,
+			}
+			if err := composeguard.Validate(rendered.ComposeYAML, opts); err != nil {
+				t.Fatalf("the built-in template does not pass the service guard: %v", err)
+			}
+		})
 	}
 }

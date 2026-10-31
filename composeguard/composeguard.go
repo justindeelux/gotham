@@ -23,6 +23,9 @@ const (
 type Options struct {
 	AppID       string
 	ManagedRoot string
+	// ServiceRouteLabels permits the two gotham.domain labels services use to
+	// declare routes. Every other gotham.* label stays reserved.
+	ServiceRouteLabels bool
 }
 
 func Validate(content string, opts Options) error {
@@ -44,7 +47,7 @@ func Validate(content string, opts Options) error {
 	if err := doc.Decode(&decoded); err != nil {
 		return fmt.Errorf("compose document is not valid YAML: %v", err)
 	}
-	v := &validator{root: root, appID: appID}
+	v := &validator{root: root, appID: appID, serviceRouteLabels: opts.ServiceRouteLabels}
 	return v.document(decoded)
 }
 
@@ -199,8 +202,9 @@ func nodeValue(node *yaml.Node) any {
 }
 
 type validator struct {
-	root  string
-	appID string
+	root               string
+	appID              string
+	serviceRouteLabels bool
 }
 
 func (v *validator) managedDir() string {

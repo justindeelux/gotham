@@ -130,6 +130,19 @@ const en = {
       invalid: "Check the name, nodes, categories, cron and minimum age.",
     },
   },
+  threshold: {
+    title: "Automatic cleanup on disk pressure",
+    description:
+      "When a node's disk usage stays at or above the percentage, Gotham cleans the chosen categories once. After a run it waits for the cool-down before trying again, and tells the owner when the node is still above.",
+    enabled: "Run automatically when disk usage is high",
+    percent: "Disk usage threshold",
+    categories: "Categories",
+    minAge: "Minimum age",
+    cooldown: "Cool-down",
+    save: "Save",
+    saved: "Threshold saved.",
+    invalid: "Check the percentage, categories, minimum age and cool-down.",
+  },
   history: {
     description:
       "Every manual, scheduled and threshold run, with the bytes each category freed and every skipped node.",

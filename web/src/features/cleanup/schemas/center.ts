@@ -53,6 +53,18 @@ export const cleanupNextRunSchema = z.object({
   next_run_at: z.string(),
 });
 
+export const cleanupThresholdSchema = z.object({
+  enabled: z.boolean(),
+  percent: z.number().int(),
+  categories: z.array(z.string()),
+  min_age_hours: z.number().int(),
+  cooldown_hours: z.number().int(),
+});
+
+export const cleanupThresholdEnvelopeSchema = z.object({
+  threshold: cleanupThresholdSchema,
+});
+
 export const cleanupExclusionSchema = z.object({
   id: z.string(),
   server_id: z.string().optional(),
@@ -96,8 +108,29 @@ export function isDangerousCategory(category: string): boolean {
   return (dangerousCategories as readonly string[]).includes(category);
 }
 
+// The threshold rule shares the schedule category rule: no dangerous category.
+export const thresholdFormSchema = z
+  .object({
+    enabled: z.boolean(),
+    percent: z.number().int().min(50).max(99),
+    categories: z.array(z.string()).min(1),
+    min_age_hours: z.number().int().min(1).max(8760),
+    cooldown_hours: z.number().int().min(1).max(168),
+  })
+  .superRefine((value, ctx) => {
+    if (value.categories.some((category) => isDangerousCategory(category))) {
+      ctx.addIssue({
+        code: "custom",
+        path: ["categories"],
+        message: "dangerous",
+      });
+    }
+  });
+
 export type CleanupSchedule = z.infer<typeof cleanupScheduleSchema>;
 export type CleanupRun = z.infer<typeof cleanupRunSchema>;
 export type CleanupRunDetail = z.infer<typeof cleanupRunDetailSchema>["run"];
 export type CleanupExclusion = z.infer<typeof cleanupExclusionSchema>;
+export type CleanupThreshold = z.infer<typeof cleanupThresholdSchema>;
 export type ScheduleForm = z.infer<typeof scheduleFormSchema>;
+export type ThresholdForm = z.infer<typeof thresholdFormSchema>;

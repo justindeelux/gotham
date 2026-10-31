@@ -3,6 +3,7 @@ package cleanup
 import (
 	"context"
 	"errors"
+	"sync"
 	"testing"
 	"time"
 
@@ -22,6 +23,8 @@ type fakeCenter struct {
 	runs       []store.CleanupRunView
 	items      []store.CleanupRunItem
 	exclusions []store.CleanupExclusion
+	threshold  store.CleanupThreshold
+	latestRun  *store.CleanupRun
 	marked     []uuid.UUID
 	nextRun    time.Time
 	err        error
@@ -97,6 +100,24 @@ func (f *fakeCenter) ListCleanupRunItems(context.Context, uuid.UUID) ([]store.Cl
 	return f.items, f.err
 }
 
+func (f *fakeCenter) LatestCleanupThresholdRun(context.Context, uuid.UUID) (store.CleanupRun, error) {
+	if f.latestRun == nil {
+		return store.CleanupRun{}, pgx.ErrNoRows
+	}
+	return *f.latestRun, f.err
+}
+
+func (f *fakeCenter) GetCleanupThreshold(context.Context) (store.CleanupThreshold, error) {
+	return f.threshold, f.err
+}
+
+func (f *fakeCenter) SaveCleanupThreshold(
+	_ context.Context, _ uuid.UUID, threshold store.CleanupThreshold, _ any,
+) error {
+	f.threshold = threshold
+	return f.err
+}
+
 func (f *fakeCenter) ListCleanupExclusions(context.Context) ([]store.CleanupExclusion, error) {
 	return f.exclusions, f.err
 }
@@ -111,11 +132,20 @@ func (f *fakeCenter) CreateCleanupExclusion(
 func (f *fakeCenter) DeleteCleanupExclusion(context.Context, uuid.UUID) error { return f.err }
 
 type fakeNotifier struct {
+	mu        sync.Mutex
 	summaries []ScheduleRunSummary
 }
 
 func (f *fakeNotifier) CleanupFinished(_ context.Context, summary ScheduleRunSummary) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
 	f.summaries = append(f.summaries, summary)
+}
+
+func (f *fakeNotifier) notified() []ScheduleRunSummary {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	return append([]ScheduleRunSummary(nil), f.summaries...)
 }
 
 func testScheduledService(

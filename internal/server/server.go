@@ -380,6 +380,17 @@ func (s *Server) routes() (http.Handler, error) {
 		if svc, ok := cleanupSvc.(*cleanup.Service); ok && svc != nil {
 			s.cleanupScheduler = cleanup.NewScheduler(svc, time.Minute)
 			s.cleanupScheduler.Start()
+			// Keep the runtime observer wired earlier and add the threshold
+			// observer next to it; monitoring keeps receiving every observation.
+			if nodes, ok := s.servers.(interface {
+				SetRuntimeObserver(servers.RuntimeObserver)
+			}); ok {
+				observers := runtimeFanout{}
+				if s.runtime != nil {
+					observers = append(observers, s.runtime)
+				}
+				nodes.SetRuntimeObserver(append(observers, svc))
+			}
 		}
 
 		filesAuth := s.resourceAuth()

@@ -48,6 +48,10 @@ type CleanupCenter interface {
 	ListExclusions(ctx context.Context) ([]store.CleanupExclusion, error)
 	CreateExclusion(ctx context.Context, actor uuid.UUID, input ExclusionInput) (store.CleanupExclusion, error)
 	DeleteExclusion(ctx context.Context, id uuid.UUID) error
+	Threshold(ctx context.Context) (store.CleanupThreshold, error)
+	UpdateThreshold(
+		ctx context.Context, actor uuid.UUID, input ThresholdInput,
+	) (store.CleanupThreshold, error)
 }
 
 type handler struct {
@@ -90,6 +94,8 @@ func MountCenter(r chi.Router, admin func(http.Handler) http.Handler, userID Use
 		protected.Get("/v1/cleanup/exclusions", h.listExclusions)
 		protected.Post("/v1/cleanup/exclusions", h.createExclusion)
 		protected.Delete("/v1/cleanup/exclusions/{id}", h.deleteExclusion)
+		protected.Get("/v1/cleanup/threshold", h.getThreshold)
+		protected.Put("/v1/cleanup/threshold", h.putThreshold)
 	})
 }
 
@@ -394,6 +400,32 @@ type exclusionEnvelope struct {
 	Exclusion exclusionResponse `json:"exclusion"`
 }
 
+type thresholdResponse struct {
+	Enabled       bool     `json:"enabled"`
+	Percent       int      `json:"percent"`
+	Categories    []string `json:"categories"`
+	MinAgeHours   int      `json:"min_age_hours"`
+	CooldownHours int      `json:"cooldown_hours"`
+}
+
+type thresholdEnvelope struct {
+	Threshold thresholdResponse `json:"threshold"`
+}
+
+func newThresholdResponse(threshold store.CleanupThreshold) thresholdResponse {
+	categories := threshold.Categories
+	if categories == nil {
+		categories = []string{}
+	}
+	return thresholdResponse{
+		Enabled:       threshold.Enabled,
+		Percent:       threshold.Percent,
+		Categories:    categories,
+		MinAgeHours:   threshold.MinAgeHours,
+		CooldownHours: threshold.CooldownHours,
+	}
+}
+
 func (h *handler) listSchedules(w http.ResponseWriter, r *http.Request) {
 	schedules, err := h.center.ListSchedules(r.Context())
 	if err != nil {
@@ -658,6 +690,32 @@ func (h *handler) deleteExclusion(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	w.WriteHeader(http.StatusNoContent)
+}
+
+func (h *handler) getThreshold(w http.ResponseWriter, r *http.Request) {
+	threshold, err := h.center.Threshold(r.Context())
+	if err != nil {
+		h.writeError(w, err)
+		return
+	}
+	writeJSON(w, http.StatusOK, thresholdEnvelope{Threshold: newThresholdResponse(threshold)})
+}
+
+func (h *handler) putThreshold(w http.ResponseWriter, r *http.Request) {
+	actor, ok := h.actor(w, r)
+	if !ok {
+		return
+	}
+	var body ThresholdInput
+	if !decodeBody(w, r, &body) {
+		return
+	}
+	threshold, err := h.center.UpdateThreshold(r.Context(), actor, body)
+	if err != nil {
+		h.writeError(w, err)
+		return
+	}
+	writeJSON(w, http.StatusOK, thresholdEnvelope{Threshold: newThresholdResponse(threshold)})
 }
 
 func newExclusionResponse(exclusion store.CleanupExclusion) exclusionResponse {

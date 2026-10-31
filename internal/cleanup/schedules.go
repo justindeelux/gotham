@@ -30,6 +30,11 @@ type CenterStore interface {
 	ListCleanupRuns(ctx context.Context, filter store.CleanupRunFilter) ([]store.CleanupRunView, error)
 	GetCleanupRun(ctx context.Context, id uuid.UUID) (store.CleanupRunView, error)
 	ListCleanupRunItems(ctx context.Context, runID uuid.UUID) ([]store.CleanupRunItem, error)
+	LatestCleanupThresholdRun(ctx context.Context, serverID uuid.UUID) (store.CleanupRun, error)
+	GetCleanupThreshold(ctx context.Context) (store.CleanupThreshold, error)
+	SaveCleanupThreshold(
+		ctx context.Context, actor uuid.UUID, threshold store.CleanupThreshold, changes any,
+	) error
 	ListCleanupExclusions(ctx context.Context) ([]store.CleanupExclusion, error)
 	CreateCleanupExclusion(
 		ctx context.Context, exclusion store.CleanupExclusion,
@@ -45,6 +50,8 @@ type ScheduleNodeResult struct {
 	Reason         string
 	ReclaimedBytes int64
 	Categories     map[string]int64
+	// RunID is the recorded history row, empty when nothing was written.
+	RunID string
 }
 
 // ScheduleRunSummary is what a scheduled run accomplished; the notifier turns
@@ -244,18 +251,9 @@ func (s *Service) validatedSchedule(
 			return store.CleanupSchedule{}, fmt.Errorf("%w: %s", ErrInvalidServerID, serverID)
 		}
 	}
-	categories := dedupeStrings(input.Categories)
-	if len(categories) < 1 {
-		return store.CleanupSchedule{}, fmt.Errorf("%w: choose at least one category", ErrValidation)
-	}
-	for _, category := range categories {
-		if !KnownCategory(category) {
-			return store.CleanupSchedule{}, fmt.Errorf("%w: %q", ErrInvalidCategory, category)
-		}
-		if CategoryTier(category) == TierDangerous {
-			return store.CleanupSchedule{}, fmt.Errorf(
-				"%w: %s cannot be cleaned on a schedule; run it manually", ErrDangerousCategory, category)
-		}
+	categories, err := validatedCategories(input.Categories)
+	if err != nil {
+		return store.CleanupSchedule{}, err
 	}
 	cron := strings.TrimSpace(input.Cron)
 	if err := cronexpr.Validate(cron); err != nil {
@@ -293,64 +291,97 @@ func (s *Service) executeSchedule(ctx context.Context, schedule store.CleanupSch
 		s.logger.Error("cleanup: schedule could not read exclusions",
 			"schedule_id", schedule.ID.String(), "error", err)
 	}
-	categories := make(map[string]bool, len(schedule.Categories))
-	for _, category := range schedule.Categories {
-		if CategoryTier(category) == TierDangerous {
-			continue
-		}
-		categories[category] = true
-	}
+	categories := categorySet(schedule.Categories)
 	minAge := time.Duration(schedule.MinAgeHours) * time.Hour
 	for _, serverID := range schedule.ServerIDs {
-		node := ScheduleNodeResult{ServerID: serverID.String(), ServerName: s.serverName(ctx, serverID)}
-		raw := serverID.String()
-		if err != nil {
-			node.Status, node.Reason = StatusFailed, err.Error()
-			summary.Nodes = append(summary.Nodes, node)
-			continue
-		}
-		scan := s.scanNode(ctx, raw, minAge, exclusions)
-		if scan.Status != StatusOK {
-			node.Status, node.Reason = scan.Status, scan.Reason
-			if scan.Reason == servers.ErrNotFound.Error() {
-				// A deleted node is skipped, not failed: its history cascaded
-				// away with it, and cleanup_runs.server_id would violate its FK.
-				node.Status, node.Reason = StatusSkipped, ReasonNotFound
-			} else {
-				s.recordSkipped(ctx, schedule.ID, serverID, node.Status, node.Reason)
-			}
-			summary.Nodes = append(summary.Nodes, node)
-			continue
-		}
-		ids := make([]string, 0, len(scan.Items))
-		for _, item := range scan.Items {
-			if categories[item.Category] {
-				ids = append(ids, item.ID)
-			}
-		}
-		if len(ids) == 0 {
-			node.Status = StatusOK
-			summary.Nodes = append(summary.Nodes, node)
-			continue
-		}
-		result := s.clean(ctx, uuid.Nil, TriggerSchedule, &schedule.ID, raw, ids, minAge)
-		node.Status, node.Reason = result.Status, result.Reason
-		node.Categories = map[string]int64{}
-		for _, item := range result.Items {
-			node.ReclaimedBytes += item.ReclaimedBytes
-			node.Categories[item.Category] += item.ReclaimedBytes
-		}
-		summary.Nodes = append(summary.Nodes, node)
+		summary.Nodes = append(summary.Nodes,
+			s.runNode(ctx, TriggerSchedule, &schedule.ID, serverID, categories, minAge, exclusions, err))
 	}
 	s.notifySchedule(ctx, summary)
 	return summary
 }
 
+// runNode is the shared run path for schedules and the threshold trigger: it
+// scans one node, keeps the selected categories and cleans them.
+func (s *Service) runNode(
+	ctx context.Context, trigger string, scheduleID *uuid.UUID, serverID uuid.UUID,
+	categories map[string]bool, minAge time.Duration, exclusions exclusionIndex, exclusionErr error,
+) ScheduleNodeResult {
+	node := ScheduleNodeResult{ServerID: serverID.String(), ServerName: s.serverName(ctx, serverID)}
+	raw := serverID.String()
+	if exclusionErr != nil {
+		node.Status, node.Reason = StatusFailed, exclusionErr.Error()
+		return node
+	}
+	scan := s.scanNode(ctx, raw, minAge, exclusions)
+	if scan.Status != StatusOK {
+		node.Status, node.Reason = scan.Status, scan.Reason
+		if scan.Reason == servers.ErrNotFound.Error() {
+			// A deleted node is skipped, not failed: its history cascaded
+			// away with it, and cleanup_runs.server_id would violate its FK.
+			node.Status, node.Reason = StatusSkipped, ReasonNotFound
+		} else {
+			s.recordSkipped(ctx, trigger, scheduleID, serverID, node.Status, node.Reason)
+		}
+		return node
+	}
+	ids := make([]string, 0, len(scan.Items))
+	for _, item := range scan.Items {
+		if categories[item.Category] {
+			ids = append(ids, item.ID)
+		}
+	}
+	if len(ids) == 0 {
+		node.Status = StatusOK
+		return node
+	}
+	result := s.clean(ctx, uuid.Nil, trigger, scheduleID, raw, ids, minAge)
+	node.Status, node.Reason, node.RunID = result.Status, result.Reason, result.RunID
+	node.Categories = map[string]int64{}
+	for _, item := range result.Items {
+		node.ReclaimedBytes += item.ReclaimedBytes
+		node.Categories[item.Category] += item.ReclaimedBytes
+	}
+	return node
+}
+
+// categorySet keeps the categories a run may clean; dangerous categories stay
+// manual-only even if a stored row still names one.
+func categorySet(categories []string) map[string]bool {
+	set := make(map[string]bool, len(categories))
+	for _, category := range categories {
+		if CategoryTier(category) == TierDangerous {
+			continue
+		}
+		set[category] = true
+	}
+	return set
+}
+
+// validatedCategories is the single category validator for schedules and the
+// threshold rule: at least one known, non-dangerous key.
+func validatedCategories(categories []string) ([]string, error) {
+	categories = dedupeStrings(categories)
+	if len(categories) < 1 {
+		return nil, fmt.Errorf("%w: choose at least one category", ErrValidation)
+	}
+	for _, category := range categories {
+		if !KnownCategory(category) {
+			return nil, fmt.Errorf("%w: %q", ErrInvalidCategory, category)
+		}
+		if CategoryTier(category) == TierDangerous {
+			return nil, fmt.Errorf(
+				"%w: %s cannot be cleaned automatically; run it manually", ErrDangerousCategory, category)
+		}
+	}
+	return categories, nil
+}
+
 func (s *Service) recordSkipped(
-	ctx context.Context, scheduleID, serverID uuid.UUID, status, reason string,
+	ctx context.Context, trigger string, scheduleID *uuid.UUID, serverID uuid.UUID, status, reason string,
 ) {
 	startedAt := s.now()
-	s.record(ctx, uuid.Nil, TriggerSchedule, &scheduleID, serverID, startedAt,
+	s.record(ctx, uuid.Nil, trigger, scheduleID, serverID, startedAt,
 		CleanResult{ServerID: serverID.String(), Status: status, Reason: reason})
 }
 

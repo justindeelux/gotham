@@ -1,7 +1,10 @@
 <script setup lang="ts">
 import { NButton, NPopconfirm, NProgress } from "naive-ui";
+import { computed } from "vue";
 import { useI18n } from "vue-i18n";
+import { RouterLink } from "vue-router";
 
+import { useAuthStore } from "@/features/auth";
 import type { Server } from "@/features/servers/api/servers";
 import ServerStatusTag from "@/features/servers/components/ServerStatusTag.vue";
 import {
@@ -10,14 +13,14 @@ import {
   keyLabel,
   nodeMeta,
 } from "@/features/servers/utils/serverListView";
-import { formatBytes, relativeTime, usageView } from "@/shared/utils/format";
+import { formatBytes, relativeTime, toPercent, usageLevel, usageView } from "@/shared/utils/format";
 
 interface Props {
   server: Server;
   validating: boolean;
 }
 
-defineProps<Props>();
+const props = defineProps<Props>();
 const emit = defineEmits<{
   open: [];
   edit: [];
@@ -27,6 +30,8 @@ const emit = defineEmits<{
 }>();
 
 const { locale } = useI18n();
+const authStore = useAuthStore();
+const diskHigh = computed(() => usageLevel(toPercent(props.server.disk_usage)) !== "ok");
 </script>
 
 <template>
@@ -100,6 +105,13 @@ const { locale } = useI18n();
           :show-indicator="false"
           :rail-style="{ borderRadius: 'var(--radius-pill)' }"
         />
+        <RouterLink
+          v-if="authStore.isOwner && diskHigh"
+          class="node-metric__cleanup"
+          :to="{ name: 'cleanup', query: { server: server.id } }"
+        >
+          {{ $t("servers.card.cleanUp") }}
+        </RouterLink>
       </div>
     </div>
 
@@ -167,6 +179,21 @@ const { locale } = useI18n();
   font-size: var(--text-sm);
   color: var(--fg);
   margin-top: 2px;
+}
+
+.node-metric__cleanup {
+  display: inline-block;
+  margin-top: var(--space-2);
+  min-width: 0;
+  overflow-wrap: anywhere;
+  font-size: var(--text-xs);
+  color: var(--warn-ink, var(--warn));
+  text-decoration: none;
+}
+
+.node-metric__cleanup:hover,
+.node-metric__cleanup:focus-visible {
+  text-decoration: underline;
 }
 
 .node-foot {

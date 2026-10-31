@@ -2,7 +2,9 @@ import { describe, expect, it } from "vitest";
 
 import {
   cleanupRunListSchema,
+  cleanupThresholdEnvelopeSchema,
   scheduleFormSchema,
+  thresholdFormSchema,
 } from "@/features/cleanup/schemas/center";
 import { cronPresetKey, cronPresets } from "@/features/cleanup/utils/cron";
 import { parseWith } from "@/shared/validation/parse";
@@ -44,8 +46,53 @@ describe("cleanup schedule form", () => {
   });
 });
 
-describe("cron presets", () => {
-  it("maps the presets to their expressions", () => {
+function threshold(overrides: Record<string, unknown> = {}) {
+  return {
+    enabled: true,
+    percent: 85,
+    categories: ["build_cache", "journal"],
+    min_age_hours: 24,
+    cooldown_hours: 6,
+    ...overrides,
+  };
+}
+
+describe("cleanup threshold form", () => {
+  it("accepts a complete threshold", () => {
+    expect(thresholdFormSchema.safeParse(threshold()).success).toBe(true);
+  });
+
+  it("never accepts a dangerous category", () => {
+    expect(
+      thresholdFormSchema.safeParse(threshold({ categories: ["orphaned_volumes"] }))
+        .success,
+    ).toBe(false);
+  });
+
+  it("bounds percent, minimum age and cool-down to the server contract", () => {
+    for (const overrides of [
+      { percent: 49 },
+      { percent: 100 },
+      { categories: [] },
+      { min_age_hours: 0 },
+      { min_age_hours: 8761 },
+      { cooldown_hours: 0 },
+      { cooldown_hours: 169 },
+    ]) {
+      expect(thresholdFormSchema.safeParse(threshold(overrides)).success).toBe(false);
+    }
+  });
+
+  it("parses a threshold envelope", () => {
+    const parsed = parseWith(cleanupThresholdEnvelopeSchema, {
+      threshold: threshold(),
+    });
+    expect(parsed.threshold.percent).toBe(85);
+    expect(parsed.threshold.categories).toEqual(["build_cache", "journal"]);
+  });
+});
+
+describe("cron presets", () => {  it("maps the presets to their expressions", () => {
     expect(cronPresets.map((preset) => preset.cron)).toEqual([
       "0 3 * * *",
       "0 3 * * 0",

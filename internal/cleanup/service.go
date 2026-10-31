@@ -160,6 +160,10 @@ type Service struct {
 	mu       sync.Mutex
 	locks    map[string]*sync.Mutex
 	inflight map[uuid.UUID]bool
+	// thresholdInFlight and thresholdNoticed are process-local: the cooldown
+	// that survives a restart comes from cleanup_runs, not from these maps.
+	thresholdInFlight map[uuid.UUID]bool
+	thresholdNoticed  map[uuid.UUID]uuid.UUID
 }
 
 func NewService(cfg Config) *Service {
@@ -190,6 +194,9 @@ func NewService(cfg Config) *Service {
 		loc:       time.Local,
 		locks:     map[string]*sync.Mutex{},
 		inflight:  map[uuid.UUID]bool{},
+
+		thresholdInFlight: map[uuid.UUID]bool{},
+		thresholdNoticed:  map[uuid.UUID]uuid.UUID{},
 	}
 }
 

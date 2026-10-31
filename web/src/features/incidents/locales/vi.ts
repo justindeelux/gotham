@@ -86,6 +86,7 @@ const vi = {
     logs: "Xem nhật ký",
     server: "Xem máy chủ",
     metrics: "Xem số liệu",
+    cleanup: "Dọn dẹp",
   },
   status: {
     acknowledged: "Đã xác nhận",

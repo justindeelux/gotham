@@ -47,6 +47,7 @@ const en = {
     containers: "Containers",
     delete: "Delete",
     deleteConfirm: "Remove {name}? Containers on the node are not touched.",
+    cleanUp: "Clean up",
   },
   credential: {
     passwordStored: "password stored",
@@ -104,6 +105,7 @@ const en = {
       "Deleting a node removes it from the control plane only. Containers, volumes and certificates on the machine are kept.",
     deleteNode: "Delete node",
     deleteConfirm: "Delete server {name}?",
+    cleanUp: "Clean up",
   },
   settings: {
     host: {

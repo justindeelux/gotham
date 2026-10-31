@@ -199,6 +199,8 @@ owner PUT /api/v1/cleanup/schedules/{id}
 owner DELETE /api/v1/cleanup/schedules/{id}
 owner POST /api/v1/cleanup/schedules/{id}/run
 owner POST /api/v1/cleanup/scan
+owner GET /api/v1/cleanup/threshold
+owner PUT /api/v1/cleanup/threshold
 project POST /api/v1/databases
 owner POST /api/v1/databases/backup-targets
 owner POST /api/v1/databases/backup-targets/{targetId}/test

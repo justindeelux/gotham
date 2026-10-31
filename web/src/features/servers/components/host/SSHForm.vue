@@ -46,9 +46,12 @@ const rules: FormRules = {
 const sshUserLabel = computed(
   () => props.sshUser || t("servers.settings.host.ssh.anyUser"),
 );
-const disabled = computed(
-  () => props.state.capability !== "ready" || !props.state.ssh.available,
-);
+// A helper that predates SSH settings reports no SSH fields at all, which is
+// not the same as a current helper that found no sshd on the host.
+const helperOutdated = computed(() => props.state.capability === "helper_outdated");
+const ready = computed(() => props.state.capability === "ready");
+const sshdMissing = computed(() => ready.value && !props.state.ssh.available);
+const disabled = computed(() => !ready.value || !props.state.ssh.available);
 const portChanged = computed(() => form.port !== props.state.ssh.port);
 const passwordChanged = computed(
   () => form.passwordAuth !== props.state.ssh.password_authentication,
@@ -99,11 +102,20 @@ function status(path: string): "error" | undefined {
 
 <template>
   <NCard :title="t('servers.settings.host.ssh.title')">
-    <NAlert v-if="!state.ssh.available" type="info" :show-icon="true" class="form-alert">
+    <NAlert v-if="helperOutdated" type="info" :show-icon="true" class="form-alert">
+      {{
+        t(
+          state.repair
+            ? "servers.settings.host.capability.helperOutdated"
+            : "servers.settings.host.capability.helperOutdatedRemote",
+        )
+      }}
+    </NAlert>
+    <NAlert v-else-if="sshdMissing" type="info" :show-icon="true" class="form-alert">
       {{ t("servers.settings.host.ssh.unavailable") }}
     </NAlert>
     <NAlert
-      v-else-if="!state.ssh.key_auth_available"
+      v-else-if="ready && !state.ssh.key_auth_available"
       type="warning"
       :show-icon="true"
       class="form-alert"

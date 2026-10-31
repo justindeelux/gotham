@@ -24,7 +24,6 @@ import { useServersStore } from "@/features/servers";
 import { applicationTileView, buildApplicationTileInput } from "@/features/dashboard/utils/dashboard";
 import type { ServerNodeCardModel } from "@/features/dashboard/utils/serverNode";
 import { buildServerNodeCard } from "@/features/dashboard/utils/serverNode";
-import { usageView } from "@/shared/utils/format";
 import DashboardHeader from "@/features/dashboard/components/DashboardHeader.vue";
 import DashboardProjectsSection from "@/features/dashboard/components/DashboardProjectsSection.vue";
 import RecentDeploysPanel from "@/features/dashboard/components/RecentDeploysPanel.vue";
@@ -179,13 +178,7 @@ const hiddenNodeCount = computed<number>(() =>
 );
 
 const nodeCards = computed<ServerNodeCardModel[]>(() =>
-  visibleNodes.value.map((server) =>
-    buildServerNodeCard(server, {
-      cpu: usageView(server.cpu_usage, "var(--accent)"),
-      ram: usageView(server.mem_usage, "var(--success)"),
-      disk: usageView(server.disk_usage, "var(--success)"),
-    }),
-  ),
+  visibleNodes.value.map((server) => buildServerNodeCard(server)),
 );
 
 onMounted(() => {

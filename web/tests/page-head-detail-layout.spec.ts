@@ -664,8 +664,8 @@ test("server overview puts usage beside node info and stacks on phones", async (
 
   const usageRows = page.locator(".usage-panel .usage-row");
   await expect(usageRows).toHaveCount(3);
-  await expect(usageRows.first().locator(".usage-block")).toHaveCount(30);
-  await expect(usageRows.first().locator(".usage-block.is-filled")).toHaveCount(4);
+  await expect(usageRows.first().locator(".usage-block")).toHaveCount(50);
+  await expect(usageRows.first().locator(".usage-block.is-filled")).toHaveCount(6);
   await expect(page.locator(".node-info-panel")).not.toContainText("CPU usage");
   await expect(page.locator(".node-info-panel")).not.toContainText("Memory usage");
   await expect(page.locator(".node-info-panel")).not.toContainText("Disk usage");

@@ -1,9 +1,11 @@
 <script setup lang="ts">
-import { NCard, NProgress, NSpace, NTag, NText } from "naive-ui";
+import { NCard, NSpace, NTag, NText } from "naive-ui";
 import { computed } from "vue";
 import { useI18n } from "vue-i18n";
+import { RouterLink } from "vue-router";
 
 import ServerStatusTag from "@/features/servers/components/ServerStatusTag.vue";
+import ServerUsageSegments from "@/features/servers/components/ServerUsageSegments.vue";
 import type { ServerNodeCardModel } from "@/features/dashboard/utils/serverNode";
 
 interface Props {
@@ -21,75 +23,67 @@ const containersText = computed<string>(() =>
 </script>
 
 <template>
-  <NCard
-    size="small"
-    class="node-card"
+  <RouterLink
+    class="node-card-link"
+    :to="{ name: 'server-detail', params: { id: props.card.id } }"
+    :aria-label="t('dashboard.health.openServer', { name: props.card.name })"
   >
-    <NSpace vertical :size="12" class="node-stack">
-      <div class="node-top">
-        <div class="node-avatar" aria-hidden="true">
-          {{ card.initials }}
+    <NCard size="small" hoverable class="node-card">
+      <NSpace vertical :size="12" class="node-stack">
+        <div class="node-top">
+          <div class="node-avatar" aria-hidden="true">
+            {{ props.card.initials }}
+          </div>
+          <div class="node-head">
+            <NText strong>{{ props.card.name }}</NText>
+            <NText depth="3" class="node-sub" :title="props.card.subtitle">{{ props.card.subtitle }}</NText>
+          </div>
+          <ServerStatusTag class="node-status" :status="props.card.status" />
         </div>
-        <div class="node-head">
-          <NText strong>{{ card.name }}</NText>
-          <NText depth="3" class="node-sub" :title="card.subtitle">{{ card.subtitle }}</NText>
-        </div>
-        <ServerStatusTag class="node-status" :status="card.status" />
-      </div>
-      <div class="node-metrics">
-        <div class="node-metric">
-          <NText depth="3" class="metric-label">CPU</NText>
-          <NText class="num metric-val">
-            {{ card.cpu.label }}
-          </NText>
-          <NProgress
-            type="line"
-            :percentage="card.cpu.percentage"
-            :show-indicator="false"
-            :color="card.cpu.color"
+        <div class="node-metrics">
+          <ServerUsageSegments
+            :label="$t('servers.overview.cpuUsage')"
+            :value="props.card.cpuUsage"
+          />
+          <ServerUsageSegments
+            :label="$t('servers.overview.memUsage')"
+            :value="props.card.memUsage"
+          />
+          <ServerUsageSegments
+            :label="$t('servers.overview.diskUsage')"
+            :value="props.card.diskUsage"
           />
         </div>
-        <div class="node-metric">
-          <NText depth="3" class="metric-label">RAM</NText>
-          <NText class="num metric-val">
-            {{ card.ram.label }}
-          </NText>
-          <NProgress
-            type="line"
-            :percentage="card.ram.percentage"
-            :show-indicator="false"
-            :color="card.ram.color"
-          />
-        </div>
-        <div class="node-metric">
-          <NText depth="3" class="metric-label">Disk</NText>
-          <NText class="num metric-val">
-            {{ card.disk.label }}
-          </NText>
-          <NProgress
-            type="line"
-            :percentage="card.disk.percentage"
-            :show-indicator="false"
-            :color="card.disk.color"
-          />
-        </div>
-      </div>
-      <NSpace align="center" :size="8">
-        <NTag v-if="card.containerCount !== null" size="small" :bordered="false">
-          {{ containersText }}
-        </NTag>
-        <NTag v-if="card.arch" size="small" :bordered="false">
-          {{ card.arch }}
-        </NTag>
-        <NTag v-if="card.sshUser" size="small" :bordered="false">
-          {{ card.sshUser }}
-        </NTag>
+        <NSpace align="center" :size="8">
+          <NTag v-if="props.card.containerCount !== null" size="small" :bordered="false">
+            {{ containersText }}
+          </NTag>
+          <NTag v-if="props.card.arch" size="small" :bordered="false">
+            {{ props.card.arch }}
+          </NTag>
+          <NTag v-if="props.card.sshUser" size="small" :bordered="false">
+            {{ props.card.sshUser }}
+          </NTag>
+        </NSpace>
       </NSpace>
-    </NSpace>
-  </NCard>
+    </NCard>
+  </RouterLink>
 </template>
 
 <style scoped>
+.node-card-link {
+  display: block;
+  min-width: 0;
+  border-radius: var(--radius-md);
+  color: inherit;
+  text-decoration: none;
+}
+
+.node-card-link:focus-visible {
+  outline: none;
+  box-shadow: var(--focus-ring);
+}
+
 .node-stack {
   min-width: 0;
 }
@@ -135,29 +129,7 @@ const containersText = computed<string>(() =>
 
 .node-metrics {
   display: grid;
-  grid-template-columns: repeat(3, minmax(0, 1fr));
   gap: var(--space-3);
-}
-
-.node-metric {
-  display: flex;
-  flex-direction: column;
-  gap: var(--space-1);
-}
-
-.metric-label {
-  font-size: 10px;
-  text-transform: uppercase;
-  letter-spacing: 0.06em;
-}
-
-.metric-val {
-  font-size: var(--text-sm);
-  color: var(--fg-2);
-}
-
-.num {
-  font-family: var(--font-mono);
-  font-variant-numeric: tabular-nums;
+  min-width: 0;
 }
 </style>

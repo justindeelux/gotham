@@ -52,11 +52,16 @@ describe("nodeSubtitle", () => {
 });
 
 describe("buildServerNodeCard", () => {
-  it("maps a server plus metric views into the card model", () => {
-    const view = { label: "10%", percentage: 10, color: "red" };
+  it("maps a server into the card model", () => {
     const card = buildServerNodeCard(
-      server({ name: "alpha beta", container_count: 3, arch: "amd64" }),
-      { cpu: view, ram: view, disk: view },
+      server({
+        name: "alpha beta",
+        container_count: 3,
+        arch: "amd64",
+        cpu_usage: 0.1,
+        mem_usage: 0.2,
+        disk_usage: 0.3,
+      }),
     );
     expect(card).toMatchObject({
       id: "srv-1",
@@ -64,7 +69,9 @@ describe("buildServerNodeCard", () => {
       initials: "AB",
       subtitle: "10.0.0.2:9442",
       status: "ready",
-      cpu: view,
+      cpuUsage: 0.1,
+      memUsage: 0.2,
+      diskUsage: 0.3,
       containerCount: 3,
       arch: "amd64",
       sshUser: "root",

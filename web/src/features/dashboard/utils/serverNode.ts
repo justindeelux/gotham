@@ -1,20 +1,14 @@
 import type { Server } from "@/features/servers";
 
-export interface ServerMetricView {
-  label: string;
-  percentage: number;
-  color: string;
-}
-
 export interface ServerNodeCardModel {
   id: string;
   name: string;
   subtitle: string;
   initials: string;
   status: Server["status"];
-  cpu: ServerMetricView;
-  ram: ServerMetricView;
-  disk: ServerMetricView;
+  cpuUsage: number | null;
+  memUsage: number | null;
+  diskUsage: number | null;
   containerCount: number | null;
   arch: string | null;
   sshUser: string;
@@ -39,19 +33,16 @@ export function nodeSubtitle(server: Server): string {
   return bits.join(" · ");
 }
 
-export function buildServerNodeCard(
-  server: Server,
-  metrics: { cpu: ServerMetricView; ram: ServerMetricView; disk: ServerMetricView },
-): ServerNodeCardModel {
+export function buildServerNodeCard(server: Server): ServerNodeCardModel {
   return {
     id: server.id,
     name: server.name,
     subtitle: nodeSubtitle(server),
     initials: nodeInitials(server.name),
     status: server.status,
-    cpu: metrics.cpu,
-    ram: metrics.ram,
-    disk: metrics.disk,
+    cpuUsage: server.cpu_usage,
+    memUsage: server.mem_usage,
+    diskUsage: server.disk_usage,
     containerCount: server.container_count,
     arch: server.arch,
     sshUser: server.ssh_user,

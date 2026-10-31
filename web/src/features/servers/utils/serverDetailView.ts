@@ -59,14 +59,14 @@ export interface UsageSegments {
   blocks: UsageBlock[];
 }
 
-export const usageBlockCount = 30;
+export const usageBlockCount = 50;
 
-/** Fixed gauge mapping: blocks 1-18 success, 19-24 warning, 25-30 danger. */
+/** Fixed gauge mapping: blocks 1-30 success, 31-40 warning, 41-50 danger. */
 export function usageBlockLevel(index: number): UsageBlockLevel {
-  if (index < 18) {
+  if (index < 30) {
     return "success";
   }
-  return index < 24 ? "warning" : "danger";
+  return index < 40 ? "warning" : "danger";
 }
 
 export function usageSegments(

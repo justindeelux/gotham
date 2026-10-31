@@ -6,6 +6,7 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 vi.mock("@/features/servers/api/host", () => ({
   saveNodeNetwork: vi.fn(),
   saveNodeSystem: vi.fn(),
+  saveNodeSSH: vi.fn(),
   installNodeHelper: vi.fn(),
 }));
 
@@ -13,6 +14,7 @@ import { installNodeHelper, saveNodeSystem } from "@/features/servers/api/host";
 import type { NodeCapability, NodeHostState } from "@/features/servers/api/host";
 import HostHelperGate from "@/features/servers/components/host/HostHelperGate.vue";
 import NetworkForm from "@/features/servers/components/host/NetworkForm.vue";
+import SSHForm from "@/features/servers/components/host/SSHForm.vue";
 import SystemForm from "@/features/servers/components/host/SystemForm.vue";
 import {
   i18n,
@@ -34,8 +36,20 @@ function stateWith(capability: NodeCapability, repair = false): NodeHostState {
       ipv6: { enabled: false, mode: "dhcp", address: "", gateway: "" },
     },
     system: { hostname: "gotham-1", ntp_enabled: true, ntp_servers: [], timezone: "Europe/Berlin" },
+    ssh: { available: true, port: 22, password_authentication: true, key_auth_available: true },
+    agent_root: false,
     pending: null,
   };
+}
+
+function withoutSSHD(state: NodeHostState): NodeHostState {
+  state.ssh = {
+    available: false,
+    port: 0,
+    password_authentication: false,
+    key_auth_available: false,
+  };
+  return state;
 }
 
 function mountGate(state: NodeHostState) {
@@ -62,11 +76,11 @@ function mountGate(state: NodeHostState) {
   return { wrapper, saved };
 }
 
-function mountForm(component: unknown, state: NodeHostState) {
+function mountForm(component: unknown, state: NodeHostState, props: Record<string, unknown> = {}) {
   const wrapperComponent = defineComponent({
     render() {
       return h(NMessageProvider, null, {
-        default: () => h(component as never, { state, serverId: "srv-1" }),
+        default: () => h(component as never, { state, serverId: "srv-1", ...props }),
       });
     },
   });
@@ -253,6 +267,26 @@ describe("host forms while the node is not ready", () => {
     await flushUi();
     expect(wrapper.find('[role="status"]').text()).toContain("Host helper installed");
     expect(wrapper.find('input[placeholder="1.1.1.1"]').attributes("disabled")).toBeUndefined();
+    wrapper.unmount();
+  });
+});
+
+describe("SSHForm helper and sshd states", () => {
+  it("asks for a host helper update when the helper predates SSH settings", async () => {
+    const wrapper = mountForm(SSHForm, withoutSSHD(stateWith("helper_outdated")), {
+      sshUser: "root",
+    });
+    await flushUi();
+    expect(wrapper.text()).toContain("host helper is too old");
+    expect(wrapper.text()).not.toContain("sshd is not installed");
+    wrapper.unmount();
+  });
+
+  it("reports missing sshd only when the current helper says it is absent", async () => {
+    const wrapper = mountForm(SSHForm, withoutSSHD(stateWith("ready")), { sshUser: "root" });
+    await flushUi();
+    expect(wrapper.text()).toContain("sshd is not installed");
+    expect(wrapper.text()).not.toContain("host helper is too old");
     wrapper.unmount();
   });
 });

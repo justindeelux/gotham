@@ -44,6 +44,12 @@ async function handleInstall(): Promise<void> {
   try {
     const result = await installNodeHelper(props.serverId);
     emit("saved", props.serverId, result.state);
+    if (
+      result.state.capability === "helper_outdated" ||
+      result.state.capability === "helper_missing"
+    ) {
+      errorMessage.value = t("servers.settings.host.helper.stillOutdated");
+    }
   } catch (error) {
     errorMessage.value = errorText(error) || t("servers.settings.host.helper.installFailed");
     const log = errorLog(error);

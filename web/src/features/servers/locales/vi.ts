@@ -116,6 +116,8 @@ const vi: ServersMessages = {
         install: "Cài helper máy chủ",
         installed: "Đã cài helper máy chủ. Các cài đặt này giờ có thể chỉnh sửa.",
         installFailed: "Không cài được helper máy chủ.",
+        stillOutdated:
+          "Đã cài lại helper máy chủ nhưng vẫn quá cũ. Hãy cập nhật Gotham hoặc chạy lại trình cài trên máy chủ này.",
         logTitleFailed: "Cài helper máy chủ thất bại",
         logHint: "Kết quả từ trình cài trên nút này.",
         close: "Đóng",

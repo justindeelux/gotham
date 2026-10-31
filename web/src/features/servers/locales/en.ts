@@ -114,6 +114,8 @@ const en = {
         install: "Install host helper",
         installed: "Host helper installed. These settings are now editable.",
         installFailed: "The host helper could not be installed.",
+        stillOutdated:
+          "The host helper was reinstalled but is still out of date. Update Gotham, or re-run the installer on this server.",
         logTitleFailed: "Host helper install failed",
         logHint: "Output from the installer on this node.",
         close: "Close",

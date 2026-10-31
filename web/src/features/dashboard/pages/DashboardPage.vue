@@ -303,17 +303,23 @@ onMounted(() => {
         </div>
       </NCard>
 
-      <NeedsAttentionSection />
+      <div class="dash-columns">
+        <div class="dash-main">
+          <NeedsAttentionSection />
 
-      <DashboardProjectsSection />
+          <DashboardProjectsSection />
 
-      <ServerHealthSection
-        v-if="authStore.isOwner && totalCount > 0"
-        :cards="nodeCards"
-        :hidden-count="hiddenNodeCount"
-      />
+          <ServerHealthSection
+            v-if="authStore.isOwner && totalCount > 0"
+            :cards="nodeCards"
+            :hidden-count="hiddenNodeCount"
+          />
+        </div>
 
-      <RecentDeploysPanel />
+        <div class="dash-side">
+          <RecentDeploysPanel />
+        </div>
+      </div>
     </template>
   </div>
 </template>
@@ -328,6 +334,27 @@ onMounted(() => {
 
 .dash-alert {
   max-width: 720px;
+}
+
+.dash-columns {
+  display: grid;
+  grid-template-columns: minmax(0, 2fr) minmax(0, 1fr);
+  gap: var(--space-5);
+  align-items: start;
+}
+
+.dash-main,
+.dash-side {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-5);
+  min-width: 0;
+}
+
+@media (max-width: 1024px) {
+  .dash-columns {
+    grid-template-columns: minmax(0, 1fr);
+  }
 }
 
 .status-inner {

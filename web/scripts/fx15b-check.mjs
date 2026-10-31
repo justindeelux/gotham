@@ -119,6 +119,7 @@ async function main() {
   const applications = await loadModule("../src/features/applications/api/applications.ts");
   const localizedApplications = await loadLocalizedApplications();
   const format = await loadModule("../src/shared/utils/format.ts");
+  const usage = await loadModule("../src/features/servers/utils/serverDetailView.ts");
   const version = await loadModule("../src/features/version/api/version.ts");
   const rowKeys = await loadInline(
     `import { ref } from "vue";
@@ -130,6 +131,7 @@ async function main() {
   try {
     const { describeApplicationError } = localizedApplications.module;
     const { toPercent, USAGE_DANGER_PERCENT } = format.module;
+    const { usageBlockCount, usageBlockLevel } = usage.module;
     const { formatVersionTag } = version.module;
     const { ref, useStableRowKeys } = rowKeys.module;
 
@@ -205,13 +207,14 @@ async function main() {
     });
 
     await check("B4-13: dashboard and server list share the threshold (no hard-coded 80)", async () => {
-      const pages = ["../src/features/dashboard/pages/DashboardPage.vue", "../src/features/servers/components/ServerCard.vue"];
+      const pages = ["../src/features/dashboard/components/ServerNodeCard.vue", "../src/features/servers/components/ServerCard.vue"];
       for (const page of pages) {
         const source = await readFile(new URL(page, import.meta.url), "utf8");
         assert(
           source.includes("USAGE_DANGER_PERCENT") ||
             source.includes("usageLevel") ||
-            source.includes("usageView"),
+            source.includes("usageView") ||
+            source.includes("ServerUsageSegments"),
           `${page} must reference the shared threshold`,
         );
         assert(
@@ -222,12 +225,13 @@ async function main() {
     });
 
     await check("B4-13: exactly 80% counts as danger (inclusive >=)", async () => {
-      for (const page of ["../src/features/dashboard/pages/DashboardPage.vue", "../src/features/servers/components/ServerCard.vue"]) {
+      for (const page of ["../src/features/dashboard/components/ServerNodeCard.vue", "../src/features/servers/components/ServerCard.vue"]) {
         const source = await readFile(new URL(page, import.meta.url), "utf8");
         assert(
           source.includes(">= USAGE_DANGER_PERCENT") ||
             source.includes("usageLevel") ||
-            source.includes("usageView"),
+            source.includes("usageView") ||
+            source.includes("ServerUsageSegments"),
           `${page} must compare with >= (a node at exactly 80% is danger-red)`,
         );
       }
@@ -238,6 +242,16 @@ async function main() {
       assert(
         toPercent(0.794) < USAGE_DANGER_PERCENT,
         "just under 0.8 must stay below the danger threshold",
+      );
+    });
+
+    await check("B4-13: shared segment bands start danger at exactly 80%", () => {
+      assert(usageBlockCount === 50, "50 segments per meter");
+      assert(usageBlockLevel(39) === "warning", "block 40 is still warning");
+      assert(usageBlockLevel(40) === "danger", "block 41 starts danger");
+      assert(
+        (40 / usageBlockCount) * 100 === USAGE_DANGER_PERCENT,
+        "40 of 50 is exactly the shared danger threshold",
       );
     });
 

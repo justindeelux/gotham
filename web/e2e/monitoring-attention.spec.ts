@@ -328,11 +328,18 @@ test.describe("needs attention", () => {
 
   test("shows no monitoring data when no server has reported", async ({ page }) => {
     await installServers(page, []);
+    await page.route("**/api/v1/applications", async (route) => {
+      await route.fulfill({ json: { applications: [{ id: "app-1" }] } });
+    });
+    await page.route("**/api/v1/applications/app-1/deployments*", async (route) => {
+      await route.fulfill({ json: { deployments: [] } });
+    });
     await page.route("**/api/v1/incidents?*", async (route) => {
       await route.fulfill({ json: { incidents: [], active_count: 0 } });
     });
     await page.goto("/dashboard");
     await expect(page.getByText("No monitoring data yet")).toBeVisible();
+    await expect(page.getByTestId("dashboard-status")).toHaveText("No servers yet");
   });
 
   test("keeps long names and controls usable at phone and desktop widths", async ({

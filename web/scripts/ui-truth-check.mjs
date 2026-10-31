@@ -521,6 +521,7 @@ async function main() {
     assert(
       ready.state === "ready" &&
         ready.countText === "1/2" &&
+        ready.runningText === "1" &&
         ready.hint === "",
       "complete tile reads 1/2 with no hint",
     );
@@ -530,7 +531,9 @@ async function main() {
     );
     const incomplete = applicationTileView({ ...base, failedReads: 1 });
     assert(
-      incomplete.state === "ready" && incomplete.hint === incompleteTileHint,
+      incomplete.state === "ready" &&
+        incomplete.runningText === "≥1" &&
+        incomplete.hint === incompleteTileHint,
       "incomplete tile carries the caveat hint",
     );
     const allFailed = applicationTileView({
@@ -540,7 +543,9 @@ async function main() {
       failedReads: 3,
     });
     assert(
-      allFailed.countText === "≥0/3" && allFailed.hint === incompleteTileHint,
+      allFailed.countText === "≥0/3" &&
+        allFailed.runningText === "≥0" &&
+        allFailed.hint === incompleteTileHint,
       "zero running with failed reads is at least 0/3, not 0/3",
     );
     assert(
@@ -597,36 +602,30 @@ async function main() {
     );
   });
 
-  await check("tile template renders the tested output only", async () => {
+  await check("status strip renders the tested output only", async () => {
     const { readFile } = await import("node:fs/promises");
     const source = await readFile(
       new URL("../src/features/dashboard/pages/DashboardPage.vue", import.meta.url),
       "utf8",
     );
-    const start = source.indexOf("dashboard.kpi.applications");
-    assert(start !== -1, "tile card exists");
-    const end = source.indexOf("dashboard.kpi.deploys", start);
-    assert(end !== -1, "tile card block ends");
+    const start = source.indexOf('data-testid="dashboard-apps-figure"');
+    assert(start !== -1, "apps figure exists");
+    const end = source.indexOf("</NCard>", start);
+    assert(end !== -1, "apps figure block ends");
     const block = source.slice(start, end);
-    const directives = [...block.matchAll(/\bv-(?:if|else-if)="([^"]*)"/g)].map(
-      (match) => match[1],
+    assert(
+      block.includes(`v-if="tile.state === 'loading'"`),
+      "loading branch renders the skeleton",
     );
     assert(
-      directives.length === 4,
-      `three tile branches plus the hint (saw ${directives.length})`,
+      block.includes(`v-else-if="tile.state === 'error'"`),
+      "error branch renders",
     );
-    assert(
-      directives[0] === "tile.state === 'loading'" &&
-        directives[1] === "tile.state === 'error'" &&
-        directives[2] === "tile.state === 'ready'" &&
-        directives[3] === "tile.hint",
-      `branch directives are exactly the tile state plus hint (saw ${directives})`,
-    );
-    assert(block.includes("{{ tile.countText }}"), "figure binds countText");
+    assert(block.includes("{{ tile.runningText }}"), "figure binds runningText");
     assert(block.includes("{{ tile.hint }}"), "caveat binds hint");
     assert(block.includes("{{ tile.error }}"), "error branch binds tile.error");
+    assert(!/\btile\.running\b/.test(block), "apps figure references no tile.running");
     for (const stale of [
-      "tile.running",
       "tile.total",
       "tile.prefix",
       "tile.incomplete",
@@ -638,7 +637,7 @@ async function main() {
       "applicationsIncomplete",
       "≥",
     ]) {
-      assert(!block.includes(stale), `tile block references no ${stale}`);
+      assert(!block.includes(stale), `apps figure references no ${stale}`);
     }
   });
 

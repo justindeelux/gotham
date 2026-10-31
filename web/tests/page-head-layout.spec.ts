@@ -136,6 +136,14 @@ async function mockApi(page: Page): Promise<void> {
       await route.fulfill(json(200, { version: "v0.2.1-dev" }));
       return;
     }
+    if (get && path === "/servers") {
+      await route.fulfill(json(200, { servers: [] }));
+      return;
+    }
+    if (get && path === "/applications") {
+      await route.fulfill(json(200, { applications: [] }));
+      return;
+    }
     await route.fulfill(json(404, { message: `unmocked ${method} ${path}` }));
   });
 }
@@ -197,6 +205,9 @@ test("ordinary page headers share one computed style contract", async ({ page })
     await page.setViewportSize({ width: 1366, height: 900 });
     await page.goto(`${baseURL}${route}`);
     await page.locator(".page-head .eyebrow").first().waitFor();
+    if (actionRoutes.has(route)) {
+      await page.locator(".page-actions").waitFor();
+    }
     await waitForLayoutSettled(page);
     const desktop = await measure(page);
 

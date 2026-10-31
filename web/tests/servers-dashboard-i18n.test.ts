@@ -207,9 +207,11 @@ describe("dashboard tile helper", () => {
     });
     const en = applicationTileView(input);
     expect(en.countText).toBe("≥1/2");
+    expect(en.runningText).toBe("≥1");
     expect(en.hint).toBe(incompleteTileHint);
     const vi = applicationTileView(input, "vi");
     expect(vi.countText).toBe("≥1/2");
+    expect(vi.runningText).toBe("≥1");
     expect(vi.hint).toBe("Không đọc được một số trạng thái");
   });
 });

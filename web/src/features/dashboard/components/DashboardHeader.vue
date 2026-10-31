@@ -1,6 +1,12 @@
 <script setup lang="ts">
 import { NButton } from "naive-ui";
 import { RouterLink } from "vue-router";
+
+interface Props {
+  showAddServer: boolean;
+}
+
+defineProps<Props>();
 </script>
 
 <template>
@@ -12,12 +18,7 @@ import { RouterLink } from "vue-router";
         {{ $t("dashboard.header.description") }}
       </p>
     </div>
-    <div class="page-actions">
-      <RouterLink :to="{ name: 'servers' }" custom>
-        <template #default="{ navigate }">
-          <NButton quaternary @click="navigate">{{ $t("dashboard.header.viewServers") }}</NButton>
-        </template>
-      </RouterLink>
+    <div v-if="showAddServer" class="page-actions">
       <RouterLink :to="{ name: 'servers', query: { add: '1' } }" custom>
         <template #default="{ navigate }">
           <NButton type="primary" @click="navigate">{{ $t("dashboard.header.addServer") }}</NButton>

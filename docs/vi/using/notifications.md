@@ -65,8 +65,9 @@ và các dải dành riêng đều bị từ chối, nên thành viên không th
 SMTP vào control plane, cơ sở dữ liệu hay dịch vụ metadata của cloud. Kênh do chủ
 sở hữu tạo vẫn có thể giữ đích riêng như một dịch vụ chat tự lưu trữ trong mạng
 LAN; địa chỉ metadata và các dải luôn bị chặn vẫn bị từ chối với mọi người. Kênh
-được tạo trước quy tắc này chỉ được coi là công khai cho tới khi chủ sở hữu sửa
-lại đích của kênh.
+được lưu trước quy tắc này không ghi lại quyết định: khi biết người tạo, Gotham
+dùng vai trò hiện tại của tài khoản đó; kênh không xác định được người tạo sẽ bị
+từ chối cho tới khi chủ sở hữu sửa lại đích của kênh.
 
 ## Phạm vi và sự kiện
 

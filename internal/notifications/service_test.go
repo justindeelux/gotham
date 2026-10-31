@@ -35,7 +35,7 @@ func TestDeployFailureDeliversFormattedDiscordMessage(t *testing.T) {
 	appID := uuid.New()
 	server, call := newWebhookServer(t, http.StatusOK)
 	repo := newFakeRepository()
-	sealed, err := sealConfig(testSecret, ChannelConfig{WebhookURL: server.URL + "/webhook", AllowPrivate: true})
+	sealed, err := sealConfig(testSecret, ChannelConfig{WebhookURL: server.URL + "/webhook", AllowPrivate: ptr(true)})
 	if err != nil {
 		t.Fatalf("seal config: %v", err)
 	}
@@ -523,7 +523,7 @@ func TestMemberChannelCannotReachPrivateWebhook(t *testing.T) {
 			Kind: KindSlack,
 			Config: ChannelConfig{
 				WebhookURL:   endpoint,
-				AllowPrivate: true, // must not be honoured from a request
+				AllowPrivate: ptr(true), // must not be honoured from a request
 			},
 		})
 		if err != nil {
@@ -537,7 +537,7 @@ func TestMemberChannelCannotReachPrivateWebhook(t *testing.T) {
 		if err != nil {
 			t.Fatalf("openConfig: %v", err)
 		}
-		if config.AllowPrivate {
+		if config.AllowPrivate != nil && *config.AllowPrivate {
 			t.Errorf("a member request set allow_private for %s", endpoint)
 		}
 		result, err := service.TestChannel(context.Background(), userID, view.ID)
@@ -584,6 +584,159 @@ func TestOwnerChannelCanReachPrivateWebhook(t *testing.T) {
 	}
 	if got := hits.Load(); got != 1 {
 		t.Fatalf("the local listener saw %d requests, want 1", got)
+	}
+}
+
+func TestLegacyChannelResolvesTrustFromCreator(t *testing.T) {
+	var hits atomic.Int32
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		hits.Add(1)
+		w.WriteHeader(http.StatusOK)
+	}))
+	t.Cleanup(server.Close)
+
+	ownerID := uuid.New()
+	memberID := uuid.New()
+	repo := newFakeRepository()
+	repo.nonOwners[memberID] = true
+	service := newTestService(t, repo)
+
+	seal := func() string {
+		sealed, err := sealConfig(testSecret, ChannelConfig{WebhookURL: server.URL + "/hook"})
+		if err != nil {
+			t.Fatalf("seal: %v", err)
+		}
+		return sealed
+	}
+	ownerChannel := repo.seed(Channel{
+		ID: uuid.New(), Name: "owner legacy", Kind: KindSlack,
+		Enabled: true, Events: AllEvents, SealedConfig: seal(), CreatedBy: ownerID,
+	})
+	memberChannel := repo.seed(Channel{
+		ID: uuid.New(), Name: "member legacy", Kind: KindSlack,
+		Enabled: true, Events: AllEvents, SealedConfig: seal(), CreatedBy: memberID,
+	})
+
+	result, err := service.TestChannel(context.Background(), ownerID, ownerChannel.ID)
+	if err != nil {
+		t.Fatalf("TestChannel(owner): %v", err)
+	}
+	if !result.OK {
+		t.Fatalf("owner legacy channel = %+v, want delivery", result)
+	}
+	if got := hits.Load(); got != 1 {
+		t.Fatalf("the listener saw %d requests, want 1", got)
+	}
+
+	result, err = service.TestChannel(context.Background(), memberID, memberChannel.ID)
+	if err != nil {
+		t.Fatalf("TestChannel(member): %v", err)
+	}
+	if result.OK {
+		t.Fatal("member legacy channel delivered to a private target")
+	}
+	if !strings.Contains(result.Message, "destination is not allowed") {
+		t.Errorf("message = %q, want the blocked-destination category", result.Message)
+	}
+	if got := hits.Load(); got != 1 {
+		t.Fatalf("the listener saw %d requests, want 1 (owner only)", got)
+	}
+}
+
+func TestLegacyChannelFailsClosedWithoutACreator(t *testing.T) {
+	var hits atomic.Int32
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		hits.Add(1)
+		w.WriteHeader(http.StatusOK)
+	}))
+	t.Cleanup(server.Close)
+
+	userID := uuid.New()
+	repo := newFakeRepository()
+	service := newTestService(t, repo)
+
+	sealed, err := sealConfig(testSecret, ChannelConfig{WebhookURL: server.URL + "/hook"})
+	if err != nil {
+		t.Fatalf("seal: %v", err)
+	}
+	unknown := repo.seed(Channel{
+		ID: uuid.New(), Name: "unknown creator", Kind: KindSlack,
+		Enabled: true, Events: AllEvents, SealedConfig: sealed,
+	})
+	_, err = service.TestChannel(context.Background(), userID, unknown.ID)
+	if !errors.Is(err, ErrValidation) || !strings.Contains(err.Error(), "creator is unknown") {
+		t.Fatalf("TestChannel(unknown creator) = %v, want the unknown creator refused", err)
+	}
+
+	repo.ownerErr = errors.New("user lookup failed")
+	unresolvable := repo.seed(Channel{
+		ID: uuid.New(), Name: "unresolvable creator", Kind: KindSlack,
+		Enabled: true, Events: AllEvents, SealedConfig: sealed, CreatedBy: uuid.New(),
+	})
+	_, err = service.TestChannel(context.Background(), userID, unresolvable.ID)
+	if !errors.Is(err, ErrValidation) || !strings.Contains(err.Error(), "creator could not be resolved") {
+		t.Fatalf("TestChannel(failed lookup) = %v, want the failed lookup refused", err)
+	}
+	if got := hits.Load(); got != 0 {
+		t.Fatalf("the listener saw %d requests, want 0", got)
+	}
+}
+
+func TestUpdateChannelKeepsStoredPrivatePolicy(t *testing.T) {
+	repo := newFakeRepository()
+	service := newTestService(t, repo)
+	ownerID := uuid.New()
+	memberID := uuid.New()
+	repo.nonOwners[memberID] = true
+
+	allowed := true
+	sealed, err := sealConfig(testSecret, ChannelConfig{
+		WebhookURL: "https://discord.com/api/webhooks/1/a", AllowPrivate: &allowed,
+	})
+	if err != nil {
+		t.Fatalf("seal: %v", err)
+	}
+	ownerChannel := repo.seed(Channel{
+		ID: uuid.New(), Name: "owner", Kind: KindDiscord,
+		Enabled: true, Events: AllEvents, SealedConfig: sealed, CreatedBy: ownerID,
+	})
+	if _, err := service.UpdateChannel(scopedCtx(), memberID, ownerChannel.ID, ChannelRequest{
+		Config: ChannelConfig{WebhookURL: "https://discord.com/api/webhooks/2/b"},
+	}); err != nil {
+		t.Fatalf("member update: %v", err)
+	}
+	stored, _ := repo.get(ownerChannel.ID)
+	opened, err := openConfig(testSecret, stored.SealedConfig)
+	if err != nil {
+		t.Fatalf("openConfig: %v", err)
+	}
+	if opened.AllowPrivate == nil || !*opened.AllowPrivate {
+		t.Error("a member edit demoted the stored private-target policy")
+	}
+
+	denied := false
+	sealed, err = sealConfig(testSecret, ChannelConfig{
+		WebhookURL: "https://discord.com/api/webhooks/3/c", AllowPrivate: &denied,
+	})
+	if err != nil {
+		t.Fatalf("seal: %v", err)
+	}
+	memberChannel := repo.seed(Channel{
+		ID: uuid.New(), Name: "member", Kind: KindDiscord,
+		Enabled: true, Events: AllEvents, SealedConfig: sealed, CreatedBy: memberID,
+	})
+	if _, err := service.UpdateChannel(scopedCtx(), ownerID, memberChannel.ID, ChannelRequest{
+		Config: ChannelConfig{WebhookURL: "https://discord.com/api/webhooks/4/d"},
+	}); err != nil {
+		t.Fatalf("owner update: %v", err)
+	}
+	stored, _ = repo.get(memberChannel.ID)
+	opened, err = openConfig(testSecret, stored.SealedConfig)
+	if err != nil {
+		t.Fatalf("openConfig: %v", err)
+	}
+	if opened.AllowPrivate == nil || !*opened.AllowPrivate {
+		t.Error("an owner edit did not grant the private-target policy")
 	}
 }
 
@@ -651,6 +804,7 @@ func TestTestChannelDelivers(t *testing.T) {
 	mailer := &fakeMailer{}
 	sealed, err := sealConfig(testSecret, ChannelConfig{
 		Host: "smtp.gotham.dev", Port: 587, From: "ops@gotham.dev", To: []string{"oncall@gotham.dev"},
+		AllowPrivate: ptr(true),
 	})
 	if err != nil {
 		t.Fatalf("seal: %v", err)
@@ -805,7 +959,7 @@ func TestDispatcherLogHidesTransportSecret(t *testing.T) {
 	server.Close()
 
 	repo := newFakeRepository()
-	sealed, err := sealConfig(testSecret, ChannelConfig{WebhookURL: endpoint, AllowPrivate: true})
+	sealed, err := sealConfig(testSecret, ChannelConfig{WebhookURL: endpoint, AllowPrivate: ptr(true)})
 	if err != nil {
 		t.Fatalf("seal: %v", err)
 	}
@@ -835,7 +989,7 @@ func TestDispatcherLogHidesTransportSecret(t *testing.T) {
 func TestDispatcherLogHidesStatusReasonPhrase(t *testing.T) {
 	server := newReflectingStatusServer(t, http.StatusInternalServerError)
 	repo := newFakeRepository()
-	sealed, err := sealConfig(testSecret, ChannelConfig{WebhookURL: server.URL + "/webhook/log-reason-secret", AllowPrivate: true})
+	sealed, err := sealConfig(testSecret, ChannelConfig{WebhookURL: server.URL + "/webhook/log-reason-secret", AllowPrivate: ptr(true)})
 	if err != nil {
 		t.Fatalf("seal: %v", err)
 	}

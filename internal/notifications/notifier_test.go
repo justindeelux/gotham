@@ -189,7 +189,7 @@ func TestEmailNotifierBuildsMail(t *testing.T) {
 		Password:     "smtp-pass",
 		From:         "ops@gotham.dev",
 		To:           []string{"oncall@gotham.dev", "ops@gotham.dev"},
-		AllowPrivate: true,
+		AllowPrivate: ptr(true),
 	})
 
 	if err := notifier.Notify(context.Background(), fixedEvent()); err != nil {

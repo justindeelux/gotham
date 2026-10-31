@@ -1,7 +1,7 @@
 -- name: CreateNotificationChannel :one
 INSERT INTO notification_channels (
-    id, name, kind, config, enabled, resource_type, resource_id, events
-) VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
+    id, name, kind, config, enabled, resource_type, resource_id, events, created_by
+) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)
 RETURNING *;
 
 -- name: GetNotificationChannel :one

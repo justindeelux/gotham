@@ -69,6 +69,7 @@ func (r *storeRepository) CreateChannel(ctx context.Context, channel Channel) (C
 		ResourceType: nullableText(channel.ResourceType),
 		ResourceID:   pgUUID(channel.ResourceID),
 		Events:       stringsFromEvents(channel.Events),
+		CreatedBy:    pgUUID(channel.CreatedBy),
 	})
 	if err != nil {
 		return Channel{}, fmt.Errorf("notifications: create channel: %w", err)
@@ -601,6 +602,7 @@ func channelFromRow(row sqlc.NotificationChannel) Channel {
 		Enabled:      row.Enabled,
 		Events:       events,
 		SealedConfig: row.Config,
+		CreatedBy:    uuidFromPG(row.CreatedBy),
 		CreatedAt:    row.CreatedAt.Time,
 		UpdatedAt:    row.UpdatedAt.Time,
 	}

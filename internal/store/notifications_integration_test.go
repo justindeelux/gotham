@@ -69,12 +69,16 @@ func TestNotificationChannelPersistence(t *testing.T) {
 		ResourceType: nil,
 		ResourceID:   pgtype.UUID{},
 		Events:       []string{"deploy_failure", "backup_failure"},
+		CreatedBy:    user.ID,
 	})
 	if err != nil {
 		t.Fatalf("CreateNotificationChannel: %v", err)
 	}
 	if len(created.Events) != 2 || created.Events[0] != "deploy_failure" {
 		t.Errorf("events = %v, want the stored subscription", created.Events)
+	}
+	if created.CreatedBy != user.ID {
+		t.Errorf("created_by = %v, want the creating user", created.CreatedBy)
 	}
 	if created.ResourceType != nil {
 		t.Errorf("resource_type = %v, want NULL for a instance-wide channel", *created.ResourceType)

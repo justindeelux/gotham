@@ -133,7 +133,7 @@ func (n *emailNotifier) Notify(ctx context.Context, event Event) error {
 		To:           append([]string(nil), n.config.To...),
 		Subject:      defaultSubjectPrefix + event.Summary(),
 		Body:         event.Message() + "\n",
-		AllowPrivate: n.config.AllowPrivate,
+		AllowPrivate: n.config.AllowPrivate != nil && *n.config.AllowPrivate,
 	})
 }
 

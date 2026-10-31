@@ -69,8 +69,9 @@ NAT, link-local and reserved ranges are refused, so a member cannot point a
 webhook or SMTP relay at the control plane, a database or a cloud metadata
 service. A channel created by the owner may keep a private target such as a
 self-hosted chat service on the LAN; metadata and the other always-denied
-ranges stay blocked for everyone. A channel created before this rule is treated
-as public-only until the owner edits its target again.
+ranges stay blocked for everyone. A channel saved before this rule recorded no
+decision: when its creator is known, Gotham uses that account's current role; a
+channel whose creator is unknown is refused until the owner edits its target.
 
 ## Scope and events
 

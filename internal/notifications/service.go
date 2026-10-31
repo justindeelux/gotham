@@ -359,7 +359,7 @@ func (s *Service) CreateChannel(ctx context.Context, userID uuid.UUID, req Chann
 	if err != nil {
 		return ChannelView{}, err
 	}
-	config.AllowPrivate = owner
+	config.AllowPrivate = &owner
 	if err := config.validate(kind); err != nil {
 		return ChannelView{}, err
 	}
@@ -381,6 +381,7 @@ func (s *Service) CreateChannel(ctx context.Context, userID uuid.UUID, req Chann
 		ResourceType: resourceType,
 		ResourceID:   resourceID,
 		SealedConfig: sealed,
+		CreatedBy:    userID,
 		CreatedAt:    now,
 		UpdatedAt:    now,
 	})
@@ -437,7 +438,12 @@ func (s *Service) UpdateChannel(ctx context.Context, userID, channelID uuid.UUID
 		if err != nil {
 			return ChannelView{}, err
 		}
-		merged.AllowPrivate = owner
+		// Only an owner may grant private targets; a member editing a channel
+		// keeps the trust it was created with.
+		if owner {
+			allow := true
+			merged.AllowPrivate = &allow
+		}
 		if err := merged.validate(existing.Kind); err != nil {
 			return ChannelView{}, err
 		}
@@ -1141,7 +1147,12 @@ func (s *Service) notifierFor(channel Channel) (Notifier, error) {
 	if err != nil {
 		return nil, err
 	}
-	client := outboundClient(s.client, config.AllowPrivate)
+	allowPrivate, err := s.allowPrivateTargets(channel, config.AllowPrivate)
+	if err != nil {
+		return nil, err
+	}
+	config.AllowPrivate = &allowPrivate
+	client := outboundClient(s.client, allowPrivate)
 	switch channel.Kind {
 	case KindDiscord:
 		return newDiscordNotifier(config.WebhookURL, client), nil
@@ -1154,6 +1165,27 @@ func (s *Service) notifierFor(channel Channel) (Notifier, error) {
 	default:
 		return nil, fmt.Errorf("%w: unknown channel kind %q", ErrValidation, channel.Kind)
 	}
+}
+
+// allowPrivateTargets resolves the channel's private-target policy. A config
+// sealed before the flag existed follows the creator's current role; an
+// unknown creator fails closed.
+func (s *Service) allowPrivateTargets(channel Channel, stored *bool) (bool, error) {
+	if stored != nil {
+		return *stored, nil
+	}
+	if channel.CreatedBy == uuid.Nil {
+		return false, fmt.Errorf("%w: channel creator is unknown", ErrValidation)
+	}
+	ctx, cancel := context.WithTimeout(s.baseCtx, dispatchReadTimeout)
+	defer cancel()
+	owner, err := s.repo.IsOwner(ctx, channel.CreatedBy)
+	if err != nil {
+		s.logger.Warn("notifications: resolve channel creator",
+			"channel_id", channel.ID.String(), "error", err)
+		return false, fmt.Errorf("%w: channel creator could not be resolved", ErrValidation)
+	}
+	return owner, nil
 }
 
 // CleanupFinished turns one scheduled cleanup run into a single success or

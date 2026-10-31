@@ -6,6 +6,7 @@ import { RouterLink } from "vue-router";
 
 import ServerStatusTag from "@/features/servers/components/ServerStatusTag.vue";
 import ServerUsageSegments from "@/features/servers/components/ServerUsageSegments.vue";
+import { isUsageStale } from "@/features/servers";
 import type { ServerNodeCardModel } from "@/features/dashboard/utils/serverNode";
 
 interface Props {
@@ -20,6 +21,7 @@ const containersText = computed<string>(() =>
     ? t("dashboard.health.containersOne", { count: 1 })
     : t("dashboard.health.containersOther", { count: props.card.containerCount }),
 );
+const stale = computed<boolean>(() => isUsageStale(props.card.lastSeen));
 </script>
 
 <template>
@@ -44,14 +46,17 @@ const containersText = computed<string>(() =>
           <ServerUsageSegments
             :label="$t('servers.overview.cpuUsage')"
             :value="props.card.cpuUsage"
+            :stale="stale"
           />
           <ServerUsageSegments
             :label="$t('servers.overview.memUsage')"
             :value="props.card.memUsage"
+            :stale="stale"
           />
           <ServerUsageSegments
             :label="$t('servers.overview.diskUsage')"
             :value="props.card.diskUsage"
+            :stale="stale"
           />
         </div>
         <NSpace align="center" :size="8">

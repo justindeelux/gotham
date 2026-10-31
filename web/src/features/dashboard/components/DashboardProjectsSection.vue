@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { NAlert, NButton, NEmpty, NSkeleton, NSpace, NText } from "naive-ui";
+import { NAlert, NButton, NSkeleton, NText } from "naive-ui";
 import { computed, onMounted } from "vue";
 import { RouterLink } from "vue-router";
 
@@ -10,6 +10,9 @@ const projectLimit = 6;
 
 const store = useProjectsStore();
 const visibleProjects = computed(() => store.projects.slice(0, projectLimit));
+const showSection = computed<boolean>(
+  () => !store.loaded || store.error !== null || store.projects.length > 0,
+);
 
 onMounted(() => {
   if (!store.loaded) {
@@ -25,7 +28,7 @@ function retry(): void {
 </script>
 
 <template>
-  <section class="projects-section" data-test="projects">
+  <section v-if="showSection" class="projects-section" data-test="projects">
     <div class="section-title">
       <h2>{{ $t("dashboard.projects.title") }}</h2>
       <RouterLink
@@ -37,7 +40,7 @@ function retry(): void {
       </RouterLink>
     </div>
 
-    <template v-if="store.loading && !store.loaded">
+    <template v-if="!store.loaded && !store.error">
       <NText depth="3" class="meta">{{ $t("dashboard.projects.loading") }}</NText>
       <div class="project-grid" aria-busy="true">
         <NSkeleton v-for="index in 2" :key="index" height="116px" />
@@ -52,24 +55,6 @@ function retry(): void {
         </NButton>
       </div>
     </NAlert>
-
-    <NEmpty
-      v-else-if="store.projects.length === 0"
-      :description="$t('dashboard.projects.empty')"
-    >
-      <template #extra>
-        <NSpace vertical :size="8" align="center">
-          <NText depth="3">{{ $t("dashboard.projects.emptyHint") }}</NText>
-          <RouterLink :to="{ name: 'projects' }" custom>
-            <template #default="{ navigate }">
-              <NButton size="small" @click="navigate">
-                {{ $t("dashboard.projects.emptyAction") }}
-              </NButton>
-            </template>
-          </RouterLink>
-        </NSpace>
-      </template>
-    </NEmpty>
 
     <div v-else class="project-grid">
       <ProjectCard

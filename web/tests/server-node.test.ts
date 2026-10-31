@@ -1,11 +1,18 @@
-import { describe, expect, it } from "vitest";
+import { mount } from "@vue/test-utils";
+import { beforeAll, describe, expect, it } from "vitest";
 
 import type { Server } from "@/features/servers";
+import ServerNodeCard from "@/features/dashboard/components/ServerNodeCard.vue";
 import {
   buildServerNodeCard,
   nodeInitials,
   nodeSubtitle,
 } from "@/features/dashboard/utils/serverNode";
+import { i18n, registerDiscoveredCatalogs } from "@/shared/i18n";
+
+beforeAll(() => {
+  registerDiscoveredCatalogs();
+});
 
 function server(overrides: Partial<Server> = {}): Server {
   return {
@@ -61,6 +68,7 @@ describe("buildServerNodeCard", () => {
         cpu_usage: 0.1,
         mem_usage: 0.2,
         disk_usage: 0.3,
+        last_seen: "2026-10-30T10:00:00Z",
       }),
     );
     expect(card).toMatchObject({
@@ -75,6 +83,43 @@ describe("buildServerNodeCard", () => {
       containerCount: 3,
       arch: "amd64",
       sshUser: "root",
+      lastSeen: "2026-10-30T10:00:00Z",
     });
+  });
+});
+
+describe("ServerNodeCard", () => {
+  function mountCard(lastSeen: string): ReturnType<typeof mount> {
+    return mount(ServerNodeCard, {
+      props: {
+        card: buildServerNodeCard(
+          server({
+            cpu_usage: 0.1,
+            mem_usage: 0.2,
+            disk_usage: 0.3,
+            last_seen: lastSeen,
+          }),
+        ),
+      },
+      global: {
+        plugins: [i18n],
+        stubs: { RouterLink: { template: "<a><slot /></a>" } },
+      },
+    });
+  }
+
+  it("marks all three usage meters stale when the node stopped reporting", () => {
+    const wrapper = mountCard(
+      new Date(Date.now() - 10 * 60_000).toISOString(),
+    );
+    expect(wrapper.findAll(".usage-row")).toHaveLength(3);
+    expect(wrapper.findAll(".usage-row.is-stale")).toHaveLength(3);
+    wrapper.unmount();
+  });
+
+  it("keeps fresh usage meters live", () => {
+    const wrapper = mountCard(new Date().toISOString());
+    expect(wrapper.findAll(".usage-row.is-stale")).toHaveLength(0);
+    wrapper.unmount();
   });
 });

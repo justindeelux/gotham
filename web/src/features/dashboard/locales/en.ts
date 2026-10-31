@@ -34,10 +34,6 @@ const en = {
     title: "Projects",
     viewAll: "view all projects",
     loading: "Loading projects…",
-    empty: "No projects yet",
-    emptyHint:
-      "Create a project to group the applications, services and databases for one product.",
-    emptyAction: "Open projects",
   },
   empty: {
     title: "Your dashboard is ready",

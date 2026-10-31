@@ -1072,26 +1072,20 @@ test("dashboard keeps projects and servers in the main column and deploys beside
   }
 });
 
-test("dashboard projects show an empty state at zero and a single card at one", async ({
+test("dashboard hides the projects section at zero and shows a single card at one", async ({
   page,
 }) => {
   await mockApi(page, "owner", { projects: [] });
   await page.setViewportSize({ width: 1280, height: 900 });
   await page.goto(`${baseURL}/dashboard`);
   await page.locator(".dash-columns").waitFor();
-  await expect(page.getByText("No projects yet", { exact: true })).toBeVisible();
-  const openProjects = page.getByRole("button", {
-    name: "Open projects",
-    exact: true,
-  });
-  await expect(openProjects).toBeVisible();
-  await openProjects.click();
-  await expect(page).toHaveURL(/\/projects$/);
+  await expect(page.locator('[data-test="projects"]')).toHaveCount(0);
   await expect(page.locator(".project-card-link")).toHaveCount(0);
 
   await mockApi(page, "owner", { projects: [dashboardProjects[0]!] });
   await page.goto(`${baseURL}/dashboard`);
   await page.locator(".project-card-link").first().waitFor();
+  await expect(page.locator('[data-test="projects"]')).toHaveCount(1);
   await expect(page.locator(".project-card-link")).toHaveCount(1);
   await expect(
     page.getByRole("link", { name: "Open project project-1", exact: true }),

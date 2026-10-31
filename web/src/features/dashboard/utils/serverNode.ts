@@ -12,6 +12,7 @@ export interface ServerNodeCardModel {
   containerCount: number | null;
   arch: string | null;
   sshUser: string;
+  lastSeen: string | null;
 }
 
 export function nodeInitials(name: string): string {
@@ -46,5 +47,6 @@ export function buildServerNodeCard(server: Server): ServerNodeCardModel {
     containerCount: server.container_count,
     arch: server.arch,
     sshUser: server.ssh_user,
+    lastSeen: server.last_seen,
   };
 }

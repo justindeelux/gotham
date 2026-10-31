@@ -13,6 +13,8 @@ import (
 	"strconv"
 	"strings"
 	"time"
+
+	"github.com/justindeelux/gotham/internal/netguard"
 )
 
 type Notifier interface {
@@ -123,14 +125,15 @@ func (n *emailNotifier) Notify(ctx context.Context, event Event) error {
 		return fmt.Errorf("%w: mailer is not configured", ErrValidation)
 	}
 	return n.mailer.Send(ctx, Mail{
-		Host:     n.config.Host,
-		Port:     n.config.Port,
-		Username: n.config.Username,
-		Password: n.config.Password,
-		From:     n.config.From,
-		To:       append([]string(nil), n.config.To...),
-		Subject:  defaultSubjectPrefix + event.Summary(),
-		Body:     event.Message() + "\n",
+		Host:         n.config.Host,
+		Port:         n.config.Port,
+		Username:     n.config.Username,
+		Password:     n.config.Password,
+		From:         n.config.From,
+		To:           append([]string(nil), n.config.To...),
+		Subject:      defaultSubjectPrefix + event.Summary(),
+		Body:         event.Message() + "\n",
+		AllowPrivate: n.config.AllowPrivate,
 	})
 }
 
@@ -186,8 +189,9 @@ func postJSON(ctx context.Context, client *http.Client, endpoint string, payload
 	resp, err := guarded.Do(req)
 	if err != nil {
 		return &sendFailure{
-			message:   fmt.Sprintf("notifications: post to %s: %s", endpointHost(endpoint), transportCategory(err)),
-			permanent: errors.Is(err, errRedirectRefused),
+			message: fmt.Sprintf("notifications: post to %s: %s", endpointHost(endpoint), transportCategory(err)),
+			permanent: errors.Is(err, errRedirectRefused) ||
+				errors.Is(err, netguard.ErrDenied),
 		}
 	}
 	defer func() { _ = resp.Body.Close() }()
@@ -251,6 +255,8 @@ func transportCategory(err error) string {
 		return "timed out"
 	}
 	switch {
+	case errors.Is(err, netguard.ErrDenied):
+		return "destination is not allowed; edit and save the channel as the owner to allow it"
 	case errors.Is(err, context.DeadlineExceeded):
 		return "timed out"
 	case errors.Is(err, context.Canceled):
@@ -258,6 +264,32 @@ func transportCategory(err error) string {
 	default:
 		return "connection failed"
 	}
+}
+
+// outboundClient guards an HTTP client with the member/owner address policy at
+// dial time. A caller-supplied transport that is not an *http.Transport is
+// returned as-is.
+func outboundClient(base *http.Client, allowPrivate bool) *http.Client {
+	if base == nil {
+		base = &http.Client{}
+	}
+	transport, ok := base.Transport.(*http.Transport)
+	if base.Transport == nil {
+		transport, ok = http.DefaultTransport.(*http.Transport)
+	}
+	if !ok {
+		return base
+	}
+	cloned := transport.Clone()
+	dialer := &net.Dialer{
+		Timeout:   10 * time.Second,
+		KeepAlive: 30 * time.Second,
+		Control:   netguard.Control(allowPrivate),
+	}
+	cloned.DialContext = dialer.DialContext
+	client := *base
+	client.Transport = cloned
+	return &client
 }
 
 func endpointHost(endpoint string) string {

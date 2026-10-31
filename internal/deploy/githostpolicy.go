@@ -14,6 +14,8 @@ import (
 	"sync"
 	"sync/atomic"
 	"time"
+
+	"github.com/justindeelux/gotham/internal/netguard"
 )
 
 const GitAllowPrivateHostsEnv = "GOTHAM_GIT_ALLOW_PRIVATE_HOSTS"
@@ -213,78 +215,9 @@ func isHexDigit(r rune) bool {
 
 var errGitHostNotAllowed = fmt.Errorf("%w: clone URL host is not allowed", ErrValidation)
 
-type gitDenyNet struct {
-	net *net.IPNet
-}
-
-func mustGitCIDR(cidr string) gitDenyNet {
-	_, parsed, err := net.ParseCIDR(cidr)
-	if err != nil {
-		panic("deploy: invalid git deny CIDR " + cidr)
-	}
-	return gitDenyNet{net: parsed}
-}
-
-var gitAlwaysDeny = []gitDenyNet{
-	mustGitCIDR("0.0.0.0/8"),
-	mustGitCIDR("169.254.0.0/16"),
-	mustGitCIDR("224.0.0.0/4"),
-	mustGitCIDR("100.64.0.0/10"),
-	mustGitCIDR("198.18.0.0/15"),
-	mustGitCIDR("fe80::/10"),
-	mustGitCIDR("ff00::/8"),
-	mustGitCIDR("64:ff9b::/96"),
-	mustGitCIDR("64:ff9b:1::/48"),
-	mustGitCIDR("2002::/16"),
-	mustGitCIDR("::/96"),
-}
-
-var gitPrivateNets = []gitDenyNet{
-	mustGitCIDR("127.0.0.0/8"),
-	mustGitCIDR("10.0.0.0/8"),
-	mustGitCIDR("172.16.0.0/12"),
-	mustGitCIDR("192.168.0.0/16"),
-	mustGitCIDR("::1/128"),
-	mustGitCIDR("fc00::/7"),
-}
-
 func checkDeniedIP(ip net.IP, allowPrivate bool) error {
-	if ip.IsUnspecified() {
+	if netguard.Denied(ip, allowPrivate) {
 		return errGitHostNotAllowed
-	}
-	if v4 := ip.To4(); v4 != nil {
-		ip = v4
-		for _, denied := range gitAlwaysDeny {
-			if denied.net.Contains(ip) {
-				return errGitHostNotAllowed
-			}
-		}
-		if !allowPrivate {
-			for _, denied := range gitPrivateNets {
-				if denied.net.Contains(ip) {
-					return errGitHostNotAllowed
-				}
-			}
-		}
-		return nil
-	}
-	if ip.IsLoopback() {
-		if !allowPrivate {
-			return errGitHostNotAllowed
-		}
-		return nil
-	}
-	for _, denied := range gitAlwaysDeny {
-		if denied.net.Contains(ip) {
-			return errGitHostNotAllowed
-		}
-	}
-	if !allowPrivate {
-		for _, denied := range gitPrivateNets {
-			if denied.net.Contains(ip) {
-				return errGitHostNotAllowed
-			}
-		}
 	}
 	return nil
 }
@@ -328,39 +261,87 @@ func resolveGitHostAddrs(ctx context.Context, lookup gitHostLookupFunc, host str
 	return ips, nil
 }
 
-func pinGitRemoteHost(ctx context.Context, lookup gitHostLookupFunc, rawURL string, env []string) ([]string, error) {
+// pinGitRemoteHost returns the clone URL and environment to use after
+// validation. HTTP(S) keeps the URL and pins the address through curl;
+// git:// is rewritten to the validated address; SSH keeps the URL and pins
+// ssh through GIT_SSH_COMMAND. All three make git connect to the address that
+// passed validation instead of resolving the host a second time.
+func pinGitRemoteHost(ctx context.Context, lookup gitHostLookupFunc, rawURL string, env []string) (string, []string, error) {
 	remote, err := extractGitHost(rawURL)
 	if err != nil {
-		return nil, err
+		return "", nil, err
 	}
 	if remote.local || remote.host == "" {
 		if remote.host == "" && !remote.local {
-			return nil, fmt.Errorf("%w: clone URL has no host", ErrValidation)
+			return "", nil, fmt.Errorf("%w: clone URL has no host", ErrValidation)
 		}
-		return env, nil
+		return rawURL, env, nil
 	}
 	first, err := resolveGitHostAddrs(ctx, lookup, remote.host)
 	if err != nil {
-		return nil, err
+		return "", nil, err
 	}
 	second, err := resolveGitHostAddrs(ctx, lookup, remote.host)
 	if err != nil {
-		return nil, err
+		return "", nil, err
 	}
 	if !sameIPSet(first, second) {
-		return nil, fmt.Errorf("%w: clone URL host address changed during validation (possible DNS rebinding)",
+		return "", nil, fmt.Errorf("%w: clone URL host address changed during validation (possible DNS rebinding)",
 			ErrValidation)
 	}
-	switch gitURLScheme(rawURL) {
+	switch scheme := gitURLScheme(rawURL); scheme {
 	case "http", "https":
 		port := remote.port
 		if port == "" {
-			port = gitDefaultPort(gitURLScheme(rawURL))
+			port = gitDefaultPort(scheme)
 		}
 		env = appendCurloptResolve(env, remote.host, port, first)
 		env = appendGitConfigOnce(env, "http.followRedirects", "false")
+	case "git":
+		pinned, err := rewriteGitProtocolHost(rawURL, remote.port, first[0])
+		if err != nil {
+			return "", nil, err
+		}
+		return pinned, env, nil
+	default:
+		env, err = pinGitSSHHost(env, remote.host, first[0])
+		if err != nil {
+			return "", nil, err
+		}
 	}
-	return env, nil
+	return rawURL, env, nil
+}
+
+func rewriteGitProtocolHost(rawURL, port string, ip net.IP) (string, error) {
+	parsed, err := neturl.Parse(rawURL)
+	if err != nil {
+		return "", fmt.Errorf("%w: unsupported clone URL", ErrValidation)
+	}
+	host := ip.String()
+	if port != "" {
+		host = net.JoinHostPort(host, port)
+	} else if strings.Contains(host, ":") {
+		host = "[" + host + "]"
+	}
+	parsed.Host = host
+	return parsed.String(), nil
+}
+
+func pinGitSSHHost(env []string, host string, ip net.IP) ([]string, error) {
+	for index, entry := range env {
+		command, ok := strings.CutPrefix(entry, "GIT_SSH_COMMAND=")
+		if !ok {
+			continue
+		}
+		// HostName redirects the TCP connection to the validated address while
+		// HostKeyAlias keeps known_hosts verification on the URL host.
+		pinned := command + " -o HostName=" + ip.String() + " -o HostKeyAlias=" + shellQuote(host)
+		copied := append([]string(nil), env...)
+		copied[index] = "GIT_SSH_COMMAND=" + pinned
+		return copied, nil
+	}
+	return nil, fmt.Errorf("%w: SSH clone URLs need a deploy key so the validated address can be pinned",
+		ErrValidation)
 }
 
 func gitURLScheme(raw string) string {

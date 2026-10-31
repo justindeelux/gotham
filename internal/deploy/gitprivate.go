@@ -420,12 +420,12 @@ func (s *Service) TestGitConnection(ctx context.Context, userID, appID uuid.UUID
 	defer cleanup()
 	probeCtx, cancel := context.WithTimeout(ctx, gitTestTimeout)
 	defer cancel()
-	pinnedEnv, err := pinGitRemoteHost(probeCtx, s.probeLookup(), url, env)
+	pinnedURL, pinnedEnv, err := pinGitRemoteHost(probeCtx, s.probeLookup(), url, env)
 	if err != nil {
 		return GitConnectionResult{Host: privateGitHost(rawURL), Message: err.Error()}, nil
 	}
 	env = pinnedEnv
-	argv := []string{"git", "ls-remote", "--", url, "HEAD"}
+	argv := []string{"git", "ls-remote", "--", pinnedURL, "HEAD"}
 	output, err := src.runOrDefault()(probeCtx, argv, env)
 	if probeCtx.Err() != nil {
 		return GitConnectionResult{

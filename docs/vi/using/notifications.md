@@ -59,6 +59,21 @@ giá trị được che, tối đa để lộ bốn ký tự cuối, và một k
 đã được cấu hình hay chưa. Sửa một kênh và để nguyên giá trị đã che sẽ giữ bí mật đã
 lưu; loại kênh không thể đổi sau khi tạo.
 
+Khi gửi, Gotham phân giải host của kênh tại thời điểm kết nối. Kênh do thành viên
+tạo chỉ đến được địa chỉ công khai; loopback, mạng riêng, NAT nhà mạng, link-local
+và các dải dành riêng đều bị từ chối, nên thành viên không thể trỏ webhook hay
+SMTP vào control plane, cơ sở dữ liệu hay dịch vụ metadata của cloud. Kênh do chủ
+sở hữu tạo vẫn có thể giữ đích riêng như một dịch vụ chat tự lưu trữ trong mạng
+LAN; địa chỉ metadata và các dải luôn bị chặn vẫn bị từ chối với mọi người.
+
+### Ghi chú nâng cấp
+
+Kênh được lưu trước khi Gotham ghi nhận quyền dùng đích riêng không có quyết định
+đã lưu và chỉ được coi là công khai sau khi nâng cấp. Nếu chủ sở hữu dùng webhook
+hoặc SMTP trong mạng LAN, hãy mở kênh và lưu lại bằng tài khoản chủ sở hữu: thao
+tác lưu có cấu hình sẽ cấp lại quyền dùng đích riêng kể cả khi không thay đổi gì.
+Lần gửi bị từ chối vì đích riêng sẽ báo như vậy và chỉ đúng cách sửa.
+
 ## Phạm vi và sự kiện
 
 Chọn phạm vi khi tạo hoặc sửa kênh:

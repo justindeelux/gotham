@@ -183,12 +183,13 @@ func TestTelegramNotifierHidesTokenOnFailure(t *testing.T) {
 func TestEmailNotifierBuildsMail(t *testing.T) {
 	mailer := &fakeMailer{}
 	notifier := newEmailNotifier(mailer, ChannelConfig{
-		Host:     "smtp.gotham.dev",
-		Port:     587,
-		Username: "ops@gotham.dev",
-		Password: "smtp-pass",
-		From:     "ops@gotham.dev",
-		To:       []string{"oncall@gotham.dev", "ops@gotham.dev"},
+		Host:         "smtp.gotham.dev",
+		Port:         587,
+		Username:     "ops@gotham.dev",
+		Password:     "smtp-pass",
+		From:         "ops@gotham.dev",
+		To:           []string{"oncall@gotham.dev", "ops@gotham.dev"},
+		AllowPrivate: true,
 	})
 
 	if err := notifier.Notify(context.Background(), fixedEvent()); err != nil {
@@ -207,6 +208,9 @@ func TestEmailNotifierBuildsMail(t *testing.T) {
 	}
 	if mail.From != "ops@gotham.dev" {
 		t.Errorf("from = %q", mail.From)
+	}
+	if !mail.AllowPrivate {
+		t.Error("allow-private = false, want the channel policy carried to the mailer")
 	}
 	if strings.Join(mail.To, ",") != "oncall@gotham.dev,ops@gotham.dev" {
 		t.Errorf("to = %v", mail.To)

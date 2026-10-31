@@ -597,6 +597,25 @@ func (q *Queries) SetServerAgentLeaf(ctx context.Context, arg SetServerAgentLeaf
 	return i, err
 }
 
+const setServerSSHPort = `-- name: SetServerSSHPort :exec
+UPDATE servers
+SET port = $2,
+    updated_at = now()
+WHERE id = $1
+`
+
+type SetServerSSHPortParams struct {
+	ID   pgtype.UUID `json:"id"`
+	Port int32       `json:"port"`
+}
+
+// Saves a port verified by the node's own host helper. Only the port moves:
+// the host key and the readiness status stay valid.
+func (q *Queries) SetServerSSHPort(ctx context.Context, arg SetServerSSHPortParams) error {
+	_, err := q.db.Exec(ctx, setServerSSHPort, arg.ID, arg.Port)
+	return err
+}
+
 const setServerStatus = `-- name: SetServerStatus :one
 UPDATE servers
 SET status = $2,

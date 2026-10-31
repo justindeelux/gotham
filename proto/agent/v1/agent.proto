@@ -1230,6 +1230,19 @@ service HostService {
   // CleanupHost reclaims one root-only cleanup category (the systemd journal
   // or the package cache) and reports the size it released.
   rpc CleanupHost(HostCleanupRequest) returns (HostCleanupResult);
+  // ApplySSH changes the SSH port and password-login setting. A port change is
+  // tentative: the old port stays open until ConfirmSSH, so a failed change
+  // never locks the operator out.
+  rpc ApplySSH(HostApplySSHRequest) returns (HostApplySSHResponse);
+  // ConfirmSSH keeps the tentative port change and closes the old port.
+  rpc ConfirmSSH(HostConfirmSSHRequest) returns (HostConfirmSSHResponse);
+  // RevertSSH restores the SSH configuration snapshotted by ApplySSH. It is
+  // idempotent: reverting with no pending change succeeds.
+  rpc RevertSSH(HostRevertSSHRequest) returns (HostRevertSSHResponse);
+  // ApplyAgentRoot switches the node agent between the unprivileged
+  // gotham-agent user and root (file manager + root terminal). The helper
+  // restarts the agent, so the control plane reconnects afterwards.
+  rpc ApplyAgentRoot(HostApplyAgentRootRequest) returns (HostApplyAgentRootResponse);
 }
 
 // HostCapability is the overall host-control state of this node. Anything but
@@ -1286,6 +1299,10 @@ message HostStatusResponse {
   bool ntp_enabled = 4;
   repeated string ntp_servers = 5;
   string timezone = 6;
+  // ssh is null on a helper that predates SSH settings.
+  HostSSHSettings ssh = 7;
+  // agent_root reports whether the agent process actually runs as root.
+  bool agent_root = 8;
 }
 
 // HostApplyNetworkRequest carries the whole desired network state, exactly as
@@ -2063,3 +2080,46 @@ message TerminalExited {
   // normal exit.
   string signal = 2;
 }
+
+// HostSSHSettings is the SSH server state of a node. Declared after the host
+// messages so adding it does not renumber existing generated message types.
+message HostSSHSettings {
+  // available is false when the host does not run sshd.
+  bool available = 1;
+  // port is the configured port. During a tentative change it is the new
+  // port.
+  uint32 port = 2;
+  // password_authentication is the effective PasswordAuthentication value.
+  bool password_authentication = 3;
+  // key_auth_available reports whether at least one authorized key exists, so
+  // disabling password login cannot lock the operator out.
+  bool key_auth_available = 4;
+}
+
+message HostApplySSHRequest {
+  // port is the desired SSH port, 1..65535.
+  uint32 port = 1;
+  // password_authentication is the desired PasswordAuthentication value.
+  bool password_authentication = 2;
+  // ssh_user is the user the control plane connects as. A password-login
+  // disable is only accepted when this user has a usable authorized key.
+  string ssh_user = 3;
+}
+
+message HostApplySSHResponse {}
+
+message HostConfirmSSHRequest {}
+
+message HostConfirmSSHResponse {}
+
+message HostRevertSSHRequest {}
+
+message HostRevertSSHResponse {}
+
+message HostApplyAgentRootRequest {
+  // enabled runs the agent as root (file manager + root terminal) when true,
+  // and as the unprivileged gotham-agent user when false.
+  bool enabled = 1;
+}
+
+message HostApplyAgentRootResponse {}

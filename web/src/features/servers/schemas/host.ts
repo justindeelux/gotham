@@ -1,5 +1,7 @@
 import { z } from "zod";
 
+import { intInRange } from "@/shared/validation/primitives";
+
 const m = (key: string): string => `servers.settings.host.validation.${key}`;
 
 const v4 = /^((25[0-5]|2[0-4]\d|1\d\d|[1-9]?\d)\.){3}(25[0-5]|2[0-4]\d|1\d\d|[1-9]?\d)$/;
@@ -161,6 +163,15 @@ const systemSchema = z.object({
   timezone: z.string(),
 });
 
+const sshSchema = z.object({
+  available: z.boolean(),
+  port: z.number(),
+  password_authentication: z.boolean(),
+  key_auth_available: z.boolean(),
+});
+
+export const sshPortSchema = intInRange(m("sshPort"), { min: 1, max: 65535 });
+
 export const nodeHostEnvelopeSchema = z.object({
   host: z.object({
     capability: z.enum([
@@ -176,6 +187,8 @@ export const nodeHostEnvelopeSchema = z.object({
     repair: z.boolean(),
     network: networkSchema,
     system: systemSchema,
+    ssh: sshSchema,
+    agent_root: z.boolean(),
     pending: z
       .object({ previous: networkSchema, proposed: networkSchema, deadline: z.string() })
       .nullable(),

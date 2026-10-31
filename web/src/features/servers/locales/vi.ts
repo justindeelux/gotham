@@ -183,6 +183,48 @@ const vi: ServersMessages = {
         submit: "Lưu cài đặt hệ thống",
         saved: "Đã lưu cài đặt hệ thống.",
       },
+      ssh: {
+        title: "Truy cập SSH",
+        port: "Cổng SSH",
+        portHint: "1–65535. Cổng cũ vẫn mở cho tới khi cổng mới nhận được kết nối.",
+        passwordLogin: "Đăng nhập bằng mật khẩu",
+        anyUser: "một người dùng đã ghi nhận",
+        passwordHint:
+          "Đăng nhập bằng khóa luôn được phép. Chỉ tắt được đăng nhập bằng mật khẩu khi người dùng SSH {user} có khóa được ủy quyền dùng được; Gotham kiểm tra khi bạn lưu.",
+        unavailable: "Máy chủ này không cài sshd, nên cài đặt SSH chỉ để xem.",
+        noKeys:
+          "Người dùng SSH {user} chưa có khóa được ủy quyền. Hãy thêm khóa trước khi tắt đăng nhập bằng mật khẩu.",
+        submit: "Lưu cài đặt SSH",
+        saved: "Đã lưu cài đặt SSH.",
+        confirmTitle: "Áp dụng thay đổi SSH?",
+        confirmIntro: "Gotham sẽ thay đổi sshd trên máy chủ này:",
+        confirmPort: "Cổng {from} → {to}",
+        confirmPasswordOn: "Bật đăng nhập bằng mật khẩu",
+        confirmPasswordOff: "Tắt đăng nhập bằng mật khẩu",
+        portWarning:
+          "Gotham kiểm tra cổng mới trước khi lưu. Nếu kiểm tra thất bại, cổng cũ được tự động khôi phục.",
+        cancel: "Hủy",
+        confirmApply: "Áp dụng thay đổi",
+      },
+      agentRoot: {
+        title: "Quyền của agent",
+        hint: "Mặc định agent chạy bằng người dùng không đặc quyền gotham-agent. Chạy agent bằng root cho phép trình quản lý tệp duyệt và sửa mọi tệp, và mở terminal bằng root.",
+        toggleLabel: "Chạy agent của nút bằng root",
+        on: "Agent chạy bằng root",
+        off: "Agent chạy bằng gotham-agent",
+        enabledSaved: "Đã bật chế độ root. Agent đã kết nối lại.",
+        disabledSaved: "Đã tắt chế độ root. Agent đã kết nối lại.",
+        confirmTitle: "Đổi người dùng của agent?",
+        rootWarning:
+          "Chạy agent bằng root gỡ bỏ rào cản quyền: trình quản lý tệp và terminal có toàn quyền trên máy chủ này. Chỉ bật khi bạn tin tưởng mọi tài khoản chủ sở hữu Gotham.",
+        disableBody:
+          "Agent trở lại người dùng không đặc quyền gotham-agent. Trình quản lý tệp và terminal vẫn hoạt động, nhưng không có quyền root.",
+        restartHint:
+          "Agent sẽ khởi động lại và kết nối lại trong giây lát; trang này có thể tạm thời không dùng được.",
+        restarting: "Agent đang khởi động lại. Hãy đợi một lát rồi tải lại trang này.",
+        cancel: "Hủy",
+        confirm: "Đổi quyền",
+      },
       validation: {
         timezone: "Chọn múi giờ IANA, ví dụ Europe/Berlin.",
         dns: "Nhập tối đa 3 địa chỉ IPv4 hoặc IPv6 khác nhau.",
@@ -193,6 +235,7 @@ const vi: ServersMessages = {
         ipv6Gateway: "Nhập gateway IPv6 hợp lệ.",
         hostname: "Dùng chữ cái, chữ số và dấu gạch ngang; dấu chấm ngăn cách các nhãn.",
         ntp: "Nhập tối đa 4 tên máy chủ hoặc địa chỉ IP khác nhau.",
+        sshPort: "Nhập cổng từ 1 đến 65535.",
       },
     },
   },

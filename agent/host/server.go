@@ -123,6 +123,19 @@ type statusPayload struct {
 	// Cleanup is the same signal for the cleanup verbs: a helper that predates
 	// them has no key, so it must be updated before a cleanup can run.
 	Cleanup bool `json:"cleanup"`
+	// SSH and AgentRoot are pointers for the same reason: a helper that
+	// predates SSH settings has neither key.
+	SSH       *sshStatus `json:"ssh"`
+	AgentRoot *bool      `json:"agent_root"`
+}
+
+// sshStatus is the helper's SSH section. The zero value means sshd is not
+// installed; the pointer in statusPayload tells an old helper apart.
+type sshStatus struct {
+	Available              bool   `json:"available"`
+	Port                   uint32 `json:"port"`
+	PasswordAuthentication bool   `json:"password_authentication"`
+	KeyAuthAvailable       bool   `json:"key_auth_available"`
 }
 
 // cleanupStatusPayload is the helper's `cleanup-status` document. Unknown
@@ -195,8 +208,19 @@ func (s *Server) Status(ctx context.Context, _ *agentv1.HostStatusRequest) (*age
 	if payload.Timezone != nil {
 		response.Timezone = *payload.Timezone
 	}
+	if payload.SSH != nil {
+		response.Ssh = &agentv1.HostSSHSettings{
+			Available:              payload.SSH.Available,
+			Port:                   payload.SSH.Port,
+			PasswordAuthentication: payload.SSH.PasswordAuthentication,
+			KeyAuthAvailable:       payload.SSH.KeyAuthAvailable,
+		}
+	}
+	if payload.AgentRoot != nil {
+		response.AgentRoot = *payload.AgentRoot
+	}
 	switch {
-	case payload.Timezone == nil:
+	case payload.Timezone == nil || payload.SSH == nil || payload.AgentRoot == nil:
 		response.Capability = agentv1.HostCapability_HOST_CAPABILITY_HELPER_OUTDATED
 	case !payload.Network || !payload.System:
 		// The platform manages network and system settings together, so a host
@@ -336,6 +360,43 @@ func (s *Server) CleanupHost(ctx context.Context, request *agentv1.HostCleanupRe
 	return &agentv1.HostCleanupResult{ReclaimedBytes: reclaimed}, nil
 }
 
+// ApplySSH changes the SSH port and password login. A port change stays
+// tentative on the host until ConfirmSSH, so the old port remains reachable.
+func (s *Server) ApplySSH(ctx context.Context, request *agentv1.HostApplySSHRequest) (*agentv1.HostApplySSHResponse, error) {
+	in := "port=" + strconv.FormatUint(uint64(request.GetPort()), 10) + "\n" +
+		"password_authentication=" + strconv.FormatBool(request.GetPasswordAuthentication()) + "\n" +
+		"ssh_user=" + request.GetSshUser() + "\n"
+	if _, err := s.runner.Run(ctx, "apply-ssh", in); err != nil {
+		return nil, helperStatus("apply-ssh", err)
+	}
+	return &agentv1.HostApplySSHResponse{}, nil
+}
+
+func (s *Server) ConfirmSSH(ctx context.Context, _ *agentv1.HostConfirmSSHRequest) (*agentv1.HostConfirmSSHResponse, error) {
+	if _, err := s.runner.Run(ctx, "confirm-ssh", ""); err != nil {
+		return nil, helperStatus("confirm-ssh", err)
+	}
+	return &agentv1.HostConfirmSSHResponse{}, nil
+}
+
+func (s *Server) RevertSSH(ctx context.Context, _ *agentv1.HostRevertSSHRequest) (*agentv1.HostRevertSSHResponse, error) {
+	if _, err := s.runner.Run(ctx, "revert-ssh", ""); err != nil {
+		return nil, helperStatus("revert-ssh", err)
+	}
+	return &agentv1.HostRevertSSHResponse{}, nil
+}
+
+// ApplyAgentRoot switches the agent between the unprivileged service user and
+// root. The helper schedules the restart, so this call returns before the
+// agent drops its connection.
+func (s *Server) ApplyAgentRoot(ctx context.Context, request *agentv1.HostApplyAgentRootRequest) (*agentv1.HostApplyAgentRootResponse, error) {
+	in := "enabled=" + strconv.FormatBool(request.GetEnabled()) + "\n"
+	if _, err := s.runner.Run(ctx, "apply-agent-root", in); err != nil {
+		return nil, helperStatus("apply-agent-root", err)
+	}
+	return &agentv1.HostApplyAgentRootResponse{}, nil
+}
+
 // helperStatus maps the helper's pinned exit codes to gRPC statuses. The
 // helper's own fixed reason line rides along with an unexpected failure; raw
 // stderr (which may name host paths) is never forwarded.
@@ -351,12 +412,25 @@ func helperStatus(verb string, err error) error {
 		if strings.HasPrefix(verb, "cleanup-") {
 			return status.Error(codes.FailedPrecondition, "unsupported")
 		}
+		if (verb == "apply-ssh" || verb == "apply-agent-root") && helperErr.reason != "" {
+			return status.Error(codes.FailedPrecondition, helperErr.reason)
+		}
 		return status.Error(codes.FailedPrecondition, "this host does not support the setting")
 	case 4:
-		if verb == "apply-network" {
+		switch verb {
+		case "apply-network":
 			return status.Error(codes.FailedPrecondition, "a network change is already pending")
+		case "apply-ssh":
+			return status.Error(codes.FailedPrecondition, "an SSH change is already pending")
+		case "confirm-ssh", "revert-ssh":
+			return status.Error(codes.FailedPrecondition, "no SSH change is pending")
 		}
 		return status.Error(codes.FailedPrecondition, "no network change is pending")
+	case 5, 6:
+		if helperErr.reason != "" {
+			return status.Error(codes.FailedPrecondition, helperErr.reason)
+		}
+		return status.Error(codes.FailedPrecondition, "the host refused the change")
 	}
 	if helperErr.reason != "" {
 		return status.Error(codes.Internal, "the host helper failed: "+helperErr.reason)

@@ -260,7 +260,7 @@ onMounted(() => {
             name="settings"
             :tab="$t('servers.detail.tabSettings')"
           >
-            <ServerSettingsTab :server="server" />
+            <ServerSettingsTab :server="server" @server-changed="fetchServer" />
           </NTabPane>
         </NTabs>
       </template>

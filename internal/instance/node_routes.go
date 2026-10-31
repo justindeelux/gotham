@@ -40,6 +40,8 @@ func MountNode(r chi.Router, admin func(http.Handler) http.Handler, userID UserI
 		g.Put("/v1/servers/{id}/host/network", h.putNetwork)
 		g.Post("/v1/servers/{id}/host/network/confirm", h.confirm)
 		g.Post("/v1/servers/{id}/host/network/revert", h.revert)
+		g.Put("/v1/servers/{id}/host/ssh", h.putSSH)
+		g.Put("/v1/servers/{id}/host/agent-root", h.putAgentRoot)
 		g.Post("/v1/servers/{id}/host/helper", h.installHelper)
 	})
 }
@@ -81,6 +83,34 @@ func (h *nodeHandler) putNetwork(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	st, err := h.svc.UpdateNetwork(r.Context(), h.actor(r), id, in)
+	h.reply(w, st, "", err)
+}
+
+func (h *nodeHandler) putSSH(w http.ResponseWriter, r *http.Request) {
+	id, ok := serverIDParam(w, r)
+	if !ok {
+		return
+	}
+	var in SSHInput
+	if !decode(w, r, &in) {
+		return
+	}
+	st, err := h.svc.UpdateSSH(r.Context(), h.actor(r), id, in)
+	h.reply(w, st, "", err)
+}
+
+func (h *nodeHandler) putAgentRoot(w http.ResponseWriter, r *http.Request) {
+	id, ok := serverIDParam(w, r)
+	if !ok {
+		return
+	}
+	var in struct {
+		Enabled bool `json:"enabled"`
+	}
+	if !decode(w, r, &in) {
+		return
+	}
+	st, err := h.svc.UpdateAgentRoot(r.Context(), h.actor(r), id, in.Enabled)
 	h.reply(w, st, "", err)
 }
 
@@ -127,6 +157,8 @@ func (h *nodeHandler) reply(w http.ResponseWriter, st NodeState, log string, err
 		writeJSON(w, http.StatusBadRequest, errorBody{Message: "validation failed", Errors: fe})
 	case errors.As(err, &unsupported):
 		writeJSON(w, http.StatusConflict, errorBody{Message: unsupported.Error()})
+	case errors.Is(err, ErrAgentRestarting):
+		writeJSON(w, http.StatusConflict, errorBody{Message: err.Error(), Code: "agent_restarting"})
 	case errors.Is(err, ErrPending), errors.Is(err, ErrNoPending), errors.Is(err, ErrRiskyNetwork),
 		errors.Is(err, ErrUnsupported), errors.Is(err, ErrAgentOutdated), errors.Is(err, ErrNodeOffline):
 		writeJSON(w, http.StatusConflict, errorBody{Message: err.Error()})

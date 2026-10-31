@@ -3,6 +3,7 @@ package instance
 import (
 	"context"
 	"errors"
+	"strings"
 	"testing"
 	"time"
 
@@ -21,6 +22,11 @@ type fakeHostClient struct {
 	applyErr  error
 	system    *agentv1.HostApplySystemRequest
 	systemErr error
+
+	ssh       *agentv1.HostApplySSHRequest
+	sshErr    error
+	agentRoot *agentv1.HostApplyAgentRootRequest
+	rootErr   error
 
 	cleanupStatus    *agentv1.HostCleanupStatus
 	cleanupStatusErr error
@@ -51,6 +57,24 @@ func (f *fakeHostClient) ApplySystem(_ context.Context, in *agentv1.HostApplySys
 	return &agentv1.HostApplySystemResponse{}, f.systemErr
 }
 
+func (f *fakeHostClient) ApplySSH(_ context.Context, in *agentv1.HostApplySSHRequest, _ ...grpc.CallOption) (*agentv1.HostApplySSHResponse, error) {
+	f.ssh = in
+	return &agentv1.HostApplySSHResponse{}, f.sshErr
+}
+
+func (f *fakeHostClient) ConfirmSSH(context.Context, *agentv1.HostConfirmSSHRequest, ...grpc.CallOption) (*agentv1.HostConfirmSSHResponse, error) {
+	return &agentv1.HostConfirmSSHResponse{}, nil
+}
+
+func (f *fakeHostClient) RevertSSH(context.Context, *agentv1.HostRevertSSHRequest, ...grpc.CallOption) (*agentv1.HostRevertSSHResponse, error) {
+	return &agentv1.HostRevertSSHResponse{}, nil
+}
+
+func (f *fakeHostClient) ApplyAgentRoot(_ context.Context, in *agentv1.HostApplyAgentRootRequest, _ ...grpc.CallOption) (*agentv1.HostApplyAgentRootResponse, error) {
+	f.agentRoot = in
+	return &agentv1.HostApplyAgentRootResponse{}, f.rootErr
+}
+
 func (f *fakeHostClient) CleanupStatus(context.Context, *agentv1.HostCleanupStatusRequest, ...grpc.CallOption) (*agentv1.HostCleanupStatus, error) {
 	return f.cleanupStatus, f.cleanupStatusErr
 }
@@ -75,6 +99,10 @@ func TestAgentApplierMapsStatus(t *testing.T) {
 			Ipv6: &agentv1.HostIPv6Config{Enabled: true, Mode: ModeDHCP},
 		},
 		Hostname: "node-a", NtpEnabled: true, NtpServers: []string{"time.cloudflare.com"}, Timezone: "Europe/Berlin",
+		Ssh: &agentv1.HostSSHSettings{
+			Available: true, Port: 2222, PasswordAuthentication: true, KeyAuthAvailable: true,
+		},
+		AgentRoot: true,
 	}}
 	st, err := newAgentApplier(fake).Status(context.Background())
 	if err != nil || st.Capability != CapabilityReady {
@@ -85,6 +113,20 @@ func TestAgentApplierMapsStatus(t *testing.T) {
 	}
 	if st.Network.IPv4.Mode != ModeDHCP || st.Network.DNSServers[0] != "1.1.1.1" {
 		t.Fatalf("network not mapped: %+v", st.Network)
+	}
+	if st.SSH.Port != 2222 || !st.SSH.Available || !st.SSH.KeyAuthAvailable || !st.AgentRoot {
+		t.Fatalf("ssh/agent not mapped: %+v root=%v", st.SSH, st.AgentRoot)
+	}
+}
+
+func TestAgentApplierStatusWithoutSSHIsOutdated(t *testing.T) {
+	fake := &fakeHostClient{status: &agentv1.HostStatusResponse{
+		Capability: agentv1.HostCapability_HOST_CAPABILITY_READY,
+		Timezone:   "UTC",
+	}}
+	st, err := newAgentApplier(fake).Status(context.Background())
+	if err != nil || st.Capability != CapabilityHelperOutdated {
+		t.Fatalf("status without ssh = %+v, %v", st, err)
 	}
 }
 
@@ -198,5 +240,35 @@ func TestAgentApplierSettleRefusals(t *testing.T) {
 	fail := &fakeHostClient{applyErr: status.Error(codes.FailedPrecondition, "unsupported")}
 	if err := newAgentApplier(fail).ApplyNetwork(context.Background(), goodNet(), time.Minute, false); !errors.Is(err, ErrHost) {
 		t.Fatalf("apply refusal = %v, want host failure", err)
+	}
+}
+
+func TestAgentApplierAppliesSSHAndAgentRoot(t *testing.T) {
+	fake := &fakeHostClient{}
+	applier := newAgentApplier(fake)
+	if err := applier.ApplySSH(context.Background(), SSHInput{Port: 2222, PasswordAuthentication: false}, "deploy"); err != nil {
+		t.Fatal(err)
+	}
+	if fake.ssh.GetPort() != 2222 || fake.ssh.GetPasswordAuthentication() || fake.ssh.GetSshUser() != "deploy" {
+		t.Fatalf("ssh request = %+v", fake.ssh)
+	}
+	if err := applier.ApplyAgentRoot(context.Background(), true); err != nil {
+		t.Fatal(err)
+	}
+	if !fake.agentRoot.GetEnabled() {
+		t.Fatalf("agent root request = %+v", fake.agentRoot)
+	}
+
+	refused := &fakeHostClient{sshErr: status.Error(codes.FailedPrecondition, "no authorized key")}
+	if err := newAgentApplier(refused).ApplySSH(context.Background(), SSHInput{Port: 22}, "root"); !errors.Is(err, ErrUnsupported) {
+		t.Fatalf("ssh refusal = %v, want unsupported", err)
+	}
+
+	noKey := &fakeHostClient{sshErr: status.Error(codes.FailedPrecondition,
+		"gotham-hostctl: cannot disable password login: no authorized key for user 'deploy'")}
+	err := newAgentApplier(noKey).ApplySSH(context.Background(), SSHInput{Port: 22}, "deploy")
+	var fields FieldErrors
+	if !errors.As(err, &fields) || !strings.Contains(fields["password_authentication"], "no authorized key for user") {
+		t.Fatalf("key refusal = %v, want a password field error", err)
 	}
 }

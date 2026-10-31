@@ -17,6 +17,9 @@ var (
 	ErrAgentOutdated  = errors.New("instance: the node agent does not support host settings")
 	ErrNodeOffline    = errors.New("instance: the node agent is unreachable")
 	ErrHelperOutdated = errors.New("instance: the host helper does not support this operation")
+	// ErrAgentRestarting: the root-mode toggle applied, but the agent has not
+	// reconnected yet. The change is not lost; the next read shows the state.
+	ErrAgentRestarting = errors.New("instance: the agent is restarting; reload when it reconnects")
 )
 
 type FieldErrors map[string]string
@@ -95,6 +98,20 @@ type System struct {
 	Timezone   string   `json:"timezone"`
 }
 
+// SSHSettings is the SSH server state read from one node.
+type SSHSettings struct {
+	Available              bool   `json:"available"`
+	Port                   uint32 `json:"port"`
+	PasswordAuthentication bool   `json:"password_authentication"`
+	KeyAuthAvailable       bool   `json:"key_auth_available"`
+}
+
+// SSHInput is one desired SSH state.
+type SSHInput struct {
+	Port                   uint32 `json:"port"`
+	PasswordAuthentication bool   `json:"password_authentication"`
+}
+
 type Pending struct {
 	Previous Network   `json:"previous"`
 	Proposed Network   `json:"proposed"`
@@ -137,10 +154,12 @@ type HostStatus struct {
 	Capability NodeCapability
 	// Reason overrides the generic capability text when the host has a more
 	// specific story (for example an outdated helper that can be repaired).
-	Reason  string
-	Repair  bool
-	Network Network
-	System  System
+	Reason    string
+	Repair    bool
+	Network   Network
+	System    System
+	SSH       SSHSettings
+	AgentRoot bool
 }
 
 // NodeState is the per-node host settings response. Network and System are the
@@ -151,6 +170,8 @@ type NodeState struct {
 	Repair     bool           `json:"repair"`
 	Network    Network        `json:"network"`
 	System     System         `json:"system"`
+	SSH        SSHSettings    `json:"ssh"`
+	AgentRoot  bool           `json:"agent_root"`
 	Pending    *Pending       `json:"pending"`
 }
 

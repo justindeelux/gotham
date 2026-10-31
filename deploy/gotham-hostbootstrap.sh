@@ -96,7 +96,7 @@ install_optional() {
 
 # Closed verb set the control plane may run the host helper with; the last rule
 # is the single pinned repair verb (the tool installer re-applies the payload).
-HOSTCTL_VERBS="status apply-network confirm-network revert-network apply-system cleanup-status cleanup-journal cleanup-package-cache"
+HOSTCTL_VERBS="status apply-network confirm-network revert-network apply-system cleanup-status cleanup-journal cleanup-package-cache apply-ssh confirm-ssh revert-ssh apply-agent-root"
 
 die() { echo "gotham-hostbootstrap: $*" >&2; exit "${2:-1}"; }
 

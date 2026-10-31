@@ -347,6 +347,13 @@ func (s *Store) GetServerByNodeID(ctx context.Context, nodeID *string) (sqlc.Ser
 	return s.queries.GetServerByNodeID(ctx, nodeID)
 }
 
+func (s *Store) SetServerSSHPort(ctx context.Context, id uuid.UUID, port int32) error {
+	return s.queries.SetServerSSHPort(ctx, sqlc.SetServerSSHPortParams{
+		ID:   pgtype.UUID{Bytes: id, Valid: true},
+		Port: port,
+	})
+}
+
 func (s *Store) SetServerAgentLeaf(ctx context.Context, params sqlc.SetServerAgentLeafParams) (sqlc.Server, error) {
 	return s.queries.SetServerAgentLeaf(ctx, params)
 }

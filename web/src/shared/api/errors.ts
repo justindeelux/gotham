@@ -3,7 +3,7 @@ interface ApiErrorShape {
   message?: string;
   cause?: {
     response?: {
-      data?: { errors?: Record<string, string>; log?: string };
+      data?: { code?: string; errors?: Record<string, string>; log?: string };
     };
   };
 }
@@ -18,6 +18,10 @@ export function fieldErrors(error: unknown): Record<string, string> {
 
 export function errorLog(error: unknown): string {
   return (error as ApiErrorShape)?.cause?.response?.data?.log ?? "";
+}
+
+export function errorCode(error: unknown): string {
+  return (error as ApiErrorShape)?.cause?.response?.data?.code ?? "";
 }
 
 export function isForbidden(error: unknown): boolean {

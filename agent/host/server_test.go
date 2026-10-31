@@ -84,7 +84,7 @@ func TestStatusReportsCapability(t *testing.T) {
 		t.Fatalf("capability = %v, want helper denied", response.GetCapability())
 	}
 
-	unsupported := NewServer(WithHelper(helper), withRunner(&fakeRunner{out: `{"network":false,"system":true,"timezone":"UTC"}`}))
+	unsupported := NewServer(WithHelper(helper), withRunner(&fakeRunner{out: `{"network":false,"system":true,"timezone":"UTC","ssh":{"available":true},"agent_root":false}`}))
 	response, err = unsupported.Status(context.Background(), &agentv1.HostStatusRequest{})
 	if err != nil {
 		t.Fatal(err)
@@ -121,7 +121,9 @@ func TestStatusMapsLiveHostSettings(t *testing.T) {
 		"hostname": "node-1",
 		"ntp_enabled": true,
 		"ntp_servers": ["time.cloudflare.com"],
-		"timezone": "Europe/Berlin"
+		"timezone": "Europe/Berlin",
+		"ssh": {"available": true, "port": 2222, "password_authentication": false, "key_auth_available": true},
+		"agent_root": true
 	}`
 	server := NewServer(WithHelper(helper), withRunner(&fakeRunner{out: out}))
 	response, err := server.Status(context.Background(), &agentv1.HostStatusRequest{})
@@ -140,6 +142,13 @@ func TestStatusMapsLiveHostSettings(t *testing.T) {
 		network.GetIpv4().GetAddress() != "10.0.0.5/24" || network.GetIpv4().GetGateway() != "10.0.0.1" ||
 		network.GetIpv6().GetEnabled() {
 		t.Fatalf("network = %+v", network)
+	}
+	ssh := response.GetSsh()
+	if !ssh.GetAvailable() || ssh.GetPort() != 2222 || ssh.GetPasswordAuthentication() || !ssh.GetKeyAuthAvailable() {
+		t.Fatalf("ssh = %+v", ssh)
+	}
+	if !response.GetAgentRoot() {
+		t.Fatal("agent root not mapped")
 	}
 }
 
@@ -203,6 +212,51 @@ func TestApplyPassesOnlyWhitelistedKeys(t *testing.T) {
 	}
 }
 
+func TestSSHAndAgentRootVerbsPassOnlyFixedKeys(t *testing.T) {
+	runner := &fakeRunner{}
+	server := NewServer(withRunner(runner))
+
+	if _, err := server.ApplySSH(context.Background(), &agentv1.HostApplySSHRequest{
+		Port: 2222, PasswordAuthentication: false, SshUser: "deploy",
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if last := runner.last(); last.verb != "apply-ssh" ||
+		last.stdin != "port=2222\npassword_authentication=false\nssh_user=deploy\n" {
+		t.Fatalf("apply-ssh call = %q %q", last.verb, last.stdin)
+	}
+	if _, err := server.ConfirmSSH(context.Background(), &agentv1.HostConfirmSSHRequest{}); err != nil {
+		t.Fatal(err)
+	}
+	if last := runner.last(); last.verb != "confirm-ssh" || last.stdin != "" {
+		t.Fatalf("confirm-ssh call = %q %q", last.verb, last.stdin)
+	}
+	if _, err := server.RevertSSH(context.Background(), &agentv1.HostRevertSSHRequest{}); err != nil {
+		t.Fatal(err)
+	}
+	if last := runner.last(); last.verb != "revert-ssh" || last.stdin != "" {
+		t.Fatalf("revert-ssh call = %q %q", last.verb, last.stdin)
+	}
+	if _, err := server.ApplyAgentRoot(context.Background(), &agentv1.HostApplyAgentRootRequest{Enabled: true}); err != nil {
+		t.Fatal(err)
+	}
+	if last := runner.last(); last.verb != "apply-agent-root" || last.stdin != "enabled=true\n" {
+		t.Fatalf("apply-agent-root call = %q %q", last.verb, last.stdin)
+	}
+}
+
+func TestSSHRefusalKeepsHelperReason(t *testing.T) {
+	server := NewServer(withRunner(&fakeRunner{err: &runError{
+		verb: "apply-ssh", code: 5,
+		reason: "gotham-hostctl: cannot disable password login: no authorized key is configured",
+	}}))
+	_, err := server.ApplySSH(context.Background(), &agentv1.HostApplySSHRequest{Port: 22, PasswordAuthentication: false})
+	if status.Code(err) != codes.FailedPrecondition ||
+		!strings.Contains(status.Convert(err).Message(), "no authorized key") {
+		t.Fatalf("refusal = %v/%q", status.Code(err), status.Convert(err).Message())
+	}
+}
+
 func TestHelperErrorsStayOpaque(t *testing.T) {
 	secret := "cannot open /etc/shadow: secret-value"
 	server := NewServer(withRunner(&fakeRunner{err: &runError{verb: "apply-system", code: 2, err: errors.New(secret)}}))
@@ -223,6 +277,8 @@ func TestHelperErrorsStayOpaque(t *testing.T) {
 		{"unsupported stack", "apply-system", 3, codes.FailedPrecondition},
 		{"pending network", "apply-network", 4, codes.FailedPrecondition},
 		{"no pending network", "confirm-network", 4, codes.FailedPrecondition},
+		{"pending ssh", "apply-ssh", 4, codes.FailedPrecondition},
+		{"refused ssh", "apply-ssh", 5, codes.FailedPrecondition},
 		{"helper failed", "apply-network", 1, codes.Internal},
 	}
 	for _, tc := range cases {

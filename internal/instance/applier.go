@@ -27,6 +27,13 @@ type HostApplier interface {
 	ConfirmNetwork(ctx context.Context) error
 	RevertNetwork(ctx context.Context) error
 	ApplySystem(ctx context.Context, sys System) error
+	// ApplySSH changes SSH access. A port change stays tentative until
+	// ConfirmSSH, so a failed verification can always RevertSSH.
+	ApplySSH(ctx context.Context, in SSHInput, sshUser string) error
+	ConfirmSSH(ctx context.Context) error
+	RevertSSH(ctx context.Context) error
+	// ApplyAgentRoot switches the agent between its service user and root.
+	ApplyAgentRoot(ctx context.Context, enabled bool) error
 	// CleanupStatus reports the root-only cleanup categories this host
 	// supports; ErrHelperOutdated means the helper predates them.
 	CleanupStatus(ctx context.Context) (HostCleanupStatus, error)
@@ -139,7 +146,7 @@ func (a *sudoApplier) Status(ctx context.Context) (HostStatus, error) {
 	if !ok {
 		return HostStatus{Capability: CapabilityHelperDenied, Repair: a.repairPossible(ctx)}, nil
 	}
-	if p.Timezone == nil {
+	if p.Timezone == nil || p.SSH == nil || p.AgentRoot == nil {
 		return HostStatus{
 			Capability: CapabilityHelperOutdated,
 			Repair:     a.repairPossible(ctx),
@@ -154,6 +161,11 @@ func (a *sudoApplier) Status(ctx context.Context) (HostStatus, error) {
 		System: System{
 			Hostname: p.Hostname, NTPEnabled: p.NTPEnabled, NTPServers: nonNil(p.NTPServers), Timezone: *p.Timezone,
 		},
+		SSH: SSHSettings{
+			Available: p.SSH.Available, Port: p.SSH.Port,
+			PasswordAuthentication: p.SSH.PasswordAuthentication, KeyAuthAvailable: p.SSH.KeyAuthAvailable,
+		},
+		AgentRoot: *p.AgentRoot,
 	}, nil
 }
 
@@ -215,6 +227,17 @@ type statusPayload struct {
 	Timezone *string `json:"timezone"`
 	// Cleanup is the same outdated signal for the cleanup verbs.
 	Cleanup bool `json:"cleanup"`
+	// SSH and AgentRoot are pointers for the same outdated signal on helpers
+	// that predate SSH access settings.
+	SSH       *hostSSH `json:"ssh"`
+	AgentRoot *bool    `json:"agent_root"`
+}
+
+type hostSSH struct {
+	Available              bool   `json:"available"`
+	Port                   uint32 `json:"port"`
+	PasswordAuthentication bool   `json:"password_authentication"`
+	KeyAuthAvailable       bool   `json:"key_auth_available"`
 }
 
 type hostCleanupCategory struct {
@@ -292,6 +315,38 @@ func (a *sudoApplier) ApplySystem(ctx context.Context, s System) error {
 		"ntp_servers=" + strings.Join(s.NTPServers, ",") + "\n" +
 		"timezone=" + s.Timezone + "\n"
 	_, err := a.run(ctx, "apply-system", in)
+	return err
+}
+
+func (a *sudoApplier) ApplySSH(ctx context.Context, in SSHInput, sshUser string) error {
+	body := "port=" + strconv.FormatUint(uint64(in.Port), 10) + "\n" +
+		"password_authentication=" + strconv.FormatBool(in.PasswordAuthentication) + "\n" +
+		"ssh_user=" + sshUser + "\n"
+	_, err := a.run(ctx, "apply-ssh", body)
+	var exit *helperExit
+	if errors.As(err, &exit) {
+		switch exit.code {
+		case 5:
+			return FieldErrors{"port": sshRefusalText(exit.err.Error())}
+		case 6:
+			return FieldErrors{"password_authentication": sshRefusalText(exit.err.Error())}
+		}
+	}
+	return err
+}
+
+func (a *sudoApplier) ConfirmSSH(ctx context.Context) error {
+	_, err := a.run(ctx, "confirm-ssh", "")
+	return err
+}
+
+func (a *sudoApplier) RevertSSH(ctx context.Context) error {
+	_, err := a.run(ctx, "revert-ssh", "")
+	return err
+}
+
+func (a *sudoApplier) ApplyAgentRoot(ctx context.Context, enabled bool) error {
+	_, err := a.run(ctx, "apply-agent-root", "enabled="+strconv.FormatBool(enabled)+"\n")
 	return err
 }
 

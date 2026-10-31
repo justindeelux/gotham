@@ -25,6 +25,14 @@ RETURNING *;
 -- name: GetServerByID :one
 SELECT * FROM servers WHERE id = $1;
 
+-- name: SetServerSSHPort :exec
+-- Saves a port verified by the node's own host helper. Only the port moves:
+-- the host key and the readiness status stay valid.
+UPDATE servers
+SET port = $2,
+    updated_at = now()
+WHERE id = $1;
+
 -- name: GetServerByIDForUpdate :one
 -- Locks the node row for a PATCH edit (Update): the service re-reads under
 -- this lock and computes the write from the locked row, so a concurrent

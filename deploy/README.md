@@ -51,7 +51,7 @@ sandbox), `GOTHAM_INSTALL_TEST=1` (honour OS/agent-env seams, only with
 Run by the operator as root on each node. Installs the agent binary into
 `/var/lib/gotham-agent/bin`, writes `/etc/gotham/agent.env`, installs the shared
 update wrapper as `gotham-agent-update`, its sudoers rule, the host helper
-(`gotham-hostctl` with a five-verb sudoers rule for the agent user) and the
+(`gotham-hostctl` with a fixed verb-pinned sudoers rule for the agent user) and the
 unit, then starts it. Re-running is a safe reinstall: keys the invocation does
 not set keep their previous value. It verifies the same signed manifest as the
 control plane and **fails closed without a CA**.
@@ -164,8 +164,8 @@ sudo sh deploy/gotham-hostbootstrap.sh create-agent <agent-user> <version>
 ```
 
 Writes fixed root-owned paths under `/usr/libexec/gotham/` and a sudoers drop-in
-for the recorded users: the control-plane user gets the five host-control verbs
-plus the pinned repair verb, the node agent user gets exactly the five
+for the recorded users: the control-plane user gets the fixed host-control
+verbs plus the pinned repair verb, the node agent user gets exactly the fixed
 host-control verbs. `create` and `create-agent` keep each other's grantee, so
 the control-plane machine can carry both. Validates sudoers with `visudo`, is
 idempotent, refuses symlinked destinations, and records a root-owned high-water
@@ -191,7 +191,8 @@ The signed version, not the caller's `version`, decides what is applied.
 
 Installed root-owned and reached only through its sudoers drop-in. Verbs:
 `status`, `apply-network`, `confirm-network`, `revert-network`, `apply-system`,
-`cleanup-status`, `cleanup-journal`, `cleanup-package-cache`.
+`cleanup-status`, `cleanup-journal`, `cleanup-package-cache`, `apply-ssh`,
+`confirm-ssh`, `revert-ssh`, `apply-agent-root`.
 Values arrive on stdin as `key=value` and are re-validated. Only
 systemd-networkd, systemd-resolved and systemd-timesyncd are supported, and it
 owns only its `05-gotham.*` drop-ins. A network change is tentative: a systemd
@@ -203,8 +204,16 @@ tzdata) in addition to `hostname`, `ntp_enabled` and `ntp_servers`.
 takes `min_age_seconds` (clamped to at least one day) and vacuums older
 entries; `cleanup-package-cache` clears the apt or dnf cache. A host without
 the tool exits 3 (`unsupported`); `status` carries `"cleanup":true` so the
-control plane can spot a helper that predates them. Test seams:
-`GOTHAM_HOSTCTL_ROOT`, `GOTHAM_HOSTCTL_DRYRUN` (only without sudo).
+control plane can spot a helper that predates them. `apply-ssh` changes the
+`Port` and `PasswordAuthentication` drop-in, opening the new port in ufw or
+firewalld; the old port stays live until `confirm-ssh`, and a revert timer
+restores it if nothing confirms in 15 minutes. Disabling password login is
+refused (exit 5) unless an authorized key exists. `apply-agent-root` writes or
+removes the same `file-manager.conf` drop-in `install-agent.sh` uses and
+restarts the agent once, so the file manager and terminal follow the agent's
+user. Enabling root turns the file manager on and remembers the previous
+answer; disabling root restores it. Test seams: `GOTHAM_HOSTCTL_ROOT`, `GOTHAM_HOSTCTL_DRYRUN` (only without
+sudo).
 
 ### `gotham-toolctl.sh` — host build-tool installer
 

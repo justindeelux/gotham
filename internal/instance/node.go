@@ -1,9 +1,14 @@
 package instance
 
 import (
+	"bufio"
 	"context"
 	"errors"
+	"fmt"
 	"log/slog"
+	"net"
+	"strconv"
+	"strings"
 	"sync"
 	"time"
 
@@ -48,13 +53,20 @@ type NodeService struct {
 	// request, but two changes on the same node must not race the pending
 	// check (the loser would revert the winner's host change).
 	locks sync.Map
+	// Root mode restarts the agent; poll that long for it to come back.
+	agentWaitTimeout time.Duration
+	agentWaitPoll    time.Duration
 }
 
 func NewNodeService(repo NodeRepository, nodes NodeResolver, general *Service, logger *slog.Logger) *NodeService {
 	if logger == nil {
 		logger = slog.Default()
 	}
-	return &NodeService{repo: repo, nodes: nodes, general: general, logger: logger, now: time.Now}
+	return &NodeService{
+		repo: repo, nodes: nodes, general: general, logger: logger, now: time.Now,
+		agentWaitTimeout: 45 * time.Second,
+		agentWaitPoll:    time.Second,
+	}
 }
 
 func capabilityReason(c NodeCapability) string {
@@ -168,6 +180,161 @@ func (s *NodeService) UpdateNetwork(ctx context.Context, actor, serverID uuid.UU
 	return s.state(ctx, serverID)
 }
 
+// UpdateSSH changes the SSH port and password login. A port change is verified
+// with a new TCP connection before it is saved on the server record and
+// confirmed on the host; any failure restores the previous port, which stayed
+// open during the trial.
+func (s *NodeService) UpdateSSH(ctx context.Context, actor, serverID uuid.UUID, in SSHInput) (NodeState, error) {
+	unlock := s.lock(serverID)
+	defer unlock()
+	if in.Port < 1 || in.Port > 65535 {
+		return NodeState{}, FieldErrors{"port": "port must be between 1 and 65535"}
+	}
+	host, status, err := s.ready(ctx, serverID)
+	if err != nil {
+		return NodeState{}, err
+	}
+	if !status.SSH.Available {
+		return NodeState{}, FieldErrors{"port": "sshd is not installed on this server"}
+	}
+	sshUser, err := s.repo.ServerSSHUser(ctx, serverID)
+	if err != nil {
+		return NodeState{}, err
+	}
+	if status.SSH.PasswordAuthentication && !in.PasswordAuthentication && !status.SSH.KeyAuthAvailable {
+		user := sshUser
+		if user == "" {
+			user = "a recorded user"
+		}
+		return NodeState{}, FieldErrors{
+			"password_authentication": fmt.Sprintf(
+				"cannot disable password login: no authorized key is configured for SSH user %q", user,
+			),
+		}
+	}
+	portChanged := in.Port != status.SSH.Port
+	passwordChanged := in.PasswordAuthentication != status.SSH.PasswordAuthentication
+	if !portChanged && !passwordChanged {
+		return s.state(ctx, serverID)
+	}
+	// A browser disconnect must not abort the trial commit or its rollback:
+	// the host is mid-change and a failed confirm would leave both ports open
+	// until the revert timer fires.
+	applyCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), 180*time.Second)
+	defer cancel()
+	if err := host.Applier.ApplySSH(applyCtx, in, sshUser); err != nil {
+		return NodeState{}, err
+	}
+	previous := status.SSH
+	if portChanged {
+		ip, err := s.repo.ServerAddress(applyCtx, serverID)
+		if err != nil {
+			s.revertSSH(applyCtx, host, serverID, previous, false)
+			return NodeState{}, err
+		}
+		if err := verifySSHPort(applyCtx, ip, int(in.Port)); err != nil {
+			s.revertSSH(applyCtx, host, serverID, previous, false)
+			return NodeState{}, FieldErrors{
+				"port": fmt.Sprintf(
+					"the server did not accept a connection on port %d; the previous port was restored", in.Port,
+				),
+			}
+		}
+		saved := !host.Local
+		if saved {
+			if err := s.repo.SetSSHPort(applyCtx, serverID, int(in.Port)); err != nil {
+				s.revertSSH(applyCtx, host, serverID, previous, false)
+				return NodeState{}, err
+			}
+		}
+		if err := host.Applier.ConfirmSSH(applyCtx); err != nil {
+			s.revertSSH(applyCtx, host, serverID, previous, saved)
+			return NodeState{}, err
+		}
+	}
+	s.audit(applyCtx, actor, NodeSectionSSH, serverID, map[string]any{
+		"port": in.Port, "password_authentication": in.PasswordAuthentication,
+	})
+	s.logger.Info("node SSH settings updated", "actor", actor, "server_id", serverID, "port", in.Port)
+	return s.state(applyCtx, serverID)
+}
+
+// revertSSH restores the previous SSH state and, when it was already saved,
+// the previous port on the server record.
+func (s *NodeService) revertSSH(ctx context.Context, host NodeHost, serverID uuid.UUID, previous SSHSettings, saved bool) {
+	rollbackCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), 45*time.Second)
+	defer cancel()
+	if err := host.Applier.RevertSSH(rollbackCtx); err != nil {
+		s.logger.Error("node SSH revert failed", "server_id", serverID, "error", err)
+	}
+	if saved {
+		if err := s.repo.SetSSHPort(rollbackCtx, serverID, int(previous.Port)); err != nil {
+			s.logger.Error("node SSH port rollback failed", "server_id", serverID, "error", err)
+		}
+	}
+}
+
+// UpdateAgentRoot switches the agent's service user and waits for it to
+// reconnect. The helper schedules the restart, so the apply call returns
+// before the connection drops.
+func (s *NodeService) UpdateAgentRoot(ctx context.Context, actor, serverID uuid.UUID, enabled bool) (NodeState, error) {
+	unlock := s.lock(serverID)
+	defer unlock()
+	host, status, err := s.ready(ctx, serverID)
+	if err != nil {
+		return NodeState{}, err
+	}
+	if status.AgentRoot == enabled {
+		return s.state(ctx, serverID)
+	}
+	if err := host.Applier.ApplyAgentRoot(ctx, enabled); err != nil {
+		// The restart can drop the connection before the reply arrives; the
+		// poll below is the authority on whether the change took effect.
+		if !errors.Is(err, ErrNodeOffline) {
+			return NodeState{}, err
+		}
+	}
+	deadline := s.now().Add(s.agentWaitTimeout)
+	for {
+		current, err := s.status(ctx, host)
+		if err == nil && current.Capability == CapabilityReady && current.AgentRoot == enabled {
+			s.audit(ctx, actor, NodeSectionAgent, serverID, map[string]any{"agent_root": enabled})
+			s.logger.Info("node agent root mode updated", "actor", actor, "server_id", serverID, "enabled", enabled)
+			return s.state(ctx, serverID)
+		}
+		if s.now().After(deadline) {
+			return NodeState{}, ErrAgentRestarting
+		}
+		select {
+		case <-ctx.Done():
+			return NodeState{}, ctx.Err()
+		case <-time.After(s.agentWaitPoll):
+		}
+	}
+}
+
+// verifySSHPort opens a new connection on the new port and requires an SSH
+// banner, so a random service on that port cannot pass for sshd.
+func verifySSHPort(ctx context.Context, host string, port int) error {
+	dialCtx, cancel := context.WithTimeout(ctx, 5*time.Second)
+	defer cancel()
+	var dialer net.Dialer
+	conn, err := dialer.DialContext(dialCtx, "tcp", net.JoinHostPort(host, strconv.Itoa(port)))
+	if err != nil {
+		return err
+	}
+	defer conn.Close()
+	_ = conn.SetReadDeadline(time.Now().Add(5 * time.Second))
+	banner, err := bufio.NewReader(conn).ReadString('\n')
+	if err != nil {
+		return err
+	}
+	if !strings.HasPrefix(banner, "SSH-") {
+		return fmt.Errorf("unexpected SSH banner on port %d", port)
+	}
+	return nil
+}
+
 func (s *NodeService) ConfirmNetwork(ctx context.Context, actor, serverID uuid.UUID) (NodeState, error) {
 	return s.settle(ctx, actor, serverID, true)
 }
@@ -268,6 +435,8 @@ func (s *NodeService) state(ctx context.Context, serverID uuid.UUID) (NodeState,
 		Repair:     status.Repair,
 		Network:    status.Network,
 		System:     status.System,
+		SSH:        status.SSH,
+		AgentRoot:  status.AgentRoot,
 		Pending:    pending,
 	}
 	if pending != nil {

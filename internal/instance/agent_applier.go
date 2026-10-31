@@ -60,6 +60,17 @@ func (a *agentApplier) Status(ctx context.Context) (HostStatus, error) {
 			Hostname: resp.GetHostname(), NTPEnabled: resp.GetNtpEnabled(),
 			NTPServers: nonNil(resp.GetNtpServers()), Timezone: resp.GetTimezone(),
 		},
+		AgentRoot: resp.GetAgentRoot(),
+	}
+	if ssh := resp.GetSsh(); ssh != nil {
+		st.SSH = SSHSettings{
+			Available:              ssh.GetAvailable(),
+			Port:                   ssh.GetPort(),
+			PasswordAuthentication: ssh.GetPasswordAuthentication(),
+			KeyAuthAvailable:       ssh.GetKeyAuthAvailable(),
+		}
+	} else if st.Capability == CapabilityReady {
+		st.Capability = CapabilityHelperOutdated
 	}
 	if network := resp.GetNetwork(); network != nil && network.GetInterface() != "" {
 		st.Network = Network{
@@ -127,6 +138,54 @@ func (a *agentApplier) ApplySystem(ctx context.Context, s System) error {
 		Hostname: s.Hostname, NtpEnabled: s.NTPEnabled, NtpServers: s.NTPServers, Timezone: s.Timezone,
 	})
 	return classifyApplyError("system", err)
+}
+
+func (a *agentApplier) ApplySSH(ctx context.Context, in SSHInput) error {
+	callCtx, client, closeFn, err := a.client(ctx)
+	if err != nil {
+		return err
+	}
+	defer closeFn()
+	_, err = client.ApplySSH(callCtx, &agentv1.HostApplySSHRequest{
+		Port: in.Port, PasswordAuthentication: in.PasswordAuthentication,
+	})
+	if err != nil && status.Code(err) == codes.FailedPrecondition {
+		return fmt.Errorf("%w: %s", ErrUnsupported, status.Convert(err).Message())
+	}
+	return classifyApplyError("ssh", err)
+}
+
+func (a *agentApplier) ConfirmSSH(ctx context.Context) error {
+	callCtx, client, closeFn, err := a.client(ctx)
+	if err != nil {
+		return err
+	}
+	defer closeFn()
+	_, err = client.ConfirmSSH(callCtx, &agentv1.HostConfirmSSHRequest{})
+	return classifySettleError(err)
+}
+
+func (a *agentApplier) RevertSSH(ctx context.Context) error {
+	callCtx, client, closeFn, err := a.client(ctx)
+	if err != nil {
+		return err
+	}
+	defer closeFn()
+	_, err = client.RevertSSH(callCtx, &agentv1.HostRevertSSHRequest{})
+	return classifySettleError(err)
+}
+
+func (a *agentApplier) ApplyAgentRoot(ctx context.Context, enabled bool) error {
+	callCtx, client, closeFn, err := a.client(ctx)
+	if err != nil {
+		return err
+	}
+	defer closeFn()
+	_, err = client.ApplyAgentRoot(callCtx, &agentv1.HostApplyAgentRootRequest{Enabled: enabled})
+	if err != nil && status.Code(err) == codes.FailedPrecondition {
+		return fmt.Errorf("%w: %s", ErrUnsupported, status.Convert(err).Message())
+	}
+	return classifyAgentError(err)
 }
 
 func (a *agentApplier) CleanupStatus(ctx context.Context) (HostCleanupStatus, error) {
@@ -251,8 +310,12 @@ func classifySettleError(err error) error {
 }
 
 func fieldsFor(what, msg string) error {
-	if what == "network" {
+	switch what {
+	case "network":
 		return FieldErrors{"network": msg}
+	case "ssh":
+		return FieldErrors{"port": msg}
+	default:
+		return FieldErrors{"system": msg}
 	}
-	return FieldErrors{"system": msg}
 }

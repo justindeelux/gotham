@@ -5,6 +5,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"net"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -37,6 +38,13 @@ type fakeHost struct {
 	cleanupErr    error
 	reclaimed     int64
 	cleaned       []string
+
+	sshApplied   []SSHInput
+	sshConfirmed int
+	sshReverted  int
+	sshApplyErr  error
+	agentApplied []bool
+	agentStays   bool
 }
 
 func (h *fakeHost) Status(context.Context) (HostStatus, error) {
@@ -68,6 +76,21 @@ func (h *fakeHost) ApplySystem(_ context.Context, in System) error {
 	return h.applyErr
 }
 
+func (h *fakeHost) ApplySSH(_ context.Context, in SSHInput) error {
+	h.sshApplied = append(h.sshApplied, in)
+	return h.sshApplyErr
+}
+
+func (h *fakeHost) ConfirmSSH(context.Context) error { h.sshConfirmed++; return nil }
+func (h *fakeHost) RevertSSH(context.Context) error  { h.sshReverted++; return nil }
+func (h *fakeHost) ApplyAgentRoot(_ context.Context, enabled bool) error {
+	h.agentApplied = append(h.agentApplied, enabled)
+	if !h.agentStays {
+		h.status.AgentRoot = enabled
+	}
+	return nil
+}
+
 func (h *fakeHost) CleanupStatus(context.Context) (HostCleanupStatus, error) {
 	return h.cleanupStatus, h.cleanupErr
 }
@@ -80,6 +103,10 @@ func (h *fakeHost) CleanupHost(_ context.Context, category string, _ time.Durati
 type fakeNodeRepo struct {
 	pending map[uuid.UUID]Pending
 	audits  []string
+	address string
+	port    int
+	ports   []int
+	portErr error
 }
 
 func newFakeNodeRepo() *fakeNodeRepo { return &fakeNodeRepo{pending: map[uuid.UUID]Pending{}} }
@@ -107,6 +134,22 @@ func (r *fakeNodeRepo) ClearPending(_ context.Context, id uuid.UUID) error {
 
 func (r *fakeNodeRepo) Audit(_ context.Context, _ uuid.UUID, section string, _ any) error {
 	r.audits = append(r.audits, section)
+	return nil
+}
+
+func (r *fakeNodeRepo) ServerAddress(context.Context, uuid.UUID) (string, error) {
+	if r.address == "" {
+		return "127.0.0.1", nil
+	}
+	return r.address, nil
+}
+
+func (r *fakeNodeRepo) SetSSHPort(_ context.Context, _ uuid.UUID, port int) error {
+	if r.portErr != nil {
+		return r.portErr
+	}
+	r.port = port
+	r.ports = append(r.ports, port)
 	return nil
 }
 
@@ -253,6 +296,129 @@ func TestNodeNetworkRiskyChangeNeedsConfirmation(t *testing.T) {
 				t.Fatalf("interface change must take the full path: %v", host.dnsOnlys)
 			}
 		})
+	}
+}
+
+func sshStatus() SSHSettings {
+	return SSHSettings{
+		Available: true, Port: 22, PasswordAuthentication: true, KeyAuthAvailable: true,
+	}
+}
+
+func TestNodeSSHPortChangeVerifiesAndSaves(t *testing.T) {
+	listener, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer listener.Close()
+	port := uint32(listener.Addr().(*net.TCPAddr).Port)
+	go func() {
+		conn, acceptErr := listener.Accept()
+		if acceptErr != nil {
+			return
+		}
+		_, _ = conn.Write([]byte("SSH-2.0-test\r\n"))
+		_ = conn.Close()
+	}()
+
+	host := &fakeHost{status: HostStatus{SSH: sshStatus()}}
+	f := newNodeFixture(t, host, nil)
+	st, err := f.svc.UpdateSSH(context.Background(), uuid.Nil, f.servers[0], SSHInput{
+		Port: port, PasswordAuthentication: true,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(host.sshApplied) != 1 || host.sshApplied[0].Port != port {
+		t.Fatalf("apply = %+v", host.sshApplied)
+	}
+	if host.sshConfirmed != 1 || host.sshReverted != 0 {
+		t.Fatalf("confirm=%d revert=%d", host.sshConfirmed, host.sshReverted)
+	}
+	if f.repo.port != int(port) {
+		t.Fatalf("saved port = %d, want %d", f.repo.port, port)
+	}
+	if st.Capability != CapabilityReady {
+		t.Fatalf("state = %+v", st)
+	}
+}
+
+func TestNodeSSHPortChangeRollsBackWhenDialFails(t *testing.T) {
+	listener, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	port := uint32(listener.Addr().(*net.TCPAddr).Port)
+	listener.Close()
+
+	host := &fakeHost{status: HostStatus{SSH: sshStatus()}}
+	f := newNodeFixture(t, host, nil)
+	_, err = f.svc.UpdateSSH(context.Background(), uuid.Nil, f.servers[0], SSHInput{
+		Port: port, PasswordAuthentication: true,
+	})
+	var fields FieldErrors
+	if !errors.As(err, &fields) || fields["port"] == "" {
+		t.Fatalf("err = %v, want a port field error", err)
+	}
+	if host.sshConfirmed != 0 || host.sshReverted != 1 {
+		t.Fatalf("confirm=%d revert=%d, want a revert", host.sshConfirmed, host.sshReverted)
+	}
+	if len(f.repo.ports) != 0 {
+		t.Fatalf("a failed port change reached the server record: %v", f.repo.ports)
+	}
+}
+
+func TestNodeSSHDisablePasswordNeedsKeyAuth(t *testing.T) {
+	status := sshStatus()
+	status.KeyAuthAvailable = false
+	host := &fakeHost{status: HostStatus{SSH: status}}
+	f := newNodeFixture(t, host, nil)
+	_, err := f.svc.UpdateSSH(context.Background(), uuid.Nil, f.servers[0], SSHInput{
+		Port: 22, PasswordAuthentication: false,
+	})
+	var fields FieldErrors
+	if !errors.As(err, &fields) || fields["password_authentication"] == "" {
+		t.Fatalf("err = %v, want a password-authentication field error", err)
+	}
+	if len(host.sshApplied) != 0 {
+		t.Fatal("a blocked change reached the host")
+	}
+}
+
+func TestNodeSSHPasswordOnlyChangeNeedsNoTrial(t *testing.T) {
+	host := &fakeHost{status: HostStatus{SSH: sshStatus()}}
+	f := newNodeFixture(t, host, nil)
+	if _, err := f.svc.UpdateSSH(context.Background(), uuid.Nil, f.servers[0], SSHInput{
+		Port: 22, PasswordAuthentication: false,
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if len(host.sshApplied) != 1 || host.sshConfirmed != 0 {
+		t.Fatalf("apply=%+v confirm=%d", host.sshApplied, host.sshConfirmed)
+	}
+}
+
+func TestNodeAgentRootWaitsForReconnect(t *testing.T) {
+	host := &fakeHost{status: HostStatus{AgentRoot: false}}
+	f := newNodeFixture(t, host, nil)
+	if _, err := f.svc.UpdateAgentRoot(context.Background(), uuid.Nil, f.servers[0], true); err != nil {
+		t.Fatal(err)
+	}
+	if len(host.agentApplied) != 1 || !host.agentApplied[0] {
+		t.Fatalf("agent apply = %+v", host.agentApplied)
+	}
+	if len(f.repo.audits) == 0 || f.repo.audits[0] != NodeSectionAgent {
+		t.Fatalf("audits = %v", f.repo.audits)
+	}
+}
+
+func TestNodeAgentRootReportsRestarting(t *testing.T) {
+	host := &fakeHost{status: HostStatus{AgentRoot: false}, agentStays: true}
+	f := newNodeFixture(t, host, nil)
+	f.svc.agentWaitTimeout = 0
+	f.svc.agentWaitPoll = time.Millisecond
+	if _, err := f.svc.UpdateAgentRoot(context.Background(), uuid.Nil, f.servers[0], true); !errors.Is(err, ErrAgentRestarting) {
+		t.Fatalf("err = %v, want ErrAgentRestarting", err)
 	}
 }
 
@@ -434,6 +600,8 @@ func TestNodeWithoutDialableAddressIsOffline(t *testing.T) {
 	}{
 		{http.MethodPut, "/host/system", `{"hostname":"node-a","ntp_enabled":true}`},
 		{http.MethodPut, "/host/network", `{"ipv4":{"mode":"dhcp"},"ipv6":{"enabled":false,"mode":"dhcp"}}`},
+		{http.MethodPut, "/host/ssh", `{"port":2222,"password_authentication":true}`},
+		{http.MethodPut, "/host/agent-root", `{"enabled":true}`},
 		{http.MethodPost, "/host/helper", ""},
 	} {
 		rec = httptest.NewRecorder()
@@ -487,6 +655,23 @@ func TestNodeRoutes(t *testing.T) {
 	ok.ServeHTTP(rec, httptest.NewRequest(http.MethodPost, "/v1/servers/"+id.String()+"/host/network/confirm", nil))
 	if rec.Code != http.StatusConflict {
 		t.Fatalf("confirm without pending: %d %s", rec.Code, rec.Body)
+	}
+}
+
+func TestNodeAgentRootRestartingIsConflict(t *testing.T) {
+	host := &fakeHost{status: HostStatus{AgentRoot: false}, agentStays: true}
+	f := newNodeFixture(t, host, nil)
+	f.svc.agentWaitTimeout = 0
+	f.svc.agentWaitPoll = time.Millisecond
+	id := f.servers[0]
+	r := chi.NewRouter()
+	MountNode(r, func(n http.Handler) http.Handler { return n },
+		func(context.Context) (uuid.UUID, bool) { return uuid.Nil, true }, f.svc)
+	rec := httptest.NewRecorder()
+	r.ServeHTTP(rec, httptest.NewRequest(http.MethodPut, "/v1/servers/"+id.String()+"/host/agent-root",
+		strings.NewReader(`{"enabled":true}`)))
+	if rec.Code != http.StatusConflict || !strings.Contains(rec.Body.String(), "restarting") {
+		t.Fatalf("restarting = %d %s", rec.Code, rec.Body)
 	}
 }
 

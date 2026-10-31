@@ -6,7 +6,7 @@
 # to the service StateDirectory (/var/lib/gotham-agent/bin/gotham-agent), writes
 # /etc/gotham/agent.env from the current environment, installs the privileged
 # update wrapper + sudoers rule and the host helper (gotham-hostctl with a
-# five-verb sudoers rule for the agent user), creates the gotham-agent system
+# fixed verb-pinned sudoers rule for the agent user), creates the gotham-agent system
 # user and enables the systemd unit.
 #
 # Re-running it is a reinstall: keys left unset keep the value the previous run
@@ -505,9 +505,10 @@ else
     sh "${SCRIPT_DIR}/install-toolctl-sudoers.sh" "${SERVICE_USER}"
 fi
 
-# Host helper: the fixed root-owned gotham-hostctl and the five-verb sudoers
+# Host helper: the fixed root-owned gotham-hostctl and its verb-pinned sudoers
 # drop-in for the agent user, so the control plane can configure this node's
-# network, hostname, NTP and timezone over the agent channel. It reuses the
+# network, hostname, NTP, timezone, SSH access and agent user over the agent
+# channel. It reuses the
 # hostbootstrap payload installer; on the control-plane machine that keeps the
 # control-plane grantee in the same drop-in (neither user replaces the other).
 log "installing the host helper for ${SERVICE_USER}"

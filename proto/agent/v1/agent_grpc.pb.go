@@ -3048,6 +3048,10 @@ const (
 	HostService_ApplySystem_FullMethodName    = "/agent.v1.HostService/ApplySystem"
 	HostService_CleanupStatus_FullMethodName  = "/agent.v1.HostService/CleanupStatus"
 	HostService_CleanupHost_FullMethodName    = "/agent.v1.HostService/CleanupHost"
+	HostService_ApplySSH_FullMethodName       = "/agent.v1.HostService/ApplySSH"
+	HostService_ConfirmSSH_FullMethodName     = "/agent.v1.HostService/ConfirmSSH"
+	HostService_RevertSSH_FullMethodName      = "/agent.v1.HostService/RevertSSH"
+	HostService_ApplyAgentRoot_FullMethodName = "/agent.v1.HostService/ApplyAgentRoot"
 )
 
 // HostServiceClient is the client API for HostService service.
@@ -3082,6 +3086,19 @@ type HostServiceClient interface {
 	// CleanupHost reclaims one root-only cleanup category (the systemd journal
 	// or the package cache) and reports the size it released.
 	CleanupHost(ctx context.Context, in *HostCleanupRequest, opts ...grpc.CallOption) (*HostCleanupResult, error)
+	// ApplySSH changes the SSH port and password-login setting. A port change is
+	// tentative: the old port stays open until ConfirmSSH, so a failed change
+	// never locks the operator out.
+	ApplySSH(ctx context.Context, in *HostApplySSHRequest, opts ...grpc.CallOption) (*HostApplySSHResponse, error)
+	// ConfirmSSH keeps the tentative port change and closes the old port.
+	ConfirmSSH(ctx context.Context, in *HostConfirmSSHRequest, opts ...grpc.CallOption) (*HostConfirmSSHResponse, error)
+	// RevertSSH restores the SSH configuration snapshotted by ApplySSH. It is
+	// idempotent: reverting with no pending change succeeds.
+	RevertSSH(ctx context.Context, in *HostRevertSSHRequest, opts ...grpc.CallOption) (*HostRevertSSHResponse, error)
+	// ApplyAgentRoot switches the node agent between the unprivileged
+	// gotham-agent user and root (file manager + root terminal). The helper
+	// restarts the agent, so the control plane reconnects afterwards.
+	ApplyAgentRoot(ctx context.Context, in *HostApplyAgentRootRequest, opts ...grpc.CallOption) (*HostApplyAgentRootResponse, error)
 }
 
 type hostServiceClient struct {
@@ -3162,6 +3179,46 @@ func (c *hostServiceClient) CleanupHost(ctx context.Context, in *HostCleanupRequ
 	return out, nil
 }
 
+func (c *hostServiceClient) ApplySSH(ctx context.Context, in *HostApplySSHRequest, opts ...grpc.CallOption) (*HostApplySSHResponse, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	out := new(HostApplySSHResponse)
+	err := c.cc.Invoke(ctx, HostService_ApplySSH_FullMethodName, in, out, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
+func (c *hostServiceClient) ConfirmSSH(ctx context.Context, in *HostConfirmSSHRequest, opts ...grpc.CallOption) (*HostConfirmSSHResponse, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	out := new(HostConfirmSSHResponse)
+	err := c.cc.Invoke(ctx, HostService_ConfirmSSH_FullMethodName, in, out, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
+func (c *hostServiceClient) RevertSSH(ctx context.Context, in *HostRevertSSHRequest, opts ...grpc.CallOption) (*HostRevertSSHResponse, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	out := new(HostRevertSSHResponse)
+	err := c.cc.Invoke(ctx, HostService_RevertSSH_FullMethodName, in, out, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
+func (c *hostServiceClient) ApplyAgentRoot(ctx context.Context, in *HostApplyAgentRootRequest, opts ...grpc.CallOption) (*HostApplyAgentRootResponse, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	out := new(HostApplyAgentRootResponse)
+	err := c.cc.Invoke(ctx, HostService_ApplyAgentRoot_FullMethodName, in, out, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
 // HostServiceServer is the server API for HostService service.
 // All implementations must embed UnimplementedHostServiceServer
 // for forward compatibility.
@@ -3194,6 +3251,19 @@ type HostServiceServer interface {
 	// CleanupHost reclaims one root-only cleanup category (the systemd journal
 	// or the package cache) and reports the size it released.
 	CleanupHost(context.Context, *HostCleanupRequest) (*HostCleanupResult, error)
+	// ApplySSH changes the SSH port and password-login setting. A port change is
+	// tentative: the old port stays open until ConfirmSSH, so a failed change
+	// never locks the operator out.
+	ApplySSH(context.Context, *HostApplySSHRequest) (*HostApplySSHResponse, error)
+	// ConfirmSSH keeps the tentative port change and closes the old port.
+	ConfirmSSH(context.Context, *HostConfirmSSHRequest) (*HostConfirmSSHResponse, error)
+	// RevertSSH restores the SSH configuration snapshotted by ApplySSH. It is
+	// idempotent: reverting with no pending change succeeds.
+	RevertSSH(context.Context, *HostRevertSSHRequest) (*HostRevertSSHResponse, error)
+	// ApplyAgentRoot switches the node agent between the unprivileged
+	// gotham-agent user and root (file manager + root terminal). The helper
+	// restarts the agent, so the control plane reconnects afterwards.
+	ApplyAgentRoot(context.Context, *HostApplyAgentRootRequest) (*HostApplyAgentRootResponse, error)
 	mustEmbedUnimplementedHostServiceServer()
 }
 
@@ -3224,6 +3294,18 @@ func (UnimplementedHostServiceServer) CleanupStatus(context.Context, *HostCleanu
 }
 func (UnimplementedHostServiceServer) CleanupHost(context.Context, *HostCleanupRequest) (*HostCleanupResult, error) {
 	return nil, status.Error(codes.Unimplemented, "method CleanupHost not implemented")
+}
+func (UnimplementedHostServiceServer) ApplySSH(context.Context, *HostApplySSHRequest) (*HostApplySSHResponse, error) {
+	return nil, status.Error(codes.Unimplemented, "method ApplySSH not implemented")
+}
+func (UnimplementedHostServiceServer) ConfirmSSH(context.Context, *HostConfirmSSHRequest) (*HostConfirmSSHResponse, error) {
+	return nil, status.Error(codes.Unimplemented, "method ConfirmSSH not implemented")
+}
+func (UnimplementedHostServiceServer) RevertSSH(context.Context, *HostRevertSSHRequest) (*HostRevertSSHResponse, error) {
+	return nil, status.Error(codes.Unimplemented, "method RevertSSH not implemented")
+}
+func (UnimplementedHostServiceServer) ApplyAgentRoot(context.Context, *HostApplyAgentRootRequest) (*HostApplyAgentRootResponse, error) {
+	return nil, status.Error(codes.Unimplemented, "method ApplyAgentRoot not implemented")
 }
 func (UnimplementedHostServiceServer) mustEmbedUnimplementedHostServiceServer() {}
 func (UnimplementedHostServiceServer) testEmbeddedByValue()                     {}
@@ -3372,6 +3454,78 @@ func _HostService_CleanupHost_Handler(srv interface{}, ctx context.Context, dec 
 	return interceptor(ctx, in, info, handler)
 }
 
+func _HostService_ApplySSH_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(HostApplySSHRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(HostServiceServer).ApplySSH(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: HostService_ApplySSH_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(HostServiceServer).ApplySSH(ctx, req.(*HostApplySSHRequest))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
+func _HostService_ConfirmSSH_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(HostConfirmSSHRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(HostServiceServer).ConfirmSSH(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: HostService_ConfirmSSH_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(HostServiceServer).ConfirmSSH(ctx, req.(*HostConfirmSSHRequest))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
+func _HostService_RevertSSH_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(HostRevertSSHRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(HostServiceServer).RevertSSH(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: HostService_RevertSSH_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(HostServiceServer).RevertSSH(ctx, req.(*HostRevertSSHRequest))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
+func _HostService_ApplyAgentRoot_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(HostApplyAgentRootRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(HostServiceServer).ApplyAgentRoot(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: HostService_ApplyAgentRoot_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(HostServiceServer).ApplyAgentRoot(ctx, req.(*HostApplyAgentRootRequest))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
 // HostService_ServiceDesc is the grpc.ServiceDesc for HostService service.
 // It's only intended for direct use with grpc.RegisterService,
 // and not to be introspected or modified (even as a copy)
@@ -3406,6 +3560,22 @@ var HostService_ServiceDesc = grpc.ServiceDesc{
 		{
 			MethodName: "CleanupHost",
 			Handler:    _HostService_CleanupHost_Handler,
+		},
+		{
+			MethodName: "ApplySSH",
+			Handler:    _HostService_ApplySSH_Handler,
+		},
+		{
+			MethodName: "ConfirmSSH",
+			Handler:    _HostService_ConfirmSSH_Handler,
+		},
+		{
+			MethodName: "RevertSSH",
+			Handler:    _HostService_RevertSSH_Handler,
+		},
+		{
+			MethodName: "ApplyAgentRoot",
+			Handler:    _HostService_ApplyAgentRoot_Handler,
 		},
 	},
 	Streams:  []grpc.StreamDesc{},

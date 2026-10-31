@@ -112,6 +112,222 @@ func stubProbes(t *testing.T, root string) []string {
 	return []string{"PATH=" + bin + ":" + os.Getenv("PATH")}
 }
 
+func sshTestStubs(t *testing.T, root string, livePassword string) ([]string, string) {
+	t.Helper()
+	bin := filepath.Join(root, "bin")
+	if err := os.MkdirAll(bin, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	dropin := filepath.Join(root, "etc/ssh/sshd_config.d/05-gotham.conf")
+	sshd := "#!/bin/sh\n" +
+		"if [ \"$1\" = \"-t\" ]; then exit 0; fi\n" +
+		"if [ \"$1\" = \"-T\" ]; then\n" +
+		"  if [ -f \"$SSHD_DROPIN\" ]; then\n" +
+		"    grep -i '^Port ' \"$SSHD_DROPIN\"\n" +
+		"    grep -i '^PasswordAuthentication ' \"$SSHD_DROPIN\"\n" +
+		"  else\n" +
+		"    echo 'port 22'\n" +
+		"    printf 'passwordauthentication %s\\n' \"" + livePassword + "\"\n" +
+		"  fi\n" +
+		"  echo 'pubkeyauthentication yes'\n" +
+		"  exit 0\n" +
+		"fi\n"
+	writeStub(t, bin, "sshd", sshd)
+	ufwLog := filepath.Join(root, "ufw.log")
+	ufw := "#!/bin/sh\n" +
+		"case \"$1\" in\n" +
+		"  status) echo 'Status: active' ;;\n" +
+		"  allow|delete) printf '%s\\n' \"$*\" >>\"$UFW_LOG\" ;;\n" +
+		"esac\n" +
+		"exit 0\n"
+	writeStub(t, bin, "ufw", ufw)
+	writeStub(t, bin, "systemctl", "#!/bin/sh\nexit 0\n")
+	systemdLog := filepath.Join(root, "systemd-run.log")
+	writeStub(t, bin, "systemd-run", "#!/bin/sh\nprintf '%s\\n' \"$*\" >>\"$SYSTEMD_LOG\"\nexit 0\n")
+	writeStub(t, bin, "ps", "#!/bin/sh\necho gotham-agent\n")
+	return []string{
+		"PATH=" + bin + ":" + os.Getenv("PATH"),
+		"SSHD_DROPIN=" + dropin,
+		"UFW_LOG=" + ufwLog,
+		"SYSTEMD_LOG=" + systemdLog,
+	}, dropin
+}
+
+func TestHostctlSSHStatusReportsState(t *testing.T) {
+	root := t.TempDir()
+	extra, _ := sshTestStubs(t, root, "yes")
+	if err := os.MkdirAll(filepath.Join(root, "root/.ssh"), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	key := "ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAITestKey gotham@test\n"
+	if err := os.WriteFile(filepath.Join(root, "root/.ssh/authorized_keys"), []byte(key), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	out, err := runHostctlEnv(t, root, "", "status", extra)
+	if err != nil {
+		t.Fatalf("status failed: %v\n%s", err, out)
+	}
+	for _, want := range []string{
+		`"ssh":{"available":true,"port":22,"password_authentication":true,"key_auth_available":true}`,
+		`"agent_root":false`,
+	} {
+		if !strings.Contains(out, want) {
+			t.Errorf("status misses %s:\n%s", want, out)
+		}
+	}
+}
+
+func TestHostctlApplySSHKeepsOldPortUntilConfirm(t *testing.T) {
+	root := t.TempDir()
+	extra, dropin := sshTestStubs(t, root, "yes")
+	if err := os.MkdirAll(filepath.Join(root, "root/.ssh"), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(root, "root/.ssh/authorized_keys"),
+		[]byte("ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAITestKey gotham@test\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	out, err := runHostctlReal(t, root, "port=2222\npassword_authentication=true\n", "apply-ssh", extra)
+	if err != nil {
+		t.Fatalf("apply-ssh failed: %v\n%s", err, out)
+	}
+	data, err := os.ReadFile(dropin)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(string(data), "Port 22\n") || !strings.Contains(string(data), "Port 2222\n") {
+		t.Fatalf("a trial must keep both ports:\n%s", data)
+	}
+	pending := filepath.Join(root, "var/lib/gotham-hostctl/ssh-pending")
+	if _, err := os.Stat(pending); err != nil {
+		t.Fatalf("apply-ssh must record a pending change: %v", err)
+	}
+	systemdLog, _ := os.ReadFile(filepath.Join(root, "systemd-run.log"))
+	if !strings.Contains(string(systemdLog), "--unit=gotham-hostctl-ssh-revert") {
+		t.Fatalf("apply-ssh must arm the revert timer: %s", systemdLog)
+	}
+
+	if out, err := runHostctlReal(t, root, "", "confirm-ssh", extra); err != nil {
+		t.Fatalf("confirm-ssh failed: %v\n%s", err, out)
+	}
+	data, err = os.ReadFile(dropin)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if strings.Contains(string(data), "Port 22\n") || !strings.Contains(string(data), "Port 2222\n") {
+		t.Fatalf("confirm must keep only the new port:\n%s", data)
+	}
+	if _, err := os.Stat(pending); !os.IsNotExist(err) {
+		t.Fatalf("confirm left the pending file: %v", err)
+	}
+
+	out, err = runHostctlReal(t, root, "port=2223\npassword_authentication=true\n", "apply-ssh", extra)
+	if err != nil {
+		t.Fatalf("second apply-ssh failed: %v\n%s", err, out)
+	}
+	if out, err := runHostctlReal(t, root, "", "revert-ssh", extra); err != nil {
+		t.Fatalf("revert-ssh failed: %v\n%s", err, out)
+	}
+	data, err = os.ReadFile(dropin)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if strings.Contains(string(data), "Port 2223\n") || !strings.Contains(string(data), "Port 2222\n") {
+		t.Fatalf("revert must restore the previous port:\n%s", data)
+	}
+	log, err := os.ReadFile(filepath.Join(root, "ufw.log"))
+	if err != nil || !strings.Contains(string(log), "allow 2222/tcp") {
+		t.Fatalf("the new port was not opened in the firewall: %v %s", err, log)
+	}
+}
+
+func TestHostctlSSHDisablePasswordNeedsKeys(t *testing.T) {
+	root := t.TempDir()
+	extra, dropin := sshTestStubs(t, root, "yes")
+	out, err := runHostctlReal(t, root, "port=22\npassword_authentication=false\n", "apply-ssh", extra)
+	if err == nil {
+		t.Fatalf("disabling password login without an authorized key must be refused:\n%s", out)
+	}
+	if code := exitCode(t, err); code != 5 {
+		t.Fatalf("exit = %d, want 5:\n%s", code, out)
+	}
+	if _, err := os.Stat(dropin); !os.IsNotExist(err) {
+		t.Fatalf("a refused change wrote the drop-in: %v", err)
+	}
+
+	if err := os.MkdirAll(filepath.Join(root, "root/.ssh"), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(root, "root/.ssh/authorized_keys"),
+		[]byte("ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAITestKey gotham@test\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	out, err = runHostctlReal(t, root, "port=22\npassword_authentication=false\n", "apply-ssh", extra)
+	if err != nil {
+		t.Fatalf("apply with key auth failed: %v\n%s", err, out)
+	}
+	data, readErr := os.ReadFile(dropin)
+	if readErr != nil || !strings.Contains(string(data), "PasswordAuthentication no") {
+		t.Fatalf("password login not disabled: %v\n%s", readErr, data)
+	}
+}
+
+func TestHostctlAgentRootToggle(t *testing.T) {
+	root := t.TempDir()
+	bin := filepath.Join(root, "bin")
+	if err := os.MkdirAll(bin, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	writeStub(t, bin, "systemctl", "#!/bin/sh\nexit 0\n")
+	writeStub(t, bin, "ps", "#!/bin/sh\nprintf '%s\\n' \"$PS_USER\"\n")
+	restartLog := filepath.Join(root, "restart.log")
+	writeStub(t, bin, "systemd-run", "#!/bin/sh\nprintf '%s\\n' \"$*\" >>\"$RESTART_LOG\"\nexit 0\n")
+	envFile := filepath.Join(root, "etc/gotham/agent.env")
+	if err := os.MkdirAll(filepath.Dir(envFile), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(envFile, []byte("GOTHAM_AGENT_CP_ADDR=127.0.0.1:9442\nGOTHAM_AGENT_FILES=false\n"), 0o640); err != nil {
+		t.Fatal(err)
+	}
+	extra := []string{
+		"PATH=" + bin + ":" + os.Getenv("PATH"),
+		"PS_USER=gotham-agent", "RESTART_LOG=" + restartLog,
+	}
+
+	out, err := runHostctlReal(t, root, "enabled=true\n", "apply-agent-root", extra)
+	if err != nil {
+		t.Fatalf("enable root failed: %v\n%s", err, out)
+	}
+	dropin := filepath.Join(root, "etc/systemd/system/gotham-agent.service.d/file-manager.conf")
+	data, err := os.ReadFile(dropin)
+	if err != nil || !strings.Contains(string(data), "User=root") {
+		t.Fatalf("root drop-in: %v\n%s", err, data)
+	}
+	env, _ := os.ReadFile(envFile)
+	if strings.Contains(string(env), "GOTHAM_AGENT_FILES=false") ||
+		!strings.Contains(string(env), "GOTHAM_AGENT_FILES=true") {
+		t.Fatalf("agent env not switched on:\n%s", env)
+	}
+	if log, _ := os.ReadFile(restartLog); !strings.Contains(string(log), "restart") {
+		t.Fatalf("agent restart not scheduled: %s", log)
+	}
+
+	extra[1] = "PS_USER=root"
+	out, err = runHostctlReal(t, root, "enabled=false\n", "apply-agent-root", extra)
+	if err != nil {
+		t.Fatalf("disable root failed: %v\n%s", err, out)
+	}
+	if _, err := os.Stat(dropin); !os.IsNotExist(err) {
+		t.Fatalf("root drop-in not removed: %v", err)
+	}
+	env, _ = os.ReadFile(envFile)
+	if strings.Contains(string(env), "GOTHAM_AGENT_FILES=true") ||
+		!strings.Contains(string(env), "GOTHAM_AGENT_FILES=false") {
+		t.Fatalf("disabling root must restore the previous file-manager answer:\n%s", env)
+	}
+}
+
 func TestHostctlApplyRevertAndRejects(t *testing.T) {
 	root := t.TempDir()
 	good := "dns=1.1.1.1\nipv4_mode=static\nipv4_address=10.0.0.5/24\nipv4_gateway=10.0.0.1\n" +
@@ -257,7 +473,10 @@ func TestHostctlReexecsWriteVerbsOnly(t *testing.T) {
 		t.Fatalf("abs path: %v", err)
 	}
 
-	for _, verb := range []string{"apply-system", "apply-network", "revert-network", "cleanup-journal", "cleanup-package-cache"} {
+	for _, verb := range []string{
+		"apply-system", "apply-network", "revert-network", "cleanup-journal", "cleanup-package-cache",
+		"apply-ssh", "confirm-ssh", "revert-ssh", "apply-agent-root",
+	} {
 		if err := os.Remove(record); err != nil && !os.IsNotExist(err) {
 			t.Fatal(err)
 		}

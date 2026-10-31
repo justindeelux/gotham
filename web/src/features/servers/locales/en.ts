@@ -181,6 +181,46 @@ const en = {
         submit: "Save system settings",
         saved: "System settings saved.",
       },
+      ssh: {
+        title: "SSH access",
+        port: "SSH port",
+        portHint: "1–65535. The old port stays open until the new one accepts a connection.",
+        passwordLogin: "Password login",
+        passwordHint:
+          "Key login is always allowed. Password login can only be disabled when an authorized key exists.",
+        unavailable: "sshd is not installed on this server, so SSH settings are read-only.",
+        noKeys:
+          "No authorized key is configured on this server. Add an SSH key before disabling password login.",
+        submit: "Save SSH settings",
+        saved: "SSH settings saved.",
+        confirmTitle: "Apply SSH changes?",
+        confirmIntro: "Gotham will change sshd on this server:",
+        confirmPort: "Port {from} → {to}",
+        confirmPasswordOn: "Enable password login",
+        confirmPasswordOff: "Disable password login",
+        portWarning:
+          "Gotham tests the new port before saving it. If the test fails, the previous port is restored automatically.",
+        cancel: "Cancel",
+        confirmApply: "Apply changes",
+      },
+      agentRoot: {
+        title: "Agent access",
+        hint: "The agent runs as the unprivileged gotham-agent user by default. Running it as root lets the file manager browse and edit every file and opens the terminal as root.",
+        toggleLabel: "Run the node agent as root",
+        on: "Agent runs as root",
+        off: "Agent runs as gotham-agent",
+        enabledSaved: "Root mode enabled. The agent reconnected.",
+        disabledSaved: "Root mode disabled. The agent reconnected.",
+        confirmTitle: "Change the agent's user?",
+        rootWarning:
+          "Running the agent as root removes the permission barrier: the file manager and terminal get full control of this server. Enable this only if you trust every Gotham owner account.",
+        disableBody:
+          "The agent returns to the unprivileged gotham-agent user. The file manager and terminal keep working, without root access.",
+        restartHint:
+          "The agent restarts and reconnects in a moment; this page may be briefly unavailable.",
+        cancel: "Cancel",
+        confirm: "Change access",
+      },
       validation: {
         timezone: "Select an IANA timezone such as Europe/Berlin.",
         dns: "Enter up to 3 distinct IPv4 or IPv6 addresses.",
@@ -191,6 +231,7 @@ const en = {
         ipv6Gateway: "Enter a valid IPv6 gateway.",
         hostname: "Use letters, digits and hyphens; dots separate labels.",
         ntp: "Enter up to 4 distinct host names or IP addresses.",
+        sshPort: "Enter a port between 1 and 65535.",
       },
     },
   },

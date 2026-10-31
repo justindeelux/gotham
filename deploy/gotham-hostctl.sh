@@ -7,7 +7,8 @@
 # the gotham service user exactly these verbs (one rule each, no wildcards):
 #
 #   status | apply-network | confirm-network | revert-network | apply-system |
-#   cleanup-status | cleanup-journal | cleanup-package-cache
+#   cleanup-status | cleanup-journal | cleanup-package-cache |
+#   apply-ssh | confirm-ssh | revert-ssh | apply-agent-root
 #
 # Values arrive on stdin as key=value lines. Only whitelisted keys are accepted
 # and every value is re-validated here with strict anchored patterns before it
@@ -76,6 +77,15 @@ NTPFILE="${NTPD}/05-gotham.conf"
 PENDING="${STATE}/pending"
 BACKUP="${STATE}/backup"
 TIMER="gotham-hostctl-revert"
+SSHD_DIR="${ROOT}/etc/ssh/sshd_config.d"
+SSHD_DROPIN="${SSHD_DIR}/05-gotham.conf"
+SSH_PENDING="${STATE}/ssh-pending"
+SSH_BACKUP="${STATE}/ssh-backup"
+SSH_TIMER="gotham-hostctl-ssh-revert"
+AGENT_DROPIN_DIR="${ROOT}/etc/systemd/system/gotham-agent.service.d"
+AGENT_DROPIN="${AGENT_DROPIN_DIR}/file-manager.conf"
+AGENT_ENV="${ROOT}/etc/gotham/agent.env"
+AGENT_STATE="${ROOT}/var/lib/gotham-agent"
 
 die() { echo "gotham-hostctl: $*" >&2; exit "${2:-1}"; }
 
@@ -94,7 +104,8 @@ VERB="$1"
 # Skip the read-only verbs and any invocation that already runs inside the
 # transient unit. stdin, stdout and the exit code pass through --pipe --wait.
 case "${VERB}" in
-    apply-network | revert-network | apply-system | cleanup-journal | cleanup-package-cache) WRITE=1 ;;
+    apply-network | revert-network | apply-system | cleanup-journal | cleanup-package-cache | \
+    apply-ssh | confirm-ssh | revert-ssh | apply-agent-root) WRITE=1 ;;
     *) WRITE=0 ;;
 esac
 case "${SELF_RUN}" in /*) SELF_OK=1 ;; *) SELF_OK=0 ;; esac
@@ -403,6 +414,171 @@ current_tz() {
     return 0
 }
 
+# ---- SSH settings ----------------------------------------------------------
+# A port change is tentative: the new drop-in lists the old AND the new port,
+# so the operator keeps a way in while the control plane verifies the new one.
+# confirm-ssh keeps only the new port; revert-ssh restores the snapshot. A
+# revert timer restores the old port even when the control plane never answers.
+ssh_available() { command -v sshd >/dev/null 2>&1; }
+
+ssh_effective() { sshd -T 2>/dev/null; }
+
+ssh_live_port() {
+    ssh_effective | awk 'tolower($1) == "port" { p = $2 } END { if (p != "") print p }'
+}
+
+ssh_password_auth() {
+    ssh_effective | awk 'tolower($1) == "passwordauthentication" { v = tolower($2) } END { if (v != "") print v }'
+}
+
+ssh_pubkey_enabled() {
+    [ "$(ssh_effective | awk 'tolower($1) == "pubkeyauthentication" { print tolower($2); exit }')" != "no" ]
+}
+
+# ssh_key_auth_available: at least one authorized key exists for root or a
+# home-directory user. Password login is only switched off when this is true.
+ssh_key_auth_available() {
+    ssh_pubkey_enabled || return 1
+    for f in "${ROOT}/root/.ssh/authorized_keys" "${ROOT}"/home/*/.ssh/authorized_keys; do
+        [ -f "${f}" ] || continue
+        grep -Eq '^[[:space:]]*(ssh-|ecdsa-sha2-|sk-)[A-Za-z0-9@._-]+[[:space:]]' "${f}" && return 0
+        grep -Eq '^[[:space:]]*[^#[:space:]].*[[:space:]](ssh-|ecdsa-sha2-|sk-)[A-Za-z0-9@._-]+[[:space:]]' "${f}" && return 0
+    done
+    return 1
+}
+
+# sshd_configure writes the owned drop-in: one or more Port lines plus the
+# PasswordAuthentication value.
+sshd_configure() {
+    mkdir -p "${SSHD_DIR}" || die "cannot prepare ${SSHD_DIR}"
+    case "$2" in
+        true) password=yes ;;
+        false) password=no ;;
+        *) password="$2" ;;
+    esac
+    tmp="${SSHD_DROPIN}.new.$$"
+    {
+        echo "# Managed by Gotham (gotham-hostctl). Manual edits are overwritten."
+        for p in $1; do echo "Port ${p}"; done
+        echo "PasswordAuthentication ${password}"
+    } >"${tmp}" || die "cannot write the SSH configuration"
+    chmod 0644 "${tmp}" 2>/dev/null || true
+    mv -f "${tmp}" "${SSHD_DROPIN}" || die "cannot install the SSH configuration"
+}
+
+sshd_validate() {
+    [ "${DRYRUN}" = "1" ] && { echo "+ sshd -t"; return 0; }
+    sshd -t 2>/dev/null
+}
+
+ssh_reload() {
+    [ "${DRYRUN}" = "1" ] && { echo "+ systemctl reload ssh"; return 0; }
+    if systemctl is-active --quiet ssh 2>/dev/null; then
+        systemctl reload ssh 2>/dev/null || systemctl restart ssh
+        return $?
+    fi
+    if systemctl is-active --quiet sshd 2>/dev/null; then
+        systemctl reload sshd 2>/dev/null || systemctl restart sshd
+        return $?
+    fi
+    return 1
+}
+
+# firewall_open opens one TCP port in the active firewall and prints the
+# firewall it used ("none" when neither ufw nor firewalld is active).
+firewall_open() {
+    [ "${DRYRUN}" = "1" ] && { echo none; return 0; }
+    if command -v ufw >/dev/null 2>&1 && ufw status 2>/dev/null | grep -q '^Status: active'; then
+        ufw allow "$1/tcp" >/dev/null 2>&1 && { echo ufw; return 0; }
+        return 1
+    fi
+    if command -v firewall-cmd >/dev/null 2>&1 && systemctl is-active --quiet firewalld 2>/dev/null; then
+        firewall-cmd --permanent --add-port="$1/tcp" >/dev/null 2>&1 \
+            && firewall-cmd --reload >/dev/null 2>&1 && { echo firewalld; return 0; }
+        return 1
+    fi
+    echo none
+}
+
+firewall_close() {
+    [ "${DRYRUN}" = "1" ] && { echo "+ close firewall port $1"; return 0; }
+    case "$2" in
+        ufw) command -v ufw >/dev/null 2>&1 && ufw delete allow "$1/tcp" >/dev/null 2>&1 ;;
+        firewalld) command -v firewall-cmd >/dev/null 2>&1 && {
+            firewall-cmd --permanent --remove-port="$1/tcp" >/dev/null 2>&1
+            firewall-cmd --reload >/dev/null 2>&1
+        } ;;
+    esac
+    return 0
+}
+
+ssh_snapshot() {
+    rm -rf "${SSH_BACKUP}" || die "cannot reset the SSH backup"
+    mkdir -p "${SSH_BACKUP}" || die "cannot prepare the SSH backup"
+    if [ -e "${SSHD_DROPIN}" ]; then
+        cp -p "${SSHD_DROPIN}" "${SSH_BACKUP}/dropin" || die "cannot back up the SSH configuration"
+    else
+        : >"${SSH_BACKUP}/dropin.absent"
+    fi
+}
+
+ssh_restore() {
+    if [ -e "${SSH_BACKUP}/dropin" ]; then
+        cp -p "${SSH_BACKUP}/dropin" "${SSHD_DROPIN}"
+    elif [ -e "${SSH_BACKUP}/dropin.absent" ]; then
+        rm -f "${SSHD_DROPIN}"
+    fi
+}
+
+pending_val() { sed -n "s/^$1=//p" "${SSH_PENDING}" 2>/dev/null | head -n 1; }
+
+ssh_stop_revert() { systemctl stop "${SSH_TIMER}.timer" >/dev/null 2>&1 || true; }
+
+# ---- agent root mode -------------------------------------------------------
+# The same drop-in install-agent.sh writes for the file manager. The live
+# report reads the MainPID owner, so a written drop-in alone does not count
+# until the restarted agent actually runs as root.
+agent_root_live() {
+    pid="$(systemctl show -p MainPID --value gotham-agent 2>/dev/null)"
+    case "${pid}" in "" | 0 | *[!0-9]*) return 1 ;; esac
+    user="$(ps -o user= -p "${pid}" 2>/dev/null | tr -d '[:space:]')"
+    [ "${user}" = "root" ]
+}
+
+agent_env_set_files() {
+    [ -f "${AGENT_ENV}" ] || die "the agent configuration ${AGENT_ENV} is missing" 3
+    tmp="${AGENT_ENV}.new.$$"
+    awk -v value="$1" '
+        /^[[:space:]]*GOTHAM_AGENT_FILES=/ { next }
+        { print }
+        END { print "GOTHAM_AGENT_FILES=" value }
+    ' "${AGENT_ENV}" >"${tmp}" || die "cannot stage the agent configuration"
+    chmod 0640 "${tmp}" 2>/dev/null || true
+    if [ -z "${ROOT}" ]; then chown root:gotham-agent "${tmp}" 2>/dev/null || true; fi
+    mv -f "${tmp}" "${AGENT_ENV}" || die "cannot update the agent configuration"
+}
+
+agent_files_current() {
+    _files_value="$(sed -n 's/^[[:space:]]*GOTHAM_AGENT_FILES=//p' "${AGENT_ENV}" 2>/dev/null | tail -n 1 | tr -d '[:space:]' | tr 'A-Z' 'a-z')"
+    case "${_files_value}" in
+        true | false) printf '%s' "${_files_value}" ;;
+        *) printf 'true' ;;
+    esac
+}
+
+ssh_status_json() {
+    available=false; port=0; password=false; key=false
+    if ssh_available; then
+        available=true
+        p="$(ssh_live_port)"
+        case "${p}" in "" | *[!0-9]*) port=0 ;; *) port="${p}" ;; esac
+        [ "$(ssh_password_auth)" = "yes" ] && password=true
+        ssh_key_auth_available && key=true
+    fi
+    printf '{"available":%s,"port":%s,"password_authentication":%s,"key_auth_available":%s}' \
+        "${available}" "${port}" "${password}" "${key}"
+}
+
 case "${VERB}" in
 status)
     n=false; s=false
@@ -410,9 +586,11 @@ status)
     sys_ok && s=true
     hn="null"
     [ "${n}" = "true" ] && hn="$(host_network_json)"
-    printf '{"network":%s,"system":%s,"host_network":%s,"hostname":%s,"ntp_enabled":%s,"ntp_servers":[%s],"timezone":%s,"cleanup":true}\n' \
+    agent_root=false
+    agent_root_live && agent_root=true
+    printf '{"network":%s,"system":%s,"host_network":%s,"hostname":%s,"ntp_enabled":%s,"ntp_servers":[%s],"timezone":%s,"cleanup":true,"ssh":%s,"agent_root":%s}\n' \
         "${n}" "${s}" "${hn}" "$(jstr "$(host_name)")" "$(ntp_state)" \
-        "$(jstrs "$(ntp_list)")" "$(jstr "$(current_tz)")"
+        "$(jstrs "$(ntp_list)")" "$(jstr "$(current_tz)")" "$(ssh_status_json)" "${agent_root}"
     ;;
 
 apply-network)
@@ -647,6 +825,169 @@ cleanup-package-cache)
         after="$(size_or_zero "$(dnf_cache_bytes)")"
     fi
     printf '{"before":%s,"after":%s}\n' "${before}" "${after}"
+    ;;
+
+apply-ssh)
+    ssh_available || die "sshd is not installed on this host" 3
+    K_port=""; K_password_authentication=""
+    read_kv "port password_authentication"
+    printf '%s\n' "${K_port}" | grep -Eq '^[0-9]{1,5}$' || die "invalid port" 2
+    K_port="$(printf '%s' "${K_port}" | sed 's/^0*//')"
+    [ -n "${K_port}" ] || K_port=0
+    [ "${K_port}" -ge 1 ] && [ "${K_port}" -le 65535 ] || die "port out of range" 2
+    is_bool "${K_password_authentication}" || die "invalid password_authentication" 2
+    [ ! -e "${SSH_PENDING}" ] || die "an SSH change is already pending" 4
+    live_port="$(ssh_live_port)"
+    printf '%s\n' "${live_port}" | grep -Eq '^[0-9]{1,5}$' || die "cannot read the live SSH port" 3
+    live_password="$(ssh_password_auth)"
+    if [ "${K_password_authentication}" = "false" ] && [ "${live_password}" != "no" ]; then
+        ssh_key_auth_available || die "cannot disable password login: no authorized key is configured" 5
+    fi
+    ssh_snapshot
+    if [ "${K_port}" = "${live_port}" ]; then
+        sshd_configure "${K_port}" "${K_password_authentication}"
+        if ! sshd_validate || ! ssh_reload; then
+            ssh_restore
+            sshd_validate >/dev/null 2>&1 || true
+            ssh_reload >/dev/null 2>&1 || true
+            rm -rf "${SSH_BACKUP}"
+            die "sshd rejected the new configuration; the previous values were restored"
+        fi
+        rm -rf "${SSH_BACKUP}"
+        printf '{"port":%s,"previous_port":%s}\n' "${K_port}" "${live_port}"
+        exit 0
+    fi
+    # Trial: both ports are live until the control plane confirms the new one.
+    sshd_configure "${live_port} ${K_port}" "${K_password_authentication}"
+    if ! sshd_validate; then
+        ssh_restore
+        rm -rf "${SSH_BACKUP}"
+        die "sshd rejected the new configuration; the previous values were restored"
+    fi
+    fw="$(firewall_open "${K_port}")" || {
+        ssh_restore
+        rm -rf "${SSH_BACKUP}"
+        die "cannot open port ${K_port} in the firewall; the previous values were restored"
+    }
+    if ! ssh_reload; then
+        firewall_close "${K_port}" "${fw}"
+        ssh_restore
+        ssh_reload >/dev/null 2>&1 || true
+        rm -rf "${SSH_BACKUP}"
+        die "sshd did not reload; the previous values were restored"
+    fi
+    {
+        echo "previous_port=${live_port}"
+        echo "new_port=${K_port}"
+        echo "password_authentication=${K_password_authentication}"
+        echo "firewall=${fw}"
+    } >"${SSH_PENDING}" || die "cannot record the pending SSH change"
+    ssh_stop_revert
+    if ! run systemd-run --quiet --collect --unit="${SSH_TIMER}" --on-active=900 "${SELF}" revert-ssh; then
+        firewall_close "${K_port}" "${fw}"
+        ssh_restore
+        ssh_reload >/dev/null 2>&1 || true
+        rm -f "${SSH_PENDING}"; rm -rf "${SSH_BACKUP}"
+        die "cannot arm the SSH revert timer; the previous values were restored"
+    fi
+    printf '{"port":%s,"previous_port":%s}\n' "${K_port}" "${live_port}"
+    ;;
+
+confirm-ssh)
+    [ -e "${SSH_PENDING}" ] || exit 0
+    new_port="$(pending_val new_port)"
+    password="$(pending_val password_authentication)"
+    printf '%s\n' "${new_port}" | grep -Eq '^[0-9]{1,5}$' || die "the pending SSH change is unreadable" 3
+    is_bool "${password}" || die "the pending SSH change is unreadable" 3
+    sshd_configure "${new_port}" "${password}"
+    if ! sshd_validate || ! ssh_reload; then
+        ssh_restore
+        sshd_validate >/dev/null 2>&1 || true
+        ssh_reload >/dev/null 2>&1 || true
+        ssh_stop_revert
+        rm -f "${SSH_PENDING}"; rm -rf "${SSH_BACKUP}"
+        die "could not keep the new SSH port; the previous values were restored"
+    fi
+    ssh_stop_revert
+    rm -f "${SSH_PENDING}"; rm -rf "${SSH_BACKUP}"
+    ;;
+
+revert-ssh)
+    [ -e "${SSH_PENDING}" ] || exit 0
+    previous_port="$(pending_val previous_port)"
+    new_port="$(pending_val new_port)"
+    password="$(pending_val password_authentication)"
+    fw="$(pending_val firewall)"
+    ssh_restore
+    if ! sshd_validate || ! ssh_reload; then
+        # Keep a way in: the trial configuration (old + new port) is restored
+        # and the pending change stays so the operator can retry.
+        sshd_configure "${previous_port} ${new_port}" "${password}"
+        sshd_validate >/dev/null 2>&1 || true
+        ssh_reload >/dev/null 2>&1 || true
+        die "could not restore the previous SSH port; the new port stays open"
+    fi
+    firewall_close "${new_port}" "${fw}"
+    ssh_stop_revert
+    rm -f "${SSH_PENDING}"; rm -rf "${SSH_BACKUP}"
+    ;;
+
+apply-agent-root)
+    K_enabled=""
+    read_kv "enabled"
+    is_bool "${K_enabled}" || die "invalid enabled" 2
+    systemctl cat gotham-agent.service >/dev/null 2>&1 \
+        || die "gotham-agent.service is not installed on this host" 3
+    live_root=false
+    agent_root_live && live_root=true
+    dropin=false
+    [ -e "${AGENT_DROPIN}" ] && dropin=true
+    if [ "${K_enabled}" = "true" ]; then
+        mkdir -p "${AGENT_DROPIN_DIR}" || die "cannot prepare ${AGENT_DROPIN_DIR}"
+        tmp="${AGENT_DROPIN}.new.$$"
+        cat >"${tmp}" <<'DROPIN' || die "cannot write the agent drop-in"
+# Managed by Gotham (gotham-hostctl). The agent runs as root so the file
+# manager and terminal reach every file on this node.
+[Service]
+User=root
+Group=root
+ProtectSystem=no
+ProtectHome=no
+PrivateTmp=no
+DROPIN
+        chmod 0644 "${tmp}" 2>/dev/null || true
+        mv -f "${tmp}" "${AGENT_DROPIN}" || die "cannot install the agent drop-in"
+        # Root mode needs the file manager to be enabled; remember the previous
+        # answer so disabling root restores it.
+        [ -e "${STATE}/agent-files" ] || agent_files_current >"${STATE}/agent-files"
+        agent_env_set_files true
+    else
+        rm -f "${AGENT_DROPIN}"
+        if [ -e "${STATE}/agent-files" ]; then
+            previous_files="$(sed -n '1p' "${STATE}/agent-files" 2>/dev/null)"
+            case "${previous_files}" in
+                true | false) agent_env_set_files "${previous_files}" ;;
+            esac
+            rm -f "${STATE}/agent-files"
+        fi
+        if [ -z "${ROOT}" ] && id -u gotham-agent >/dev/null 2>&1 && [ -d "${AGENT_STATE}" ]; then
+            chown -R gotham-agent:gotham-agent "${AGENT_STATE}" || die "cannot restore ownership of ${AGENT_STATE}"
+        fi
+    fi
+    if [ "${K_enabled}" = "${live_root}" ] && [ "${dropin}" = "${K_enabled}" ]; then
+        printf '{"enabled":%s}\n' "${K_enabled}"
+        exit 0
+    fi
+    run systemctl daemon-reload || die "systemd could not reload the agent unit"
+    if [ "${DRYRUN}" = "1" ]; then
+        echo "[dry-run] schedule gotham-agent.service restart"
+    else
+        # The restart drops this RPC's connection; schedule it just after the
+        # helper returns so the control plane gets the result, then reconnects.
+        systemd-run --quiet --collect --on-active=1 --unit="gotham-agent-root-$$" \
+            systemctl restart gotham-agent.service || die "cannot schedule the agent restart"
+    fi
+    printf '{"enabled":%s}\n' "${K_enabled}"
     ;;
 
 *)

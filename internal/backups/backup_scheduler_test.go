@@ -231,6 +231,9 @@ func TestSchedulerPassesTheSchedulePauseChoice(t *testing.T) {
 			if captures[0].Pause {
 				t.Fatal("capture paused although the schedule opted out")
 			}
+			// The capture is async and keeps writing under t.TempDir; wait for
+			// the run before returning so cleanup cannot race it.
+			fixture.waitBackup(t, firstBackupID(t, fixture))
 			return
 		}
 		time.Sleep(5 * time.Millisecond)

@@ -17,11 +17,13 @@ const SectionGeneral = "general"
 // SectionCleanup labels the retention changes in the settings audit trail.
 const SectionCleanup = "cleanup"
 
-// NodeSectionSystem and NodeSectionNetwork label the per-node host changes in
-// the settings audit trail.
+// NodeSectionSystem, NodeSectionNetwork, NodeSectionSSH and NodeSectionAgent
+// label the per-node host changes in the settings audit trail.
 const (
 	NodeSectionSystem  = "node-system"
 	NodeSectionNetwork = "node-network"
+	NodeSectionSSH     = "node-ssh"
+	NodeSectionAgent   = "node-agent"
 )
 
 type Repository interface {

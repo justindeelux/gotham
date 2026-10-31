@@ -39,6 +39,18 @@ export interface SystemSettings {
   timezone: string;
 }
 
+export interface SSHSettings {
+  available: boolean;
+  port: number;
+  password_authentication: boolean;
+  key_auth_available: boolean;
+}
+
+export interface SSHInput {
+  port: number;
+  password_authentication: boolean;
+}
+
 export interface PendingNetwork {
   previous: NetworkSettings;
   proposed: NetworkSettings;
@@ -51,6 +63,8 @@ export interface NodeHostState {
   repair: boolean;
   network: NetworkSettings;
   system: SystemSettings;
+  ssh: SSHSettings;
+  agent_root: boolean;
   pending: PendingNetwork | null;
 }
 
@@ -80,6 +94,17 @@ export const saveNodeNetwork = (
   serverId: string,
   input: NetworkSettings,
 ): Promise<NodeHostState> => unwrap(http.put(`/servers/${serverId}/host/network`, input));
+
+export const saveNodeSSH = (
+  serverId: string,
+  input: SSHInput,
+): Promise<NodeHostState> => unwrap(http.put(`/servers/${serverId}/host/ssh`, input));
+
+export const saveNodeAgentRoot = (
+  serverId: string,
+  enabled: boolean,
+): Promise<NodeHostState> =>
+  unwrap(http.put(`/servers/${serverId}/host/agent-root`, { enabled }));
 
 export const confirmNodeNetwork = (serverId: string): Promise<NodeHostState> =>
   unwrap(http.post(`/servers/${serverId}/host/network/confirm`));

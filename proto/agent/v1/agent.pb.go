@@ -6162,11 +6162,15 @@ type HostStatusResponse struct {
 	Capability HostCapability         `protobuf:"varint,1,opt,name=capability,proto3,enum=agent.v1.HostCapability" json:"capability,omitempty"`
 	// network is null when the host has no usable default-route network
 	// configuration to report.
-	Network       *HostNetworkConfig `protobuf:"bytes,2,opt,name=network,proto3" json:"network,omitempty"`
-	Hostname      string             `protobuf:"bytes,3,opt,name=hostname,proto3" json:"hostname,omitempty"`
-	NtpEnabled    bool               `protobuf:"varint,4,opt,name=ntp_enabled,json=ntpEnabled,proto3" json:"ntp_enabled,omitempty"`
-	NtpServers    []string           `protobuf:"bytes,5,rep,name=ntp_servers,json=ntpServers,proto3" json:"ntp_servers,omitempty"`
-	Timezone      string             `protobuf:"bytes,6,opt,name=timezone,proto3" json:"timezone,omitempty"`
+	Network    *HostNetworkConfig `protobuf:"bytes,2,opt,name=network,proto3" json:"network,omitempty"`
+	Hostname   string             `protobuf:"bytes,3,opt,name=hostname,proto3" json:"hostname,omitempty"`
+	NtpEnabled bool               `protobuf:"varint,4,opt,name=ntp_enabled,json=ntpEnabled,proto3" json:"ntp_enabled,omitempty"`
+	NtpServers []string           `protobuf:"bytes,5,rep,name=ntp_servers,json=ntpServers,proto3" json:"ntp_servers,omitempty"`
+	Timezone   string             `protobuf:"bytes,6,opt,name=timezone,proto3" json:"timezone,omitempty"`
+	// ssh is null on a helper that predates SSH settings.
+	Ssh *HostSSHSettings `protobuf:"bytes,7,opt,name=ssh,proto3" json:"ssh,omitempty"`
+	// agent_root reports whether the agent process actually runs as root.
+	AgentRoot     bool `protobuf:"varint,8,opt,name=agent_root,json=agentRoot,proto3" json:"agent_root,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
 }
@@ -6241,6 +6245,20 @@ func (x *HostStatusResponse) GetTimezone() string {
 		return x.Timezone
 	}
 	return ""
+}
+
+func (x *HostStatusResponse) GetSsh() *HostSSHSettings {
+	if x != nil {
+		return x.Ssh
+	}
+	return nil
+}
+
+func (x *HostStatusResponse) GetAgentRoot() bool {
+	if x != nil {
+		return x.AgentRoot
+	}
+	return false
 }
 
 // HostApplyNetworkRequest carries the whole desired network state, exactly as
@@ -11045,6 +11063,398 @@ func (x *TerminalExited) GetSignal() string {
 	return ""
 }
 
+// HostSSHSettings is the SSH server state of a node. Declared after the host
+// messages so adding it does not renumber existing generated message types.
+type HostSSHSettings struct {
+	state protoimpl.MessageState `protogen:"open.v1"`
+	// available is false when the host does not run sshd.
+	Available bool `protobuf:"varint,1,opt,name=available,proto3" json:"available,omitempty"`
+	// port is the configured port. During a tentative change it is the new
+	// port.
+	Port uint32 `protobuf:"varint,2,opt,name=port,proto3" json:"port,omitempty"`
+	// password_authentication is the effective PasswordAuthentication value.
+	PasswordAuthentication bool `protobuf:"varint,3,opt,name=password_authentication,json=passwordAuthentication,proto3" json:"password_authentication,omitempty"`
+	// key_auth_available reports whether at least one authorized key exists, so
+	// disabling password login cannot lock the operator out.
+	KeyAuthAvailable bool `protobuf:"varint,4,opt,name=key_auth_available,json=keyAuthAvailable,proto3" json:"key_auth_available,omitempty"`
+	unknownFields    protoimpl.UnknownFields
+	sizeCache        protoimpl.SizeCache
+}
+
+func (x *HostSSHSettings) Reset() {
+	*x = HostSSHSettings{}
+	mi := &file_agent_v1_agent_proto_msgTypes[157]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *HostSSHSettings) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*HostSSHSettings) ProtoMessage() {}
+
+func (x *HostSSHSettings) ProtoReflect() protoreflect.Message {
+	mi := &file_agent_v1_agent_proto_msgTypes[157]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use HostSSHSettings.ProtoReflect.Descriptor instead.
+func (*HostSSHSettings) Descriptor() ([]byte, []int) {
+	return file_agent_v1_agent_proto_rawDescGZIP(), []int{157}
+}
+
+func (x *HostSSHSettings) GetAvailable() bool {
+	if x != nil {
+		return x.Available
+	}
+	return false
+}
+
+func (x *HostSSHSettings) GetPort() uint32 {
+	if x != nil {
+		return x.Port
+	}
+	return 0
+}
+
+func (x *HostSSHSettings) GetPasswordAuthentication() bool {
+	if x != nil {
+		return x.PasswordAuthentication
+	}
+	return false
+}
+
+func (x *HostSSHSettings) GetKeyAuthAvailable() bool {
+	if x != nil {
+		return x.KeyAuthAvailable
+	}
+	return false
+}
+
+type HostApplySSHRequest struct {
+	state protoimpl.MessageState `protogen:"open.v1"`
+	// port is the desired SSH port, 1..65535.
+	Port uint32 `protobuf:"varint,1,opt,name=port,proto3" json:"port,omitempty"`
+	// password_authentication is the desired PasswordAuthentication value.
+	PasswordAuthentication bool `protobuf:"varint,2,opt,name=password_authentication,json=passwordAuthentication,proto3" json:"password_authentication,omitempty"`
+	unknownFields          protoimpl.UnknownFields
+	sizeCache              protoimpl.SizeCache
+}
+
+func (x *HostApplySSHRequest) Reset() {
+	*x = HostApplySSHRequest{}
+	mi := &file_agent_v1_agent_proto_msgTypes[158]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *HostApplySSHRequest) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*HostApplySSHRequest) ProtoMessage() {}
+
+func (x *HostApplySSHRequest) ProtoReflect() protoreflect.Message {
+	mi := &file_agent_v1_agent_proto_msgTypes[158]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use HostApplySSHRequest.ProtoReflect.Descriptor instead.
+func (*HostApplySSHRequest) Descriptor() ([]byte, []int) {
+	return file_agent_v1_agent_proto_rawDescGZIP(), []int{158}
+}
+
+func (x *HostApplySSHRequest) GetPort() uint32 {
+	if x != nil {
+		return x.Port
+	}
+	return 0
+}
+
+func (x *HostApplySSHRequest) GetPasswordAuthentication() bool {
+	if x != nil {
+		return x.PasswordAuthentication
+	}
+	return false
+}
+
+type HostApplySSHResponse struct {
+	state         protoimpl.MessageState `protogen:"open.v1"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *HostApplySSHResponse) Reset() {
+	*x = HostApplySSHResponse{}
+	mi := &file_agent_v1_agent_proto_msgTypes[159]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *HostApplySSHResponse) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*HostApplySSHResponse) ProtoMessage() {}
+
+func (x *HostApplySSHResponse) ProtoReflect() protoreflect.Message {
+	mi := &file_agent_v1_agent_proto_msgTypes[159]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use HostApplySSHResponse.ProtoReflect.Descriptor instead.
+func (*HostApplySSHResponse) Descriptor() ([]byte, []int) {
+	return file_agent_v1_agent_proto_rawDescGZIP(), []int{159}
+}
+
+type HostConfirmSSHRequest struct {
+	state         protoimpl.MessageState `protogen:"open.v1"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *HostConfirmSSHRequest) Reset() {
+	*x = HostConfirmSSHRequest{}
+	mi := &file_agent_v1_agent_proto_msgTypes[160]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *HostConfirmSSHRequest) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*HostConfirmSSHRequest) ProtoMessage() {}
+
+func (x *HostConfirmSSHRequest) ProtoReflect() protoreflect.Message {
+	mi := &file_agent_v1_agent_proto_msgTypes[160]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use HostConfirmSSHRequest.ProtoReflect.Descriptor instead.
+func (*HostConfirmSSHRequest) Descriptor() ([]byte, []int) {
+	return file_agent_v1_agent_proto_rawDescGZIP(), []int{160}
+}
+
+type HostConfirmSSHResponse struct {
+	state         protoimpl.MessageState `protogen:"open.v1"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *HostConfirmSSHResponse) Reset() {
+	*x = HostConfirmSSHResponse{}
+	mi := &file_agent_v1_agent_proto_msgTypes[161]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *HostConfirmSSHResponse) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*HostConfirmSSHResponse) ProtoMessage() {}
+
+func (x *HostConfirmSSHResponse) ProtoReflect() protoreflect.Message {
+	mi := &file_agent_v1_agent_proto_msgTypes[161]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use HostConfirmSSHResponse.ProtoReflect.Descriptor instead.
+func (*HostConfirmSSHResponse) Descriptor() ([]byte, []int) {
+	return file_agent_v1_agent_proto_rawDescGZIP(), []int{161}
+}
+
+type HostRevertSSHRequest struct {
+	state         protoimpl.MessageState `protogen:"open.v1"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *HostRevertSSHRequest) Reset() {
+	*x = HostRevertSSHRequest{}
+	mi := &file_agent_v1_agent_proto_msgTypes[162]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *HostRevertSSHRequest) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*HostRevertSSHRequest) ProtoMessage() {}
+
+func (x *HostRevertSSHRequest) ProtoReflect() protoreflect.Message {
+	mi := &file_agent_v1_agent_proto_msgTypes[162]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use HostRevertSSHRequest.ProtoReflect.Descriptor instead.
+func (*HostRevertSSHRequest) Descriptor() ([]byte, []int) {
+	return file_agent_v1_agent_proto_rawDescGZIP(), []int{162}
+}
+
+type HostRevertSSHResponse struct {
+	state         protoimpl.MessageState `protogen:"open.v1"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *HostRevertSSHResponse) Reset() {
+	*x = HostRevertSSHResponse{}
+	mi := &file_agent_v1_agent_proto_msgTypes[163]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *HostRevertSSHResponse) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*HostRevertSSHResponse) ProtoMessage() {}
+
+func (x *HostRevertSSHResponse) ProtoReflect() protoreflect.Message {
+	mi := &file_agent_v1_agent_proto_msgTypes[163]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use HostRevertSSHResponse.ProtoReflect.Descriptor instead.
+func (*HostRevertSSHResponse) Descriptor() ([]byte, []int) {
+	return file_agent_v1_agent_proto_rawDescGZIP(), []int{163}
+}
+
+type HostApplyAgentRootRequest struct {
+	state protoimpl.MessageState `protogen:"open.v1"`
+	// enabled runs the agent as root (file manager + root terminal) when true,
+	// and as the unprivileged gotham-agent user when false.
+	Enabled       bool `protobuf:"varint,1,opt,name=enabled,proto3" json:"enabled,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *HostApplyAgentRootRequest) Reset() {
+	*x = HostApplyAgentRootRequest{}
+	mi := &file_agent_v1_agent_proto_msgTypes[164]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *HostApplyAgentRootRequest) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*HostApplyAgentRootRequest) ProtoMessage() {}
+
+func (x *HostApplyAgentRootRequest) ProtoReflect() protoreflect.Message {
+	mi := &file_agent_v1_agent_proto_msgTypes[164]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use HostApplyAgentRootRequest.ProtoReflect.Descriptor instead.
+func (*HostApplyAgentRootRequest) Descriptor() ([]byte, []int) {
+	return file_agent_v1_agent_proto_rawDescGZIP(), []int{164}
+}
+
+func (x *HostApplyAgentRootRequest) GetEnabled() bool {
+	if x != nil {
+		return x.Enabled
+	}
+	return false
+}
+
+type HostApplyAgentRootResponse struct {
+	state         protoimpl.MessageState `protogen:"open.v1"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *HostApplyAgentRootResponse) Reset() {
+	*x = HostApplyAgentRootResponse{}
+	mi := &file_agent_v1_agent_proto_msgTypes[165]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *HostApplyAgentRootResponse) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*HostApplyAgentRootResponse) ProtoMessage() {}
+
+func (x *HostApplyAgentRootResponse) ProtoReflect() protoreflect.Message {
+	mi := &file_agent_v1_agent_proto_msgTypes[165]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use HostApplyAgentRootResponse.ProtoReflect.Descriptor instead.
+func (*HostApplyAgentRootResponse) Descriptor() ([]byte, []int) {
+	return file_agent_v1_agent_proto_rawDescGZIP(), []int{165}
+}
+
 var File_agent_v1_agent_proto protoreflect.FileDescriptor
 
 const file_agent_v1_agent_proto_rawDesc = "" +
@@ -11490,7 +11900,7 @@ const file_agent_v1_agent_proto_rawDesc = "" +
 	"\aenabled\x18\x01 \x01(\bR\aenabled\x12\x12\n" +
 	"\x04mode\x18\x02 \x01(\tR\x04mode\x12\x18\n" +
 	"\aaddress\x18\x03 \x01(\tR\aaddress\x12\x18\n" +
-	"\agateway\x18\x04 \x01(\tR\agateway\"\xff\x01\n" +
+	"\agateway\x18\x04 \x01(\tR\agateway\"\xcb\x02\n" +
 	"\x12HostStatusResponse\x128\n" +
 	"\n" +
 	"capability\x18\x01 \x01(\x0e2\x18.agent.v1.HostCapabilityR\n" +
@@ -11501,7 +11911,10 @@ const file_agent_v1_agent_proto_rawDesc = "" +
 	"ntpEnabled\x12\x1f\n" +
 	"\vntp_servers\x18\x05 \x03(\tR\n" +
 	"ntpServers\x12\x1a\n" +
-	"\btimezone\x18\x06 \x01(\tR\btimezone\"\xe1\x02\n" +
+	"\btimezone\x18\x06 \x01(\tR\btimezone\x12+\n" +
+	"\x03ssh\x18\a \x01(\v2\x19.agent.v1.HostSSHSettingsR\x03ssh\x12\x1d\n" +
+	"\n" +
+	"agent_root\x18\b \x01(\bR\tagentRoot\"\xe1\x02\n" +
 	"\x17HostApplyNetworkRequest\x12\x1f\n" +
 	"\vdns_servers\x18\x01 \x03(\tR\n" +
 	"dnsServers\x12\x1b\n" +
@@ -11828,7 +12241,23 @@ const file_agent_v1_agent_proto_rawDesc = "" +
 	"\fservice_user\x18\x04 \x01(\tR\vserviceUser\"E\n" +
 	"\x0eTerminalExited\x12\x1b\n" +
 	"\texit_code\x18\x01 \x01(\x05R\bexitCode\x12\x16\n" +
-	"\x06signal\x18\x02 \x01(\tR\x06signal*\x80\x01\n" +
+	"\x06signal\x18\x02 \x01(\tR\x06signal\"\xaa\x01\n" +
+	"\x0fHostSSHSettings\x12\x1c\n" +
+	"\tavailable\x18\x01 \x01(\bR\tavailable\x12\x12\n" +
+	"\x04port\x18\x02 \x01(\rR\x04port\x127\n" +
+	"\x17password_authentication\x18\x03 \x01(\bR\x16passwordAuthentication\x12,\n" +
+	"\x12key_auth_available\x18\x04 \x01(\bR\x10keyAuthAvailable\"b\n" +
+	"\x13HostApplySSHRequest\x12\x12\n" +
+	"\x04port\x18\x01 \x01(\rR\x04port\x127\n" +
+	"\x17password_authentication\x18\x02 \x01(\bR\x16passwordAuthentication\"\x16\n" +
+	"\x14HostApplySSHResponse\"\x17\n" +
+	"\x15HostConfirmSSHRequest\"\x18\n" +
+	"\x16HostConfirmSSHResponse\"\x16\n" +
+	"\x14HostRevertSSHRequest\"\x17\n" +
+	"\x15HostRevertSSHResponse\"5\n" +
+	"\x19HostApplyAgentRootRequest\x12\x18\n" +
+	"\aenabled\x18\x01 \x01(\bR\aenabled\"\x1c\n" +
+	"\x1aHostApplyAgentRootResponse*\x80\x01\n" +
 	"\bFileKind\x12\x19\n" +
 	"\x15FILE_KIND_UNSPECIFIED\x10\x00\x12\x12\n" +
 	"\x0eFILE_KIND_FILE\x10\x01\x12\x17\n" +
@@ -11927,7 +12356,7 @@ const file_agent_v1_agent_proto_rawDesc = "" +
 	"\vToolService\x12D\n" +
 	"\tListTools\x12\x1a.agent.v1.ListToolsRequest\x1a\x1b.agent.v1.ListToolsResponse\x12B\n" +
 	"\vInstallTool\x12\x1c.agent.v1.InstallToolRequest\x1a\x13.agent.v1.ToolEvent0\x01\x12D\n" +
-	"\rUninstallTool\x12\x1c.agent.v1.InstallToolRequest\x1a\x13.agent.v1.ToolEvent0\x012\xd0\x04\n" +
+	"\rUninstallTool\x12\x1c.agent.v1.InstallToolRequest\x1a\x13.agent.v1.ToolEvent0\x012\x97\a\n" +
 	"\vHostService\x12C\n" +
 	"\x06Status\x12\x1b.agent.v1.HostStatusRequest\x1a\x1c.agent.v1.HostStatusResponse\x12U\n" +
 	"\fApplyNetwork\x12!.agent.v1.HostApplyNetworkRequest\x1a\".agent.v1.HostApplyNetworkResponse\x12[\n" +
@@ -11935,7 +12364,12 @@ const file_agent_v1_agent_proto_rawDesc = "" +
 	"\rRevertNetwork\x12\".agent.v1.HostRevertNetworkRequest\x1a#.agent.v1.HostRevertNetworkResponse\x12R\n" +
 	"\vApplySystem\x12 .agent.v1.HostApplySystemRequest\x1a!.agent.v1.HostApplySystemResponse\x12P\n" +
 	"\rCleanupStatus\x12\".agent.v1.HostCleanupStatusRequest\x1a\x1b.agent.v1.HostCleanupStatus\x12H\n" +
-	"\vCleanupHost\x12\x1c.agent.v1.HostCleanupRequest\x1a\x1b.agent.v1.HostCleanupResult2\\\n" +
+	"\vCleanupHost\x12\x1c.agent.v1.HostCleanupRequest\x1a\x1b.agent.v1.HostCleanupResult\x12I\n" +
+	"\bApplySSH\x12\x1d.agent.v1.HostApplySSHRequest\x1a\x1e.agent.v1.HostApplySSHResponse\x12O\n" +
+	"\n" +
+	"ConfirmSSH\x12\x1f.agent.v1.HostConfirmSSHRequest\x1a .agent.v1.HostConfirmSSHResponse\x12L\n" +
+	"\tRevertSSH\x12\x1e.agent.v1.HostRevertSSHRequest\x1a\x1f.agent.v1.HostRevertSSHResponse\x12[\n" +
+	"\x0eApplyAgentRoot\x12#.agent.v1.HostApplyAgentRootRequest\x1a$.agent.v1.HostApplyAgentRootResponse2\\\n" +
 	"\x0fTerminalService\x12I\n" +
 	"\fOpenTerminal\x12\x19.agent.v1.TerminalRequest\x1a\x1a.agent.v1.TerminalResponse(\x010\x01B7Z5github.com/justindeelux/gotham/proto/agent/v1;agentv1b\x06proto3"
 
@@ -11952,7 +12386,7 @@ func file_agent_v1_agent_proto_rawDescGZIP() []byte {
 }
 
 var file_agent_v1_agent_proto_enumTypes = make([]protoimpl.EnumInfo, 6)
-var file_agent_v1_agent_proto_msgTypes = make([]protoimpl.MessageInfo, 162)
+var file_agent_v1_agent_proto_msgTypes = make([]protoimpl.MessageInfo, 171)
 var file_agent_v1_agent_proto_goTypes = []any{
 	(FileKind)(0),                             // 0: agent.v1.FileKind
 	(ArchiveFormat)(0),                        // 1: agent.v1.ArchiveFormat
@@ -12117,17 +12551,26 @@ var file_agent_v1_agent_proto_goTypes = []any{
 	(*TerminalResponse)(nil),                  // 160: agent.v1.TerminalResponse
 	(*TerminalOpened)(nil),                    // 161: agent.v1.TerminalOpened
 	(*TerminalExited)(nil),                    // 162: agent.v1.TerminalExited
-	nil,                                       // 163: agent.v1.ListContainersRequest.LabelsEntry
-	nil,                                       // 164: agent.v1.ContainerInfo.LabelsEntry
-	nil,                                       // 165: agent.v1.CreateContainerRequest.LabelsEntry
-	nil,                                       // 166: agent.v1.ContainerLogConfig.OptionsEntry
-	nil,                                       // 167: agent.v1.BuildMeta.BuildArgsEntry
-	(*timestamppb.Timestamp)(nil),             // 168: google.protobuf.Timestamp
+	(*HostSSHSettings)(nil),                   // 163: agent.v1.HostSSHSettings
+	(*HostApplySSHRequest)(nil),               // 164: agent.v1.HostApplySSHRequest
+	(*HostApplySSHResponse)(nil),              // 165: agent.v1.HostApplySSHResponse
+	(*HostConfirmSSHRequest)(nil),             // 166: agent.v1.HostConfirmSSHRequest
+	(*HostConfirmSSHResponse)(nil),            // 167: agent.v1.HostConfirmSSHResponse
+	(*HostRevertSSHRequest)(nil),              // 168: agent.v1.HostRevertSSHRequest
+	(*HostRevertSSHResponse)(nil),             // 169: agent.v1.HostRevertSSHResponse
+	(*HostApplyAgentRootRequest)(nil),         // 170: agent.v1.HostApplyAgentRootRequest
+	(*HostApplyAgentRootResponse)(nil),        // 171: agent.v1.HostApplyAgentRootResponse
+	nil,                                       // 172: agent.v1.ListContainersRequest.LabelsEntry
+	nil,                                       // 173: agent.v1.ContainerInfo.LabelsEntry
+	nil,                                       // 174: agent.v1.CreateContainerRequest.LabelsEntry
+	nil,                                       // 175: agent.v1.ContainerLogConfig.OptionsEntry
+	nil,                                       // 176: agent.v1.BuildMeta.BuildArgsEntry
+	(*timestamppb.Timestamp)(nil),             // 177: google.protobuf.Timestamp
 }
 var file_agent_v1_agent_proto_depIdxs = []int32{
 	7,   // 0: agent.v1.ListRootsResponse.roots:type_name -> agent.v1.FileRoot
 	0,   // 1: agent.v1.FileEntry.kind:type_name -> agent.v1.FileKind
-	168, // 2: agent.v1.FileEntry.modified_at:type_name -> google.protobuf.Timestamp
+	177, // 2: agent.v1.FileEntry.modified_at:type_name -> google.protobuf.Timestamp
 	10,  // 3: agent.v1.ListResponse.entries:type_name -> agent.v1.FileEntry
 	10,  // 4: agent.v1.StatResponse.entry:type_name -> agent.v1.FileEntry
 	10,  // 5: agent.v1.SearchResult.entry:type_name -> agent.v1.FileEntry
@@ -12135,7 +12578,7 @@ var file_agent_v1_agent_proto_depIdxs = []int32{
 	22,  // 7: agent.v1.WriteRequest.header:type_name -> agent.v1.WriteHeader
 	23,  // 8: agent.v1.WriteRequest.commit:type_name -> agent.v1.WriteCommit
 	10,  // 9: agent.v1.WriteResponse.entry:type_name -> agent.v1.FileEntry
-	168, // 10: agent.v1.TrashEntry.deleted_at:type_name -> google.protobuf.Timestamp
+	177, // 10: agent.v1.TrashEntry.deleted_at:type_name -> google.protobuf.Timestamp
 	0,   // 11: agent.v1.TrashEntry.kind:type_name -> agent.v1.FileKind
 	27,  // 12: agent.v1.ListTrashResponse.entries:type_name -> agent.v1.TrashEntry
 	10,  // 13: agent.v1.RestoreResponse.entry:type_name -> agent.v1.FileEntry
@@ -12148,10 +12591,10 @@ var file_agent_v1_agent_proto_depIdxs = []int32{
 	10,  // 20: agent.v1.MkdirResponse.entry:type_name -> agent.v1.FileEntry
 	10,  // 21: agent.v1.RenameResponse.entry:type_name -> agent.v1.FileEntry
 	61,  // 22: agent.v1.WriteProxyConfigRequest.files:type_name -> agent.v1.ProxyConfigFile
-	168, // 23: agent.v1.ACMECertificateInfo.not_after:type_name -> google.protobuf.Timestamp
+	177, // 23: agent.v1.ACMECertificateInfo.not_after:type_name -> google.protobuf.Timestamp
 	65,  // 24: agent.v1.ReadACMEStorageResponse.certificates:type_name -> agent.v1.ACMECertificateInfo
-	168, // 25: agent.v1.HeartbeatRequest.sent_at:type_name -> google.protobuf.Timestamp
-	168, // 26: agent.v1.HeartbeatResponse.received_at:type_name -> google.protobuf.Timestamp
+	177, // 25: agent.v1.HeartbeatRequest.sent_at:type_name -> google.protobuf.Timestamp
+	177, // 26: agent.v1.HeartbeatResponse.received_at:type_name -> google.protobuf.Timestamp
 	3,   // 27: agent.v1.Metric.status:type_name -> agent.v1.MetricStatus
 	71,  // 28: agent.v1.HostObservation.cpu_usage:type_name -> agent.v1.Metric
 	71,  // 29: agent.v1.HostObservation.mem_usage:type_name -> agent.v1.Metric
@@ -12162,16 +12605,16 @@ var file_agent_v1_agent_proto_depIdxs = []int32{
 	71,  // 34: agent.v1.HostObservation.disk_write_bps:type_name -> agent.v1.Metric
 	3,   // 35: agent.v1.FilesystemObservation.status:type_name -> agent.v1.MetricStatus
 	3,   // 36: agent.v1.FilesystemObservation.inode_status:type_name -> agent.v1.MetricStatus
-	168, // 37: agent.v1.ContainerObservation.created_at:type_name -> google.protobuf.Timestamp
-	168, // 38: agent.v1.ContainerObservation.started_at:type_name -> google.protobuf.Timestamp
-	168, // 39: agent.v1.ContainerObservation.finished_at:type_name -> google.protobuf.Timestamp
+	177, // 37: agent.v1.ContainerObservation.created_at:type_name -> google.protobuf.Timestamp
+	177, // 38: agent.v1.ContainerObservation.started_at:type_name -> google.protobuf.Timestamp
+	177, // 39: agent.v1.ContainerObservation.finished_at:type_name -> google.protobuf.Timestamp
 	74,  // 40: agent.v1.ContainerInventory.containers:type_name -> agent.v1.ContainerObservation
-	168, // 41: agent.v1.ObservationReport.observed_at:type_name -> google.protobuf.Timestamp
+	177, // 41: agent.v1.ObservationReport.observed_at:type_name -> google.protobuf.Timestamp
 	72,  // 42: agent.v1.ObservationReport.host:type_name -> agent.v1.HostObservation
 	73,  // 43: agent.v1.ObservationReport.filesystems:type_name -> agent.v1.FilesystemObservation
 	75,  // 44: agent.v1.ObservationReport.inventory:type_name -> agent.v1.ContainerInventory
 	77,  // 45: agent.v1.ObservationReport.container_samples:type_name -> agent.v1.ContainerResourceSample
-	168, // 46: agent.v1.ContainerResourceSample.observed_at:type_name -> google.protobuf.Timestamp
+	177, // 46: agent.v1.ContainerResourceSample.observed_at:type_name -> google.protobuf.Timestamp
 	71,  // 47: agent.v1.ContainerResourceSample.cpu_cores:type_name -> agent.v1.Metric
 	71,  // 48: agent.v1.ContainerResourceSample.mem_working_set_bytes:type_name -> agent.v1.Metric
 	71,  // 49: agent.v1.ContainerResourceSample.mem_limit_bytes:type_name -> agent.v1.Metric
@@ -12179,177 +12622,186 @@ var file_agent_v1_agent_proto_depIdxs = []int32{
 	71,  // 51: agent.v1.ContainerResourceSample.net_tx_bps:type_name -> agent.v1.Metric
 	71,  // 52: agent.v1.ContainerResourceSample.disk_read_bps:type_name -> agent.v1.Metric
 	71,  // 53: agent.v1.ContainerResourceSample.disk_write_bps:type_name -> agent.v1.Metric
-	168, // 54: agent.v1.ObservationAck.received_at:type_name -> google.protobuf.Timestamp
+	177, // 54: agent.v1.ObservationAck.received_at:type_name -> google.protobuf.Timestamp
 	82,  // 55: agent.v1.ListToolsResponse.tools:type_name -> agent.v1.ToolInfo
 	86,  // 56: agent.v1.HostNetworkConfig.ipv4:type_name -> agent.v1.HostIPv4Config
 	87,  // 57: agent.v1.HostNetworkConfig.ipv6:type_name -> agent.v1.HostIPv6Config
 	4,   // 58: agent.v1.HostStatusResponse.capability:type_name -> agent.v1.HostCapability
 	85,  // 59: agent.v1.HostStatusResponse.network:type_name -> agent.v1.HostNetworkConfig
-	98,  // 60: agent.v1.HostCleanupStatus.journal:type_name -> agent.v1.HostCleanupCategoryStatus
-	98,  // 61: agent.v1.HostCleanupStatus.package_cache:type_name -> agent.v1.HostCleanupCategoryStatus
-	4,   // 62: agent.v1.HostCleanupStatus.capability:type_name -> agent.v1.HostCapability
-	104, // 63: agent.v1.ToolEvent.output:type_name -> agent.v1.ToolOutput
-	105, // 64: agent.v1.ToolEvent.result:type_name -> agent.v1.ToolResult
-	163, // 65: agent.v1.ListContainersRequest.labels:type_name -> agent.v1.ListContainersRequest.LabelsEntry
-	168, // 66: agent.v1.ContainerInfo.created_at:type_name -> google.protobuf.Timestamp
-	164, // 67: agent.v1.ContainerInfo.labels:type_name -> agent.v1.ContainerInfo.LabelsEntry
-	109, // 68: agent.v1.ContainerInfo.ports:type_name -> agent.v1.PortBinding
-	108, // 69: agent.v1.ContainerInfo.mounts:type_name -> agent.v1.ContainerMount
-	107, // 70: agent.v1.ListContainersResponse.containers:type_name -> agent.v1.ContainerInfo
-	168, // 71: agent.v1.VolumeInfo.created_at:type_name -> google.protobuf.Timestamp
-	114, // 72: agent.v1.ListVolumesResponse.volumes:type_name -> agent.v1.VolumeInfo
-	119, // 73: agent.v1.CleanupScanResponse.items:type_name -> agent.v1.CleanupItem
-	122, // 74: agent.v1.CleanupCleanResponse.results:type_name -> agent.v1.CleanupItemResult
-	126, // 75: agent.v1.ArchiveVolumesRequest.sources:type_name -> agent.v1.ArchiveSource
-	129, // 76: agent.v1.ArchiveChunk.result:type_name -> agent.v1.ArchiveResult
-	126, // 77: agent.v1.RestoreVolumesHeader.targets:type_name -> agent.v1.ArchiveSource
-	5,   // 78: agent.v1.RestoreVolumesHeader.mode:type_name -> agent.v1.RestoreMode
-	130, // 79: agent.v1.RestoreVolumesRequest.header:type_name -> agent.v1.RestoreVolumesHeader
-	165, // 80: agent.v1.CreateContainerRequest.labels:type_name -> agent.v1.CreateContainerRequest.LabelsEntry
-	137, // 81: agent.v1.CreateContainerRequest.healthcheck:type_name -> agent.v1.ContainerHealthcheck
-	136, // 82: agent.v1.CreateContainerRequest.log_config:type_name -> agent.v1.ContainerLogConfig
-	166, // 83: agent.v1.ContainerLogConfig.options:type_name -> agent.v1.ContainerLogConfig.OptionsEntry
-	141, // 84: agent.v1.BuildImageRequest.meta:type_name -> agent.v1.BuildMeta
-	167, // 85: agent.v1.BuildMeta.build_args:type_name -> agent.v1.BuildMeta.BuildArgsEntry
-	143, // 86: agent.v1.BuildImageResponse.log:type_name -> agent.v1.BuildLogChunk
-	144, // 87: agent.v1.BuildImageResponse.result:type_name -> agent.v1.BuildImageResult
-	154, // 88: agent.v1.ComposePsResponse.containers:type_name -> agent.v1.ComposeContainer
-	157, // 89: agent.v1.TerminalRequest.open:type_name -> agent.v1.TerminalOpen
-	158, // 90: agent.v1.TerminalRequest.resize:type_name -> agent.v1.TerminalResize
-	159, // 91: agent.v1.TerminalRequest.close:type_name -> agent.v1.TerminalClose
-	161, // 92: agent.v1.TerminalResponse.opened:type_name -> agent.v1.TerminalOpened
-	162, // 93: agent.v1.TerminalResponse.exited:type_name -> agent.v1.TerminalExited
-	67,  // 94: agent.v1.AgentService.Register:input_type -> agent.v1.RegisterRequest
-	69,  // 95: agent.v1.AgentService.Heartbeat:input_type -> agent.v1.HeartbeatRequest
-	76,  // 96: agent.v1.AgentService.PushObservations:input_type -> agent.v1.ObservationReport
-	79,  // 97: agent.v1.UpdateService.RequestUpdate:input_type -> agent.v1.UpdateRequest
-	106, // 98: agent.v1.DockerService.ListContainers:input_type -> agent.v1.ListContainersRequest
-	113, // 99: agent.v1.DockerService.ListVolumes:input_type -> agent.v1.ListVolumesRequest
-	118, // 100: agent.v1.DockerService.ScanCleanup:input_type -> agent.v1.CleanupScanRequest
-	121, // 101: agent.v1.DockerService.Clean:input_type -> agent.v1.CleanupCleanRequest
-	111, // 102: agent.v1.DockerService.StartContainer:input_type -> agent.v1.ContainerActionRequest
-	111, // 103: agent.v1.DockerService.StopContainer:input_type -> agent.v1.ContainerActionRequest
-	111, // 104: agent.v1.DockerService.RestartContainer:input_type -> agent.v1.ContainerActionRequest
-	111, // 105: agent.v1.DockerService.RemoveContainer:input_type -> agent.v1.ContainerActionRequest
-	116, // 106: agent.v1.DockerService.RemoveVolume:input_type -> agent.v1.VolumeActionRequest
-	133, // 107: agent.v1.DockerService.PullImage:input_type -> agent.v1.PullImageRequest
-	135, // 108: agent.v1.DockerService.CreateContainer:input_type -> agent.v1.CreateContainerRequest
-	135, // 109: agent.v1.DockerService.RunImage:input_type -> agent.v1.CreateContainerRequest
-	138, // 110: agent.v1.DockerService.StreamLogs:input_type -> agent.v1.StreamLogsRequest
-	124, // 111: agent.v1.DockerService.VolumeArchiveCapabilities:input_type -> agent.v1.VolumeArchiveCapabilitiesRequest
-	127, // 112: agent.v1.DockerService.ArchiveVolumes:input_type -> agent.v1.ArchiveVolumesRequest
-	131, // 113: agent.v1.DockerService.RestoreVolumes:input_type -> agent.v1.RestoreVolumesRequest
-	140, // 114: agent.v1.BuildService.BuildImage:input_type -> agent.v1.BuildImageRequest
-	62,  // 115: agent.v1.ProxyService.WriteProxyConfig:input_type -> agent.v1.WriteProxyConfigRequest
-	64,  // 116: agent.v1.ProxyService.ReadACMEStorage:input_type -> agent.v1.ReadACMEStorageRequest
-	145, // 117: agent.v1.ComposeService.ComposeValidate:input_type -> agent.v1.ComposeValidateRequest
-	147, // 118: agent.v1.ComposeService.ComposeUp:input_type -> agent.v1.ComposeUpRequest
-	149, // 119: agent.v1.ComposeService.ComposeDown:input_type -> agent.v1.ComposeDownRequest
-	151, // 120: agent.v1.ComposeService.ComposeLogs:input_type -> agent.v1.ComposeLogsRequest
-	153, // 121: agent.v1.ComposeService.ComposePs:input_type -> agent.v1.ComposePsRequest
-	6,   // 122: agent.v1.FileService.ListRoots:input_type -> agent.v1.ListRootsRequest
-	9,   // 123: agent.v1.FileService.List:input_type -> agent.v1.ListRequest
-	12,  // 124: agent.v1.FileService.Stat:input_type -> agent.v1.StatRequest
-	16,  // 125: agent.v1.FileService.Search:input_type -> agent.v1.SearchRequest
-	19,  // 126: agent.v1.FileService.Read:input_type -> agent.v1.ReadRequest
-	14,  // 127: agent.v1.FileService.DirectorySize:input_type -> agent.v1.DirectorySizeRequest
-	21,  // 128: agent.v1.FileService.Write:input_type -> agent.v1.WriteRequest
-	25,  // 129: agent.v1.FileService.Copy:input_type -> agent.v1.CopyRequest
-	26,  // 130: agent.v1.FileService.Delete:input_type -> agent.v1.DeleteRequest
-	55,  // 131: agent.v1.FileService.Mkdir:input_type -> agent.v1.MkdirRequest
-	57,  // 132: agent.v1.FileService.Rename:input_type -> agent.v1.RenameRequest
-	59,  // 133: agent.v1.FileService.Chmod:input_type -> agent.v1.ChmodRequest
-	37,  // 134: agent.v1.FileService.Compress:input_type -> agent.v1.CompressRequest
-	38,  // 135: agent.v1.FileService.Extract:input_type -> agent.v1.ExtractRequest
-	39,  // 136: agent.v1.FileService.TransferCapabilities:input_type -> agent.v1.TransferCapabilitiesRequest
-	41,  // 137: agent.v1.FileService.PrepareBundle:input_type -> agent.v1.PrepareBundleRequest
-	44,  // 138: agent.v1.FileService.ReadArtifact:input_type -> agent.v1.ReadArtifactRequest
-	46,  // 139: agent.v1.FileService.ReceiveArtifact:input_type -> agent.v1.ReceiveArtifactRequest
-	49,  // 140: agent.v1.FileService.ApplyArtifact:input_type -> agent.v1.ApplyArtifactRequest
-	53,  // 141: agent.v1.FileService.DiscardArtifact:input_type -> agent.v1.DiscardArtifactRequest
-	28,  // 142: agent.v1.FileService.ListTrash:input_type -> agent.v1.ListTrashRequest
-	30,  // 143: agent.v1.FileService.Restore:input_type -> agent.v1.RestoreRequest
-	32,  // 144: agent.v1.FileService.Purge:input_type -> agent.v1.PurgeRequest
-	34,  // 145: agent.v1.FileService.EmptyTrash:input_type -> agent.v1.EmptyTrashRequest
-	81,  // 146: agent.v1.ToolService.ListTools:input_type -> agent.v1.ListToolsRequest
-	102, // 147: agent.v1.ToolService.InstallTool:input_type -> agent.v1.InstallToolRequest
-	102, // 148: agent.v1.ToolService.UninstallTool:input_type -> agent.v1.InstallToolRequest
-	84,  // 149: agent.v1.HostService.Status:input_type -> agent.v1.HostStatusRequest
-	89,  // 150: agent.v1.HostService.ApplyNetwork:input_type -> agent.v1.HostApplyNetworkRequest
-	91,  // 151: agent.v1.HostService.ConfirmNetwork:input_type -> agent.v1.HostConfirmNetworkRequest
-	93,  // 152: agent.v1.HostService.RevertNetwork:input_type -> agent.v1.HostRevertNetworkRequest
-	95,  // 153: agent.v1.HostService.ApplySystem:input_type -> agent.v1.HostApplySystemRequest
-	97,  // 154: agent.v1.HostService.CleanupStatus:input_type -> agent.v1.HostCleanupStatusRequest
-	100, // 155: agent.v1.HostService.CleanupHost:input_type -> agent.v1.HostCleanupRequest
-	156, // 156: agent.v1.TerminalService.OpenTerminal:input_type -> agent.v1.TerminalRequest
-	68,  // 157: agent.v1.AgentService.Register:output_type -> agent.v1.RegisterResponse
-	70,  // 158: agent.v1.AgentService.Heartbeat:output_type -> agent.v1.HeartbeatResponse
-	78,  // 159: agent.v1.AgentService.PushObservations:output_type -> agent.v1.ObservationAck
-	80,  // 160: agent.v1.UpdateService.RequestUpdate:output_type -> agent.v1.UpdateResponse
-	110, // 161: agent.v1.DockerService.ListContainers:output_type -> agent.v1.ListContainersResponse
-	115, // 162: agent.v1.DockerService.ListVolumes:output_type -> agent.v1.ListVolumesResponse
-	120, // 163: agent.v1.DockerService.ScanCleanup:output_type -> agent.v1.CleanupScanResponse
-	123, // 164: agent.v1.DockerService.Clean:output_type -> agent.v1.CleanupCleanResponse
-	112, // 165: agent.v1.DockerService.StartContainer:output_type -> agent.v1.ContainerActionResponse
-	112, // 166: agent.v1.DockerService.StopContainer:output_type -> agent.v1.ContainerActionResponse
-	112, // 167: agent.v1.DockerService.RestartContainer:output_type -> agent.v1.ContainerActionResponse
-	112, // 168: agent.v1.DockerService.RemoveContainer:output_type -> agent.v1.ContainerActionResponse
-	117, // 169: agent.v1.DockerService.RemoveVolume:output_type -> agent.v1.VolumeActionResponse
-	134, // 170: agent.v1.DockerService.PullImage:output_type -> agent.v1.PullImageResponse
-	112, // 171: agent.v1.DockerService.CreateContainer:output_type -> agent.v1.ContainerActionResponse
-	112, // 172: agent.v1.DockerService.RunImage:output_type -> agent.v1.ContainerActionResponse
-	139, // 173: agent.v1.DockerService.StreamLogs:output_type -> agent.v1.LogChunk
-	125, // 174: agent.v1.DockerService.VolumeArchiveCapabilities:output_type -> agent.v1.VolumeArchiveCapabilitiesResponse
-	128, // 175: agent.v1.DockerService.ArchiveVolumes:output_type -> agent.v1.ArchiveChunk
-	132, // 176: agent.v1.DockerService.RestoreVolumes:output_type -> agent.v1.RestoreVolumesResponse
-	142, // 177: agent.v1.BuildService.BuildImage:output_type -> agent.v1.BuildImageResponse
-	63,  // 178: agent.v1.ProxyService.WriteProxyConfig:output_type -> agent.v1.WriteProxyConfigResponse
-	66,  // 179: agent.v1.ProxyService.ReadACMEStorage:output_type -> agent.v1.ReadACMEStorageResponse
-	146, // 180: agent.v1.ComposeService.ComposeValidate:output_type -> agent.v1.ComposeValidateResponse
-	148, // 181: agent.v1.ComposeService.ComposeUp:output_type -> agent.v1.ComposeUpResponse
-	150, // 182: agent.v1.ComposeService.ComposeDown:output_type -> agent.v1.ComposeDownResponse
-	152, // 183: agent.v1.ComposeService.ComposeLogs:output_type -> agent.v1.ComposeLogChunk
-	155, // 184: agent.v1.ComposeService.ComposePs:output_type -> agent.v1.ComposePsResponse
-	8,   // 185: agent.v1.FileService.ListRoots:output_type -> agent.v1.ListRootsResponse
-	11,  // 186: agent.v1.FileService.List:output_type -> agent.v1.ListResponse
-	13,  // 187: agent.v1.FileService.Stat:output_type -> agent.v1.StatResponse
-	18,  // 188: agent.v1.FileService.Search:output_type -> agent.v1.SearchResponse
-	20,  // 189: agent.v1.FileService.Read:output_type -> agent.v1.ReadChunk
-	15,  // 190: agent.v1.FileService.DirectorySize:output_type -> agent.v1.DirectorySizeResponse
-	24,  // 191: agent.v1.FileService.Write:output_type -> agent.v1.WriteResponse
-	36,  // 192: agent.v1.FileService.Copy:output_type -> agent.v1.Progress
-	36,  // 193: agent.v1.FileService.Delete:output_type -> agent.v1.Progress
-	56,  // 194: agent.v1.FileService.Mkdir:output_type -> agent.v1.MkdirResponse
-	58,  // 195: agent.v1.FileService.Rename:output_type -> agent.v1.RenameResponse
-	60,  // 196: agent.v1.FileService.Chmod:output_type -> agent.v1.ChmodResponse
-	36,  // 197: agent.v1.FileService.Compress:output_type -> agent.v1.Progress
-	36,  // 198: agent.v1.FileService.Extract:output_type -> agent.v1.Progress
-	40,  // 199: agent.v1.FileService.TransferCapabilities:output_type -> agent.v1.TransferCapabilitiesResponse
-	43,  // 200: agent.v1.FileService.PrepareBundle:output_type -> agent.v1.PrepareBundleResponse
-	45,  // 201: agent.v1.FileService.ReadArtifact:output_type -> agent.v1.ArtifactChunk
-	48,  // 202: agent.v1.FileService.ReceiveArtifact:output_type -> agent.v1.ReceiveArtifactResponse
-	50,  // 203: agent.v1.FileService.ApplyArtifact:output_type -> agent.v1.ApplyArtifactEvent
-	54,  // 204: agent.v1.FileService.DiscardArtifact:output_type -> agent.v1.DiscardArtifactResponse
-	29,  // 205: agent.v1.FileService.ListTrash:output_type -> agent.v1.ListTrashResponse
-	31,  // 206: agent.v1.FileService.Restore:output_type -> agent.v1.RestoreResponse
-	33,  // 207: agent.v1.FileService.Purge:output_type -> agent.v1.PurgeResponse
-	35,  // 208: agent.v1.FileService.EmptyTrash:output_type -> agent.v1.EmptyTrashResponse
-	83,  // 209: agent.v1.ToolService.ListTools:output_type -> agent.v1.ListToolsResponse
-	103, // 210: agent.v1.ToolService.InstallTool:output_type -> agent.v1.ToolEvent
-	103, // 211: agent.v1.ToolService.UninstallTool:output_type -> agent.v1.ToolEvent
-	88,  // 212: agent.v1.HostService.Status:output_type -> agent.v1.HostStatusResponse
-	90,  // 213: agent.v1.HostService.ApplyNetwork:output_type -> agent.v1.HostApplyNetworkResponse
-	92,  // 214: agent.v1.HostService.ConfirmNetwork:output_type -> agent.v1.HostConfirmNetworkResponse
-	94,  // 215: agent.v1.HostService.RevertNetwork:output_type -> agent.v1.HostRevertNetworkResponse
-	96,  // 216: agent.v1.HostService.ApplySystem:output_type -> agent.v1.HostApplySystemResponse
-	99,  // 217: agent.v1.HostService.CleanupStatus:output_type -> agent.v1.HostCleanupStatus
-	101, // 218: agent.v1.HostService.CleanupHost:output_type -> agent.v1.HostCleanupResult
-	160, // 219: agent.v1.TerminalService.OpenTerminal:output_type -> agent.v1.TerminalResponse
-	157, // [157:220] is the sub-list for method output_type
-	94,  // [94:157] is the sub-list for method input_type
-	94,  // [94:94] is the sub-list for extension type_name
-	94,  // [94:94] is the sub-list for extension extendee
-	0,   // [0:94] is the sub-list for field type_name
+	163, // 60: agent.v1.HostStatusResponse.ssh:type_name -> agent.v1.HostSSHSettings
+	98,  // 61: agent.v1.HostCleanupStatus.journal:type_name -> agent.v1.HostCleanupCategoryStatus
+	98,  // 62: agent.v1.HostCleanupStatus.package_cache:type_name -> agent.v1.HostCleanupCategoryStatus
+	4,   // 63: agent.v1.HostCleanupStatus.capability:type_name -> agent.v1.HostCapability
+	104, // 64: agent.v1.ToolEvent.output:type_name -> agent.v1.ToolOutput
+	105, // 65: agent.v1.ToolEvent.result:type_name -> agent.v1.ToolResult
+	172, // 66: agent.v1.ListContainersRequest.labels:type_name -> agent.v1.ListContainersRequest.LabelsEntry
+	177, // 67: agent.v1.ContainerInfo.created_at:type_name -> google.protobuf.Timestamp
+	173, // 68: agent.v1.ContainerInfo.labels:type_name -> agent.v1.ContainerInfo.LabelsEntry
+	109, // 69: agent.v1.ContainerInfo.ports:type_name -> agent.v1.PortBinding
+	108, // 70: agent.v1.ContainerInfo.mounts:type_name -> agent.v1.ContainerMount
+	107, // 71: agent.v1.ListContainersResponse.containers:type_name -> agent.v1.ContainerInfo
+	177, // 72: agent.v1.VolumeInfo.created_at:type_name -> google.protobuf.Timestamp
+	114, // 73: agent.v1.ListVolumesResponse.volumes:type_name -> agent.v1.VolumeInfo
+	119, // 74: agent.v1.CleanupScanResponse.items:type_name -> agent.v1.CleanupItem
+	122, // 75: agent.v1.CleanupCleanResponse.results:type_name -> agent.v1.CleanupItemResult
+	126, // 76: agent.v1.ArchiveVolumesRequest.sources:type_name -> agent.v1.ArchiveSource
+	129, // 77: agent.v1.ArchiveChunk.result:type_name -> agent.v1.ArchiveResult
+	126, // 78: agent.v1.RestoreVolumesHeader.targets:type_name -> agent.v1.ArchiveSource
+	5,   // 79: agent.v1.RestoreVolumesHeader.mode:type_name -> agent.v1.RestoreMode
+	130, // 80: agent.v1.RestoreVolumesRequest.header:type_name -> agent.v1.RestoreVolumesHeader
+	174, // 81: agent.v1.CreateContainerRequest.labels:type_name -> agent.v1.CreateContainerRequest.LabelsEntry
+	137, // 82: agent.v1.CreateContainerRequest.healthcheck:type_name -> agent.v1.ContainerHealthcheck
+	136, // 83: agent.v1.CreateContainerRequest.log_config:type_name -> agent.v1.ContainerLogConfig
+	175, // 84: agent.v1.ContainerLogConfig.options:type_name -> agent.v1.ContainerLogConfig.OptionsEntry
+	141, // 85: agent.v1.BuildImageRequest.meta:type_name -> agent.v1.BuildMeta
+	176, // 86: agent.v1.BuildMeta.build_args:type_name -> agent.v1.BuildMeta.BuildArgsEntry
+	143, // 87: agent.v1.BuildImageResponse.log:type_name -> agent.v1.BuildLogChunk
+	144, // 88: agent.v1.BuildImageResponse.result:type_name -> agent.v1.BuildImageResult
+	154, // 89: agent.v1.ComposePsResponse.containers:type_name -> agent.v1.ComposeContainer
+	157, // 90: agent.v1.TerminalRequest.open:type_name -> agent.v1.TerminalOpen
+	158, // 91: agent.v1.TerminalRequest.resize:type_name -> agent.v1.TerminalResize
+	159, // 92: agent.v1.TerminalRequest.close:type_name -> agent.v1.TerminalClose
+	161, // 93: agent.v1.TerminalResponse.opened:type_name -> agent.v1.TerminalOpened
+	162, // 94: agent.v1.TerminalResponse.exited:type_name -> agent.v1.TerminalExited
+	67,  // 95: agent.v1.AgentService.Register:input_type -> agent.v1.RegisterRequest
+	69,  // 96: agent.v1.AgentService.Heartbeat:input_type -> agent.v1.HeartbeatRequest
+	76,  // 97: agent.v1.AgentService.PushObservations:input_type -> agent.v1.ObservationReport
+	79,  // 98: agent.v1.UpdateService.RequestUpdate:input_type -> agent.v1.UpdateRequest
+	106, // 99: agent.v1.DockerService.ListContainers:input_type -> agent.v1.ListContainersRequest
+	113, // 100: agent.v1.DockerService.ListVolumes:input_type -> agent.v1.ListVolumesRequest
+	118, // 101: agent.v1.DockerService.ScanCleanup:input_type -> agent.v1.CleanupScanRequest
+	121, // 102: agent.v1.DockerService.Clean:input_type -> agent.v1.CleanupCleanRequest
+	111, // 103: agent.v1.DockerService.StartContainer:input_type -> agent.v1.ContainerActionRequest
+	111, // 104: agent.v1.DockerService.StopContainer:input_type -> agent.v1.ContainerActionRequest
+	111, // 105: agent.v1.DockerService.RestartContainer:input_type -> agent.v1.ContainerActionRequest
+	111, // 106: agent.v1.DockerService.RemoveContainer:input_type -> agent.v1.ContainerActionRequest
+	116, // 107: agent.v1.DockerService.RemoveVolume:input_type -> agent.v1.VolumeActionRequest
+	133, // 108: agent.v1.DockerService.PullImage:input_type -> agent.v1.PullImageRequest
+	135, // 109: agent.v1.DockerService.CreateContainer:input_type -> agent.v1.CreateContainerRequest
+	135, // 110: agent.v1.DockerService.RunImage:input_type -> agent.v1.CreateContainerRequest
+	138, // 111: agent.v1.DockerService.StreamLogs:input_type -> agent.v1.StreamLogsRequest
+	124, // 112: agent.v1.DockerService.VolumeArchiveCapabilities:input_type -> agent.v1.VolumeArchiveCapabilitiesRequest
+	127, // 113: agent.v1.DockerService.ArchiveVolumes:input_type -> agent.v1.ArchiveVolumesRequest
+	131, // 114: agent.v1.DockerService.RestoreVolumes:input_type -> agent.v1.RestoreVolumesRequest
+	140, // 115: agent.v1.BuildService.BuildImage:input_type -> agent.v1.BuildImageRequest
+	62,  // 116: agent.v1.ProxyService.WriteProxyConfig:input_type -> agent.v1.WriteProxyConfigRequest
+	64,  // 117: agent.v1.ProxyService.ReadACMEStorage:input_type -> agent.v1.ReadACMEStorageRequest
+	145, // 118: agent.v1.ComposeService.ComposeValidate:input_type -> agent.v1.ComposeValidateRequest
+	147, // 119: agent.v1.ComposeService.ComposeUp:input_type -> agent.v1.ComposeUpRequest
+	149, // 120: agent.v1.ComposeService.ComposeDown:input_type -> agent.v1.ComposeDownRequest
+	151, // 121: agent.v1.ComposeService.ComposeLogs:input_type -> agent.v1.ComposeLogsRequest
+	153, // 122: agent.v1.ComposeService.ComposePs:input_type -> agent.v1.ComposePsRequest
+	6,   // 123: agent.v1.FileService.ListRoots:input_type -> agent.v1.ListRootsRequest
+	9,   // 124: agent.v1.FileService.List:input_type -> agent.v1.ListRequest
+	12,  // 125: agent.v1.FileService.Stat:input_type -> agent.v1.StatRequest
+	16,  // 126: agent.v1.FileService.Search:input_type -> agent.v1.SearchRequest
+	19,  // 127: agent.v1.FileService.Read:input_type -> agent.v1.ReadRequest
+	14,  // 128: agent.v1.FileService.DirectorySize:input_type -> agent.v1.DirectorySizeRequest
+	21,  // 129: agent.v1.FileService.Write:input_type -> agent.v1.WriteRequest
+	25,  // 130: agent.v1.FileService.Copy:input_type -> agent.v1.CopyRequest
+	26,  // 131: agent.v1.FileService.Delete:input_type -> agent.v1.DeleteRequest
+	55,  // 132: agent.v1.FileService.Mkdir:input_type -> agent.v1.MkdirRequest
+	57,  // 133: agent.v1.FileService.Rename:input_type -> agent.v1.RenameRequest
+	59,  // 134: agent.v1.FileService.Chmod:input_type -> agent.v1.ChmodRequest
+	37,  // 135: agent.v1.FileService.Compress:input_type -> agent.v1.CompressRequest
+	38,  // 136: agent.v1.FileService.Extract:input_type -> agent.v1.ExtractRequest
+	39,  // 137: agent.v1.FileService.TransferCapabilities:input_type -> agent.v1.TransferCapabilitiesRequest
+	41,  // 138: agent.v1.FileService.PrepareBundle:input_type -> agent.v1.PrepareBundleRequest
+	44,  // 139: agent.v1.FileService.ReadArtifact:input_type -> agent.v1.ReadArtifactRequest
+	46,  // 140: agent.v1.FileService.ReceiveArtifact:input_type -> agent.v1.ReceiveArtifactRequest
+	49,  // 141: agent.v1.FileService.ApplyArtifact:input_type -> agent.v1.ApplyArtifactRequest
+	53,  // 142: agent.v1.FileService.DiscardArtifact:input_type -> agent.v1.DiscardArtifactRequest
+	28,  // 143: agent.v1.FileService.ListTrash:input_type -> agent.v1.ListTrashRequest
+	30,  // 144: agent.v1.FileService.Restore:input_type -> agent.v1.RestoreRequest
+	32,  // 145: agent.v1.FileService.Purge:input_type -> agent.v1.PurgeRequest
+	34,  // 146: agent.v1.FileService.EmptyTrash:input_type -> agent.v1.EmptyTrashRequest
+	81,  // 147: agent.v1.ToolService.ListTools:input_type -> agent.v1.ListToolsRequest
+	102, // 148: agent.v1.ToolService.InstallTool:input_type -> agent.v1.InstallToolRequest
+	102, // 149: agent.v1.ToolService.UninstallTool:input_type -> agent.v1.InstallToolRequest
+	84,  // 150: agent.v1.HostService.Status:input_type -> agent.v1.HostStatusRequest
+	89,  // 151: agent.v1.HostService.ApplyNetwork:input_type -> agent.v1.HostApplyNetworkRequest
+	91,  // 152: agent.v1.HostService.ConfirmNetwork:input_type -> agent.v1.HostConfirmNetworkRequest
+	93,  // 153: agent.v1.HostService.RevertNetwork:input_type -> agent.v1.HostRevertNetworkRequest
+	95,  // 154: agent.v1.HostService.ApplySystem:input_type -> agent.v1.HostApplySystemRequest
+	97,  // 155: agent.v1.HostService.CleanupStatus:input_type -> agent.v1.HostCleanupStatusRequest
+	100, // 156: agent.v1.HostService.CleanupHost:input_type -> agent.v1.HostCleanupRequest
+	164, // 157: agent.v1.HostService.ApplySSH:input_type -> agent.v1.HostApplySSHRequest
+	166, // 158: agent.v1.HostService.ConfirmSSH:input_type -> agent.v1.HostConfirmSSHRequest
+	168, // 159: agent.v1.HostService.RevertSSH:input_type -> agent.v1.HostRevertSSHRequest
+	170, // 160: agent.v1.HostService.ApplyAgentRoot:input_type -> agent.v1.HostApplyAgentRootRequest
+	156, // 161: agent.v1.TerminalService.OpenTerminal:input_type -> agent.v1.TerminalRequest
+	68,  // 162: agent.v1.AgentService.Register:output_type -> agent.v1.RegisterResponse
+	70,  // 163: agent.v1.AgentService.Heartbeat:output_type -> agent.v1.HeartbeatResponse
+	78,  // 164: agent.v1.AgentService.PushObservations:output_type -> agent.v1.ObservationAck
+	80,  // 165: agent.v1.UpdateService.RequestUpdate:output_type -> agent.v1.UpdateResponse
+	110, // 166: agent.v1.DockerService.ListContainers:output_type -> agent.v1.ListContainersResponse
+	115, // 167: agent.v1.DockerService.ListVolumes:output_type -> agent.v1.ListVolumesResponse
+	120, // 168: agent.v1.DockerService.ScanCleanup:output_type -> agent.v1.CleanupScanResponse
+	123, // 169: agent.v1.DockerService.Clean:output_type -> agent.v1.CleanupCleanResponse
+	112, // 170: agent.v1.DockerService.StartContainer:output_type -> agent.v1.ContainerActionResponse
+	112, // 171: agent.v1.DockerService.StopContainer:output_type -> agent.v1.ContainerActionResponse
+	112, // 172: agent.v1.DockerService.RestartContainer:output_type -> agent.v1.ContainerActionResponse
+	112, // 173: agent.v1.DockerService.RemoveContainer:output_type -> agent.v1.ContainerActionResponse
+	117, // 174: agent.v1.DockerService.RemoveVolume:output_type -> agent.v1.VolumeActionResponse
+	134, // 175: agent.v1.DockerService.PullImage:output_type -> agent.v1.PullImageResponse
+	112, // 176: agent.v1.DockerService.CreateContainer:output_type -> agent.v1.ContainerActionResponse
+	112, // 177: agent.v1.DockerService.RunImage:output_type -> agent.v1.ContainerActionResponse
+	139, // 178: agent.v1.DockerService.StreamLogs:output_type -> agent.v1.LogChunk
+	125, // 179: agent.v1.DockerService.VolumeArchiveCapabilities:output_type -> agent.v1.VolumeArchiveCapabilitiesResponse
+	128, // 180: agent.v1.DockerService.ArchiveVolumes:output_type -> agent.v1.ArchiveChunk
+	132, // 181: agent.v1.DockerService.RestoreVolumes:output_type -> agent.v1.RestoreVolumesResponse
+	142, // 182: agent.v1.BuildService.BuildImage:output_type -> agent.v1.BuildImageResponse
+	63,  // 183: agent.v1.ProxyService.WriteProxyConfig:output_type -> agent.v1.WriteProxyConfigResponse
+	66,  // 184: agent.v1.ProxyService.ReadACMEStorage:output_type -> agent.v1.ReadACMEStorageResponse
+	146, // 185: agent.v1.ComposeService.ComposeValidate:output_type -> agent.v1.ComposeValidateResponse
+	148, // 186: agent.v1.ComposeService.ComposeUp:output_type -> agent.v1.ComposeUpResponse
+	150, // 187: agent.v1.ComposeService.ComposeDown:output_type -> agent.v1.ComposeDownResponse
+	152, // 188: agent.v1.ComposeService.ComposeLogs:output_type -> agent.v1.ComposeLogChunk
+	155, // 189: agent.v1.ComposeService.ComposePs:output_type -> agent.v1.ComposePsResponse
+	8,   // 190: agent.v1.FileService.ListRoots:output_type -> agent.v1.ListRootsResponse
+	11,  // 191: agent.v1.FileService.List:output_type -> agent.v1.ListResponse
+	13,  // 192: agent.v1.FileService.Stat:output_type -> agent.v1.StatResponse
+	18,  // 193: agent.v1.FileService.Search:output_type -> agent.v1.SearchResponse
+	20,  // 194: agent.v1.FileService.Read:output_type -> agent.v1.ReadChunk
+	15,  // 195: agent.v1.FileService.DirectorySize:output_type -> agent.v1.DirectorySizeResponse
+	24,  // 196: agent.v1.FileService.Write:output_type -> agent.v1.WriteResponse
+	36,  // 197: agent.v1.FileService.Copy:output_type -> agent.v1.Progress
+	36,  // 198: agent.v1.FileService.Delete:output_type -> agent.v1.Progress
+	56,  // 199: agent.v1.FileService.Mkdir:output_type -> agent.v1.MkdirResponse
+	58,  // 200: agent.v1.FileService.Rename:output_type -> agent.v1.RenameResponse
+	60,  // 201: agent.v1.FileService.Chmod:output_type -> agent.v1.ChmodResponse
+	36,  // 202: agent.v1.FileService.Compress:output_type -> agent.v1.Progress
+	36,  // 203: agent.v1.FileService.Extract:output_type -> agent.v1.Progress
+	40,  // 204: agent.v1.FileService.TransferCapabilities:output_type -> agent.v1.TransferCapabilitiesResponse
+	43,  // 205: agent.v1.FileService.PrepareBundle:output_type -> agent.v1.PrepareBundleResponse
+	45,  // 206: agent.v1.FileService.ReadArtifact:output_type -> agent.v1.ArtifactChunk
+	48,  // 207: agent.v1.FileService.ReceiveArtifact:output_type -> agent.v1.ReceiveArtifactResponse
+	50,  // 208: agent.v1.FileService.ApplyArtifact:output_type -> agent.v1.ApplyArtifactEvent
+	54,  // 209: agent.v1.FileService.DiscardArtifact:output_type -> agent.v1.DiscardArtifactResponse
+	29,  // 210: agent.v1.FileService.ListTrash:output_type -> agent.v1.ListTrashResponse
+	31,  // 211: agent.v1.FileService.Restore:output_type -> agent.v1.RestoreResponse
+	33,  // 212: agent.v1.FileService.Purge:output_type -> agent.v1.PurgeResponse
+	35,  // 213: agent.v1.FileService.EmptyTrash:output_type -> agent.v1.EmptyTrashResponse
+	83,  // 214: agent.v1.ToolService.ListTools:output_type -> agent.v1.ListToolsResponse
+	103, // 215: agent.v1.ToolService.InstallTool:output_type -> agent.v1.ToolEvent
+	103, // 216: agent.v1.ToolService.UninstallTool:output_type -> agent.v1.ToolEvent
+	88,  // 217: agent.v1.HostService.Status:output_type -> agent.v1.HostStatusResponse
+	90,  // 218: agent.v1.HostService.ApplyNetwork:output_type -> agent.v1.HostApplyNetworkResponse
+	92,  // 219: agent.v1.HostService.ConfirmNetwork:output_type -> agent.v1.HostConfirmNetworkResponse
+	94,  // 220: agent.v1.HostService.RevertNetwork:output_type -> agent.v1.HostRevertNetworkResponse
+	96,  // 221: agent.v1.HostService.ApplySystem:output_type -> agent.v1.HostApplySystemResponse
+	99,  // 222: agent.v1.HostService.CleanupStatus:output_type -> agent.v1.HostCleanupStatus
+	101, // 223: agent.v1.HostService.CleanupHost:output_type -> agent.v1.HostCleanupResult
+	165, // 224: agent.v1.HostService.ApplySSH:output_type -> agent.v1.HostApplySSHResponse
+	167, // 225: agent.v1.HostService.ConfirmSSH:output_type -> agent.v1.HostConfirmSSHResponse
+	169, // 226: agent.v1.HostService.RevertSSH:output_type -> agent.v1.HostRevertSSHResponse
+	171, // 227: agent.v1.HostService.ApplyAgentRoot:output_type -> agent.v1.HostApplyAgentRootResponse
+	160, // 228: agent.v1.TerminalService.OpenTerminal:output_type -> agent.v1.TerminalResponse
+	162, // [162:229] is the sub-list for method output_type
+	95,  // [95:162] is the sub-list for method input_type
+	95,  // [95:95] is the sub-list for extension type_name
+	95,  // [95:95] is the sub-list for extension extendee
+	0,   // [0:95] is the sub-list for field type_name
 }
 
 func init() { file_agent_v1_agent_proto_init() }
@@ -12412,7 +12864,7 @@ func file_agent_v1_agent_proto_init() {
 			GoPackagePath: reflect.TypeOf(x{}).PkgPath(),
 			RawDescriptor: unsafe.Slice(unsafe.StringData(file_agent_v1_agent_proto_rawDesc), len(file_agent_v1_agent_proto_rawDesc)),
 			NumEnums:      6,
-			NumMessages:   162,
+			NumMessages:   171,
 			NumExtensions: 0,
 			NumServices:   10,
 		},

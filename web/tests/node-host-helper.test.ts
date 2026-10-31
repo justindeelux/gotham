@@ -133,8 +133,23 @@ describe("HostHelperGate", () => {
     await flushUi();
     expect(mockInstall).toHaveBeenCalledWith("srv-1");
     expect(saved.value?.capability).toBe("ready");
+    expect(wrapper.text()).not.toContain("still out of date");
     wrapper.unmount();
   });
+
+  for (const capability of ["helper_outdated", "helper_missing"] as const) {
+    it(`reports a helper that is still ${capability} after the reinstall`, async () => {
+      const stale = stateWith(capability, true);
+      mockInstall.mockResolvedValue({ state: stale, log: "" });
+      const { wrapper, saved } = mountGate(stale);
+      await flushUi();
+      await installButton(wrapper)?.trigger("click");
+      await flushUi();
+      expect(wrapper.text()).toContain("reinstalled but is still out of date");
+      expect(saved.value?.capability).toBe(capability);
+      wrapper.unmount();
+    });
+  }
 
   it("guards against a double click", async () => {
     mockInstall.mockImplementation(() => new Promise(() => {}));

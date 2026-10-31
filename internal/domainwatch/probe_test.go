@@ -103,7 +103,10 @@ func TestRedirectPolicyRejectsOtherHostsAndSchemes(t *testing.T) {
 }
 
 func TestBlockedIP(t *testing.T) {
-	blocked := []string{"127.0.0.1", "::1", "10.0.0.1", "192.168.1.1", "169.254.169.254", "0.0.0.0", "fe80::1"}
+	blocked := []string{
+		"127.0.0.1", "::1", "10.0.0.1", "192.168.1.1", "169.254.169.254", "0.0.0.0", "fe80::1",
+		"100.64.0.1", "198.18.0.1", "192.0.0.8", "240.0.0.1",
+	}
 	for _, raw := range blocked {
 		if !blockedIP(net.ParseIP(raw)) {
 			t.Fatalf("%s should be blocked", raw)

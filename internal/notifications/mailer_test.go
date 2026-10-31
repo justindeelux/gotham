@@ -3,6 +3,7 @@ package notifications
 import (
 	"bufio"
 	"context"
+	"errors"
 	"net"
 	"strconv"
 	"strings"
@@ -170,12 +171,13 @@ func TestSMTPMailerSendsBareEnvelopeAddresses(t *testing.T) {
 
 			mailer := &smtpMailer{timeout: 5 * time.Second}
 			err = mailer.Send(context.Background(), Mail{
-				Host:    host,
-				Port:    port,
-				From:    tc.from,
-				To:      []string{tc.to},
-				Subject: "[Gotham] envelope test",
-				Body:    "hello\n",
+				Host:         host,
+				Port:         port,
+				From:         tc.from,
+				To:           []string{tc.to},
+				Subject:      "[Gotham] envelope test",
+				Body:         "hello\n",
+				AllowPrivate: true,
 			})
 			if err != nil {
 				t.Fatalf("Send: %v", err)
@@ -206,12 +208,13 @@ func TestSMTPMailerHidesRelayText(t *testing.T) {
 
 	mailer := &smtpMailer{timeout: 5 * time.Second}
 	err := mailer.Send(context.Background(), Mail{
-		Host:    host,
-		Port:    port,
-		From:    "ops@example.com",
-		To:      []string{"oncall@example.com"},
-		Subject: "subject",
-		Body:    "body",
+		Host:         host,
+		Port:         port,
+		From:         "ops@example.com",
+		To:           []string{"oncall@example.com"},
+		Subject:      "subject",
+		Body:         "body",
+		AllowPrivate: true,
 	})
 	if err == nil {
 		t.Fatal("Send = nil error, want the relay rejection")
@@ -231,18 +234,35 @@ func TestSMTPMailerRejectsInvalidEnvelopeAddress(t *testing.T) {
 
 	mailer := &smtpMailer{timeout: 5 * time.Second}
 	err := mailer.Send(context.Background(), Mail{
-		Host:    host,
-		Port:    port,
-		From:    "not an address",
-		To:      []string{"oncall@example.com"},
-		Subject: "subject",
-		Body:    "body",
+		Host:         host,
+		Port:         port,
+		From:         "not an address",
+		To:           []string{"oncall@example.com"},
+		Subject:      "subject",
+		Body:         "body",
+		AllowPrivate: true,
 	})
 	if err == nil {
 		t.Fatal("Send = nil error, want a validation failure")
 	}
 	if !strings.Contains(err.Error(), "valid email address") {
 		t.Errorf("error = %q, want the validation message", err)
+	}
+}
+
+func TestSMTPMailerRefusesPrivateRelayForMember(t *testing.T) {
+	mailer := &smtpMailer{timeout: time.Second}
+	err := mailer.Send(context.Background(), Mail{
+		Host: "127.0.0.1",
+		Port: 25,
+		From: "ops@example.com",
+		To:   []string{"oncall@example.com"},
+	})
+	if !errors.Is(err, ErrValidation) {
+		t.Fatalf("Send = %v, want ErrValidation", err)
+	}
+	if !strings.Contains(err.Error(), "not allowed") {
+		t.Errorf("error = %q, want the blocked-destination message", err)
 	}
 }
 
@@ -285,14 +305,15 @@ func TestSMTPMailerAuthenticatesOnLoopback(t *testing.T) {
 
 	mailer := &smtpMailer{timeout: 5 * time.Second}
 	err := mailer.Send(context.Background(), Mail{
-		Host:     host,
-		Port:     port,
-		Username: "ops@gotham.dev",
-		Password: "smtp-secret",
-		From:     "ops@gotham.dev",
-		To:       []string{"oncall@gotham.dev"},
-		Subject:  "subject",
-		Body:     "body",
+		Host:         host,
+		Port:         port,
+		Username:     "ops@gotham.dev",
+		Password:     "smtp-secret",
+		From:         "ops@gotham.dev",
+		To:           []string{"oncall@gotham.dev"},
+		Subject:      "subject",
+		Body:         "body",
+		AllowPrivate: true,
 	})
 	if err != nil {
 		t.Fatalf("Send: %v", err)

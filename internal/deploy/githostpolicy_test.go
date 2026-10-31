@@ -85,6 +85,8 @@ var gitHostPolicyTable = []gitHostPolicyRow{
 	{name: "multicast v6", url: "http://[ff02::1]/acme/demo.git", wantPin: false},
 	{name: "carrier-grade nat", url: "http://100.64.0.1/acme/demo.git", wantPin: false},
 	{name: "benchmarking", url: "http://198.18.0.1/acme/demo.git", wantPin: false},
+	{name: "ietf protocol assignment", url: "http://192.0.0.8/acme/demo.git", wantPin: false},
+	{name: "reserved 240/4", url: "http://240.0.0.1/acme/demo.git", wantPin: false},
 	{name: "nat64", url: "http://[64:ff9b::7f00:1]/acme/demo.git", wantPin: false},
 	{name: "nat64 local-use", url: "http://[64:ff9b:1::7f00:1]/acme/demo.git", wantPin: false},
 	{name: "ipv4-compatible", url: "http://[::7f00:1]/acme/demo.git", wantPin: false},
@@ -143,7 +145,8 @@ func TestGitHostPolicyTable(t *testing.T) {
 			check("ValidatePublicGitURL", ValidatePublicGitURL(row.url), row.wantPublic)
 			check("ValidatePrivateGitURL", ValidatePrivateGitURL(row.url), row.wantPrivate)
 			check("validateCloneURL", validateCloneURL(row.url), row.wantDeploy)
-			_, err := pinGitRemoteHost(context.Background(), policyTestLookup, row.url, nil)
+			_, _, err := pinGitRemoteHost(context.Background(), policyTestLookup, row.url,
+				[]string{"GIT_SSH_COMMAND=ssh"})
 			check("pinGitRemoteHost", err, row.wantPin)
 		})
 	}
@@ -361,12 +364,88 @@ func TestGitClonePinsPublicHost(t *testing.T) {
 	}
 }
 
+func TestGitPinsSSHRemoteAddress(t *testing.T) {
+	t.Setenv(GitAllowPrivateHostsEnv, "false")
+	const url = "ssh://git@git.example:2222/acme/demo.git"
+	original := []string{"GIT_SSH_COMMAND=ssh -F /dev/null -i '/tmp/key'"}
+
+	pinnedURL, env, err := pinGitRemoteHost(context.Background(), policyTestLookup, url, original)
+	if err != nil {
+		t.Fatalf("pinGitRemoteHost: %v", err)
+	}
+	if pinnedURL != url {
+		t.Errorf("url = %q, want the SSH URL unchanged", pinnedURL)
+	}
+	command := ""
+	for _, entry := range env {
+		if value, ok := strings.CutPrefix(entry, "GIT_SSH_COMMAND="); ok {
+			command = value
+		}
+	}
+	if !strings.Contains(command, "-o HostName=203.0.113.10") {
+		t.Errorf("GIT_SSH_COMMAND = %q, want the validated address pinned", command)
+	}
+	if !strings.Contains(command, "-o HostKeyAlias='git.example'") {
+		t.Errorf("GIT_SSH_COMMAND = %q, want host-key checks kept on the URL host", command)
+	}
+	if original[0] != "GIT_SSH_COMMAND=ssh -F /dev/null -i '/tmp/key'" {
+		t.Errorf("the caller env was mutated: %v", original)
+	}
+}
+
+func TestGitSSHWithoutAnSSHCommandCannotBePinned(t *testing.T) {
+	t.Setenv(GitAllowPrivateHostsEnv, "false")
+	_, _, err := pinGitRemoteHost(context.Background(), policyTestLookup,
+		"git@git.example:acme/demo.git", nil)
+	if !errors.Is(err, ErrValidation) {
+		t.Fatalf("pin = %v, want ErrValidation", err)
+	}
+}
+
+func TestGitRewritesProtocolRemoteAddress(t *testing.T) {
+	t.Setenv(GitAllowPrivateHostsEnv, "false")
+	pinnedURL, _, err := pinGitRemoteHost(context.Background(), policyTestLookup,
+		"git://git.example:9418/acme/demo.git", nil)
+	if err != nil {
+		t.Fatalf("pinGitRemoteHost: %v", err)
+	}
+	if want := "git://203.0.113.10:9418/acme/demo.git"; pinnedURL != want {
+		t.Errorf("url = %q, want %q", pinnedURL, want)
+	}
+}
+
+func TestGitCloneUsesPinnedProtocolAddress(t *testing.T) {
+	t.Setenv(GitAllowPrivateHostsEnv, "false")
+	app := testApplication(uuid.New())
+	app.SourceType = SourceGitPublic
+	app.Provider = ""
+	app.CloneURL = "git://git.example/acme/demo.git"
+	app.Branch = "main"
+
+	var cloneURL string
+	source := gitSource{
+		lookup: policyTestLookup,
+		run: func(_ context.Context, argv []string, _ []string) ([]byte, error) {
+			if len(argv) > 1 && argv[1] == "clone" {
+				cloneURL = argv[len(argv)-2]
+			}
+			return nil, nil
+		},
+	}
+	if err := source.Clone(context.Background(), app, filepath.Join(t.TempDir(), "repo"), nil); err != nil {
+		t.Fatalf("Clone: %v", err)
+	}
+	if want := "git://203.0.113.10/acme/demo.git"; cloneURL != want {
+		t.Errorf("clone URL = %q, want %q", cloneURL, want)
+	}
+}
+
 func TestGitMixedARecordsRefused(t *testing.T) {
 	t.Setenv(GitAllowPrivateHostsEnv, "false")
 	mixed := func(context.Context, string) ([]net.IP, error) {
 		return []net.IP{net.ParseIP("203.0.113.10"), net.ParseIP("10.0.0.5")}, nil
 	}
-	if _, err := pinGitRemoteHost(context.Background(), mixed, "https://git.example/acme/demo.git", nil); !errors.Is(err, ErrValidation) {
+	if _, _, err := pinGitRemoteHost(context.Background(), mixed, "https://git.example/acme/demo.git", nil); !errors.Is(err, ErrValidation) {
 		t.Fatalf("pin = %v, want ErrValidation", err)
 	} else if err.Error() != errGitHostNotAllowed.Error() {
 		t.Errorf("err = %q, want the generic refusal", err)
@@ -438,7 +517,7 @@ func TestGitRebindingRefused(t *testing.T) {
 		}
 		return []net.IP{net.ParseIP("203.0.113.11")}, nil
 	}
-	if _, err := pinGitRemoteHost(context.Background(), flapping, "https://git.example/acme/demo.git", nil); err == nil {
+	if _, _, err := pinGitRemoteHost(context.Background(), flapping, "https://git.example/acme/demo.git", nil); err == nil {
 		t.Fatal("pin = nil, want the rebinding refusal")
 	} else if !strings.Contains(err.Error(), "rebinding") {
 		t.Fatalf("err = %v, want it to name DNS rebinding", err)

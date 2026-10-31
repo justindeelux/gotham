@@ -79,7 +79,7 @@ func (s gitSource) Clone(ctx context.Context, app Application, dir string, log f
 		}
 		defer cleanup()
 	}
-	pinnedEnv, err := pinGitRemoteHost(ctx, s.lookup, url, env)
+	pinnedURL, pinnedEnv, err := pinGitRemoteHost(ctx, s.lookup, url, env)
 	if err != nil {
 		return err
 	}
@@ -97,7 +97,7 @@ func (s gitSource) Clone(ctx context.Context, app Application, dir string, log f
 
 	runner := s.runOrDefault()
 	if branch == "" {
-		resolved, err := defaultBranchFor(ctx, runner, url, env)
+		resolved, err := defaultBranchFor(ctx, runner, pinnedURL, env)
 		if err != nil {
 			return err
 		}
@@ -117,7 +117,7 @@ func (s gitSource) Clone(ctx context.Context, app Application, dir string, log f
 		log(line)
 	}
 	argv := []string{"git", "clone",
-		"--depth", "1", "--single-branch", "--branch", branch, "--", url, dir}
+		"--depth", "1", "--single-branch", "--branch", branch, "--", pinnedURL, dir}
 	output, err := runner(ctx, argv, env)
 	if ctx.Err() != nil {
 		return fmt.Errorf("git clone: %w", ctx.Err())

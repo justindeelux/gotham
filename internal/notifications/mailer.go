@@ -13,6 +13,8 @@ import (
 	"strconv"
 	"strings"
 	"time"
+
+	"github.com/justindeelux/gotham/internal/netguard"
 )
 
 const defaultSMTPPort = 587
@@ -28,6 +30,9 @@ type Mail struct {
 	To       []string
 	Subject  string
 	Body     string
+	// AllowPrivate lets an owner channel reach a LAN relay; member channels
+	// only reach public addresses.
+	AllowPrivate bool
 }
 
 type Mailer interface {
@@ -66,8 +71,12 @@ func (m *smtpMailer) Send(ctx context.Context, mail Mail) error {
 		recipients = append(recipients, recipient)
 	}
 
-	conn, err := (&net.Dialer{Timeout: timeout}).DialContext(ctx, "tcp", address)
+	dialer := &net.Dialer{Timeout: timeout, Control: netguard.Control(mail.AllowPrivate)}
+	conn, err := dialer.DialContext(ctx, "tcp", address)
 	if err != nil {
+		if errors.Is(err, netguard.ErrDenied) {
+			return fmt.Errorf("%w: smtp destination is not allowed", ErrValidation)
+		}
 		return fmt.Errorf("notifications: dial smtp %s: %s", address, transportCategory(err))
 	}
 	if deadline, ok := ctx.Deadline(); ok {

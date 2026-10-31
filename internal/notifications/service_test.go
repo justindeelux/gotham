@@ -6,7 +6,9 @@ import (
 	"errors"
 	"log/slog"
 	"net/http"
+	"net/http/httptest"
 	"strings"
+	"sync/atomic"
 	"testing"
 	"time"
 	"unicode/utf8"
@@ -33,7 +35,7 @@ func TestDeployFailureDeliversFormattedDiscordMessage(t *testing.T) {
 	appID := uuid.New()
 	server, call := newWebhookServer(t, http.StatusOK)
 	repo := newFakeRepository()
-	sealed, err := sealConfig(testSecret, ChannelConfig{WebhookURL: server.URL + "/webhook"})
+	sealed, err := sealConfig(testSecret, ChannelConfig{WebhookURL: server.URL + "/webhook", AllowPrivate: true})
 	if err != nil {
 		t.Fatalf("seal config: %v", err)
 	}
@@ -499,6 +501,92 @@ func TestCreateChannelValidation(t *testing.T) {
 	}
 }
 
+func TestMemberChannelCannotReachPrivateWebhook(t *testing.T) {
+	var hits atomic.Int32
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		hits.Add(1)
+		w.WriteHeader(http.StatusOK)
+	}))
+	t.Cleanup(server.Close)
+
+	userID := uuid.New()
+	repo := newFakeRepository()
+	repo.nonOwners[userID] = true
+	service := newTestService(t, repo)
+
+	for _, endpoint := range []string{
+		server.URL + "/hook",
+		strings.Replace(server.URL, "127.0.0.1", "localhost", 1) + "/hook",
+	} {
+		view, err := service.CreateChannel(scopedCtx(), userID, ChannelRequest{
+			Name: "member alert",
+			Kind: KindSlack,
+			Config: ChannelConfig{
+				WebhookURL:   endpoint,
+				AllowPrivate: true, // must not be honoured from a request
+			},
+		})
+		if err != nil {
+			t.Fatalf("CreateChannel(%s): %v", endpoint, err)
+		}
+		stored, ok := repo.get(view.ID)
+		if !ok {
+			t.Fatal("the channel was not stored")
+		}
+		config, err := openConfig(testSecret, stored.SealedConfig)
+		if err != nil {
+			t.Fatalf("openConfig: %v", err)
+		}
+		if config.AllowPrivate {
+			t.Errorf("a member request set allow_private for %s", endpoint)
+		}
+		result, err := service.TestChannel(context.Background(), userID, view.ID)
+		if err != nil {
+			t.Fatalf("TestChannel(%s): %v", endpoint, err)
+		}
+		if result.OK {
+			t.Errorf("TestChannel(%s) succeeded, want the private destination refused", endpoint)
+		}
+		if !strings.Contains(result.Message, "destination is not allowed") {
+			t.Errorf("message = %q, want the blocked-destination category", result.Message)
+		}
+	}
+	if got := hits.Load(); got != 0 {
+		t.Fatalf("the local listener saw %d requests, want 0", got)
+	}
+}
+
+func TestOwnerChannelCanReachPrivateWebhook(t *testing.T) {
+	var hits atomic.Int32
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		hits.Add(1)
+		w.WriteHeader(http.StatusOK)
+	}))
+	t.Cleanup(server.Close)
+
+	userID := uuid.New()
+	repo := newFakeRepository()
+	service := newTestService(t, repo)
+	view, err := service.CreateChannel(scopedCtx(), userID, ChannelRequest{
+		Name:   "owner alert",
+		Kind:   KindSlack,
+		Config: ChannelConfig{WebhookURL: server.URL + "/hook"},
+	})
+	if err != nil {
+		t.Fatalf("CreateChannel: %v", err)
+	}
+	result, err := service.TestChannel(context.Background(), userID, view.ID)
+	if err != nil {
+		t.Fatalf("TestChannel: %v", err)
+	}
+	if !result.OK {
+		t.Fatalf("TestChannel = %+v, want the owner channel to deliver", result)
+	}
+	if got := hits.Load(); got != 1 {
+		t.Fatalf("the local listener saw %d requests, want 1", got)
+	}
+}
+
 func ptr[T any](value T) *T { return &value }
 
 func TestUpdateChannelPartialAndKindImmutable(t *testing.T) {
@@ -717,7 +805,7 @@ func TestDispatcherLogHidesTransportSecret(t *testing.T) {
 	server.Close()
 
 	repo := newFakeRepository()
-	sealed, err := sealConfig(testSecret, ChannelConfig{WebhookURL: endpoint})
+	sealed, err := sealConfig(testSecret, ChannelConfig{WebhookURL: endpoint, AllowPrivate: true})
 	if err != nil {
 		t.Fatalf("seal: %v", err)
 	}
@@ -747,7 +835,7 @@ func TestDispatcherLogHidesTransportSecret(t *testing.T) {
 func TestDispatcherLogHidesStatusReasonPhrase(t *testing.T) {
 	server := newReflectingStatusServer(t, http.StatusInternalServerError)
 	repo := newFakeRepository()
-	sealed, err := sealConfig(testSecret, ChannelConfig{WebhookURL: server.URL + "/webhook/log-reason-secret"})
+	sealed, err := sealConfig(testSecret, ChannelConfig{WebhookURL: server.URL + "/webhook/log-reason-secret", AllowPrivate: true})
 	if err != nil {
 		t.Fatalf("seal: %v", err)
 	}

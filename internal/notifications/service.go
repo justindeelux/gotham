@@ -355,6 +355,11 @@ func (s *Service) CreateChannel(ctx context.Context, userID uuid.UUID, req Chann
 		return ChannelView{}, err
 	}
 	config := req.Config.normalized()
+	owner, err := s.repo.IsOwner(ctx, userID)
+	if err != nil {
+		return ChannelView{}, err
+	}
+	config.AllowPrivate = owner
 	if err := config.validate(kind); err != nil {
 		return ChannelView{}, err
 	}
@@ -428,6 +433,11 @@ func (s *Service) UpdateChannel(ctx context.Context, userID, channelID uuid.UUID
 			return ChannelView{}, err
 		}
 		merged := stored.merged(req.Config).normalized()
+		owner, err := s.repo.IsOwner(ctx, userID)
+		if err != nil {
+			return ChannelView{}, err
+		}
+		merged.AllowPrivate = owner
 		if err := merged.validate(existing.Kind); err != nil {
 			return ChannelView{}, err
 		}
@@ -1131,13 +1141,14 @@ func (s *Service) notifierFor(channel Channel) (Notifier, error) {
 	if err != nil {
 		return nil, err
 	}
+	client := outboundClient(s.client, config.AllowPrivate)
 	switch channel.Kind {
 	case KindDiscord:
-		return newDiscordNotifier(config.WebhookURL, s.client), nil
+		return newDiscordNotifier(config.WebhookURL, client), nil
 	case KindSlack:
-		return newSlackNotifier(config.WebhookURL, s.client), nil
+		return newSlackNotifier(config.WebhookURL, client), nil
 	case KindTelegram:
-		return newTelegramNotifier(config.BotToken, config.ChatID, "", s.client), nil
+		return newTelegramNotifier(config.BotToken, config.ChatID, "", client), nil
 	case KindEmail:
 		return newEmailNotifier(s.mailer, config), nil
 	default:

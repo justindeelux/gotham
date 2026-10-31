@@ -347,6 +347,12 @@ type ChannelConfig struct {
 	Password   string   `json:"password,omitempty"`
 	From       string   `json:"from,omitempty"`
 	To         []string `json:"to,omitempty"`
+
+	// AllowPrivate is set server-side from the creator's role, never from a
+	// request. Owner channels may target loopback, RFC1918 or unique-local
+	// hosts (a self-hosted chat on the LAN); member channels reach only public
+	// addresses. Delivery re-checks the resolved address at dial time.
+	AllowPrivate bool `json:"allow_private,omitempty"`
 }
 
 func (c ChannelConfig) validate(kind Kind) error {

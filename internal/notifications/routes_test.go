@@ -196,7 +196,7 @@ func TestChannelRouteTestHidesTransportSecret(t *testing.T) {
 	server.Close()
 
 	repo := newFakeRepository()
-	sealed, err := sealConfig(testSecret, ChannelConfig{WebhookURL: endpoint})
+	sealed, err := sealConfig(testSecret, ChannelConfig{WebhookURL: endpoint, AllowPrivate: true})
 	if err != nil {
 		t.Fatalf("seal: %v", err)
 	}
@@ -264,7 +264,7 @@ func TestChannelRouteTestHidesStatusReasonPhrase(t *testing.T) {
 	userID := uuid.New()
 	server := newReflectingStatusServer(t, http.StatusInternalServerError)
 	repo := newFakeRepository()
-	sealed, err := sealConfig(testSecret, ChannelConfig{WebhookURL: server.URL + "/webhook/route-reason-secret"})
+	sealed, err := sealConfig(testSecret, ChannelConfig{WebhookURL: server.URL + "/webhook/route-reason-secret", AllowPrivate: true})
 	if err != nil {
 		t.Fatalf("seal: %v", err)
 	}

@@ -63,6 +63,15 @@ a saved connection shows whether a secret is configured. Editing a channel and
 leaving the masked value in place keeps the stored secret; the channel kind
 cannot be changed after creation.
 
+Delivery resolves the channel host when it connects. A channel created by a
+member reaches only public addresses; loopback, private networks, carrier-grade
+NAT, link-local and reserved ranges are refused, so a member cannot point a
+webhook or SMTP relay at the control plane, a database or a cloud metadata
+service. A channel created by the owner may keep a private target such as a
+self-hosted chat service on the LAN; metadata and the other always-denied
+ranges stay blocked for everyone. A channel created before this rule is treated
+as public-only until the owner edits its target again.
+
 ## Scope and events
 
 Choose the scope when creating or editing a channel:

@@ -11,6 +11,8 @@ import (
 	"net/url"
 	"strings"
 	"time"
+
+	"github.com/justindeelux/gotham/internal/netguard"
 )
 
 var (
@@ -197,8 +199,7 @@ func (e *dnsFailure) Error() string { return "dns lookup failed: " + e.err.Error
 func (e *dnsFailure) Unwrap() error { return e.err }
 
 func blockedIP(ip net.IP) bool {
-	return ip.IsLoopback() || ip.IsPrivate() || ip.IsLinkLocalUnicast() ||
-		ip.IsLinkLocalMulticast() || ip.IsUnspecified() || ip.IsMulticast()
+	return netguard.Denied(ip, false)
 }
 
 func classifyProbeError(err error, ctx context.Context) (string, bool) {

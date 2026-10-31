@@ -312,10 +312,8 @@ onMounted(() => {
       <NeedsAttentionSection />
 
       <ServerHealthSection
-        v-if="authStore.isOwner"
+        v-if="authStore.isOwner && totalCount > 0"
         :cards="nodeCards"
-        :loading="serversStore.loading"
-        :total-count="totalCount"
         :hidden-count="hiddenNodeCount"
       />
 

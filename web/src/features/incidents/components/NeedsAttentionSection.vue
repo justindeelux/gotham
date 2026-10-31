@@ -81,7 +81,7 @@ const emptyState = computed<boolean>(
 );
 
 const compact = computed<boolean>(
-  () => emptyState.value && !hasFilters.value && !showResolved.value,
+  () => emptyState.value && !hasFilters.value,
 );
 
 const severityOptions = computed(() => [

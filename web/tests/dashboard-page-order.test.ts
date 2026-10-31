@@ -13,6 +13,8 @@ import {
 const state = vi.hoisted(() => ({
   isOwner: true,
   servers: [] as Array<Record<string, unknown>>,
+  applications: [] as Array<Record<string, unknown>>,
+  applicationsFail: false,
   incidentCount: 0,
 }));
 
@@ -76,13 +78,22 @@ vi.mock("@/features/applications", async (importOriginal) => {
     await importOriginal<typeof import("@/features/applications")>();
   return {
     ...actual,
-    listApplications: async () => [],
+    listApplications: async () => {
+      if (state.applicationsFail) {
+        throw new Error("applications unavailable");
+      }
+      return state.applications;
+    },
     latestDeploymentStates: async () => ({ states: [], failed: 0 }),
   };
 });
 
 vi.mock("@/features/dashboard/components/DashboardHeader.vue", () => ({
-  default: { template: '<div data-test="header" />' },
+  default: {
+    props: ["showAddServer"],
+    template:
+      '<div data-test="header"><button v-if="showAddServer">Add server</button></div>',
+  },
 }));
 vi.mock("@/features/dashboard/components/RecentDeploysPanel.vue", () => ({
   default: { template: '<div data-test="deploys" />' },
@@ -116,6 +127,8 @@ beforeEach(() => {
   syncComposerLocale("en");
   state.isOwner = true;
   state.servers = [server()];
+  state.applications = [];
+  state.applicationsFail = false;
   state.incidentCount = 0;
 });
 
@@ -162,6 +175,44 @@ describe("DashboardPage order", () => {
     expect(html).not.toContain('data-test="health"');
     expect(html).not.toContain('data-test="deploys"');
     expect(wrapper.text()).toContain("Add your first server");
+    wrapper.unmount();
+  });
+
+  it("keeps one server CTA when the owner has apps but no servers", async () => {
+    state.servers = [];
+    state.applications = [{ id: "app-1" }];
+    const wrapper = mountPage();
+    await flushPromises();
+
+    const html = wrapper.html();
+    expect(html).not.toContain('data-testid="dashboard-first-run"');
+    expect(html).not.toContain('data-test="health"');
+    expect(wrapper.get('[data-testid="dashboard-status"]').text()).toBe(
+      "No servers yet",
+    );
+    const addButtons = wrapper
+      .findAll("button")
+      .filter((button) => button.text() === "Add server");
+    expect(addButtons, "one server CTA surface").toHaveLength(1);
+    wrapper.unmount();
+  });
+
+  it("keeps one server CTA when the applications request fails", async () => {
+    state.servers = [];
+    state.applicationsFail = true;
+    const wrapper = mountPage();
+    await flushPromises();
+
+    const html = wrapper.html();
+    expect(html).not.toContain('data-testid="dashboard-first-run"');
+    expect(html).not.toContain('data-test="health"');
+    expect(wrapper.get('[data-testid="dashboard-status"]').text()).toBe(
+      "No servers yet",
+    );
+    const addButtons = wrapper
+      .findAll("button")
+      .filter((button) => button.text() === "Add server");
+    expect(addButtons, "one server CTA surface").toHaveLength(1);
     wrapper.unmount();
   });
 

@@ -88,6 +88,9 @@ func TestToolchainRoutesScopeContainment(t *testing.T) {
 
 	readToken := mustCreateToken(t, tokens, auth.ScopeRead, auth.ScopeAdmin)
 	deployToken := mustCreateToken(t, tokens, auth.ScopeDeploy, auth.ScopeAdmin)
+	deployOnlyToken := mustCreateToken(t, tokens, auth.ScopeDeploy)
+	readOnlyToken := mustCreateToken(t, tokens, auth.ScopeRead)
+	adminToken := mustCreateToken(t, tokens, auth.ScopeAdmin)
 	const session = "Bearer valid-token"
 	serverID := uuid.New().String()
 	toolsPath := "/api/v1/servers/" + serverID + "/tools"
@@ -105,6 +108,11 @@ func TestToolchainRoutesScopeContainment(t *testing.T) {
 		{"read token lists tools", http.MethodGet, toolsPath, "", "Bearer " + readToken, http.StatusOK},
 		{"read token with admin enqueues", http.MethodPost, jobsPath, body, "Bearer " + readToken, http.StatusCreated},
 		{"deploy token enqueues", http.MethodPost, jobsPath, body, "Bearer " + deployToken, http.StatusCreated},
+		{"admin token lists tools", http.MethodGet, toolsPath, "", "Bearer " + adminToken, http.StatusOK},
+		{"deploy-only token cannot list tools", http.MethodGet, toolsPath, "", "Bearer " + deployOnlyToken, http.StatusForbidden},
+		{"deploy-only token cannot enqueue", http.MethodPost, jobsPath, body, "Bearer " + deployOnlyToken, http.StatusForbidden},
+		{"deploy-only token cannot cancel", http.MethodPost, jobsPath + "/" + uuid.New().String() + "/cancel", "", "Bearer " + deployOnlyToken, http.StatusForbidden},
+		{"read-only token cannot enqueue", http.MethodPost, jobsPath, body, "Bearer " + readOnlyToken, http.StatusForbidden},
 		{"jwt session lists tools", http.MethodGet, toolsPath, "", session, http.StatusOK},
 		{"jwt session enqueues", http.MethodPost, jobsPath, body, session, http.StatusCreated},
 		{"no token is unauthorized", http.MethodGet, toolsPath, "", "", http.StatusUnauthorized},

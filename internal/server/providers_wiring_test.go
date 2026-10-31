@@ -10,6 +10,7 @@ import (
 
 	"github.com/google/uuid"
 
+	"github.com/justindeelux/gotham/internal/auth"
 	"github.com/justindeelux/gotham/internal/deploy"
 	"github.com/justindeelux/gotham/internal/providers"
 )
@@ -48,6 +49,36 @@ func TestProviderConnectionApplicationsWithoutDeploy(t *testing.T) {
 	}
 	if len(got) != 0 {
 		t.Fatalf("applications = %+v, want none without a deploy service", got)
+	}
+}
+
+func TestProviderRoutesRequireAdminScope(t *testing.T) {
+	s, _, owner := scratchProjectsStack(t)
+	ownerID, err := uuid.Parse(owner.User.ID)
+	if err != nil {
+		t.Fatalf("parse owner id: %v", err)
+	}
+
+	for _, scope := range []string{auth.ScopeRead, auth.ScopeDeploy} {
+		created, err := s.tokens.Create(context.Background(), ownerID, scope, []string{scope})
+		if err != nil {
+			t.Fatalf("create owner %s token: %v", scope, err)
+		}
+		rec := doRequest(t, s, http.MethodGet, "/api/v1/providers", "", "Bearer "+created.Token)
+		if rec.Code != http.StatusForbidden {
+			t.Fatalf("owner %s token providers = %d, want 403 (body %s)", scope, rec.Code, rec.Body.String())
+		}
+	}
+
+	admin, err := s.tokens.Create(context.Background(), ownerID, "admin", []string{auth.ScopeAdmin})
+	if err != nil {
+		t.Fatalf("create owner admin token: %v", err)
+	}
+	if rec := doRequest(t, s, http.MethodGet, "/api/v1/providers", "", "Bearer "+admin.Token); rec.Code != http.StatusOK {
+		t.Fatalf("owner admin token providers = %d, want 200 (body %s)", rec.Code, rec.Body.String())
+	}
+	if rec := doRequest(t, s, http.MethodGet, "/api/v1/providers", "", "Bearer "+owner.AccessToken); rec.Code != http.StatusOK {
+		t.Fatalf("owner session providers = %d, want 200 (body %s)", rec.Code, rec.Body.String())
 	}
 }
 

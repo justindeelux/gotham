@@ -193,7 +193,7 @@ type agentUpdateController interface {
 
 func (s *Server) mountServerRoutes(api chi.Router) {
 	api.Group(func(protected chi.Router) {
-		protected.Use(s.RequireAuth, requireResourceScopes, s.requireOwnerAccount)
+		protected.Use(s.RequireAuth, s.RequireOwner)
 		protected.Get("/v1/servers", s.handleListServers)
 		protected.Post("/v1/servers", s.handleCreateServer)
 		protected.Get("/v1/servers/{id}", s.handleGetServer)

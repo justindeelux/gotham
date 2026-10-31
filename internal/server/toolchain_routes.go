@@ -63,7 +63,7 @@ func (s *Server) mountToolchainRoutes(api chi.Router) {
 		return
 	}
 	api.Group(func(protected chi.Router) {
-		protected.Use(s.resourceAuth())
+		protected.Use(s.RequireAuth, s.RequireOwner)
 		protected.Get("/v1/servers/{id}/tools", s.handleListTools)
 		protected.Get("/v1/servers/{id}/toolchain/jobs", s.handleListToolchainJobs)
 		protected.Post("/v1/servers/{id}/toolchain/jobs", s.handleEnqueueToolchainJobs)

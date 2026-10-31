@@ -7,7 +7,6 @@ import (
 	"log/slog"
 	"net/http"
 	"net/http/httptest"
-	"strings"
 	"testing"
 
 	"github.com/google/uuid"
@@ -82,18 +81,22 @@ func TestResourceScopeContainment(t *testing.T) {
 		want    int
 		wantMsg string
 	}{
-		"read token cannot mint":               {http.MethodPost, "/api/v1/tokens", `{"name":"x","scopes":["deploy"]}`, "Bearer " + readToken, http.StatusForbidden, tokenScopeGrantDenied},
-		"deploy cannot mint admin":             {http.MethodPost, "/api/v1/tokens", `{"name":"x","scopes":["admin"]}`, "Bearer " + deployToken, http.StatusForbidden, tokenScopeGrantDenied},
-		"deploy can mint read":                 {http.MethodPost, "/api/v1/tokens", `{"name":"x","scopes":["read"]}`, "Bearer " + deployToken, http.StatusCreated, ""},
-		"read can mint read":                   {http.MethodPost, "/api/v1/tokens", `{"name":"x","scopes":["read"]}`, "Bearer " + readToken, http.StatusCreated, ""},
-		"jwt can mint deploy":                  {http.MethodPost, "/api/v1/tokens", `{"name":"x","scopes":["deploy"]}`, session, http.StatusCreated, ""},
-		"owner read token reads resources":     {http.MethodGet, "/api/v1/servers", "", "Bearer " + ownerReadToken, http.StatusOK, ""},
-		"owner deploy token mutates resources": {http.MethodPost, "/api/v1/servers", createBody, "Bearer " + ownerDeployToken, http.StatusCreated, ""},
-		"owner admin token reads resources":    {http.MethodGet, "/api/v1/servers", "", "Bearer " + ownerAdminToken, http.StatusOK, ""},
-		"owner read token cannot mutate":       {http.MethodPost, "/api/v1/servers", createBody, "Bearer " + ownerReadToken, http.StatusForbidden, ""},
-		"member read token cannot read":        {http.MethodGet, "/api/v1/servers", "", "Bearer " + readToken, http.StatusNotFound, ""},
-		"member deploy token cannot mutate":    {http.MethodPost, "/api/v1/servers", createBody, "Bearer " + deployToken, http.StatusNotFound, ""},
-		"member admin token cannot read":       {http.MethodGet, "/api/v1/servers", "", "Bearer " + memberAdminToken, http.StatusNotFound, ""},
+		"read token cannot mint":                   {http.MethodPost, "/api/v1/tokens", `{"name":"x","scopes":["deploy"]}`, "Bearer " + readToken, http.StatusForbidden, tokenScopeGrantDenied},
+		"deploy cannot mint admin":                 {http.MethodPost, "/api/v1/tokens", `{"name":"x","scopes":["admin"]}`, "Bearer " + deployToken, http.StatusForbidden, tokenScopeGrantDenied},
+		"deploy can mint read":                     {http.MethodPost, "/api/v1/tokens", `{"name":"x","scopes":["read"]}`, "Bearer " + deployToken, http.StatusCreated, ""},
+		"read can mint read":                       {http.MethodPost, "/api/v1/tokens", `{"name":"x","scopes":["read"]}`, "Bearer " + readToken, http.StatusCreated, ""},
+		"jwt can mint deploy":                      {http.MethodPost, "/api/v1/tokens", `{"name":"x","scopes":["deploy"]}`, session, http.StatusCreated, ""},
+		"owner read token cannot read servers":     {http.MethodGet, "/api/v1/servers", "", "Bearer " + ownerReadToken, http.StatusForbidden, ""},
+		"owner deploy token cannot create servers": {http.MethodPost, "/api/v1/servers", createBody, "Bearer " + ownerDeployToken, http.StatusForbidden, ""},
+		"owner admin token reads servers":          {http.MethodGet, "/api/v1/servers", "", "Bearer " + ownerAdminToken, http.StatusOK, ""},
+		"owner read token cannot mutate":           {http.MethodPost, "/api/v1/servers", createBody, "Bearer " + ownerReadToken, http.StatusForbidden, ""},
+		"owner deploy token cannot list keys":      {http.MethodGet, "/api/v1/private-keys", "", "Bearer " + ownerDeployToken, http.StatusForbidden, ""},
+		"owner read token cannot reveal key":       {http.MethodPost, "/api/v1/private-keys/" + uuid.NewString() + "/reveal", "", "Bearer " + ownerReadToken, http.StatusForbidden, ""},
+		"owner deploy token cannot delete server":  {http.MethodDelete, "/api/v1/servers/" + uuid.NewString(), "", "Bearer " + ownerDeployToken, http.StatusForbidden, ""},
+		"owner admin token creates servers":        {http.MethodPost, "/api/v1/servers", createBody, "Bearer " + ownerAdminToken, http.StatusCreated, ""},
+		"member read token cannot read":            {http.MethodGet, "/api/v1/servers", "", "Bearer " + readToken, http.StatusNotFound, ""},
+		"member deploy token cannot mutate":        {http.MethodPost, "/api/v1/servers", createBody, "Bearer " + deployToken, http.StatusNotFound, ""},
+		"member admin token cannot read":           {http.MethodGet, "/api/v1/servers", "", "Bearer " + memberAdminToken, http.StatusNotFound, ""},
 	}
 
 	for label, tc := range tests {
@@ -112,6 +115,31 @@ func TestResourceScopeContainment(t *testing.T) {
 				}
 			}
 		})
+	}
+}
+
+func TestPrivateKeyRevealRequiresAdminScope(t *testing.T) {
+	s, tokens := newScopeTestServer(t)
+	registry := s.servers.(*fakeServerService)
+	key, err := registry.AddPrivateKey(context.Background(), "deploy-key",
+		"-----BEGIN OPENSSH PRIVATE KEY-----\nfake\n-----END OPENSSH PRIVATE KEY-----\n", "", "")
+	if err != nil {
+		t.Fatalf("seed private key: %v", err)
+	}
+
+	path := "/api/v1/private-keys/" + key.ID.String() + "/reveal"
+	for _, scope := range []string{auth.ScopeRead, auth.ScopeDeploy} {
+		token := mustCreateOwnerToken(t, tokens, scope)
+		if rec := doRequest(t, s, http.MethodPost, path, "", "Bearer "+token); rec.Code != http.StatusForbidden {
+			t.Fatalf("owner %s token reveal = %d, want 403 (body %s)", scope, rec.Code, rec.Body.String())
+		}
+	}
+
+	if rec := doRequest(t, s, http.MethodPost, path, "", "Bearer "+mustCreateOwnerToken(t, tokens, auth.ScopeAdmin)); rec.Code != http.StatusOK {
+		t.Fatalf("owner admin token reveal = %d, want 200 (body %s)", rec.Code, rec.Body.String())
+	}
+	if rec := doRequest(t, s, http.MethodPost, path, "", "Bearer owner-token"); rec.Code != http.StatusOK {
+		t.Fatalf("owner session reveal = %d, want 200 (body %s)", rec.Code, rec.Body.String())
 	}
 }
 
@@ -271,8 +299,8 @@ func TestRequireResourceScopesClassifier(t *testing.T) {
 
 func TestFilesContentScopeGate(t *testing.T) {
 	s, tokens := newScopeTestServer(t)
-	readToken := mustCreateToken(t, tokens, auth.ScopeRead)
-	deployToken := mustCreateToken(t, tokens, auth.ScopeDeploy)
+	readToken := mustCreateOwnerToken(t, tokens, auth.ScopeRead)
+	deployToken := mustCreateOwnerToken(t, tokens, auth.ScopeDeploy)
 	id := uuid.New()
 	path := "/api/v1/servers/" + id.String() + "/files/content?root=volumes&path=app.env"
 
@@ -284,12 +312,12 @@ func TestFilesContentScopeGate(t *testing.T) {
 	if err := json.Unmarshal(rec.Body.Bytes(), &body); err != nil {
 		t.Fatalf("decode error body: %v", err)
 	}
-	if body.Message != "insufficient scope" {
-		t.Fatalf("message = %q, want %q", body.Message, "insufficient scope")
+	if body.Message != "owner access is required" {
+		t.Fatalf("message = %q, want %q", body.Message, "owner access is required")
 	}
 
 	rec = doRequest(t, s, http.MethodGet, path, "", "Bearer "+deployToken)
-	if rec.Code != http.StatusNotFound || strings.Contains(rec.Body.String(), "insufficient scope") {
+	if rec.Code != http.StatusForbidden {
 		t.Fatalf("deploy token content = %d (body %s), want the platform-operator refusal", rec.Code, rec.Body.String())
 	}
 
@@ -337,8 +365,8 @@ func TestFilesHistoryVersionScopeGate(t *testing.T) {
 
 func TestFilesWriteScopeGate(t *testing.T) {
 	s, tokens := newScopeTestServer(t)
-	readToken := mustCreateToken(t, tokens, auth.ScopeRead)
-	deployToken := mustCreateToken(t, tokens, auth.ScopeDeploy)
+	readToken := mustCreateOwnerToken(t, tokens, auth.ScopeRead)
+	deployToken := mustCreateOwnerToken(t, tokens, auth.ScopeDeploy)
 	adminToken := mustCreateOwnerToken(t, tokens, auth.ScopeAdmin)
 	id := uuid.New()
 	base := "/api/v1/servers/" + id.String() + "/files/"
@@ -371,11 +399,11 @@ func TestFilesWriteScopeGate(t *testing.T) {
 			if err := json.Unmarshal(rec.Body.Bytes(), &body); err != nil {
 				t.Fatalf("decode error body: %v", err)
 			}
-			if body.Message != "insufficient scope" {
-				t.Fatalf("message = %q, want %q", body.Message, "insufficient scope")
+			if body.Message != "owner access is required" {
+				t.Fatalf("message = %q, want %q", body.Message, "owner access is required")
 			}
 			rec = doRequest(t, s, tc.method, tc.path, tc.body, "Bearer "+deployToken)
-			if rec.Code != http.StatusNotFound || strings.Contains(rec.Body.String(), "insufficient scope") {
+			if rec.Code != http.StatusForbidden {
 				t.Fatalf("deploy token = %d (body %s), want the platform-operator refusal", rec.Code, rec.Body.String())
 			}
 			rec = doRequest(t, s, tc.method, tc.path, tc.body, "Bearer "+adminToken)

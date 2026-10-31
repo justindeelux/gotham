@@ -397,8 +397,7 @@ func (s *Server) routes() (http.Handler, error) {
 			}
 		}
 
-		filesAuth := s.resourceAuth()
-		files.Mount(api, filesAuth, files.TransferAuthorizerFunc(s.authorizeFileTransfer), s.fileService(), s.logger)
+		files.Mount(api, platformOnly, files.TransferAuthorizerFunc(s.authorizeFileTransfer), s.fileService(), s.logger)
 
 		s.databasesRetainer = s.databasesRetention(containerService)
 		s.databasesRetainer.Start()
@@ -499,7 +498,7 @@ func (s *Server) routes() (http.Handler, error) {
 
 		providerSvc := providers.NewDefaultService(s.persistence, s.secretKey, s.logger,
 			s.providerConnectionApplications)
-		providers.MountWithControlPlaneURL(api, s.resourceAuth(), UserIDFromContext, providerSvc, s.controlPlaneURLSource())
+		providers.MountWithControlPlaneURL(api, platformOnly, UserIDFromContext, providerSvc, s.controlPlaneURLSource())
 
 		githubAppSvc := githubapp.NewDefaultService(s.persistence, s.secretKey, s.logger)
 		githubapp.MountWithControlPlaneURL(api, s.resourceAuth(), UserIDFromContext, githubAppSvc, s.controlPlaneURLSource())

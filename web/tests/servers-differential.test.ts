@@ -164,7 +164,7 @@ describe("conditional required fields", () => {
       "Paste the PEM-encoded private key.",
     );
     expect(check(requiredField(serverMessages.wizardKeyIdRequired), "").message).toBe(
-      "Enter an existing key ID.",
+      "Choose a private key.",
     );
     expect(check(requiredField(serverMessages.editKeyIdRequired), "").message).toBe(
       "Enter a key ID.",

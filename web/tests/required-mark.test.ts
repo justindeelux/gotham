@@ -94,10 +94,9 @@ const wizardFields: Field[] = [
   { path: "ip", label: "IP address / hostname" },
   { path: "port", label: "SSH port" },
   { path: "sshUser", label: "SSH user" },
-  { path: "keyName", label: "Key name" },
-  { path: "privateKey", label: "Private key (PEM)" },
   { path: "keyId", label: "Key ID" },
-  { path: "password", label: "Node password" },
+  { path: "privateKey", label: "Private key (PEM)" },
+  { path: "publicKey", label: "Public key (OpenSSH)" },
 ];
 
 const wizardModel = (): Record<string, unknown> => ({
@@ -105,36 +104,29 @@ const wizardModel = (): Record<string, unknown> => ({
   ip: "",
   port: 22,
   sshUser: "root",
-  keyName: "",
-  privateKey: "",
   keyId: "",
-  password: "",
+  privateKey: "",
+  publicKey: "",
 });
 
-describe("wizard require marks follow authMode/keyMode", () => {
-  const authModes = ["key", "password", "bogus"];
-  const keyModes = ["new", "existing", "bogus"];
-  for (const authMode of authModes) {
-    for (const keyMode of keyModes) {
-      const label = `authMode=${authMode} keyMode=${keyMode}`;
-      it(`marks exactly the matching fields (${label})`, () => {
-        const wrapper = mountFields(
-          wizardModel(),
-          connectionRules({ authMode, keyMode }),
-          wizardFields,
-        );
-        expect(fieldMarks(wrapper, wizardFields), label).toEqual([
-          true,
-          true,
-          true,
-          true,
-          authMode === "key" && keyMode === "new",
-          authMode === "key" && keyMode === "new",
-          authMode === "key" && keyMode === "existing",
-          authMode === "password",
-        ]);
-      });
-    }
+describe("wizard require marks follow authMode", () => {
+  for (const authMode of ["managed", "manual", "bogus"]) {
+    it(`marks exactly the matching fields (authMode=${authMode})`, () => {
+      const wrapper = mountFields(
+        wizardModel(),
+        connectionRules({ authMode }),
+        wizardFields,
+      );
+      expect(fieldMarks(wrapper, wizardFields)).toEqual([
+        true,
+        true,
+        true,
+        true,
+        authMode === "managed",
+        authMode === "manual",
+        authMode === "manual",
+      ]);
+    });
   }
 });
 
@@ -169,7 +161,7 @@ describe("number-typed port rule still validates through the schema", () => {
   it("reports the schema message for a non-numeric port", async () => {
     const wrapper = mountFields(
       { ...wizardModel(), port: "22" },
-      connectionRules({ authMode: "key", keyMode: "new" }),
+      connectionRules({ authMode: "managed" }),
       wizardFields,
     );
     const form = wrapper.findComponent(NForm);

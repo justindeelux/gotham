@@ -26,6 +26,7 @@ type ServerService interface {
 	Update(ctx context.Context, id uuid.UUID, params servers.UpdateParams) (*servers.Server, error)
 	Delete(ctx context.Context, id uuid.UUID) error
 	Validate(ctx context.Context, id uuid.UUID, auth servers.ValidateAuth) (*servers.ValidationResult, error)
+	InstallKey(ctx context.Context, id uuid.UUID, password string) (*servers.ValidationResult, error)
 	InstallDocker(ctx context.Context, id uuid.UUID, auth servers.ValidateAuth, out io.Writer) error
 	ResetHostKey(ctx context.Context, id uuid.UUID) (*servers.Server, error)
 	AddPrivateKey(ctx context.Context, name, privateKeyPEM, description, publicKey string) (*servers.PrivateKey, error)
@@ -61,6 +62,10 @@ type validateServerRequest struct {
 	Password     string `json:"password"`
 	Passphrase   string `json:"passphrase"`
 	TrustHostKey bool   `json:"trust_host_key"`
+}
+
+type installKeyRequest struct {
+	Password string `json:"password"`
 }
 
 type createPrivateKeyRequest struct {
@@ -120,9 +125,10 @@ type serverListEnvelope struct {
 }
 
 type validateResponse struct {
-	Message string                `json:"message,omitempty"`
-	Checks  []servers.CheckResult `json:"checks"`
-	Server  *serverDTO            `json:"server,omitempty"`
+	Message    string                `json:"message,omitempty"`
+	Checks     []servers.CheckResult `json:"checks"`
+	Server     *serverDTO            `json:"server,omitempty"`
+	AuthFailed bool                  `json:"auth_failed,omitempty"`
 }
 
 type privateKeyDTO struct {
@@ -193,7 +199,8 @@ func (s *Server) mountServerRoutes(api chi.Router) {
 		protected.Get("/v1/servers/{id}", s.handleGetServer)
 		protected.Patch("/v1/servers/{id}", s.handleUpdateServer)
 		protected.Delete("/v1/servers/{id}", s.handleDeleteServer)
-		protected.Post("/v1/servers/{id}/validate", s.handleValidateServer)
+		protected.With(s.sshRateLimit).Post("/v1/servers/{id}/validate", s.handleValidateServer)
+		protected.With(s.sshRateLimit).Post("/v1/servers/{id}/install-key", s.handleInstallKey)
 		protected.Post("/v1/servers/{id}/docker-install", s.handleInstallDocker)
 		protected.Delete("/v1/servers/{id}/host-key", s.handleResetHostKey)
 		protected.Post("/v1/private-keys", s.handleCreatePrivateKey)
@@ -333,13 +340,56 @@ func (s *Server) handleValidateServer(w http.ResponseWriter, r *http.Request) {
 	if err != nil {
 		if result != nil && errors.Is(err, servers.ErrValidation) {
 			writeJSON(w, http.StatusUnprocessableEntity, validateResponse{
-				Message: err.Error(),
-				Checks:  result.Checks,
-				Server:  serverDTOPtr(result.Server),
+				Message:    err.Error(),
+				Checks:     result.Checks,
+				Server:     serverDTOPtr(result.Server),
+				AuthFailed: result.AuthFailed,
 			})
 			return
 		}
 		s.writeServerError(w, "validate", err)
+		return
+	}
+
+	if s.proxy != nil {
+		bootstrapCtx := context.WithoutCancel(r.Context())
+		go func() {
+			if err := s.proxy.SyncServer(bootstrapCtx, id); err != nil {
+				s.logger.Warn("servers: traefik bootstrap failed", "server_id", id.String(), "error", err)
+			}
+		}()
+	}
+
+	writeJSON(w, http.StatusOK, validateResponse{
+		Checks: result.Checks,
+		Server: serverDTOPtr(result.Server),
+	})
+}
+
+func (s *Server) handleInstallKey(w http.ResponseWriter, r *http.Request) {
+	id, ok := serverIDParam(w, r)
+	if !ok {
+		return
+	}
+
+	var req installKeyRequest
+	if !s.decodeJSON(w, r, &req) {
+		return
+	}
+
+	result, err := s.servers.InstallKey(r.Context(), id, req.Password)
+	if err != nil {
+		if errors.Is(err, servers.ErrValidation) {
+			response := validateResponse{Message: err.Error(), Checks: []servers.CheckResult{}}
+			if result != nil {
+				response.Checks = result.Checks
+				response.Server = serverDTOPtr(result.Server)
+				response.AuthFailed = result.AuthFailed
+			}
+			writeJSON(w, http.StatusUnprocessableEntity, response)
+			return
+		}
+		s.writeServerError(w, "install key", err)
 		return
 	}
 

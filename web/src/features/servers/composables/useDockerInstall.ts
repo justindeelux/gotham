@@ -35,8 +35,6 @@ interface PendingMarker {
 
 export interface DockerInstallSource {
   serverId: Ref<string>;
-  passphrase: Ref<string>;
-  trustHostKey: Ref<boolean>;
 }
 
 export interface DockerInstallState {
@@ -207,13 +205,6 @@ export function useDockerInstall(source: DockerInstallSource): DockerInstallStat
   }
 
   async function openStream(serverId: string, signal: AbortSignal): Promise<Response> {
-    const body: Record<string, unknown> = {};
-    if (source.passphrase.value) {
-      body.passphrase = source.passphrase.value;
-    }
-    if (source.trustHostKey.value) {
-      body.trust_host_key = true;
-    }
     const request = (): Promise<Response> => {
       const token = getAccessToken();
       return fetch(dockerInstallPath(serverId), {
@@ -222,7 +213,7 @@ export function useDockerInstall(source: DockerInstallSource): DockerInstallStat
           "Content-Type": "application/json",
           ...(token ? { Authorization: `Bearer ${token}` } : {}),
         },
-        body: JSON.stringify(body),
+        body: JSON.stringify({}),
         signal,
       });
     };

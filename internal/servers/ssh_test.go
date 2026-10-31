@@ -10,6 +10,10 @@ import (
 	"fmt"
 	"io"
 	"net"
+	"os"
+	"os/exec"
+	"path/filepath"
+	"regexp"
 	"strconv"
 	"strings"
 	"sync"
@@ -20,17 +24,18 @@ import (
 )
 
 type sshProbeServer struct {
-	listener      net.Listener
-	password      string
-	authorizedKey ssh.PublicKey
-	dockerMissing bool
-	uid           string
-	osRelease     string
-	aptGet        bool
-	arch          string
-	sudoOK        bool
-	installStatus uint32
-	installBlock  chan struct{}
+	listener       net.Listener
+	password       string
+	authorizedKey  ssh.PublicKey
+	authorizedKeys []ssh.PublicKey
+	dockerMissing  bool
+	uid            string
+	osRelease      string
+	aptGet         bool
+	arch           string
+	sudoOK         bool
+	installStatus  uint32
+	installBlock   chan struct{}
 
 	mu       sync.Mutex
 	commands []string
@@ -60,10 +65,10 @@ func startSSHServer(t *testing.T, server *sshProbeServer) (string, string, func(
 
 	config := &ssh.ServerConfig{
 		PublicKeyCallback: func(_ ssh.ConnMetadata, key ssh.PublicKey) (*ssh.Permissions, error) {
-			if server.authorizedKey != nil && !bytes.Equal(key.Marshal(), server.authorizedKey.Marshal()) {
-				return nil, errors.New("public key rejected")
+			if server.acceptsKey(key) {
+				return nil, nil
 			}
-			return nil, nil
+			return nil, errors.New("public key rejected")
 		},
 	}
 	if server.password != "" {
@@ -87,6 +92,53 @@ func startSSHServer(t *testing.T, server *sshProbeServer) (string, string, func(
 	}()
 
 	return server.listener.Addr().String(), ssh.FingerprintSHA256(signer.PublicKey()), func() { _ = server.listener.Close() }
+}
+
+func (s *sshProbeServer) acceptsKey(key ssh.PublicKey) bool {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	if len(s.authorizedKeys) == 0 && s.authorizedKey == nil {
+		return true
+	}
+	if s.authorizedKey != nil && bytes.Equal(key.Marshal(), s.authorizedKey.Marshal()) {
+		return true
+	}
+	for _, allowed := range s.authorizedKeys {
+		if bytes.Equal(key.Marshal(), allowed.Marshal()) {
+			return true
+		}
+	}
+	return false
+}
+
+var authorizedKeyPattern = regexp.MustCompile(`(?:ssh-[a-z0-9-]+|ecdsa-[a-z0-9-]+) [A-Za-z0-9+/=]+`)
+
+// applyAuthorizedKeysCommand remembers a key appended by the install command
+// so the follow-up key-only connection can authenticate.
+func (s *sshProbeServer) applyAuthorizedKeysCommand(command string) {
+	match := authorizedKeyPattern.FindString(command)
+	if match == "" {
+		return
+	}
+	key, _, _, _, err := ssh.ParseAuthorizedKey([]byte(match))
+	if err != nil {
+		return
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	for _, existing := range s.authorizedKeys {
+		if bytes.Equal(existing.Marshal(), key.Marshal()) {
+			return
+		}
+	}
+	s.authorizedKeys = append(s.authorizedKeys, key)
+}
+
+func (s *sshProbeServer) authorizedKeyCount() int {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return len(s.authorizedKeys)
 }
 
 func (s *sshProbeServer) handle(conn net.Conn, config *ssh.ServerConfig) {
@@ -137,6 +189,10 @@ func (s *sshProbeServer) serveSession(channel ssh.Channel, requests <-chan *ssh.
 			<-block
 		}
 
+		if strings.Contains(payload.Command, "authorized_keys") {
+			s.applyAuthorizedKeysCommand(payload.Command)
+		}
+
 		stdout, stderr, status := s.cannedOutput(payload.Command)
 		if stdout != "" {
 			_, _ = io.WriteString(channel, stdout)
@@ -160,6 +216,8 @@ func (s *sshProbeServer) lastCommand() string {
 
 func (s *sshProbeServer) cannedOutput(command string) (stdout, stderr string, status uint32) {
 	switch {
+	case strings.Contains(command, "authorized_keys"):
+		return "", "", 0
 	case strings.Contains(command, "docker version"):
 		if s.dockerMissing {
 			return "", "bash: docker: command not found\n", 127
@@ -780,5 +838,129 @@ func TestInstallDockerNodeRefusesUnpinnedHost(t *testing.T) {
 		SSHAuth{Password: "hunter2"}, HostKeyPolicy{}, &out)
 	if err == nil {
 		t.Fatal("InstallDockerNode trusted an unpinned host without consent")
+	}
+}
+
+func testPublicKeyLine(t *testing.T, privatePEM []byte) string {
+	t.Helper()
+
+	signer, err := ssh.ParsePrivateKey(privatePEM)
+	if err != nil {
+		t.Fatalf("parse private key: %v", err)
+	}
+	return strings.TrimSpace(string(ssh.MarshalAuthorizedKey(signer.PublicKey())))
+}
+
+func TestAuthorizedKeysCommandIdempotentAndPermissions(t *testing.T) {
+	home := t.TempDir()
+	line := testPublicKeyLine(t, testPrivateKeyPEM(t))
+	command, err := authorizedKeysCommand(line)
+	if err != nil {
+		t.Fatalf("authorizedKeysCommand: %v", err)
+	}
+
+	run := func() {
+		t.Helper()
+		cmd := exec.Command("sh", "-c", command)
+		cmd.Env = []string{"HOME=" + home, "PATH=" + os.Getenv("PATH")}
+		if out, err := cmd.CombinedOutput(); err != nil {
+			t.Fatalf("install command: %v (%s)", err, out)
+		}
+	}
+
+	path := filepath.Join(home, ".ssh", "authorized_keys")
+	run()
+	run()
+
+	data, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatalf("read authorized_keys: %v", err)
+	}
+	blob := strings.Fields(line)[1]
+	if count := strings.Count(string(data), blob); count != 1 {
+		t.Fatalf("authorized_keys has the key %d times, want 1:\n%s", count, data)
+	}
+
+	// A key already present with a comment must not be appended again.
+	if err := os.WriteFile(path, []byte(line+" deploy@example\n"), 0o600); err != nil {
+		t.Fatalf("seed authorized_keys: %v", err)
+	}
+	run()
+	data, err = os.ReadFile(path)
+	if err != nil {
+		t.Fatalf("read authorized_keys: %v", err)
+	}
+	if count := strings.Count(string(data), blob); count != 1 {
+		t.Fatalf("authorized_keys has the key %d times after the comment case, want 1:\n%s", count, data)
+	}
+
+	dirInfo, err := os.Stat(filepath.Dir(path))
+	if err != nil {
+		t.Fatalf("stat .ssh: %v", err)
+	}
+	if perm := dirInfo.Mode().Perm(); perm != 0o700 {
+		t.Errorf(".ssh mode = %o, want 700", perm)
+	}
+	fileInfo, err := os.Stat(path)
+	if err != nil {
+		t.Fatalf("stat authorized_keys: %v", err)
+	}
+	if perm := fileInfo.Mode().Perm(); perm != 0o600 {
+		t.Errorf("authorized_keys mode = %o, want 600", perm)
+	}
+}
+
+func TestInstallAuthorizedKeyRejectsWrongPassword(t *testing.T) {
+	server := &sshProbeServer{password: "correct-password"}
+	addr, _, stop := startSSHServer(t, server)
+	defer stop()
+	host, port := target(t, addr)
+
+	err := InstallAuthorizedKey(context.Background(), host, port, "root", "wrong-password",
+		testPublicKeyLine(t, testPrivateKeyPEM(t)), HostKeyPolicy{AcceptUnpinned: true})
+	if !errors.Is(err, ErrValidation) {
+		t.Fatalf("err = %v, want ErrValidation", err)
+	}
+	if !strings.Contains(err.Error(), "password") {
+		t.Errorf("err = %v, want it to name the rejected password", err)
+	}
+	if got := server.authorizedKeyCount(); got != 0 {
+		t.Errorf("authorized keys = %d, want 0 after a rejected password", got)
+	}
+}
+
+func TestInstallAuthorizedKeyEnablesKeyLogin(t *testing.T) {
+	privatePEM := testPrivateKeyPEM(t)
+	otherSigner, err := ssh.ParsePrivateKey(testPrivateKeyPEM(t))
+	if err != nil {
+		t.Fatalf("parse other key: %v", err)
+	}
+	server := &sshProbeServer{
+		password:       "hunter2",
+		authorizedKeys: []ssh.PublicKey{otherSigner.PublicKey()},
+	}
+	addr, _, stop := startSSHServer(t, server)
+	defer stop()
+	host, port := target(t, addr)
+
+	if _, _, _, err := ValidateNode(context.Background(), host, port, "root",
+		SSHAuth{PrivateKeyPEM: privatePEM}, HostKeyPolicy{AcceptUnpinned: true}); err == nil {
+		t.Fatal("key login before install succeeded, want an auth failure")
+	}
+
+	if err := InstallAuthorizedKey(context.Background(), host, port, "root", "hunter2",
+		testPublicKeyLine(t, privatePEM), HostKeyPolicy{AcceptUnpinned: true}); err != nil {
+		t.Fatalf("InstallAuthorizedKey: %v", err)
+	}
+
+	checks, _, _, err := ValidateNode(context.Background(), host, port, "root",
+		SSHAuth{PrivateKeyPEM: privatePEM}, HostKeyPolicy{AcceptUnpinned: true})
+	if err != nil {
+		t.Fatalf("key login after install: %v", err)
+	}
+	for _, check := range checks {
+		if !check.OK {
+			t.Errorf("check %q failed after install: %s", check.Name, check.Detail)
+		}
 	}
 }

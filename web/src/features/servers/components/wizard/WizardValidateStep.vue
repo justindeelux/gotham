@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { NAlert, NButton, NCheckbox, NSpace, NText } from "naive-ui";
+import { NAlert, NButton, NInput, NSpace, NText } from "naive-ui";
 import { computed, inject } from "vue";
 
 import { WizardKey } from "@/features/servers/composables/useAddServerWizard";
@@ -32,16 +32,40 @@ const dotClass = computed<string>(() => {
       </span>
     </div>
 
-    <NAlert v-if="wizard.validateMessage.value && !wizard.validationPassed.value" type="error" :show-icon="true">
+    <NAlert
+      v-if="wizard.validateMessage.value && !wizard.validationPassed.value && !wizard.keyInstallNeeded.value"
+      type="error"
+      :show-icon="true"
+    >
       {{ wizard.validateMessage.value }}
     </NAlert>
 
-    <NCheckbox
-      v-if="wizard.currentServer.value?.has_password"
-      v-model:checked="wizard.form.trustHostKey"
-    >
-      {{ $t("servers.wizard.trustHostKey") }}
-    </NCheckbox>
+    <NAlert v-if="wizard.keyInstallNeeded.value" type="warning" :show-icon="true">
+      <div class="key-install">
+        <NText strong>{{ $t("servers.wizard.keyInstallTitle") }}</NText>
+        <NText depth="3">{{ $t("servers.wizard.keyInstallHint") }}</NText>
+        <NSpace align="center" :size="8">
+          <NInput
+            v-model:value="wizard.installPassword.value"
+            type="password"
+            show-password-on="click"
+            :placeholder="$t('servers.wizard.keyInstallPassword')"
+            :input-props="{ autocomplete: 'off', 'aria-label': $t('servers.wizard.keyInstallPassword') }"
+          />
+          <NButton
+            type="primary"
+            :loading="wizard.installingKey.value"
+            :disabled="wizard.installPassword.value === ''"
+            @click="wizard.handleInstallKey"
+          >
+            {{ $t("servers.wizard.keyInstallAction") }}
+          </NButton>
+        </NSpace>
+        <NAlert v-if="wizard.keyInstallError.value" type="error" :show-icon="true">
+          {{ wizard.keyInstallError.value }}
+        </NAlert>
+      </div>
+    </NAlert>
 
     <div class="check-list">
       <WizardCheckRow
@@ -126,5 +150,11 @@ const dotClass = computed<string>(() => {
   display: flex;
   flex-direction: column;
   gap: 2px;
+}
+
+.key-install {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-2);
 }
 </style>

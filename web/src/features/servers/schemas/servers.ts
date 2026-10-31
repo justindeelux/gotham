@@ -19,6 +19,7 @@ export const serverMessages = {
   sshUserPattern: "servers.validation.sshUserPattern",
   keyNameRequired: "servers.validation.keyNameRequired",
   privateKeyRequired: "servers.validation.privateKeyRequired",
+  publicKeyRequired: "servers.validation.publicKeyRequired",
   wizardKeyIdRequired: "servers.validation.wizardKeyIdRequired",
   editKeyIdRequired: "servers.validation.editKeyIdRequired",
   nodePasswordRequired: "servers.validation.nodePasswordRequired",
@@ -67,13 +68,11 @@ export function requiredField(message: string): z.ZodString {
 
 export interface ConnectionModes {
   authMode: string;
-  keyMode: string;
 }
 
 export function connectionRules(modes: ConnectionModes): FormRules {
-  const isNewKey = modes.authMode === "key" && modes.keyMode === "new";
-  const isExistingKey = modes.authMode === "key" && modes.keyMode === "existing";
-  const isPassword = modes.authMode === "password";
+  const isManaged = modes.authMode === "managed";
+  const isManual = modes.authMode === "manual";
   return {
     name: [{ ...ruleFrom(serverNameSchema, { required: true }), trigger: ["input", "blur"] }],
     ip: [{ ...ruleFrom(serverHostSchema, { required: true }), trigger: ["input", "blur"] }],
@@ -85,11 +84,11 @@ export function connectionRules(modes: ConnectionModes): FormRules {
       },
     ],
     sshUser: [{ ...ruleFrom(serverUserSchema, { required: true }), trigger: ["input", "blur"] }],
-    keyName: [
+    keyId: [
       {
-        ...ruleFrom(requiredField(serverMessages.keyNameRequired), {
-          when: () => isNewKey,
-          required: isNewKey,
+        ...ruleFrom(requiredField(serverMessages.wizardKeyIdRequired), {
+          when: () => isManaged,
+          required: isManaged,
         }),
         trigger: ["input", "blur"],
       },
@@ -97,26 +96,17 @@ export function connectionRules(modes: ConnectionModes): FormRules {
     privateKey: [
       {
         ...ruleFrom(requiredField(serverMessages.privateKeyRequired), {
-          when: () => isNewKey,
-          required: isNewKey,
+          when: () => isManual,
+          required: isManual,
         }),
         trigger: ["input", "blur"],
       },
     ],
-    keyId: [
+    publicKey: [
       {
-        ...ruleFrom(requiredField(serverMessages.wizardKeyIdRequired), {
-          when: () => isExistingKey,
-          required: isExistingKey,
-        }),
-        trigger: ["input", "blur"],
-      },
-    ],
-    password: [
-      {
-        ...ruleFrom(requiredField(serverMessages.nodePasswordRequired), {
-          when: () => isPassword,
-          required: isPassword,
+        ...ruleFrom(requiredField(serverMessages.publicKeyRequired), {
+          when: () => isManual,
+          required: isManual,
         }),
         trigger: ["input", "blur"],
       },

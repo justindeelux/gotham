@@ -224,6 +224,38 @@ func (f *fakeServerService) Validate(_ context.Context, id uuid.UUID, auth serve
 	}, nil
 }
 
+func (f *fakeServerService) InstallKey(_ context.Context, id uuid.UUID, password string) (*servers.ValidationResult, error) {
+	f.mu.Lock()
+	f.lastPassword = password
+	err := f.validateErr
+	result := f.validateResult
+	f.mu.Unlock()
+
+	if err != nil {
+		return result, err
+	}
+	if result != nil {
+		return result, nil
+	}
+
+	f.mu.Lock()
+	item, ok := f.items[id]
+	f.mu.Unlock()
+	if !ok {
+		return nil, servers.ErrNotFound
+	}
+	item.Status = servers.StatusReady
+	return &servers.ValidationResult{
+		Checks: []servers.CheckResult{
+			{Name: "docker", OK: true, Detail: "24.0.7"},
+			{Name: "cpu", OK: true, Detail: "Linux x86_64"},
+			{Name: "ram", OK: true, Detail: "8192000 bytes"},
+			{Name: "disk", OK: true, Detail: "20480000 bytes"},
+		},
+		Server: &item,
+	}, nil
+}
+
 func (f *fakeServerService) InstallDocker(_ context.Context, id uuid.UUID, auth servers.ValidateAuth, out io.Writer) error {
 	f.mu.Lock()
 	f.lastAuth = auth
@@ -591,6 +623,102 @@ func TestValidateServerRouteNoCredentials(t *testing.T) {
 	rec := doRequest(t, s, http.MethodPost, "/api/v1/servers/"+id.String()+"/validate", "", authHeader)
 	if rec.Code != http.StatusBadRequest {
 		t.Fatalf("status = %d, want 400 (body %s)", rec.Code, rec.Body.String())
+	}
+}
+
+func TestValidateServerRouteReportsAuthFailure(t *testing.T) {
+	fake := newFakeServerService()
+	s := newServerRoutesTestServer(t, fake)
+	id := seedServer(t, fake, "web-auth")
+
+	fake.validateResult = &servers.ValidationResult{
+		AuthFailed: true,
+		Checks:     []servers.CheckResult{{Name: "docker", OK: false, Detail: "unable to authenticate"}},
+		Server:     &servers.Server{ID: id, Name: "web-auth", Status: servers.StatusError},
+	}
+	fake.validateErr = fmt.Errorf("%w: ssh: unable to authenticate", servers.ErrValidation)
+
+	rec := doRequest(t, s, http.MethodPost, "/api/v1/servers/"+id.String()+"/validate", "", authHeader)
+	if rec.Code != http.StatusUnprocessableEntity {
+		t.Fatalf("status = %d, want 422 (body %s)", rec.Code, rec.Body.String())
+	}
+
+	var body validateResponse
+	if err := json.Unmarshal(rec.Body.Bytes(), &body); err != nil {
+		t.Fatalf("decode: %v", err)
+	}
+	if !body.AuthFailed {
+		t.Error("auth_failed = false, want true")
+	}
+}
+
+func TestInstallKeyRouteSuccess(t *testing.T) {
+	fake := newFakeServerService()
+	s := newServerRoutesTestServer(t, fake)
+	id := seedServer(t, fake, "web-key")
+
+	rec := doRequest(t, s, http.MethodPost, "/api/v1/servers/"+id.String()+"/install-key",
+		`{"password":"root-password"}`, authHeader)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status = %d, want 200 (body %s)", rec.Code, rec.Body.String())
+	}
+
+	var body validateResponse
+	if err := json.Unmarshal(rec.Body.Bytes(), &body); err != nil {
+		t.Fatalf("decode: %v", err)
+	}
+	if len(body.Checks) != 4 {
+		t.Errorf("checks = %d, want 4", len(body.Checks))
+	}
+	if strings.Contains(rec.Body.String(), "root-password") {
+		t.Error("the install password is echoed in the response")
+	}
+
+	fake.mu.Lock()
+	got := fake.lastPassword
+	fake.mu.Unlock()
+	if got != "root-password" {
+		t.Errorf("password forwarded to the service = %q", got)
+	}
+}
+
+func TestInstallKeyRouteWrongPassword(t *testing.T) {
+	fake := newFakeServerService()
+	s := newServerRoutesTestServer(t, fake)
+	id := seedServer(t, fake, "web-key-bad")
+
+	fake.validateErr = fmt.Errorf("%w: the SSH password for root@10.0.0.5 was rejected", servers.ErrValidation)
+
+	rec := doRequest(t, s, http.MethodPost, "/api/v1/servers/"+id.String()+"/install-key",
+		`{"password":"wrong"}`, authHeader)
+	if rec.Code != http.StatusUnprocessableEntity {
+		t.Fatalf("status = %d, want 422 (body %s)", rec.Code, rec.Body.String())
+	}
+
+	var body validateResponse
+	if err := json.Unmarshal(rec.Body.Bytes(), &body); err != nil {
+		t.Fatalf("decode: %v", err)
+	}
+	if !strings.Contains(body.Message, "password") {
+		t.Errorf("message = %q, want it to name the rejected password", body.Message)
+	}
+}
+
+func TestSSHRoutesShareRateLimit(t *testing.T) {
+	fake := newFakeServerService()
+	s := newServerRoutesTestServer(t, fake)
+	id := seedServer(t, fake, "web-limited")
+	path := "/api/v1/servers/" + id.String()
+
+	for i := 0; i < sshRateBurst; i++ {
+		if rec := doRequest(t, s, http.MethodPost, path+"/validate", "", authHeader); rec.Code != http.StatusOK {
+			t.Fatalf("validate %d status = %d, want 200 (body %s)", i+1, rec.Code, rec.Body.String())
+		}
+	}
+
+	rec := doRequest(t, s, http.MethodPost, path+"/install-key", `{"password":"x"}`, authHeader)
+	if rec.Code != http.StatusTooManyRequests {
+		t.Fatalf("install-key status = %d, want 429 (body %s)", rec.Code, rec.Body.String())
 	}
 }
 

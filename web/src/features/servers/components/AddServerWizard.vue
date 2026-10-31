@@ -9,7 +9,7 @@ import {
   NText,
   useMessage,
 } from "naive-ui";
-import { computed, provide, ref } from "vue";
+import { computed, provide, ref, watch } from "vue";
 
 import type { Server } from "@/features/servers/api/servers";
 import ServerStatusTag from "@/features/servers/components/ServerStatusTag.vue";
@@ -52,6 +52,16 @@ const {
 
 const message = useMessage();
 const { t } = useI18n();
+
+watch(
+  () => props.show,
+  (show) => {
+    if (show) {
+      void wizard.loadPrivateKeys();
+    }
+  },
+  { immediate: true },
+);
 
 const enableFileManager = ref(false);
 const installCommand = computed(() => buildInstallCommand(enableFileManager.value));

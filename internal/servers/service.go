@@ -70,8 +70,9 @@ type PrivateKey struct {
 }
 
 type ValidationResult struct {
-	Checks []CheckResult
-	Server *Server
+	Checks     []CheckResult
+	Server     *Server
+	AuthFailed bool
 }
 
 type ValidateAuth struct {
@@ -700,6 +701,7 @@ func (s *ServerService) Validate(ctx context.Context, id uuid.UUID, auth Validat
 		if len(checks) == 0 {
 			result.Checks = failedChecks(err.Error())
 		}
+		result.AuthFailed = isSSHAuthError(err)
 		return failValidation("%v", err)
 	}
 
@@ -765,6 +767,56 @@ func (s *ServerService) Validate(ctx context.Context, id uuid.UUID, auth Validat
 
 	s.logger.Info("servers: validation succeeded", "server_id", id.String(), "docker_version", info.DockerVersion)
 	return &ValidationResult{Checks: checks, Server: serverFromRow(updated)}, nil
+}
+
+// InstallKey connects with the SSH user's password, appends the server's
+// managed public key to authorized_keys, then validates with the key alone.
+// The password is never stored or logged.
+func (s *ServerService) InstallKey(ctx context.Context, id uuid.UUID, password string) (*ValidationResult, error) {
+	row, err := s.store.GetServerByID(ctx, pgUUID(id))
+	if err != nil {
+		if errors.Is(err, pgx.ErrNoRows) {
+			return nil, ErrNotFound
+		}
+		return nil, fmt.Errorf("get server: %w", err)
+	}
+	if !row.SshKeyID.Valid {
+		return nil, fmt.Errorf("%w: server has no SSH key", ErrValidation)
+	}
+	if strings.TrimSpace(password) == "" {
+		return nil, fmt.Errorf("%w: ssh password is required", ErrValidation)
+	}
+
+	key, err := s.store.GetPrivateKeyByID(ctx, row.SshKeyID)
+	if err != nil {
+		if errors.Is(err, pgx.ErrNoRows) {
+			return nil, fmt.Errorf("%w: attached SSH key no longer exists", ErrNoCredentials)
+		}
+		return nil, fmt.Errorf("load ssh key: %w", err)
+	}
+	publicKey := ""
+	if key.PublicKey != nil {
+		publicKey = *key.PublicKey
+	}
+	if publicKey == "" {
+		plain, err := DecryptKey(key.EncryptedKey, s.secret)
+		if err != nil {
+			return nil, fmt.Errorf("decrypt ssh key: %w", err)
+		}
+		if _, publicKey, err = derivePrivateKeyMetadata(plain); err != nil {
+			return nil, fmt.Errorf("%w: cannot derive the public key for install: %v", ErrValidation, err)
+		}
+	}
+
+	policy := HostKeyPolicy{Pinned: fingerprintOf(row.HostKeyFingerprint)}
+	if policy.Pinned == "" {
+		policy.AcceptUnpinned = true
+	}
+	if err := InstallAuthorizedKey(ctx, row.Ip, int(row.Port), row.SshUser, password, publicKey, policy); err != nil {
+		return nil, err
+	}
+
+	return s.Validate(ctx, id, ValidateAuth{})
 }
 
 func (s *ServerService) InstallDocker(ctx context.Context, id uuid.UUID, auth ValidateAuth, out io.Writer) error {

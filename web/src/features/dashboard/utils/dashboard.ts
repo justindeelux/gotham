@@ -37,6 +37,7 @@ export interface ApplicationTileView {
   state: ApplicationTileState;
   error: string | null;
   countText: string;
+  runningText: string;
   hint: string;
 }
 
@@ -58,6 +59,7 @@ export function applicationTileView(
   const idle = {
     error: null as string | null,
     countText: "",
+    runningText: "",
     hint: "",
   };
   if (input.loading) {
@@ -74,6 +76,7 @@ export function applicationTileView(
     ...idle,
     state: "ready",
     countText: `${incomplete ? "≥" : ""}${input.running}/${input.total}`,
+    runningText: `${incomplete ? "≥" : ""}${input.running}`,
     hint: incomplete ? catalogFor(locale).tiles.incompleteHint : "",
   };
 }

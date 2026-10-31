@@ -26,7 +26,6 @@ import {
 import { groupIncidents } from "@/features/incidents/utils/incidents";
 import DeliveryFailuresList from "@/features/notifications/components/DeliveryFailuresList.vue";
 import { useNotificationInboxStore } from "@/features/notifications/stores/inbox";
-import { useServersStore } from "@/features/servers";
 import GothamIcon from "@/shared/ui/GothamIcon.vue";
 import { relativeTime } from "@/shared/utils/format";
 
@@ -34,7 +33,6 @@ const { t } = useI18n();
 const authStore = useAuthStore();
 const store = useIncidentsStore();
 const inbox = useNotificationInboxStore();
-const serversStore = useServersStore();
 
 const showResolved = ref(false);
 const groups = computed(() => groupIncidents(store.items));
@@ -45,32 +43,14 @@ const activeCountText = computed<string>(() =>
     : t("incidents.countOther", { count: store.activeCount }),
 );
 
-const emptyTitle = computed<string>(() => {
-  if (hasFilters.value) {
-    return t("incidents.filtered.title");
-  }
-  if (noMonitoringData.value) {
-    return t("incidents.noData.title");
-  }
-  return t("incidents.healthy.title");
-});
-
-const emptyBody = computed<string>(() => {
-  if (hasFilters.value) {
-    return t("incidents.filtered.body");
-  }
-  return noMonitoringData.value
-    ? t("incidents.noData.body")
-    : t("incidents.healthy.body");
-});
-
 const hasFilters = computed<boolean>(
   () => store.severity !== "" || store.resourceType !== "",
 );
 
-// No server has ever reported, so "healthy" would overstate what Gotham knows.
-const noMonitoringData = computed<boolean>(
-  () => authStore.isOwner && serversStore.servers.length === 0,
+const emptyTitle = computed<string>(() =>
+  hasFilters.value
+    ? t("incidents.filtered.title")
+    : t("incidents.healthy.title"),
 );
 
 const emptyState = computed<boolean>(
@@ -78,6 +58,10 @@ const emptyState = computed<boolean>(
     store.state === "ready" &&
     store.items.length === 0 &&
     !store.loading,
+);
+
+const compact = computed<boolean>(
+  () => emptyState.value && !hasFilters.value,
 );
 
 const severityOptions = computed(() => [
@@ -167,10 +151,20 @@ onUnmounted(() => {
       >
         {{ activeCountText }}
       </NTag>
-      <NText depth="3" class="meta">{{ t("incidents.subtitle") }}</NText>
+      <NText v-if="!compact" depth="3" class="meta">{{ t("incidents.subtitle") }}</NText>
+      <NText v-else depth="3" class="meta">{{ emptyTitle }}</NText>
+      <NButton
+        class="resolved-toggle"
+        quaternary
+        size="small"
+        :aria-expanded="showResolved"
+        @click="toggleResolved"
+      >
+        {{ t("incidents.resolved.title") }}
+      </NButton>
     </div>
 
-    <NCard size="small">
+    <NCard v-if="!compact" size="small">
       <NAlert
         v-if="store.state === 'error'"
         type="error"
@@ -272,78 +266,68 @@ onUnmounted(() => {
         data-testid="incidents-empty"
       >
         <template #icon>
-          <GothamIcon :name="noMonitoringData ? 'server' : 'shield'" />
+          <GothamIcon name="shield" />
         </template>
         <template #extra>
-          <NText depth="3">{{ emptyBody }}</NText>
+          <NText depth="3">{{ t("incidents.filtered.body") }}</NText>
         </template>
       </NEmpty>
     </NCard>
 
     <DeliveryFailuresList v-if="authStore.isOwner" />
 
-    <div class="resolved">
-      <NButton
-        quaternary
-        size="small"
-        :aria-expanded="showResolved"
-        @click="toggleResolved"
+    <NCard v-if="showResolved" size="small" class="resolved-card">
+      <NAlert
+        v-if="store.resolvedError"
+        type="error"
+        :show-icon="true"
       >
-        {{ t("incidents.resolved.title") }}
-      </NButton>
-      <NCard v-if="showResolved" size="small" class="resolved-card">
-        <NAlert
-          v-if="store.resolvedError"
-          type="error"
-          :show-icon="true"
+        {{ t("incidents.resolved.loadFailed") }}
+        <div class="alert-action">
+          <NButton size="small" @click="() => void store.refreshResolved()">
+            {{ t("incidents.error.retry") }}
+          </NButton>
+        </div>
+      </NAlert>
+      <NSkeleton
+        v-else-if="store.resolvedLoading"
+        text
+        :repeat="2"
+      />
+      <NEmpty
+        v-else-if="store.resolved.length === 0"
+        size="small"
+        :description="t('incidents.resolved.empty')"
+      />
+      <ul v-else class="resolved-list">
+        <li
+          v-for="incident in store.resolved"
+          :key="incident.id"
+          class="resolved-row"
         >
-          {{ t("incidents.resolved.loadFailed") }}
-          <div class="alert-action">
-            <NButton size="small" @click="() => void store.refreshResolved()">
-              {{ t("incidents.error.retry") }}
-            </NButton>
+          <div class="resolved-main">
+            <NTag
+              size="small"
+              :type="severityTagType(incident.severity)"
+              :bordered="false"
+            >
+              {{ severityOf(incident) }}
+            </NTag>
+            <span class="resolved-reason">{{ t(reasonKey(incident.detector)) }}</span>
+            <span class="resolved-name" :title="resolvedName(incident)">
+              {{ resolvedName(incident) }}
+            </span>
           </div>
-        </NAlert>
-        <NSkeleton
-          v-else-if="store.resolvedLoading"
-          text
-          :repeat="2"
-        />
-        <NEmpty
-          v-else-if="store.resolved.length === 0"
-          size="small"
-          :description="t('incidents.resolved.empty')"
-        />
-        <ul v-else class="resolved-list">
-          <li
-            v-for="incident in store.resolved"
-            :key="incident.id"
-            class="resolved-row"
-          >
-            <div class="resolved-main">
-              <NTag
-                size="small"
-                :type="severityTagType(incident.severity)"
-                :bordered="false"
-              >
-                {{ severityOf(incident) }}
-              </NTag>
-              <span class="resolved-reason">{{ t(reasonKey(incident.detector)) }}</span>
-              <span class="resolved-name" :title="resolvedName(incident)">
-                {{ resolvedName(incident) }}
-              </span>
-            </div>
-            <NText depth="3" class="resolved-time">
-              {{
-                t("incidents.resolved.at", {
-                  time: relativeTime(incident.resolved_at, null, { long: true }),
-                })
-              }}
-            </NText>
-          </li>
-        </ul>
-      </NCard>
-    </div>
+          <NText depth="3" class="resolved-time">
+            {{
+              t("incidents.resolved.at", {
+                time: relativeTime(incident.resolved_at, null, { long: true }),
+              })
+            }}
+          </NText>
+        </li>
+      </ul>
+    </NCard>
   </section>
 </template>
 
@@ -437,11 +421,8 @@ onUnmounted(() => {
   padding-top: var(--space-3);
 }
 
-.resolved {
-  display: flex;
-  flex-direction: column;
-  gap: var(--space-2);
-  align-items: flex-start;
+.resolved-toggle {
+  margin-left: auto;
 }
 
 .resolved-card {

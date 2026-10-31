@@ -6,11 +6,6 @@ const vi = {
   loading: "Đang tải sự cố",
   healthy: {
     title: "Không có gì cần chú ý",
-    body: "Mọi tài nguyên được giám sát đều đang khỏe mạnh.",
-  },
-  noData: {
-    title: "Chưa có dữ liệu giám sát",
-    body: "Thêm máy chủ hoặc ứng dụng để bắt đầu theo dõi sức khỏe tại đây.",
   },
   filtered: {
     title: "Không có sự cố phù hợp",

@@ -6,11 +6,6 @@ const en = {
   loading: "Loading issues",
   healthy: {
     title: "Nothing needs attention",
-    body: "Every monitored resource is reporting healthy.",
-  },
-  noData: {
-    title: "No monitoring data yet",
-    body: "Add a server or an application to start watching its health here.",
   },
   filtered: {
     title: "No matching issues",

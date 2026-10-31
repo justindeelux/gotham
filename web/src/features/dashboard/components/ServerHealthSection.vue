@@ -1,17 +1,14 @@
 <script setup lang="ts">
-import { NButton, NEmpty, NSkeleton, NSpace, NText } from "naive-ui";
+import { NText } from "naive-ui";
 import { computed } from "vue";
 import { RouterLink } from "vue-router";
 import { useI18n } from "vue-i18n";
 
 import type { ServerNodeCardModel } from "@/features/dashboard/utils/serverNode";
-import GothamIcon from "@/shared/ui/GothamIcon.vue";
 import ServerNodeCard from "./ServerNodeCard.vue";
 
 interface Props {
   cards: ServerNodeCardModel[];
-  loading: boolean;
-  totalCount: number;
   hiddenCount: number;
 }
 
@@ -32,30 +29,7 @@ const moreNodesText = computed<string>(() =>
       {{ $t("dashboard.health.heartbeatMeta") }}
     </NText>
   </div>
-  <NEmpty
-    v-if="!loading && totalCount === 0"
-    :description="$t('dashboard.health.empty')"
-  >
-    <template #icon>
-      <GothamIcon name="server" />
-    </template>
-    <template #extra>
-      <NSpace vertical :size="8" align="center">
-        <NText depth="3">
-          {{ $t("dashboard.health.emptyHint") }}
-        </NText>
-        <RouterLink :to="{ name: 'servers', query: { add: '1' } }" custom>
-          <template #default="{ navigate }">
-            <NButton type="primary" size="small" @click="navigate">
-              {{ $t("dashboard.health.addServer") }}
-            </NButton>
-          </template>
-        </RouterLink>
-      </NSpace>
-    </template>
-  </NEmpty>
-  <div v-else class="node-grid">
-    <NSkeleton v-if="loading && totalCount === 0" text :repeat="3" />
+  <div class="node-grid">
     <ServerNodeCard
       v-for="card in cards"
       :key="card.id"

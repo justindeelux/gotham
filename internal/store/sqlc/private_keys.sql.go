@@ -11,28 +11,6 @@ import (
 	"github.com/jackc/pgx/v5/pgtype"
 )
 
-const countApplicationDeployKeysByPrivateKeyID = `-- name: CountApplicationDeployKeysByPrivateKeyID :one
-SELECT count(*) FROM application_deploy_keys WHERE private_key_id = $1
-`
-
-func (q *Queries) CountApplicationDeployKeysByPrivateKeyID(ctx context.Context, privateKeyID pgtype.UUID) (int64, error) {
-	row := q.db.QueryRow(ctx, countApplicationDeployKeysByPrivateKeyID, privateKeyID)
-	var count int64
-	err := row.Scan(&count)
-	return count, err
-}
-
-const countServersBySSHKeyID = `-- name: CountServersBySSHKeyID :one
-SELECT count(*) FROM servers WHERE ssh_key_id = $1
-`
-
-func (q *Queries) CountServersBySSHKeyID(ctx context.Context, sshKeyID pgtype.UUID) (int64, error) {
-	row := q.db.QueryRow(ctx, countServersBySSHKeyID, sshKeyID)
-	var count int64
-	err := row.Scan(&count)
-	return count, err
-}
-
 const createPrivateKey = `-- name: CreatePrivateKey :one
 INSERT INTO private_keys (name, encrypted_key, type, description, public_key)
 VALUES ($1, $2, $3, $4, $5)
@@ -83,6 +61,21 @@ DELETE FROM private_keys WHERE id = $1
 func (q *Queries) DeletePrivateKey(ctx context.Context, id pgtype.UUID) error {
 	_, err := q.db.Exec(ctx, deletePrivateKey, id)
 	return err
+}
+
+const deletePrivateKeyIfUnused = `-- name: DeletePrivateKeyIfUnused :execrows
+DELETE FROM private_keys pk
+WHERE pk.id = $1
+  AND NOT EXISTS (SELECT 1 FROM servers WHERE ssh_key_id = pk.id)
+  AND NOT EXISTS (SELECT 1 FROM application_deploy_keys WHERE private_key_id = pk.id)
+`
+
+func (q *Queries) DeletePrivateKeyIfUnused(ctx context.Context, id pgtype.UUID) (int64, error) {
+	result, err := q.db.Exec(ctx, deletePrivateKeyIfUnused, id)
+	if err != nil {
+		return 0, err
+	}
+	return result.RowsAffected(), nil
 }
 
 const getPrivateKeyByID = `-- name: GetPrivateKeyByID :one
@@ -144,6 +137,17 @@ func (q *Queries) ListPrivateKeys(ctx context.Context) ([]ListPrivateKeysRow, er
 		return nil, err
 	}
 	return items, nil
+}
+
+const lockPrivateKey = `-- name: LockPrivateKey :one
+SELECT id FROM private_keys WHERE id = $1 FOR UPDATE
+`
+
+func (q *Queries) LockPrivateKey(ctx context.Context, id pgtype.UUID) (pgtype.UUID, error) {
+	row := q.db.QueryRow(ctx, lockPrivateKey, id)
+	var id_2 pgtype.UUID
+	err := row.Scan(&id_2)
+	return id_2, err
 }
 
 const setPrivateKeyMetadata = `-- name: SetPrivateKeyMetadata :exec

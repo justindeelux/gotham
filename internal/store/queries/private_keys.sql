@@ -22,8 +22,11 @@ RETURNING id, name, type, description, public_key, created_at;
 -- name: DeletePrivateKey :exec
 DELETE FROM private_keys WHERE id = $1;
 
--- name: CountServersBySSHKeyID :one
-SELECT count(*) FROM servers WHERE ssh_key_id = $1;
+-- name: LockPrivateKey :one
+SELECT id FROM private_keys WHERE id = $1 FOR UPDATE;
 
--- name: CountApplicationDeployKeysByPrivateKeyID :one
-SELECT count(*) FROM application_deploy_keys WHERE private_key_id = $1;
+-- name: DeletePrivateKeyIfUnused :execrows
+DELETE FROM private_keys pk
+WHERE pk.id = $1
+  AND NOT EXISTS (SELECT 1 FROM servers WHERE ssh_key_id = pk.id)
+  AND NOT EXISTS (SELECT 1 FROM application_deploy_keys WHERE private_key_id = pk.id);

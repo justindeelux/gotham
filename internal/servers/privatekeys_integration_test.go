@@ -226,6 +226,85 @@ func TestDeletePrivateKeyRefusesKeysInUse(t *testing.T) {
 	}
 }
 
+func TestDeletePrivateKeyRefusesConcurrentAttach(t *testing.T) {
+	service, st := newTestService(t)
+	ctx := testContext(t)
+
+	key, err := service.AddPrivateKey(ctx, "racing-key", string(testPrivateKeyPEM(t)), "", "")
+	if err != nil {
+		t.Fatalf("AddPrivateKey: %v", err)
+	}
+	t.Cleanup(func() { deletePrivateKeyRow(t, st, key.ID) })
+
+	// Hold an uncommitted server attach. Its foreign-key check holds KEY SHARE
+	// on the private key row, so the delete has to wait before deciding.
+	tx, err := st.DB.Begin(ctx)
+	if err != nil {
+		t.Fatalf("begin attach: %v", err)
+	}
+	serverID := uuid.New()
+	if _, err := tx.Exec(ctx,
+		`INSERT INTO servers(id, name, ip, ssh_user, status, ssh_key_id)
+		 VALUES ($1, 'race-node', '10.0.0.10', 'root', 'pending', $2)`,
+		serverID, key.ID); err != nil {
+		_ = tx.Rollback(ctx)
+		t.Fatalf("insert attached server: %v", err)
+	}
+	t.Cleanup(func() {
+		cleanupCtx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+		defer cancel()
+		if _, err := st.DB.Exec(cleanupCtx, "DELETE FROM servers WHERE id = $1", serverID); err != nil {
+			t.Logf("cleanup delete server: %v", err)
+		}
+	})
+
+	started := make(chan struct{})
+	done := make(chan error, 1)
+	go func() {
+		close(started)
+		done <- service.DeletePrivateKey(ctx, key.ID)
+	}()
+	<-started
+	time.Sleep(300 * time.Millisecond) // let the delete block on the row lock
+	if err := tx.Commit(ctx); err != nil {
+		t.Fatalf("commit attach: %v", err)
+	}
+
+	if err := <-done; !errors.Is(err, ErrConflict) {
+		t.Fatalf("concurrent attach delete error = %v, want ErrConflict", err)
+	}
+	var attached int64
+	if err := st.DB.QueryRow(ctx,
+		"SELECT count(*) FROM servers WHERE id = $1 AND ssh_key_id = $2",
+		serverID, key.ID).Scan(&attached); err != nil {
+		t.Fatalf("count attached servers: %v", err)
+	}
+	if attached != 1 {
+		t.Errorf("server lost its key reference: attached = %d, want 1", attached)
+	}
+}
+
+func TestAddPrivateKeyStoresNoUnverifiedMetadata(t *testing.T) {
+	service, st := newTestService(t)
+	ctx := testContext(t)
+
+	spoofed := strings.TrimSpace(string(ssh.MarshalAuthorizedKey(publicKeyOf(t))))
+	key, err := service.AddPrivateKey(ctx, "passphrase-key",
+		string(testEncryptedPrivateKeyPEM(t, "s3cret")), "", spoofed)
+	if err != nil {
+		t.Fatalf("AddPrivateKey: %v", err)
+	}
+	t.Cleanup(func() { deletePrivateKeyRow(t, st, key.ID) })
+
+	got, err := service.GetPrivateKey(ctx, key.ID)
+	if err != nil {
+		t.Fatalf("GetPrivateKey: %v", err)
+	}
+	if got.Type != "" || got.PublicKey != "" {
+		t.Errorf("unverified metadata was stored: type=%q public_key=%q", got.Type, got.PublicKey)
+	}
+}
+
 func TestUpdatePrivateKeyProfile(t *testing.T) {
 	service, st := newTestService(t)
 	ctx := testContext(t)

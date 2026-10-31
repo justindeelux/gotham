@@ -852,12 +852,12 @@ func TestGetUpdateDeletePrivateKeyRoutes(t *testing.T) {
 	if rec.Code != http.StatusOK {
 		t.Fatalf("get status = %d, want 200 (body %s)", rec.Code, rec.Body.String())
 	}
-	var got privateKeyEnvelope
+	var got privateKeyDTO
 	if err := json.Unmarshal(rec.Body.Bytes(), &got); err != nil {
 		t.Fatalf("decode: %v", err)
 	}
-	if got.PrivateKey.ID != key.ID.String() {
-		t.Errorf("id = %q, want %q", got.PrivateKey.ID, key.ID)
+	if got.ID != key.ID.String() {
+		t.Errorf("id = %q, want %q", got.ID, key.ID)
 	}
 
 	rec = doRequest(t, s, http.MethodPatch, "/api/v1/private-keys/"+key.ID.String(),

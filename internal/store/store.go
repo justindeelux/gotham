@@ -597,10 +597,10 @@ func (s *Store) UpdatePrivateKeyProfile(ctx context.Context, params sqlc.UpdateP
 	return s.queries.UpdatePrivateKeyProfile(ctx, params)
 }
 
-func (s *Store) CountServersBySSHKeyID(ctx context.Context, sshKeyID pgtype.UUID) (int64, error) {
-	return s.queries.CountServersBySSHKeyID(ctx, sshKeyID)
+func (s *Store) LockPrivateKey(ctx context.Context, id pgtype.UUID) (pgtype.UUID, error) {
+	return s.queries.LockPrivateKey(ctx, id)
 }
 
-func (s *Store) CountApplicationDeployKeysByPrivateKeyID(ctx context.Context, privateKeyID pgtype.UUID) (int64, error) {
-	return s.queries.CountApplicationDeployKeysByPrivateKeyID(ctx, privateKeyID)
+func (s *Store) DeletePrivateKeyIfUnused(ctx context.Context, id pgtype.UUID) (int64, error) {
+	return s.queries.DeletePrivateKeyIfUnused(ctx, id)
 }

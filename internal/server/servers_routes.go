@@ -138,10 +138,6 @@ type privateKeyListEnvelope struct {
 	PrivateKeys []privateKeyDTO `json:"private_keys"`
 }
 
-type privateKeyEnvelope struct {
-	PrivateKey privateKeyDTO `json:"private_key"`
-}
-
 type privateKeyRevealResponse struct {
 	PrivateKey string `json:"private_key"`
 }
@@ -566,7 +562,7 @@ func (s *Server) handleGetPrivateKey(w http.ResponseWriter, r *http.Request) {
 		s.writeServerError(w, "get private key", err)
 		return
 	}
-	writeJSON(w, http.StatusOK, privateKeyEnvelope{PrivateKey: newPrivateKeyDTO(key)})
+	writeJSON(w, http.StatusOK, newPrivateKeyDTO(key))
 }
 
 func (s *Server) handleUpdatePrivateKey(w http.ResponseWriter, r *http.Request) {

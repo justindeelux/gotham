@@ -18,6 +18,7 @@ import (
 	"github.com/jackc/pgx/v5/pgtype"
 	"golang.org/x/crypto/ssh"
 
+	"github.com/justindeelux/gotham/internal/store"
 	"github.com/justindeelux/gotham/internal/store/sqlc"
 )
 
@@ -54,17 +55,10 @@ func (s *ServerService) AddPrivateKey(ctx context.Context, name, privateKeyPEM, 
 		if !errors.Is(err, errPrivateKeyPassphrase) {
 			return nil, err
 		}
-		// A passphrase-protected key cannot be parsed without its
-		// passphrase. Keep the metadata the caller supplied, if any.
+		// A passphrase-protected key cannot be parsed without its passphrase,
+		// so its public half cannot be verified. Store no metadata rather than
+		// trusting caller-supplied values.
 		keyType, derivedPublicKey = "", ""
-		if strings.TrimSpace(publicKey) != "" {
-			provided, _, _, _, parseErr := ssh.ParseAuthorizedKey([]byte(strings.TrimSpace(publicKey)))
-			if parseErr != nil {
-				return nil, fmt.Errorf("%w: invalid public_key: %v", ErrValidation, parseErr)
-			}
-			derivedPublicKey = strings.TrimSpace(string(ssh.MarshalAuthorizedKey(provided)))
-			keyType, _ = privateKeyTypeOf(provided.Type())
-		}
 	}
 	if strings.TrimSpace(publicKey) != "" && derivedPublicKey != "" {
 		if err := verifyPublicKey(publicKey, derivedPublicKey); err != nil {
@@ -173,32 +167,25 @@ func (s *ServerService) UpdatePrivateKey(ctx context.Context, id uuid.UUID, para
 }
 
 func (s *ServerService) DeletePrivateKey(ctx context.Context, id uuid.UUID) error {
-	if _, err := s.store.GetPrivateKeyByID(ctx, pgUUID(id)); err != nil {
-		if errors.Is(err, pgx.ErrNoRows) {
-			return ErrNotFound
+	return s.store.InTx(ctx, func(tx *store.Store) error {
+		// Locking the row first serialises against a concurrent attach: the
+		// attach's FK check holds KEY SHARE on this row, so the next statement
+		// sees it and the guarded DELETE refuses instead of orphaning a server.
+		if _, err := tx.LockPrivateKey(ctx, pgUUID(id)); err != nil {
+			if errors.Is(err, pgx.ErrNoRows) {
+				return ErrNotFound
+			}
+			return fmt.Errorf("lock private key: %w", err)
 		}
-		return fmt.Errorf("get private key: %w", err)
-	}
-
-	attached, err := s.store.CountServersBySSHKeyID(ctx, pgUUID(id))
-	if err != nil {
-		return fmt.Errorf("count servers using private key: %w", err)
-	}
-	if attached > 0 {
-		return fmt.Errorf("%w: private key is used by a server", ErrConflict)
-	}
-	deployKeys, err := s.store.CountApplicationDeployKeysByPrivateKeyID(ctx, pgUUID(id))
-	if err != nil {
-		return fmt.Errorf("count deploy keys using private key: %w", err)
-	}
-	if deployKeys > 0 {
-		return fmt.Errorf("%w: private key is used by an application deploy key", ErrConflict)
-	}
-
-	if err := s.store.DeletePrivateKey(ctx, pgUUID(id)); err != nil {
-		return fmt.Errorf("delete private key: %w", err)
-	}
-	return nil
+		deleted, err := tx.DeletePrivateKeyIfUnused(ctx, pgUUID(id))
+		if err != nil {
+			return fmt.Errorf("delete private key: %w", err)
+		}
+		if deleted == 0 {
+			return fmt.Errorf("%w: private key is used by a server or application deploy key", ErrConflict)
+		}
+		return nil
+	})
 }
 
 // RevealPrivateKey decrypts the stored PEM. Callers must audit the reveal and

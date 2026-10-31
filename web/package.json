@@ -47,7 +47,7 @@
     "qrcode-generator": "^2.0.4",
     "unique-names-generator": "^4.7.1",
     "vue": "^3.5.43",
-    "vue-i18n": "^11.4.13",
+    "vue-i18n": "^11.4.14",
     "vue-router": "^4.6.4",
     "zod": "^4.6.6"
   },

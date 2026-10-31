@@ -897,6 +897,7 @@ async function main() {
         "export const createServer = (...a) => api().createServer(...a);",
         "export const deleteServer = (...a) => api().deleteServer(...a);",
         "export const validateServer = (...a) => api().validateServer(...a);",
+        "export const installServerKey = (...a) => api().installServerKey(...a);",
         "export const updateServer = (...a) => api().updateServer(...a);",
         "export const describeServerError = (e) => String((e && e.message) || e);",
         "export const isApiError = (e) => typeof e === 'object' && e !== null && 'message' in e && 'status' in e;",

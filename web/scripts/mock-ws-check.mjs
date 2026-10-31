@@ -259,6 +259,7 @@ async function loadServersStore() {
               "export const createServer = (...a) => api().createServer(...a);",
               "export const deleteServer = (...a) => api().deleteServer(...a);",
               "export const validateServer = (...a) => api().validateServer(...a);",
+              "export const installServerKey = (...a) => api().installServerKey(...a);",
               "export const updateServer = (...a) => api().updateServer(...a);",
               "export const describeServerError = (...a) => api().describeServerError(...a);",
               "export const isApiError = (...a) => api().isApiError(...a);",
@@ -298,6 +299,13 @@ function makeServersApi() {
       checks: [],
       server: null,
       message: "",
+    }),
+    installServerKey: async () => ({
+      ok: true,
+      checks: [],
+      server: null,
+      message: "",
+      authFailed: false,
     }),
     updateServer: async () => ({ id: "updated" }),
     describeServerError: (error) =>

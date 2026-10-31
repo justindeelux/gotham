@@ -126,6 +126,88 @@ func TestThresholdStillAboveNotifiesOncePerRun(t *testing.T) {
 	}
 }
 
+func TestThresholdNothingMatchedRecordsOnceAndCoolsDown(t *testing.T) {
+	agent := buildCacheAgent(1024)
+	st := &fakeStore{}
+	settings := thresholdSettings()
+	settings.Categories = []string{CategoryJournal}
+	center := &fakeCenter{threshold: settings}
+	notifier := &fakeNotifier{}
+	svc, serverID := testScheduledService(t, agent, st, center, notifier)
+	clock := svc.now()
+
+	svc.Observe(context.Background(), thresholdObservation(serverID, 0.9))
+	waitForThresholdIdle(t, svc, serverID, 1, st)
+
+	runs := st.recordedRuns()
+	if len(runs) != 1 || runs[0].Status != StatusOK || runs[0].Trigger != TriggerThreshold ||
+		runs[0].ReclaimedBytes != 0 {
+		t.Fatalf("runs = %+v, want one empty threshold run", runs)
+	}
+
+	center.latestRun = &runs[0]
+	svc.now = func() time.Time { return clock.Add(10 * time.Minute) }
+	svc.Observe(context.Background(), thresholdObservation(serverID, 0.9))
+	notified := notifier.notified()
+	if len(notified) != 1 || !strings.Contains(notified[0].Nodes[0].Reason, "freed 0 B") {
+		t.Fatalf("notifications = %+v, want one still-above notice", notified)
+	}
+	if calls := agent.scanCalls.Load(); calls != 1 {
+		t.Fatalf("scans = %d, want no rescan inside the cool-down", calls)
+	}
+
+	svc.Observe(context.Background(), thresholdObservation(serverID, 0.9))
+	if got := len(notifier.notified()); got != 1 || agent.scanCalls.Load() != 1 {
+		t.Fatalf("notifications = %d, scans = %d, want one of each", got, agent.scanCalls.Load())
+	}
+}
+
+func TestThresholdExclusionFailureRecordsOneRun(t *testing.T) {
+	st := &fakeStore{excludeErr: errors.New("exclusions unavailable")}
+	center := &fakeCenter{threshold: thresholdSettings()}
+	notifier := &fakeNotifier{}
+	svc, serverID := testScheduledService(t, buildCacheAgent(1024), st, center, notifier)
+	clock := svc.now()
+
+	svc.Observe(context.Background(), thresholdObservation(serverID, 0.9))
+	waitForThresholdIdle(t, svc, serverID, 1, st)
+	waitFor(t, "the failed run notification", func() bool { return len(notifier.notified()) == 1 })
+
+	runs := st.recordedRuns()
+	if len(runs) != 1 || runs[0].Status != StatusFailed ||
+		!strings.Contains(runs[0].Reason, "exclusions unavailable") {
+		t.Fatalf("runs = %+v, want one failed threshold run", runs)
+	}
+
+	center.latestRun = &runs[0]
+	svc.now = func() time.Time { return clock.Add(10 * time.Minute) }
+	svc.Observe(context.Background(), thresholdObservation(serverID, 0.9))
+	if got := len(notifier.notified()); got != 1 || len(st.recordedRuns()) != 1 {
+		t.Fatalf("notifications = %d, runs = %d, want no repeat inside the cool-down",
+			got, len(st.recordedRuns()))
+	}
+}
+
+func TestThresholdSkippedRunDoesNotClaimCleanup(t *testing.T) {
+	st := &fakeStore{}
+	center := &fakeCenter{threshold: thresholdSettings()}
+	notifier := &fakeNotifier{}
+	svc, serverID := testScheduledService(t, buildCacheAgent(1024), st, center, notifier)
+	clock := svc.now()
+	center.latestRun = &store.CleanupRun{
+		ID: uuid.New(), ServerID: serverID, Trigger: TriggerThreshold,
+		StartedAt: clock, FinishedAt: clock, Status: StatusSkipped, Reason: ReasonBusy,
+	}
+
+	svc.Observe(context.Background(), thresholdObservation(serverID, 0.9))
+	if got := len(notifier.notified()); got != 0 {
+		t.Fatalf("notifications = %d, want none for a skipped run", got)
+	}
+	if runs := st.recordedRuns(); len(runs) != 0 {
+		t.Fatalf("runs = %+v, want no new run inside the cool-down", runs)
+	}
+}
+
 func TestThresholdFailedRunNotifies(t *testing.T) {
 	agent := buildCacheAgent(1024)
 	agent.cleanErr = status.Error(codes.Internal, "agent exploded")

@@ -7,6 +7,7 @@ import (
 	"net/url"
 	"os"
 	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -41,12 +42,14 @@ type fakeAgent struct {
 	scanResp  *agentv1.CleanupScanResponse
 	scanErr   error
 	scanBlock chan struct{}
+	scanCalls atomic.Int64
 	cleanResp *agentv1.CleanupCleanResponse
 	cleanErr  error
 	cleaned   []string
 }
 
 func (f *fakeAgent) ScanCleanup(context.Context, *agentv1.CleanupScanRequest, ...grpc.CallOption) (*agentv1.CleanupScanResponse, error) {
+	f.scanCalls.Add(1)
 	if f.scanBlock != nil {
 		<-f.scanBlock
 	}

@@ -156,8 +156,9 @@ func (s *Service) maybeStartThreshold(
 		cooldownEnds := latest.StartedAt.Add(time.Duration(settings.CooldownHours) * time.Hour)
 		if now.Before(cooldownEnds) {
 			// The first observation after a finished run tells the owner that
-			// cleaning did not get the node below the threshold.
-			if !now.Before(latest.FinishedAt) {
+			// cleaning did not get the node below the threshold. A skipped run
+			// never cleaned, so it must not claim that it did.
+			if !now.Before(latest.FinishedAt) && latest.Status != StatusSkipped {
 				s.notifyStillAbove(ctx, serverID, latest, settings.Percent)
 			}
 			return

@@ -311,6 +311,7 @@ func (s *Service) runNode(
 	raw := serverID.String()
 	if exclusionErr != nil {
 		node.Status, node.Reason = StatusFailed, exclusionErr.Error()
+		node.RunID = s.recordThresholdAttempt(ctx, trigger, scheduleID, serverID, node.Status, node.Reason)
 		return node
 	}
 	scan := s.scanNode(ctx, raw, minAge, exclusions)
@@ -333,6 +334,9 @@ func (s *Service) runNode(
 	}
 	if len(ids) == 0 {
 		node.Status = StatusOK
+		// The threshold cool-down comes from history, so a run that cleaned
+		// nothing still needs its row; schedules keep their current shape.
+		node.RunID = s.recordThresholdAttempt(ctx, trigger, scheduleID, serverID, StatusOK, "")
 		return node
 	}
 	result := s.clean(ctx, uuid.Nil, trigger, scheduleID, raw, ids, minAge)
@@ -343,6 +347,23 @@ func (s *Service) runNode(
 		node.Categories[item.Category] += item.ReclaimedBytes
 	}
 	return node
+}
+
+// recordThresholdAttempt records a threshold run that never reached clean()
+// (nothing matched, or exclusions could not be read), so the cool-down and the
+// still-above check have a run to work from.
+func (s *Service) recordThresholdAttempt(
+	ctx context.Context, trigger string, scheduleID *uuid.UUID, serverID uuid.UUID, status, reason string,
+) string {
+	if trigger != TriggerThreshold {
+		return ""
+	}
+	runID := s.record(ctx, uuid.Nil, trigger, scheduleID, serverID, s.now(),
+		CleanResult{ServerID: serverID.String(), Status: status, Reason: reason})
+	if runID == uuid.Nil {
+		return ""
+	}
+	return runID.String()
 }
 
 // categorySet keeps the categories a run may clean; dangerous categories stay

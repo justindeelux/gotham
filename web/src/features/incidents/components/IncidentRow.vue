@@ -118,7 +118,8 @@ const snoozeOptions = computed(() => [
   { label: t("incidents.actions.snoozeDay"), key: "24" },
 ]);
 
-function serverRoute(): { name: string; params: { id: string }; query: { tab: string } } | null {  const id = props.incident.node_id || props.incident.resource_id;
+function serverRoute(): { name: string; params: { id: string }; query: { tab: string } } | null {
+  const id = props.incident.node_id || props.incident.resource_id;
   if (!id) {
     return null;
   }

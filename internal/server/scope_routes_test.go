@@ -74,6 +74,15 @@ func TestResourceScopeContainment(t *testing.T) {
 	const session = "Bearer valid-token"
 	const createBody = `{"name":"web-1","ip":"10.0.0.5","port":22,"ssh_user":"root"}`
 
+	registry := s.servers.(*fakeServerService)
+	serverID := seedServer(t, registry, "web-read")
+	key, err := registry.AddPrivateKey(context.Background(), "deploy-key",
+		"-----BEGIN OPENSSH PRIVATE KEY-----\nfake\n-----END OPENSSH PRIVATE KEY-----\n", "", "")
+	if err != nil {
+		t.Fatalf("seed private key: %v", err)
+	}
+	metricsPath := "/api/v1/servers/" + serverID.String() + "/metrics?from=2026-01-01T00:00:00Z&to=2026-01-01T01:00:00Z"
+
 	tests := map[string]struct {
 		method  string
 		path    string
@@ -82,18 +91,28 @@ func TestResourceScopeContainment(t *testing.T) {
 		want    int
 		wantMsg string
 	}{
-		"read token cannot mint":               {http.MethodPost, "/api/v1/tokens", `{"name":"x","scopes":["deploy"]}`, "Bearer " + readToken, http.StatusForbidden, tokenScopeGrantDenied},
-		"deploy cannot mint admin":             {http.MethodPost, "/api/v1/tokens", `{"name":"x","scopes":["admin"]}`, "Bearer " + deployToken, http.StatusForbidden, tokenScopeGrantDenied},
-		"deploy can mint read":                 {http.MethodPost, "/api/v1/tokens", `{"name":"x","scopes":["read"]}`, "Bearer " + deployToken, http.StatusCreated, ""},
-		"read can mint read":                   {http.MethodPost, "/api/v1/tokens", `{"name":"x","scopes":["read"]}`, "Bearer " + readToken, http.StatusCreated, ""},
-		"jwt can mint deploy":                  {http.MethodPost, "/api/v1/tokens", `{"name":"x","scopes":["deploy"]}`, session, http.StatusCreated, ""},
-		"owner read token reads resources":     {http.MethodGet, "/api/v1/servers", "", "Bearer " + ownerReadToken, http.StatusOK, ""},
-		"owner deploy token mutates resources": {http.MethodPost, "/api/v1/servers", createBody, "Bearer " + ownerDeployToken, http.StatusCreated, ""},
-		"owner admin token reads resources":    {http.MethodGet, "/api/v1/servers", "", "Bearer " + ownerAdminToken, http.StatusOK, ""},
-		"owner read token cannot mutate":       {http.MethodPost, "/api/v1/servers", createBody, "Bearer " + ownerReadToken, http.StatusForbidden, ""},
-		"member read token cannot read":        {http.MethodGet, "/api/v1/servers", "", "Bearer " + readToken, http.StatusNotFound, ""},
-		"member deploy token cannot mutate":    {http.MethodPost, "/api/v1/servers", createBody, "Bearer " + deployToken, http.StatusNotFound, ""},
-		"member admin token cannot read":       {http.MethodGet, "/api/v1/servers", "", "Bearer " + memberAdminToken, http.StatusNotFound, ""},
+		"read token cannot mint":                   {http.MethodPost, "/api/v1/tokens", `{"name":"x","scopes":["deploy"]}`, "Bearer " + readToken, http.StatusForbidden, tokenScopeGrantDenied},
+		"deploy cannot mint admin":                 {http.MethodPost, "/api/v1/tokens", `{"name":"x","scopes":["admin"]}`, "Bearer " + deployToken, http.StatusForbidden, tokenScopeGrantDenied},
+		"deploy can mint read":                     {http.MethodPost, "/api/v1/tokens", `{"name":"x","scopes":["read"]}`, "Bearer " + deployToken, http.StatusCreated, ""},
+		"read can mint read":                       {http.MethodPost, "/api/v1/tokens", `{"name":"x","scopes":["read"]}`, "Bearer " + readToken, http.StatusCreated, ""},
+		"jwt can mint deploy":                      {http.MethodPost, "/api/v1/tokens", `{"name":"x","scopes":["deploy"]}`, session, http.StatusCreated, ""},
+		"owner read token reads servers":           {http.MethodGet, "/api/v1/servers", "", "Bearer " + ownerReadToken, http.StatusOK, ""},
+		"owner read token reads server":            {http.MethodGet, "/api/v1/servers/" + serverID.String(), "", "Bearer " + ownerReadToken, http.StatusOK, ""},
+		"owner read token reads metrics":           {http.MethodGet, metricsPath, "", "Bearer " + ownerReadToken, http.StatusOK, ""},
+		"owner deploy token reads servers":         {http.MethodGet, "/api/v1/servers", "", "Bearer " + ownerDeployToken, http.StatusOK, ""},
+		"owner deploy token cannot create servers": {http.MethodPost, "/api/v1/servers", createBody, "Bearer " + ownerDeployToken, http.StatusForbidden, ""},
+		"owner admin token reads servers":          {http.MethodGet, "/api/v1/servers", "", "Bearer " + ownerAdminToken, http.StatusOK, ""},
+		"owner read token cannot mutate":           {http.MethodPost, "/api/v1/servers", createBody, "Bearer " + ownerReadToken, http.StatusForbidden, ""},
+		"owner read token cannot list keys":        {http.MethodGet, "/api/v1/private-keys", "", "Bearer " + ownerReadToken, http.StatusForbidden, ""},
+		"owner deploy token cannot list keys":      {http.MethodGet, "/api/v1/private-keys", "", "Bearer " + ownerDeployToken, http.StatusForbidden, ""},
+		"owner read token cannot get key":          {http.MethodGet, "/api/v1/private-keys/" + key.ID.String(), "", "Bearer " + ownerReadToken, http.StatusForbidden, ""},
+		"owner deploy token cannot get key":        {http.MethodGet, "/api/v1/private-keys/" + key.ID.String(), "", "Bearer " + ownerDeployToken, http.StatusForbidden, ""},
+		"owner read token cannot reveal key":       {http.MethodPost, "/api/v1/private-keys/" + key.ID.String() + "/reveal", "", "Bearer " + ownerReadToken, http.StatusForbidden, ""},
+		"owner deploy token cannot delete server":  {http.MethodDelete, "/api/v1/servers/" + serverID.String(), "", "Bearer " + ownerDeployToken, http.StatusForbidden, ""},
+		"owner admin token creates servers":        {http.MethodPost, "/api/v1/servers", createBody, "Bearer " + ownerAdminToken, http.StatusCreated, ""},
+		"member read token cannot read":            {http.MethodGet, "/api/v1/servers", "", "Bearer " + readToken, http.StatusNotFound, ""},
+		"member deploy token cannot mutate":        {http.MethodPost, "/api/v1/servers", createBody, "Bearer " + deployToken, http.StatusNotFound, ""},
+		"member admin token cannot read":           {http.MethodGet, "/api/v1/servers", "", "Bearer " + memberAdminToken, http.StatusNotFound, ""},
 	}
 
 	for label, tc := range tests {
@@ -112,6 +131,71 @@ func TestResourceScopeContainment(t *testing.T) {
 				}
 			}
 		})
+	}
+}
+
+func TestServerOperatorMutationsRequireAdminScope(t *testing.T) {
+	s, tokens := newScopeTestServer(t)
+	serverID := uuid.NewString()
+	keyID := uuid.NewString()
+
+	routes := []struct {
+		name   string
+		method string
+		path   string
+		body   string
+	}{
+		{"create server", http.MethodPost, "/api/v1/servers", `{"name":"web-1","ip":"10.0.0.5","ssh_user":"root"}`},
+		{"update server", http.MethodPatch, "/api/v1/servers/" + serverID, `{"name":"web-2"}`},
+		{"delete server", http.MethodDelete, "/api/v1/servers/" + serverID, ""},
+		{"validate server", http.MethodPost, "/api/v1/servers/" + serverID + "/validate", ""},
+		{"install key", http.MethodPost, "/api/v1/servers/" + serverID + "/install-key", ""},
+		{"install docker", http.MethodPost, "/api/v1/servers/" + serverID + "/docker-install", ""},
+		{"reset host key", http.MethodDelete, "/api/v1/servers/" + serverID + "/host-key", ""},
+		{"create private key", http.MethodPost, "/api/v1/private-keys", `{"name":"k","private_key":"pem"}`},
+		{"generate private key", http.MethodPost, "/api/v1/private-keys/generate", `{"name":"k","type":"ed25519"}`},
+		{"list private keys", http.MethodGet, "/api/v1/private-keys", ""},
+		{"get private key", http.MethodGet, "/api/v1/private-keys/" + keyID, ""},
+		{"update private key", http.MethodPatch, "/api/v1/private-keys/" + keyID, `{"name":"k2"}`},
+		{"delete private key", http.MethodDelete, "/api/v1/private-keys/" + keyID, ""},
+		{"reveal private key", http.MethodPost, "/api/v1/private-keys/" + keyID + "/reveal", ""},
+	}
+
+	for _, scope := range []string{auth.ScopeRead, auth.ScopeDeploy} {
+		token := mustCreateOwnerToken(t, tokens, scope)
+		for _, route := range routes {
+			t.Run(scope+" "+route.name, func(t *testing.T) {
+				rec := doRequest(t, s, route.method, route.path, route.body, "Bearer "+token)
+				if rec.Code != http.StatusForbidden {
+					t.Fatalf("%s %s = %d, want 403 (body %s)", route.method, route.path, rec.Code, rec.Body.String())
+				}
+			})
+		}
+	}
+}
+
+func TestPrivateKeyRevealRequiresAdminScope(t *testing.T) {
+	s, tokens := newScopeTestServer(t)
+	registry := s.servers.(*fakeServerService)
+	key, err := registry.AddPrivateKey(context.Background(), "deploy-key",
+		"-----BEGIN OPENSSH PRIVATE KEY-----\nfake\n-----END OPENSSH PRIVATE KEY-----\n", "", "")
+	if err != nil {
+		t.Fatalf("seed private key: %v", err)
+	}
+
+	path := "/api/v1/private-keys/" + key.ID.String() + "/reveal"
+	for _, scope := range []string{auth.ScopeRead, auth.ScopeDeploy} {
+		token := mustCreateOwnerToken(t, tokens, scope)
+		if rec := doRequest(t, s, http.MethodPost, path, "", "Bearer "+token); rec.Code != http.StatusForbidden {
+			t.Fatalf("owner %s token reveal = %d, want 403 (body %s)", scope, rec.Code, rec.Body.String())
+		}
+	}
+
+	if rec := doRequest(t, s, http.MethodPost, path, "", "Bearer "+mustCreateOwnerToken(t, tokens, auth.ScopeAdmin)); rec.Code != http.StatusOK {
+		t.Fatalf("owner admin token reveal = %d, want 200 (body %s)", rec.Code, rec.Body.String())
+	}
+	if rec := doRequest(t, s, http.MethodPost, path, "", "Bearer owner-token"); rec.Code != http.StatusOK {
+		t.Fatalf("owner session reveal = %d, want 200 (body %s)", rec.Code, rec.Body.String())
 	}
 }
 
@@ -271,8 +355,8 @@ func TestRequireResourceScopesClassifier(t *testing.T) {
 
 func TestFilesContentScopeGate(t *testing.T) {
 	s, tokens := newScopeTestServer(t)
-	readToken := mustCreateToken(t, tokens, auth.ScopeRead)
-	deployToken := mustCreateToken(t, tokens, auth.ScopeDeploy)
+	readToken := mustCreateOwnerToken(t, tokens, auth.ScopeRead)
+	deployToken := mustCreateOwnerToken(t, tokens, auth.ScopeDeploy)
 	id := uuid.New()
 	path := "/api/v1/servers/" + id.String() + "/files/content?root=volumes&path=app.env"
 
@@ -289,7 +373,7 @@ func TestFilesContentScopeGate(t *testing.T) {
 	}
 
 	rec = doRequest(t, s, http.MethodGet, path, "", "Bearer "+deployToken)
-	if rec.Code != http.StatusNotFound || strings.Contains(rec.Body.String(), "insufficient scope") {
+	if rec.Code != http.StatusForbidden {
 		t.Fatalf("deploy token content = %d (body %s), want the platform-operator refusal", rec.Code, rec.Body.String())
 	}
 
@@ -337,8 +421,8 @@ func TestFilesHistoryVersionScopeGate(t *testing.T) {
 
 func TestFilesWriteScopeGate(t *testing.T) {
 	s, tokens := newScopeTestServer(t)
-	readToken := mustCreateToken(t, tokens, auth.ScopeRead)
-	deployToken := mustCreateToken(t, tokens, auth.ScopeDeploy)
+	readToken := mustCreateOwnerToken(t, tokens, auth.ScopeRead)
+	deployToken := mustCreateOwnerToken(t, tokens, auth.ScopeDeploy)
 	adminToken := mustCreateOwnerToken(t, tokens, auth.ScopeAdmin)
 	id := uuid.New()
 	base := "/api/v1/servers/" + id.String() + "/files/"
@@ -375,7 +459,7 @@ func TestFilesWriteScopeGate(t *testing.T) {
 				t.Fatalf("message = %q, want %q", body.Message, "insufficient scope")
 			}
 			rec = doRequest(t, s, tc.method, tc.path, tc.body, "Bearer "+deployToken)
-			if rec.Code != http.StatusNotFound || strings.Contains(rec.Body.String(), "insufficient scope") {
+			if rec.Code != http.StatusForbidden {
 				t.Fatalf("deploy token = %d (body %s), want the platform-operator refusal", rec.Code, rec.Body.String())
 			}
 			rec = doRequest(t, s, tc.method, tc.path, tc.body, "Bearer "+adminToken)

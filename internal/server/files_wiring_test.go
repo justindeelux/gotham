@@ -131,4 +131,18 @@ func TestFilesRoutesRequireOwner(t *testing.T) {
 	if rec.Code == http.StatusNotFound || rec.Code == http.StatusUnauthorized {
 		t.Fatalf("owner admin token roots = %d, want past the owner gate (body %s)", rec.Code, rec.Body.String())
 	}
+
+	for _, scope := range []string{"read", "deploy"} {
+		scoped, err := tokens.Create(context.Background(), testOwnerID, scope, []string{scope})
+		if err != nil {
+			t.Fatalf("create owner %s token: %v", scope, err)
+		}
+		if rec := doRequest(t, s, http.MethodGet, url, "", "Bearer "+scoped.Token); rec.Code != http.StatusForbidden {
+			t.Fatalf("owner %s token roots = %d, want 403 (body %s)", scope, rec.Code, rec.Body.String())
+		}
+	}
+
+	if rec := doRequest(t, s, http.MethodGet, url, "", "Bearer owner-token"); rec.Code == http.StatusNotFound || rec.Code == http.StatusUnauthorized {
+		t.Fatalf("owner session roots = %d, want past the owner gate (body %s)", rec.Code, rec.Body.String())
+	}
 }

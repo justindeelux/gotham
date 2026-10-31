@@ -192,11 +192,18 @@ type agentUpdateController interface {
 }
 
 func (s *Server) mountServerRoutes(api chi.Router) {
+	api.Group(func(readOnly chi.Router) {
+		readOnly.Use(s.RequireAuth, requireResourceScopes, s.requireOwnerAccount)
+		readOnly.Get("/v1/servers", s.handleListServers)
+		readOnly.Get("/v1/servers/{id}", s.handleGetServer)
+		if servers.MetricsEnabled() {
+			readOnly.Get("/v1/servers/{id}/metrics", s.handleServerMetrics)
+		}
+	})
+
 	api.Group(func(protected chi.Router) {
-		protected.Use(s.RequireAuth, requireResourceScopes, s.requireOwnerAccount)
-		protected.Get("/v1/servers", s.handleListServers)
+		protected.Use(s.RequireAuth, s.RequireOwner)
 		protected.Post("/v1/servers", s.handleCreateServer)
-		protected.Get("/v1/servers/{id}", s.handleGetServer)
 		protected.Patch("/v1/servers/{id}", s.handleUpdateServer)
 		protected.Delete("/v1/servers/{id}", s.handleDeleteServer)
 		protected.With(s.sshRateLimit).Post("/v1/servers/{id}/validate", s.handleValidateServer)
@@ -210,9 +217,6 @@ func (s *Server) mountServerRoutes(api chi.Router) {
 		protected.Patch("/v1/private-keys/{id}", s.handleUpdatePrivateKey)
 		protected.Delete("/v1/private-keys/{id}", s.handleDeletePrivateKey)
 		protected.Post("/v1/private-keys/{id}/reveal", s.handleRevealPrivateKey)
-		if servers.MetricsEnabled() {
-			protected.Get("/v1/servers/{id}/metrics", s.handleServerMetrics)
-		}
 	})
 
 	if _, ok := s.servers.(agentUpdateController); ok {

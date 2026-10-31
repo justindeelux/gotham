@@ -130,6 +130,7 @@ func sshTestStubs(t *testing.T, root string) ([]string, string) {
 		"    echo 'passwordauthentication yes'\n" +
 		"  fi\n" +
 		"  echo 'pubkeyauthentication yes'\n" +
+		"  [ -n \"${SSHD_EXTRA_PORT:-}\" ] && echo \"port ${SSHD_EXTRA_PORT}\"\n" +
 		"  [ -n \"${SSHD_AUTHKEYS:-}\" ] && echo \"authorizedkeysfile ${SSHD_AUTHKEYS}\"\n" +
 		"  [ -n \"${SSHD_ROOTLOGIN:-}\" ] && echo \"permitrootlogin ${SSHD_ROOTLOGIN}\"\n" +
 		"  exit 0\n" +
@@ -188,6 +189,25 @@ func TestHostctlSSHStatusReportsState(t *testing.T) {
 		if !strings.Contains(out, want) {
 			t.Errorf("status misses %s:\n%s", want, out)
 		}
+	}
+}
+
+func TestHostctlSSHStatusPrefersManagedPort(t *testing.T) {
+	root := t.TempDir()
+	extra, dropin := sshTestStubs(t, root)
+	if err := os.MkdirAll(filepath.Dir(dropin), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(dropin, []byte("# managed\nPort 2222\nPasswordAuthentication yes\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	extra = append(extra, "SSHD_EXTRA_PORT=22")
+	out, err := runHostctlEnv(t, root, "", "status", extra)
+	if err != nil {
+		t.Fatalf("status failed: %v\n%s", err, out)
+	}
+	if !strings.Contains(out, `"port":2222`) {
+		t.Fatalf("status must report the managed port, not an external one:\n%s", out)
 	}
 }
 

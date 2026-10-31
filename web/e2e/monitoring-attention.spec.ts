@@ -345,6 +345,48 @@ test.describe("needs attention", () => {
     await expect(page.getByTestId("dashboard-status")).toHaveText("No servers yet");
   });
 
+  test("keeps the compact healthy line steady during a background refresh", async ({
+    page,
+  }) => {
+    let releaseRefresh: (() => void) | undefined;
+    const refreshGate = new Promise<void>((resolve) => {
+      releaseRefresh = resolve;
+    });
+    let incidentRequests = 0;
+    await page.route("**/api/v1/incidents?*", async (route) => {
+      incidentRequests += 1;
+      if (incidentRequests > 1) {
+        await refreshGate;
+      }
+      await route.fulfill({ json: { incidents: [], active_count: 0 } });
+    });
+
+    await page.goto("/dashboard");
+    await expect(page.getByText("Nothing needs attention")).toBeVisible();
+    const section = page.locator("section.attention");
+    const before = await section.boundingBox();
+    expect(before).not.toBeNull();
+
+    await page.evaluate(() => window.dispatchEvent(new Event("online")));
+    await expect.poll(() => incidentRequests).toBeGreaterThanOrEqual(2);
+    await page.evaluate(
+      () =>
+        new Promise<void>((resolve) =>
+          requestAnimationFrame(() => requestAnimationFrame(() => resolve())),
+        ),
+    );
+
+    const during = await section.boundingBox();
+    expect(during).not.toBeNull();
+    expect(during?.height).toBe(before?.height);
+    await expect(page.locator("section.attention .n-skeleton")).toHaveCount(0);
+
+    releaseRefresh?.();
+    await expect(page.locator("section.attention .n-skeleton")).toHaveCount(0);
+    const after = await section.boundingBox();
+    expect(after?.height).toBe(before?.height);
+  });
+
   test("keeps long names and controls usable at phone and desktop widths", async ({
     page,
   }) => {

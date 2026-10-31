@@ -44,9 +44,11 @@ export const useIncidentsStore = defineStore("incidents", () => {
     return status === 404 || status === 503 ? "unavailable" : "error";
   }
 
-  async function refresh(): Promise<void> {
+  async function refresh(showLoading = false): Promise<void> {
     const token = ++refreshSeq;
-    if (items.value.length === 0) {
+    // A poll or refocus refresh runs behind the loaded dashboard, so only the
+    // first load (and a user-changed filter) may reveal the loading state.
+    if (state.value !== "ready" || showLoading) {
       loading.value = true;
     }
     error.value = null;
@@ -169,7 +171,7 @@ export const useIncidentsStore = defineStore("incidents", () => {
     items.value = [];
     activeCount.value = 0;
     nextCursor.value = "";
-    void refresh();
+    void refresh(true);
   }
 
   function setResourceType(value: string): void {
@@ -177,7 +179,7 @@ export const useIncidentsStore = defineStore("incidents", () => {
     items.value = [];
     activeCount.value = 0;
     nextCursor.value = "";
-    void refresh();
+    void refresh(true);
   }
 
   function poll(): void {

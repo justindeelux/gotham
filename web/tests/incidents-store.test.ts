@@ -57,6 +57,17 @@ function page(
   return { incidents, next_cursor: nextCursor, active_count: activeCount };
 }
 
+function deferred<T>(): {
+  promise: Promise<T>;
+  resolve: (_value: T) => void;
+} {
+  let resolve: (_value: T) => void = () => undefined;
+  const promise = new Promise<T>((resolvePromise) => {
+    resolve = resolvePromise;
+  });
+  return { promise, resolve };
+}
+
 beforeEach(() => {
   window.localStorage.clear();
   setActivePinia(createPinia());
@@ -144,6 +155,35 @@ describe("incidents store", () => {
     expect(groupIncidents(store.items)[0]?.children.map((item) => item.id)).toEqual([
       "child-1",
     ]);
+  });
+
+  it("shows loading only on the first load and on a filter change", async () => {
+    const store = useIncidentsStore();
+    const first = deferred<IncidentPage>();
+    api.listIncidents.mockReturnValueOnce(first.promise);
+
+    const initial = store.refresh();
+    expect(store.loading).toBe(true);
+    first.resolve(page([]));
+    await initial;
+    expect(store.state).toBe("ready");
+    expect(store.loading).toBe(false);
+
+    const background = deferred<IncidentPage>();
+    api.listIncidents.mockReturnValueOnce(background.promise);
+    const poll = store.refresh();
+    expect(store.loading).toBe(false);
+    background.resolve(page([]));
+    await poll;
+    expect(store.loading).toBe(false);
+
+    const filtered = deferred<IncidentPage>();
+    api.listIncidents.mockReturnValueOnce(filtered.promise);
+    store.setSeverity("critical");
+    expect(store.loading).toBe(true);
+    filtered.resolve(page([]));
+    await vi.waitFor(() => expect(store.loading).toBe(false));
+    expect(store.state).toBe("ready");
   });
 
   it("drops a load-more page that a concurrent refresh superseded", async () => {

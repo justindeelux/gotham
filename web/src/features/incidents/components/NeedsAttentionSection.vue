@@ -26,7 +26,6 @@ import {
 import { groupIncidents } from "@/features/incidents/utils/incidents";
 import DeliveryFailuresList from "@/features/notifications/components/DeliveryFailuresList.vue";
 import { useNotificationInboxStore } from "@/features/notifications/stores/inbox";
-import { useServersStore } from "@/features/servers";
 import GothamIcon from "@/shared/ui/GothamIcon.vue";
 import { relativeTime } from "@/shared/utils/format";
 
@@ -34,7 +33,6 @@ const { t } = useI18n();
 const authStore = useAuthStore();
 const store = useIncidentsStore();
 const inbox = useNotificationInboxStore();
-const serversStore = useServersStore();
 
 const showResolved = ref(false);
 const groups = computed(() => groupIncidents(store.items));
@@ -45,32 +43,14 @@ const activeCountText = computed<string>(() =>
     : t("incidents.countOther", { count: store.activeCount }),
 );
 
-const emptyTitle = computed<string>(() => {
-  if (hasFilters.value) {
-    return t("incidents.filtered.title");
-  }
-  if (noMonitoringData.value) {
-    return t("incidents.noData.title");
-  }
-  return t("incidents.healthy.title");
-});
-
-const emptyBody = computed<string>(() => {
-  if (hasFilters.value) {
-    return t("incidents.filtered.body");
-  }
-  return noMonitoringData.value
-    ? t("incidents.noData.body")
-    : t("incidents.healthy.body");
-});
-
 const hasFilters = computed<boolean>(
   () => store.severity !== "" || store.resourceType !== "",
 );
 
-// No server has ever reported, so "healthy" would overstate what Gotham knows.
-const noMonitoringData = computed<boolean>(
-  () => authStore.isOwner && serversStore.servers.length === 0,
+const emptyTitle = computed<string>(() =>
+  hasFilters.value
+    ? t("incidents.filtered.title")
+    : t("incidents.healthy.title"),
 );
 
 const emptyState = computed<boolean>(
@@ -286,10 +266,10 @@ onUnmounted(() => {
         data-testid="incidents-empty"
       >
         <template #icon>
-          <GothamIcon :name="noMonitoringData ? 'server' : 'shield'" />
+          <GothamIcon name="shield" />
         </template>
         <template #extra>
-          <NText depth="3">{{ emptyBody }}</NText>
+          <NText depth="3">{{ t("incidents.filtered.body") }}</NText>
         </template>
       </NEmpty>
     </NCard>

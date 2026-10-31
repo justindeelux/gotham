@@ -270,7 +270,8 @@ func sensitiveRead(rawPath string) bool {
 			return true
 		}
 	}
-	return false
+	// The version body sits one segment below the /files/history list, which stays a read.
+	return strings.HasSuffix(path.Dir(cleaned), "/files/history")
 }
 
 const tokenScopeGrantDenied = "a token may only grant scopes it holds"

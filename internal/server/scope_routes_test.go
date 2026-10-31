@@ -213,6 +213,11 @@ func TestRequireResourceScopesClassifier(t *testing.T) {
 		"jwt reads files content":                 {http.MethodGet, "/api/v1/servers/x/files/content", nil, false, http.StatusOK},
 		"read cannot read content trailing slash": {http.MethodGet, "/api/v1/servers/x/files/content/", []string{auth.ScopeRead}, true, http.StatusForbidden},
 		"read cannot read content with query":     {http.MethodGet, "/api/v1/servers/x/files/content?root=r&path=p", []string{auth.ScopeRead}, true, http.StatusForbidden},
+		"read cannot read history version":        {http.MethodGet, "/api/v1/servers/x/files/history/2f8c1b4e-8a1d-4f45-9c2a-6b1e7d3a5c90", []string{auth.ScopeRead}, true, http.StatusForbidden},
+		"deploy reads history version":            {http.MethodGet, "/api/v1/servers/x/files/history/2f8c1b4e-8a1d-4f45-9c2a-6b1e7d3a5c90", []string{auth.ScopeDeploy}, true, http.StatusOK},
+		"admin reads history version":             {http.MethodGet, "/api/v1/servers/x/files/history/2f8c1b4e-8a1d-4f45-9c2a-6b1e7d3a5c90", []string{auth.ScopeAdmin}, true, http.StatusOK},
+		"jwt reads history version":               {http.MethodGet, "/api/v1/servers/x/files/history/2f8c1b4e-8a1d-4f45-9c2a-6b1e7d3a5c90", nil, false, http.StatusOK},
+		"read reads history list":                 {http.MethodGet, "/api/v1/servers/x/files/history", []string{auth.ScopeRead}, true, http.StatusOK},
 		"read reads files roots":                  {http.MethodGet, "/api/v1/servers/x/files/roots", []string{auth.ScopeRead}, true, http.StatusOK},
 		"read reads files list":                   {http.MethodGet, "/api/v1/servers/x/files/list", []string{auth.ScopeRead}, true, http.StatusOK},
 		"read reads files stat":                   {http.MethodGet, "/api/v1/servers/x/files/stat", []string{auth.ScopeRead}, true, http.StatusOK},
@@ -291,6 +296,42 @@ func TestFilesContentScopeGate(t *testing.T) {
 	rec = doRequest(t, s, http.MethodGet, path, "", "Bearer "+mustCreateOwnerToken(t, tokens, auth.ScopeAdmin))
 	if rec.Code == http.StatusForbidden || rec.Code == http.StatusUnauthorized {
 		t.Fatalf("admin token content = %d, want the gates to pass", rec.Code)
+	}
+}
+
+func TestFilesHistoryVersionScopeGate(t *testing.T) {
+	s, tokens := newScopeTestServer(t)
+	readToken := mustCreateToken(t, tokens, auth.ScopeRead)
+	deployToken := mustCreateToken(t, tokens, auth.ScopeDeploy)
+	id := uuid.New()
+	path := "/api/v1/servers/" + id.String() + "/files/history/" + uuid.NewString() + "?root=volumes&path=a.txt"
+
+	rec := doRequest(t, s, http.MethodGet, path, "", "Bearer "+readToken)
+	if rec.Code != http.StatusForbidden {
+		t.Fatalf("read token history version = %d, want 403 (body %s)", rec.Code, rec.Body.String())
+	}
+	var body apiError
+	if err := json.Unmarshal(rec.Body.Bytes(), &body); err != nil {
+		t.Fatalf("decode error body: %v", err)
+	}
+	if body.Message != "insufficient scope" {
+		t.Fatalf("message = %q, want %q", body.Message, "insufficient scope")
+	}
+
+	rec = doRequest(t, s, http.MethodGet, path, "", "Bearer "+deployToken)
+	if rec.Code == http.StatusForbidden || strings.Contains(rec.Body.String(), "insufficient scope") {
+		t.Fatalf("deploy token history version = %d (body %s), want the platform-operator refusal", rec.Code, rec.Body.String())
+	}
+
+	rec = doRequest(t, s, http.MethodGet, path, "", "Bearer "+mustCreateOwnerToken(t, tokens, auth.ScopeAdmin))
+	if rec.Code == http.StatusForbidden || rec.Code == http.StatusUnauthorized {
+		t.Fatalf("admin token history version = %d, want the gates to pass", rec.Code)
+	}
+
+	listPath := "/api/v1/servers/" + id.String() + "/files/history?root=volumes&path=a.txt"
+	rec = doRequest(t, s, http.MethodGet, listPath, "", "Bearer "+readToken)
+	if rec.Code == http.StatusForbidden || rec.Code == http.StatusUnauthorized {
+		t.Fatalf("read token history list = %d, want the gates to pass (body %s)", rec.Code, rec.Body.String())
 	}
 }
 

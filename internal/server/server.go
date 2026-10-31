@@ -397,7 +397,10 @@ func (s *Server) routes() (http.Handler, error) {
 			}
 		}
 
-		files.Mount(api, platformOnly, files.TransferAuthorizerFunc(s.authorizeFileTransfer), s.fileService(), s.logger)
+		filesAuth := func(next http.Handler) http.Handler {
+			return s.RequireAuth(requireResourceScopes(s.RequireOwner(next)))
+		}
+		files.Mount(api, filesAuth, files.TransferAuthorizerFunc(s.authorizeFileTransfer), s.fileService(), s.logger)
 
 		s.databasesRetainer = s.databasesRetention(containerService)
 		s.databasesRetainer.Start()

@@ -7,6 +7,7 @@ import (
 	"log/slog"
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"testing"
 
 	"github.com/google/uuid"
@@ -367,8 +368,8 @@ func TestFilesContentScopeGate(t *testing.T) {
 	if err := json.Unmarshal(rec.Body.Bytes(), &body); err != nil {
 		t.Fatalf("decode error body: %v", err)
 	}
-	if body.Message != "owner access is required" {
-		t.Fatalf("message = %q, want %q", body.Message, "owner access is required")
+	if body.Message != "insufficient scope" {
+		t.Fatalf("message = %q, want %q", body.Message, "insufficient scope")
 	}
 
 	rec = doRequest(t, s, http.MethodGet, path, "", "Bearer "+deployToken)
@@ -454,8 +455,8 @@ func TestFilesWriteScopeGate(t *testing.T) {
 			if err := json.Unmarshal(rec.Body.Bytes(), &body); err != nil {
 				t.Fatalf("decode error body: %v", err)
 			}
-			if body.Message != "owner access is required" {
-				t.Fatalf("message = %q, want %q", body.Message, "owner access is required")
+			if body.Message != "insufficient scope" {
+				t.Fatalf("message = %q, want %q", body.Message, "insufficient scope")
 			}
 			rec = doRequest(t, s, tc.method, tc.path, tc.body, "Bearer "+deployToken)
 			if rec.Code != http.StatusForbidden {

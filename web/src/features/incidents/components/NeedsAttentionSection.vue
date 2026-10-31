@@ -60,8 +60,13 @@ const emptyState = computed<boolean>(
     !store.loading,
 );
 
+// A background refresh keeps the ready empty state collapsed: `loading` only
+// matters before the first ready state, never for the compact line.
 const compact = computed<boolean>(
-  () => emptyState.value && !hasFilters.value,
+  () =>
+    store.state === "ready" &&
+    store.items.length === 0 &&
+    !hasFilters.value,
 );
 
 const severityOptions = computed(() => [

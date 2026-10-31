@@ -38,7 +38,7 @@ func TestAuthorizedNodeVersions(t *testing.T) {
 	deleted := uuid.New()
 	registry.versions[deleted.String()] = servers.AgentVersion{Version: "deleted-version", At: now}
 
-	token := mustCreateOwnerToken(t, tokens, auth.ScopeAdmin)
+	token := mustCreateOwnerToken(t, tokens, auth.ScopeRead)
 	read := func(path string) *httptest.ResponseRecorder {
 		req := httptest.NewRequest("GET", path, nil)
 		req.Header.Set("Authorization", "Bearer "+token)

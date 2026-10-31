@@ -86,15 +86,14 @@ func TestToolchainRoutesScopeContainment(t *testing.T) {
 	}
 	s, tokens := newToolchainTestServer(t, fake)
 
-	readToken := mustCreateToken(t, tokens, auth.ScopeRead, auth.ScopeAdmin)
-	deployToken := mustCreateToken(t, tokens, auth.ScopeDeploy, auth.ScopeAdmin)
-	deployOnlyToken := mustCreateToken(t, tokens, auth.ScopeDeploy)
-	readOnlyToken := mustCreateToken(t, tokens, auth.ScopeRead)
+	readToken := mustCreateToken(t, tokens, auth.ScopeRead)
+	deployToken := mustCreateToken(t, tokens, auth.ScopeDeploy)
 	adminToken := mustCreateToken(t, tokens, auth.ScopeAdmin)
 	const session = "Bearer valid-token"
 	serverID := uuid.New().String()
 	toolsPath := "/api/v1/servers/" + serverID + "/tools"
 	jobsPath := "/api/v1/servers/" + serverID + "/toolchain/jobs"
+	jobPath := jobsPath + "/" + uuid.New().String()
 	body := `{"tools":["docker"],"action":"install"}`
 
 	tests := []struct {
@@ -106,13 +105,13 @@ func TestToolchainRoutesScopeContainment(t *testing.T) {
 		want   int
 	}{
 		{"read token lists tools", http.MethodGet, toolsPath, "", "Bearer " + readToken, http.StatusOK},
-		{"read token with admin enqueues", http.MethodPost, jobsPath, body, "Bearer " + readToken, http.StatusCreated},
-		{"deploy token enqueues", http.MethodPost, jobsPath, body, "Bearer " + deployToken, http.StatusCreated},
+		{"deploy token lists tools", http.MethodGet, toolsPath, "", "Bearer " + deployToken, http.StatusOK},
+		{"read token reads job", http.MethodGet, jobPath, "", "Bearer " + readToken, http.StatusOK},
+		{"read token cannot enqueue", http.MethodPost, jobsPath, body, "Bearer " + readToken, http.StatusForbidden},
+		{"deploy token cannot enqueue", http.MethodPost, jobsPath, body, "Bearer " + deployToken, http.StatusForbidden},
+		{"deploy token cannot cancel", http.MethodPost, jobPath + "/cancel", "", "Bearer " + deployToken, http.StatusForbidden},
 		{"admin token lists tools", http.MethodGet, toolsPath, "", "Bearer " + adminToken, http.StatusOK},
-		{"deploy-only token cannot list tools", http.MethodGet, toolsPath, "", "Bearer " + deployOnlyToken, http.StatusForbidden},
-		{"deploy-only token cannot enqueue", http.MethodPost, jobsPath, body, "Bearer " + deployOnlyToken, http.StatusForbidden},
-		{"deploy-only token cannot cancel", http.MethodPost, jobsPath + "/" + uuid.New().String() + "/cancel", "", "Bearer " + deployOnlyToken, http.StatusForbidden},
-		{"read-only token cannot enqueue", http.MethodPost, jobsPath, body, "Bearer " + readOnlyToken, http.StatusForbidden},
+		{"admin token enqueues", http.MethodPost, jobsPath, body, "Bearer " + adminToken, http.StatusCreated},
 		{"jwt session lists tools", http.MethodGet, toolsPath, "", session, http.StatusOK},
 		{"jwt session enqueues", http.MethodPost, jobsPath, body, session, http.StatusCreated},
 		{"no token is unauthorized", http.MethodGet, toolsPath, "", "", http.StatusUnauthorized},

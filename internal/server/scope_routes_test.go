@@ -73,6 +73,15 @@ func TestResourceScopeContainment(t *testing.T) {
 	const session = "Bearer valid-token"
 	const createBody = `{"name":"web-1","ip":"10.0.0.5","port":22,"ssh_user":"root"}`
 
+	registry := s.servers.(*fakeServerService)
+	serverID := seedServer(t, registry, "web-read")
+	key, err := registry.AddPrivateKey(context.Background(), "deploy-key",
+		"-----BEGIN OPENSSH PRIVATE KEY-----\nfake\n-----END OPENSSH PRIVATE KEY-----\n", "", "")
+	if err != nil {
+		t.Fatalf("seed private key: %v", err)
+	}
+	metricsPath := "/api/v1/servers/" + serverID.String() + "/metrics?from=2026-01-01T00:00:00Z&to=2026-01-01T01:00:00Z"
+
 	tests := map[string]struct {
 		method  string
 		path    string
@@ -86,13 +95,19 @@ func TestResourceScopeContainment(t *testing.T) {
 		"deploy can mint read":                     {http.MethodPost, "/api/v1/tokens", `{"name":"x","scopes":["read"]}`, "Bearer " + deployToken, http.StatusCreated, ""},
 		"read can mint read":                       {http.MethodPost, "/api/v1/tokens", `{"name":"x","scopes":["read"]}`, "Bearer " + readToken, http.StatusCreated, ""},
 		"jwt can mint deploy":                      {http.MethodPost, "/api/v1/tokens", `{"name":"x","scopes":["deploy"]}`, session, http.StatusCreated, ""},
-		"owner read token cannot read servers":     {http.MethodGet, "/api/v1/servers", "", "Bearer " + ownerReadToken, http.StatusForbidden, ""},
+		"owner read token reads servers":           {http.MethodGet, "/api/v1/servers", "", "Bearer " + ownerReadToken, http.StatusOK, ""},
+		"owner read token reads server":            {http.MethodGet, "/api/v1/servers/" + serverID.String(), "", "Bearer " + ownerReadToken, http.StatusOK, ""},
+		"owner read token reads metrics":           {http.MethodGet, metricsPath, "", "Bearer " + ownerReadToken, http.StatusOK, ""},
+		"owner deploy token reads servers":         {http.MethodGet, "/api/v1/servers", "", "Bearer " + ownerDeployToken, http.StatusOK, ""},
 		"owner deploy token cannot create servers": {http.MethodPost, "/api/v1/servers", createBody, "Bearer " + ownerDeployToken, http.StatusForbidden, ""},
 		"owner admin token reads servers":          {http.MethodGet, "/api/v1/servers", "", "Bearer " + ownerAdminToken, http.StatusOK, ""},
 		"owner read token cannot mutate":           {http.MethodPost, "/api/v1/servers", createBody, "Bearer " + ownerReadToken, http.StatusForbidden, ""},
+		"owner read token cannot list keys":        {http.MethodGet, "/api/v1/private-keys", "", "Bearer " + ownerReadToken, http.StatusForbidden, ""},
 		"owner deploy token cannot list keys":      {http.MethodGet, "/api/v1/private-keys", "", "Bearer " + ownerDeployToken, http.StatusForbidden, ""},
-		"owner read token cannot reveal key":       {http.MethodPost, "/api/v1/private-keys/" + uuid.NewString() + "/reveal", "", "Bearer " + ownerReadToken, http.StatusForbidden, ""},
-		"owner deploy token cannot delete server":  {http.MethodDelete, "/api/v1/servers/" + uuid.NewString(), "", "Bearer " + ownerDeployToken, http.StatusForbidden, ""},
+		"owner read token cannot get key":          {http.MethodGet, "/api/v1/private-keys/" + key.ID.String(), "", "Bearer " + ownerReadToken, http.StatusForbidden, ""},
+		"owner deploy token cannot get key":        {http.MethodGet, "/api/v1/private-keys/" + key.ID.String(), "", "Bearer " + ownerDeployToken, http.StatusForbidden, ""},
+		"owner read token cannot reveal key":       {http.MethodPost, "/api/v1/private-keys/" + key.ID.String() + "/reveal", "", "Bearer " + ownerReadToken, http.StatusForbidden, ""},
+		"owner deploy token cannot delete server":  {http.MethodDelete, "/api/v1/servers/" + serverID.String(), "", "Bearer " + ownerDeployToken, http.StatusForbidden, ""},
 		"owner admin token creates servers":        {http.MethodPost, "/api/v1/servers", createBody, "Bearer " + ownerAdminToken, http.StatusCreated, ""},
 		"member read token cannot read":            {http.MethodGet, "/api/v1/servers", "", "Bearer " + readToken, http.StatusNotFound, ""},
 		"member deploy token cannot mutate":        {http.MethodPost, "/api/v1/servers", createBody, "Bearer " + deployToken, http.StatusNotFound, ""},
@@ -115,6 +130,46 @@ func TestResourceScopeContainment(t *testing.T) {
 				}
 			}
 		})
+	}
+}
+
+func TestServerOperatorMutationsRequireAdminScope(t *testing.T) {
+	s, tokens := newScopeTestServer(t)
+	serverID := uuid.NewString()
+	keyID := uuid.NewString()
+
+	routes := []struct {
+		name   string
+		method string
+		path   string
+		body   string
+	}{
+		{"create server", http.MethodPost, "/api/v1/servers", `{"name":"web-1","ip":"10.0.0.5","ssh_user":"root"}`},
+		{"update server", http.MethodPatch, "/api/v1/servers/" + serverID, `{"name":"web-2"}`},
+		{"delete server", http.MethodDelete, "/api/v1/servers/" + serverID, ""},
+		{"validate server", http.MethodPost, "/api/v1/servers/" + serverID + "/validate", ""},
+		{"install key", http.MethodPost, "/api/v1/servers/" + serverID + "/install-key", ""},
+		{"install docker", http.MethodPost, "/api/v1/servers/" + serverID + "/docker-install", ""},
+		{"reset host key", http.MethodDelete, "/api/v1/servers/" + serverID + "/host-key", ""},
+		{"create private key", http.MethodPost, "/api/v1/private-keys", `{"name":"k","private_key":"pem"}`},
+		{"generate private key", http.MethodPost, "/api/v1/private-keys/generate", `{"name":"k","type":"ed25519"}`},
+		{"list private keys", http.MethodGet, "/api/v1/private-keys", ""},
+		{"get private key", http.MethodGet, "/api/v1/private-keys/" + keyID, ""},
+		{"update private key", http.MethodPatch, "/api/v1/private-keys/" + keyID, `{"name":"k2"}`},
+		{"delete private key", http.MethodDelete, "/api/v1/private-keys/" + keyID, ""},
+		{"reveal private key", http.MethodPost, "/api/v1/private-keys/" + keyID + "/reveal", ""},
+	}
+
+	for _, scope := range []string{auth.ScopeRead, auth.ScopeDeploy} {
+		token := mustCreateOwnerToken(t, tokens, scope)
+		for _, route := range routes {
+			t.Run(scope+" "+route.name, func(t *testing.T) {
+				rec := doRequest(t, s, route.method, route.path, route.body, "Bearer "+token)
+				if rec.Code != http.StatusForbidden {
+					t.Fatalf("%s %s = %d, want 403 (body %s)", route.method, route.path, rec.Code, rec.Body.String())
+				}
+			})
+		}
 	}
 }
 

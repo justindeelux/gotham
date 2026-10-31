@@ -64,9 +64,19 @@ func TestProviderRoutesRequireAdminScope(t *testing.T) {
 		if err != nil {
 			t.Fatalf("create owner %s token: %v", scope, err)
 		}
-		rec := doRequest(t, s, http.MethodGet, "/api/v1/providers", "", "Bearer "+created.Token)
-		if rec.Code != http.StatusForbidden {
-			t.Fatalf("owner %s token providers = %d, want 403 (body %s)", scope, rec.Code, rec.Body.String())
+		for _, route := range []struct {
+			name   string
+			method string
+			path   string
+		}{
+			{"list providers", http.MethodGet, "/api/v1/providers"},
+			{"create provider", http.MethodPost, "/api/v1/providers"},
+			{"delete provider", http.MethodDelete, "/api/v1/providers/" + uuid.NewString()},
+		} {
+			rec := doRequest(t, s, route.method, route.path, "", "Bearer "+created.Token)
+			if rec.Code != http.StatusForbidden {
+				t.Fatalf("owner %s token %s = %d, want 403 (body %s)", scope, route.name, rec.Code, rec.Body.String())
+			}
 		}
 	}
 

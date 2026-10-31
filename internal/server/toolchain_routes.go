@@ -62,12 +62,15 @@ func (s *Server) mountToolchainRoutes(api chi.Router) {
 	if s.toolchain == nil {
 		return
 	}
+	api.Group(func(readOnly chi.Router) {
+		readOnly.Use(s.resourceAuth())
+		readOnly.Get("/v1/servers/{id}/tools", s.handleListTools)
+		readOnly.Get("/v1/servers/{id}/toolchain/jobs", s.handleListToolchainJobs)
+		readOnly.Get("/v1/servers/{id}/toolchain/jobs/{jobID}", s.handleGetToolchainJob)
+	})
 	api.Group(func(protected chi.Router) {
 		protected.Use(s.RequireAuth, s.RequireOwner)
-		protected.Get("/v1/servers/{id}/tools", s.handleListTools)
-		protected.Get("/v1/servers/{id}/toolchain/jobs", s.handleListToolchainJobs)
 		protected.Post("/v1/servers/{id}/toolchain/jobs", s.handleEnqueueToolchainJobs)
-		protected.Get("/v1/servers/{id}/toolchain/jobs/{jobID}", s.handleGetToolchainJob)
 		protected.Post("/v1/servers/{id}/toolchain/jobs/{jobID}/cancel", s.handleCancelToolchainJob)
 	})
 }

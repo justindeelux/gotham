@@ -14,7 +14,6 @@ import (
 func TestMCPStrictContextAndReads(t *testing.T) {
 	s, tokens := newScopeTestServer(t)
 	read := mustCreateOwnerToken(t, tokens, auth.ScopeRead)
-	admin := mustCreateOwnerToken(t, tokens, auth.ScopeAdmin)
 	request := func(method, path, token, contract string) *httptest.ResponseRecorder {
 		req := httptest.NewRequest(method, path, nil)
 		req.Header.Set("Authorization", "Bearer "+token)
@@ -24,11 +23,7 @@ func TestMCPStrictContextAndReads(t *testing.T) {
 		return rec
 	}
 	for _, path := range []string{"/api/v1/mcp/context", "/api/v1/servers"} {
-		token := read
-		if path == "/api/v1/servers" {
-			token = admin
-		}
-		rec := request("GET", path, token, "1")
+		rec := request("GET", path, read, "1")
 		if rec.Code != 200 {
 			t.Fatalf("strict response %s: %d %s %+v", path, rec.Code, rec.Body.String(), rec.Header())
 		}

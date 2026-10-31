@@ -28,7 +28,13 @@ type ServerService interface {
 	Validate(ctx context.Context, id uuid.UUID, auth servers.ValidateAuth) (*servers.ValidationResult, error)
 	InstallDocker(ctx context.Context, id uuid.UUID, auth servers.ValidateAuth, out io.Writer) error
 	ResetHostKey(ctx context.Context, id uuid.UUID) (*servers.Server, error)
-	AddPrivateKey(ctx context.Context, name, privateKeyPEM string) (*servers.PrivateKey, error)
+	AddPrivateKey(ctx context.Context, name, privateKeyPEM, description, publicKey string) (*servers.PrivateKey, error)
+	GeneratePrivateKey(ctx context.Context, name, keyType, description string, rsaBits int) (*servers.PrivateKey, error)
+	ListPrivateKeys(ctx context.Context) ([]servers.PrivateKey, error)
+	GetPrivateKey(ctx context.Context, id uuid.UUID) (*servers.PrivateKey, error)
+	UpdatePrivateKey(ctx context.Context, id uuid.UUID, params servers.PrivateKeyUpdateParams) (*servers.PrivateKey, error)
+	DeletePrivateKey(ctx context.Context, id uuid.UUID) error
+	RevealPrivateKey(ctx context.Context, id uuid.UUID) (string, error)
 	Metrics(ctx context.Context, id uuid.UUID, from, to time.Time, step string) ([]servers.MetricPoint, error)
 }
 
@@ -58,8 +64,22 @@ type validateServerRequest struct {
 }
 
 type createPrivateKeyRequest struct {
-	Name       string `json:"name"`
-	PrivateKey string `json:"private_key"`
+	Name        string `json:"name"`
+	PrivateKey  string `json:"private_key"`
+	Description string `json:"description"`
+	PublicKey   string `json:"public_key"`
+}
+
+type generatePrivateKeyRequest struct {
+	Name        string `json:"name"`
+	Type        string `json:"type"`
+	Description string `json:"description"`
+	Bits        int    `json:"bits"`
+}
+
+type updatePrivateKeyRequest struct {
+	Name        *string `json:"name"`
+	Description *string `json:"description"`
 }
 
 type serverDTO struct {
@@ -105,10 +125,21 @@ type validateResponse struct {
 	Server  *serverDTO            `json:"server,omitempty"`
 }
 
-type privateKeyResponse struct {
-	ID        string    `json:"id"`
-	Name      string    `json:"name"`
-	CreatedAt time.Time `json:"created_at"`
+type privateKeyDTO struct {
+	ID          string    `json:"id"`
+	Name        string    `json:"name"`
+	Type        string    `json:"type"`
+	Description *string   `json:"description"`
+	PublicKey   string    `json:"public_key"`
+	CreatedAt   time.Time `json:"created_at"`
+}
+
+type privateKeyListEnvelope struct {
+	PrivateKeys []privateKeyDTO `json:"private_keys"`
+}
+
+type privateKeyRevealResponse struct {
+	PrivateKey string `json:"private_key"`
 }
 
 type metricPointDTO struct {
@@ -166,6 +197,12 @@ func (s *Server) mountServerRoutes(api chi.Router) {
 		protected.Post("/v1/servers/{id}/docker-install", s.handleInstallDocker)
 		protected.Delete("/v1/servers/{id}/host-key", s.handleResetHostKey)
 		protected.Post("/v1/private-keys", s.handleCreatePrivateKey)
+		protected.Post("/v1/private-keys/generate", s.handleGeneratePrivateKey)
+		protected.Get("/v1/private-keys", s.handleListPrivateKeys)
+		protected.Get("/v1/private-keys/{id}", s.handleGetPrivateKey)
+		protected.Patch("/v1/private-keys/{id}", s.handleUpdatePrivateKey)
+		protected.Delete("/v1/private-keys/{id}", s.handleDeletePrivateKey)
+		protected.Post("/v1/private-keys/{id}/reveal", s.handleRevealPrivateKey)
 		if servers.MetricsEnabled() {
 			protected.Get("/v1/servers/{id}/metrics", s.handleServerMetrics)
 		}
@@ -474,18 +511,125 @@ func (s *Server) handleCreatePrivateKey(w http.ResponseWriter, r *http.Request) 
 		return
 	}
 
-	created, err := s.servers.AddPrivateKey(r.Context(), req.Name, req.PrivateKey)
+	created, err := s.servers.AddPrivateKey(r.Context(), req.Name, req.PrivateKey, req.Description, req.PublicKey)
 	if err != nil {
 		s.writeServerError(w, "create private key", err)
 		return
 	}
 
 	s.logger.Debug("servers: private key created", "private_key_id", created.ID.String())
-	writeJSON(w, http.StatusCreated, privateKeyResponse{
-		ID:        created.ID.String(),
-		Name:      created.Name,
-		CreatedAt: created.CreatedAt,
+	writeJSON(w, http.StatusCreated, newPrivateKeyDTO(created))
+}
+
+func (s *Server) handleGeneratePrivateKey(w http.ResponseWriter, r *http.Request) {
+	var req generatePrivateKeyRequest
+	if !s.decodeJSON(w, r, &req) {
+		return
+	}
+
+	created, err := s.servers.GeneratePrivateKey(r.Context(), req.Name, req.Type, req.Description, req.Bits)
+	if err != nil {
+		s.writeServerError(w, "generate private key", err)
+		return
+	}
+
+	s.logger.Debug("servers: private key generated", "private_key_id", created.ID.String(), "type", created.Type)
+	writeJSON(w, http.StatusCreated, newPrivateKeyDTO(created))
+}
+
+func (s *Server) handleListPrivateKeys(w http.ResponseWriter, r *http.Request) {
+	items, err := s.servers.ListPrivateKeys(r.Context())
+	if err != nil {
+		s.writeServerError(w, "list private keys", err)
+		return
+	}
+
+	response := privateKeyListEnvelope{PrivateKeys: make([]privateKeyDTO, 0, len(items))}
+	for i := range items {
+		response.PrivateKeys = append(response.PrivateKeys, newPrivateKeyDTO(&items[i]))
+	}
+	writeJSON(w, http.StatusOK, response)
+}
+
+func (s *Server) handleGetPrivateKey(w http.ResponseWriter, r *http.Request) {
+	id, ok := privateKeyIDParam(w, r)
+	if !ok {
+		return
+	}
+
+	key, err := s.servers.GetPrivateKey(r.Context(), id)
+	if err != nil {
+		s.writeServerError(w, "get private key", err)
+		return
+	}
+	writeJSON(w, http.StatusOK, newPrivateKeyDTO(key))
+}
+
+func (s *Server) handleUpdatePrivateKey(w http.ResponseWriter, r *http.Request) {
+	id, ok := privateKeyIDParam(w, r)
+	if !ok {
+		return
+	}
+
+	var req updatePrivateKeyRequest
+	if !s.decodeJSON(w, r, &req) {
+		return
+	}
+
+	updated, err := s.servers.UpdatePrivateKey(r.Context(), id, servers.PrivateKeyUpdateParams{
+		Name:        req.Name,
+		Description: req.Description,
 	})
+	if err != nil {
+		s.writeServerError(w, "update private key", err)
+		return
+	}
+	writeJSON(w, http.StatusOK, newPrivateKeyDTO(updated))
+}
+
+func (s *Server) handleDeletePrivateKey(w http.ResponseWriter, r *http.Request) {
+	id, ok := privateKeyIDParam(w, r)
+	if !ok {
+		return
+	}
+
+	if err := s.servers.DeletePrivateKey(r.Context(), id); err != nil {
+		s.writeServerError(w, "delete private key", err)
+		return
+	}
+	w.WriteHeader(http.StatusNoContent)
+}
+
+func (s *Server) handleRevealPrivateKey(w http.ResponseWriter, r *http.Request) {
+	id, ok := privateKeyIDParam(w, r)
+	if !ok {
+		return
+	}
+
+	privateKey, err := s.servers.RevealPrivateKey(r.Context(), id)
+	if err != nil {
+		s.writeServerError(w, "reveal private key", err)
+		return
+	}
+
+	actorID, _ := UserIDFromContext(r.Context())
+	s.logger.Info("servers: audit",
+		"actor_id", actorID.String(),
+		"action", "private_key.reveal",
+		"target_id", id.String())
+	w.Header().Set("Cache-Control", "no-store")
+	writeJSON(w, http.StatusOK, privateKeyRevealResponse{PrivateKey: privateKey})
+}
+
+func newPrivateKeyDTO(key *servers.PrivateKey) privateKeyDTO {
+	return privateKeyDTO{
+		ID:          key.ID.String(),
+		Name:        key.Name,
+		Type:        key.Type,
+		Description: key.Description,
+		PublicKey:   key.PublicKey,
+		CreatedAt:   key.CreatedAt,
+	}
 }
 
 func (s *Server) handleServerMetrics(w http.ResponseWriter, r *http.Request) {
@@ -641,6 +785,15 @@ func serverIDParam(w http.ResponseWriter, r *http.Request) (uuid.UUID, bool) {
 	id, err := uuid.Parse(chi.URLParam(r, "id"))
 	if err != nil {
 		writeJSON(w, http.StatusBadRequest, apiError{Message: "invalid server id"})
+		return uuid.Nil, false
+	}
+	return id, true
+}
+
+func privateKeyIDParam(w http.ResponseWriter, r *http.Request) (uuid.UUID, bool) {
+	id, err := uuid.Parse(chi.URLParam(r, "id"))
+	if err != nil {
+		writeJSON(w, http.StatusBadRequest, apiError{Message: "invalid private key id"})
 		return uuid.Nil, false
 	}
 	return id, true

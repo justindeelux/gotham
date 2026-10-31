@@ -238,7 +238,7 @@ func TestServicePassphraseProtectedKeyValidation(t *testing.T) {
 	defer stop()
 	host, port := target(t, addr)
 
-	key, err := service.AddPrivateKey(ctx, "passphrase-key", string(testEncryptedPrivateKeyPEM(t, "s3cret")))
+	key, err := service.AddPrivateKey(ctx, "passphrase-key", string(testEncryptedPrivateKeyPEM(t, "s3cret")), "", "")
 	if err != nil {
 		t.Fatalf("AddPrivateKey: %v", err)
 	}
@@ -294,7 +294,7 @@ func TestServiceValidateReadyNodeKeepsReady(t *testing.T) {
 	defer stop()
 	host, port := target(t, addr)
 
-	key, err := service.AddPrivateKey(ctx, "ready-key", string(testPrivateKeyPEM(t)))
+	key, err := service.AddPrivateKey(ctx, "ready-key", string(testPrivateKeyPEM(t)), "", "")
 	if err != nil {
 		t.Fatalf("AddPrivateKey: %v", err)
 	}
@@ -407,7 +407,7 @@ func TestServiceValidateRestoresStatusWhenAgentInfoWriteFails(t *testing.T) {
 	defer stop()
 	host, port := target(t, addr)
 
-	key, err := service.AddPrivateKey(ctx, "info-fail-key", string(testPrivateKeyPEM(t)))
+	key, err := service.AddPrivateKey(ctx, "info-fail-key", string(testPrivateKeyPEM(t)), "", "")
 	if err != nil {
 		t.Fatalf("AddPrivateKey: %v", err)
 	}

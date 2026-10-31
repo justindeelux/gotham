@@ -22,6 +22,7 @@ type fakeServerService struct {
 	mu             sync.Mutex
 	items          map[uuid.UUID]servers.Server
 	hasPassword    map[uuid.UUID]bool
+	privateKeys    map[uuid.UUID]servers.PrivateKey
 	failAdd        error
 	validateResult *servers.ValidationResult
 	validateErr    error
@@ -34,7 +35,11 @@ type fakeServerService struct {
 }
 
 func newFakeServerService() *fakeServerService {
-	return &fakeServerService{items: make(map[uuid.UUID]servers.Server), hasPassword: make(map[uuid.UUID]bool)}
+	return &fakeServerService{
+		items:       make(map[uuid.UUID]servers.Server),
+		hasPassword: make(map[uuid.UUID]bool),
+		privateKeys: make(map[uuid.UUID]servers.PrivateKey),
+	}
 }
 
 func (f *fakeServerService) Add(_ context.Context, _ uuid.UUID, name, ip string, port int, sshUser string, sshKeyID uuid.UUID, password string) (*servers.Server, error) {
@@ -256,11 +261,119 @@ func (f *fakeServerService) ResetHostKey(_ context.Context, id uuid.UUID) (*serv
 	return &item, nil
 }
 
-func (f *fakeServerService) AddPrivateKey(_ context.Context, name, privateKeyPEM string) (*servers.PrivateKey, error) {
+func (f *fakeServerService) AddPrivateKey(_ context.Context, name, privateKeyPEM, description, publicKey string) (*servers.PrivateKey, error) {
 	if name == "" || privateKeyPEM == "" {
 		return nil, fmt.Errorf("%w: name and private_key are required", servers.ErrValidation)
 	}
-	return &servers.PrivateKey{ID: uuid.New(), Name: name, CreatedAt: time.Now().UTC()}, nil
+	key := &servers.PrivateKey{
+		ID:          uuid.New(),
+		Name:        name,
+		Type:        servers.PrivateKeyTypeEd25519,
+		PublicKey:   "ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIFakePublicKey",
+		CreatedAt:   time.Now().UTC(),
+		Description: optionalString(description),
+	}
+	if publicKey != "" {
+		key.PublicKey = publicKey
+	}
+	f.mu.Lock()
+	f.privateKeys[key.ID] = *key
+	f.mu.Unlock()
+	return key, nil
+}
+
+func (f *fakeServerService) GeneratePrivateKey(_ context.Context, name, keyType, description string, _ int) (*servers.PrivateKey, error) {
+	if name == "" {
+		return nil, fmt.Errorf("%w: name is required", servers.ErrValidation)
+	}
+	switch keyType {
+	case servers.PrivateKeyTypeEd25519, servers.PrivateKeyTypeRSA, servers.PrivateKeyTypeECDSA:
+	default:
+		return nil, fmt.Errorf("%w: type must be ed25519, rsa or ecdsa", servers.ErrValidation)
+	}
+	key := &servers.PrivateKey{
+		ID:          uuid.New(),
+		Name:        name,
+		Type:        keyType,
+		PublicKey:   "ssh-" + keyType + " AAAAFakePublicKey",
+		CreatedAt:   time.Now().UTC(),
+		Description: optionalString(description),
+	}
+	f.mu.Lock()
+	f.privateKeys[key.ID] = *key
+	f.mu.Unlock()
+	return key, nil
+}
+
+func (f *fakeServerService) ListPrivateKeys(context.Context) ([]servers.PrivateKey, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	keys := make([]servers.PrivateKey, 0, len(f.privateKeys))
+	for _, key := range f.privateKeys {
+		keys = append(keys, key)
+	}
+	return keys, nil
+}
+
+func (f *fakeServerService) GetPrivateKey(_ context.Context, id uuid.UUID) (*servers.PrivateKey, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	key, ok := f.privateKeys[id]
+	if !ok {
+		return nil, servers.ErrNotFound
+	}
+	return &key, nil
+}
+
+func (f *fakeServerService) UpdatePrivateKey(_ context.Context, id uuid.UUID, params servers.PrivateKeyUpdateParams) (*servers.PrivateKey, error) {
+	if params.Name == nil && params.Description == nil {
+		return nil, fmt.Errorf("%w: name or description is required", servers.ErrValidation)
+	}
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	key, ok := f.privateKeys[id]
+	if !ok {
+		return nil, servers.ErrNotFound
+	}
+	if params.Name != nil {
+		key.Name = *params.Name
+	}
+	if params.Description != nil {
+		key.Description = optionalString(*params.Description)
+	}
+	f.privateKeys[id] = key
+	return &key, nil
+}
+
+func (f *fakeServerService) DeletePrivateKey(_ context.Context, id uuid.UUID) error {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	if _, ok := f.privateKeys[id]; !ok {
+		return servers.ErrNotFound
+	}
+	for _, item := range f.items {
+		if item.SSHKeyID != nil && *item.SSHKeyID == id {
+			return fmt.Errorf("%w: private key is used by a server", servers.ErrConflict)
+		}
+	}
+	delete(f.privateKeys, id)
+	return nil
+}
+
+func (f *fakeServerService) RevealPrivateKey(_ context.Context, id uuid.UUID) (string, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	if _, ok := f.privateKeys[id]; !ok {
+		return "", servers.ErrNotFound
+	}
+	return "-----BEGIN OPENSSH PRIVATE KEY-----\nfake\n-----END OPENSSH PRIVATE KEY-----\n", nil
+}
+
+func optionalString(value string) *string {
+	if strings.TrimSpace(value) == "" {
+		return nil
+	}
+	return &value
 }
 
 func (f *fakeServerService) ResourceHistory(_ context.Context, resourceType string, id uuid.UUID, rangeName, _ string) (servers.ResourceHistory, error) {
@@ -653,22 +766,159 @@ func TestCreatePrivateKeyRoute(t *testing.T) {
 	s := newServerRoutesTestServer(t, fake)
 
 	rec := doRequest(t, s, http.MethodPost, "/api/v1/private-keys",
-		`{"name":"deploy-key","private_key":"-----BEGIN OPENSSH PRIVATE KEY-----\nabc\n-----END OPENSSH PRIVATE KEY-----\n"}`, authHeader)
+		`{"name":"deploy-key","description":"edge nodes","private_key":"-----BEGIN OPENSSH PRIVATE KEY-----\nabc\n-----END OPENSSH PRIVATE KEY-----\n"}`, authHeader)
 	if rec.Code != http.StatusCreated {
 		t.Fatalf("status = %d, want 201 (body %s)", rec.Code, rec.Body.String())
 	}
 
-	var body privateKeyResponse
+	var body privateKeyDTO
 	if err := json.Unmarshal(rec.Body.Bytes(), &body); err != nil {
 		t.Fatalf("decode: %v", err)
 	}
-	if body.ID == "" || body.Name != "deploy-key" {
+	if body.ID == "" || body.Name != "deploy-key" || body.Type != servers.PrivateKeyTypeEd25519 {
 		t.Errorf("body = %+v", body)
+	}
+	if body.Description == nil || *body.Description != "edge nodes" {
+		t.Errorf("description = %v, want edge nodes", body.Description)
+	}
+	if body.PublicKey == "" {
+		t.Error("public_key is empty")
 	}
 
 	rec = doRequest(t, s, http.MethodPost, "/api/v1/private-keys", `{"name":"","private_key":""}`, authHeader)
 	if rec.Code != http.StatusBadRequest {
 		t.Errorf("empty input status = %d, want 400", rec.Code)
+	}
+}
+
+func TestGeneratePrivateKeyRoute(t *testing.T) {
+	fake := newFakeServerService()
+	s := newServerRoutesTestServer(t, fake)
+
+	rec := doRequest(t, s, http.MethodPost, "/api/v1/private-keys/generate",
+		`{"name":"edge","type":"rsa","bits":2048}`, authHeader)
+	if rec.Code != http.StatusCreated {
+		t.Fatalf("status = %d, want 201 (body %s)", rec.Code, rec.Body.String())
+	}
+	var body privateKeyDTO
+	if err := json.Unmarshal(rec.Body.Bytes(), &body); err != nil {
+		t.Fatalf("decode: %v", err)
+	}
+	if body.ID == "" || body.Type != servers.PrivateKeyTypeRSA || body.PublicKey == "" {
+		t.Errorf("body = %+v", body)
+	}
+
+	rec = doRequest(t, s, http.MethodPost, "/api/v1/private-keys/generate",
+		`{"name":"edge","type":"dsa"}`, authHeader)
+	if rec.Code != http.StatusBadRequest {
+		t.Errorf("unsupported type status = %d, want 400", rec.Code)
+	}
+}
+
+func TestListPrivateKeysRouteNeverLeaksPrivateKey(t *testing.T) {
+	fake := newFakeServerService()
+	s := newServerRoutesTestServer(t, fake)
+	const privateKeyPEM = "-----BEGIN OPENSSH PRIVATE KEY-----\nsecret-material\n-----END OPENSSH PRIVATE KEY-----\n"
+	if _, err := fake.AddPrivateKey(context.Background(), "edge", privateKeyPEM, "", ""); err != nil {
+		t.Fatalf("seed private key: %v", err)
+	}
+
+	rec := doRequest(t, s, http.MethodGet, "/api/v1/private-keys", "", authHeader)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status = %d, want 200 (body %s)", rec.Code, rec.Body.String())
+	}
+	if strings.Contains(rec.Body.String(), "PRIVATE KEY") || strings.Contains(rec.Body.String(), privateKeyPEM) {
+		t.Fatalf("list leaks private key material: %s", rec.Body.String())
+	}
+
+	var body privateKeyListEnvelope
+	if err := json.Unmarshal(rec.Body.Bytes(), &body); err != nil {
+		t.Fatalf("decode: %v", err)
+	}
+	if len(body.PrivateKeys) != 1 || body.PrivateKeys[0].PublicKey == "" {
+		t.Errorf("private_keys = %+v", body.PrivateKeys)
+	}
+}
+
+func TestGetUpdateDeletePrivateKeyRoutes(t *testing.T) {
+	fake := newFakeServerService()
+	s := newServerRoutesTestServer(t, fake)
+	key, err := fake.AddPrivateKey(context.Background(), "edge", "-----BEGIN OPENSSH PRIVATE KEY-----\nabc\n-----END OPENSSH PRIVATE KEY-----\n", "", "")
+	if err != nil {
+		t.Fatalf("seed private key: %v", err)
+	}
+
+	rec := doRequest(t, s, http.MethodGet, "/api/v1/private-keys/"+key.ID.String(), "", authHeader)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("get status = %d, want 200 (body %s)", rec.Code, rec.Body.String())
+	}
+	var got privateKeyDTO
+	if err := json.Unmarshal(rec.Body.Bytes(), &got); err != nil {
+		t.Fatalf("decode: %v", err)
+	}
+	if got.ID != key.ID.String() {
+		t.Errorf("id = %q, want %q", got.ID, key.ID)
+	}
+
+	rec = doRequest(t, s, http.MethodPatch, "/api/v1/private-keys/"+key.ID.String(),
+		`{"name":"renamed","description":"prod"}`, authHeader)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("patch status = %d, want 200 (body %s)", rec.Code, rec.Body.String())
+	}
+	var updated privateKeyDTO
+	if err := json.Unmarshal(rec.Body.Bytes(), &updated); err != nil {
+		t.Fatalf("decode: %v", err)
+	}
+	if updated.Name != "renamed" || updated.Description == nil || *updated.Description != "prod" {
+		t.Errorf("updated = %+v", updated)
+	}
+
+	rec = doRequest(t, s, http.MethodPatch, "/api/v1/private-keys/"+key.ID.String(), `{}`, authHeader)
+	if rec.Code != http.StatusBadRequest {
+		t.Errorf("empty patch status = %d, want 400", rec.Code)
+	}
+
+	serverKeyID := key.ID
+	fake.mu.Lock()
+	fake.items[uuid.New()] = servers.Server{ID: uuid.New(), SSHKeyID: &serverKeyID}
+	fake.mu.Unlock()
+	rec = doRequest(t, s, http.MethodDelete, "/api/v1/private-keys/"+key.ID.String(), "", authHeader)
+	if rec.Code != http.StatusConflict {
+		t.Fatalf("delete in use status = %d, want 409 (body %s)", rec.Code, rec.Body.String())
+	}
+
+	fake.mu.Lock()
+	fake.items = make(map[uuid.UUID]servers.Server)
+	fake.mu.Unlock()
+	rec = doRequest(t, s, http.MethodDelete, "/api/v1/private-keys/"+key.ID.String(), "", authHeader)
+	if rec.Code != http.StatusNoContent {
+		t.Fatalf("delete status = %d, want 204 (body %s)", rec.Code, rec.Body.String())
+	}
+}
+
+func TestRevealPrivateKeyRoute(t *testing.T) {
+	fake := newFakeServerService()
+	s := newServerRoutesTestServer(t, fake)
+	key, err := fake.AddPrivateKey(context.Background(), "edge", "-----BEGIN OPENSSH PRIVATE KEY-----\nabc\n-----END OPENSSH PRIVATE KEY-----\n", "", "")
+	if err != nil {
+		t.Fatalf("seed private key: %v", err)
+	}
+
+	rec := doRequest(t, s, http.MethodPost, "/api/v1/private-keys/"+key.ID.String()+"/reveal", "", authHeader)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status = %d, want 200 (body %s)", rec.Code, rec.Body.String())
+	}
+	var body privateKeyRevealResponse
+	if err := json.Unmarshal(rec.Body.Bytes(), &body); err != nil {
+		t.Fatalf("decode: %v", err)
+	}
+	if !strings.Contains(body.PrivateKey, "BEGIN OPENSSH PRIVATE KEY") {
+		t.Errorf("private_key = %q", body.PrivateKey)
+	}
+
+	rec = doRequest(t, s, http.MethodPost, "/api/v1/private-keys/"+uuid.NewString()+"/reveal", "", authHeader)
+	if rec.Code != http.StatusNotFound {
+		t.Errorf("unknown status = %d, want 404", rec.Code)
 	}
 }
 

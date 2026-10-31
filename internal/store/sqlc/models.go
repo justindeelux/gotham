@@ -660,6 +660,9 @@ type PrivateKey struct {
 	Name         string             `json:"name"`
 	EncryptedKey string             `json:"encrypted_key"`
 	CreatedAt    pgtype.Timestamptz `json:"created_at"`
+	Type         *string            `json:"type"`
+	Description  *string            `json:"description"`
+	PublicKey    *string            `json:"public_key"`
 }
 
 type Project struct {

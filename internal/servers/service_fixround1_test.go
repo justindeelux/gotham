@@ -17,7 +17,7 @@ import (
 func validatedReadyNode(t *testing.T, service *ServerService, ctx context.Context, name string) (*Server, string) {
 	t.Helper()
 
-	key, err := service.AddPrivateKey(ctx, name+"-key", string(testPrivateKeyPEM(t)))
+	key, err := service.AddPrivateKey(ctx, name+"-key", string(testPrivateKeyPEM(t)), "", "")
 	if err != nil {
 		t.Fatalf("AddPrivateKey: %v", err)
 	}
@@ -65,7 +65,7 @@ func TestUpdateRejectsKeyAndPassword(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 	defer cancel()
 
-	key, err := service.AddPrivateKey(ctx, "both-key", string(testPrivateKeyPEM(t)))
+	key, err := service.AddPrivateKey(ctx, "both-key", string(testPrivateKeyPEM(t)), "", "")
 	if err != nil {
 		t.Fatalf("AddPrivateKey: %v", err)
 	}
@@ -262,7 +262,7 @@ func TestValidateAfterPatchRace(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 60*time.Second)
 	defer cancel()
 
-	key, err := service.AddPrivateKey(ctx, "race-key", string(testPrivateKeyPEM(t)))
+	key, err := service.AddPrivateKey(ctx, "race-key", string(testPrivateKeyPEM(t)), "", "")
 	if err != nil {
 		t.Fatalf("AddPrivateKey: %v", err)
 	}

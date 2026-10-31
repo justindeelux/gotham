@@ -13,6 +13,7 @@ project DELETE /api/v1/environments/{id}
 owner DELETE /api/v1/invites/{id}
 owner DELETE /api/v1/monitoring/settings
 project DELETE /api/v1/notification-channels/{id}
+owner DELETE /api/v1/private-keys/{id}
 owner DELETE /api/v1/projects/{id}
 owner DELETE /api/v1/projects/{id}/members
 owner DELETE /api/v1/providers/github-app/{id}
@@ -84,6 +85,8 @@ project GET /api/v1/notification-channels/failures
 project GET /api/v1/notification-channels/{id}
 project GET /api/v1/notification-channels/{id}/deliveries
 personal GET /api/v1/notifications
+owner GET /api/v1/private-keys
+owner GET /api/v1/private-keys/{id}
 project GET /api/v1/projects
 project GET /api/v1/projects/{id}
 project GET /api/v1/projects/{id}/environments
@@ -156,6 +159,7 @@ project PATCH /api/v1/databases/{id}
 project PATCH /api/v1/databases/{id}/schedules/{scheduleId}
 project PATCH /api/v1/environments/{id}
 project PATCH /api/v1/notification-channels/{id}
+owner PATCH /api/v1/private-keys/{id}
 project PATCH /api/v1/projects/{id}
 owner PATCH /api/v1/proxy/certificates/{id}
 owner PATCH /api/v1/proxy/dns-providers/{id}
@@ -224,6 +228,8 @@ project POST /api/v1/notification-channels/deliveries/{id}/retry
 project POST /api/v1/notification-channels/{id}/test
 personal POST /api/v1/notifications/seen
 owner POST /api/v1/private-keys
+owner POST /api/v1/private-keys/generate
+owner POST /api/v1/private-keys/{id}/reveal
 owner POST /api/v1/projects
 project POST /api/v1/projects/{id}/environments
 owner POST /api/v1/providers

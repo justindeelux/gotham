@@ -588,3 +588,19 @@ func (s *Store) GetPrivateKeyByID(ctx context.Context, id pgtype.UUID) (sqlc.Pri
 func (s *Store) ListPrivateKeys(ctx context.Context) ([]sqlc.ListPrivateKeysRow, error) {
 	return s.queries.ListPrivateKeys(ctx)
 }
+
+func (s *Store) SetPrivateKeyMetadata(ctx context.Context, params sqlc.SetPrivateKeyMetadataParams) error {
+	return s.queries.SetPrivateKeyMetadata(ctx, params)
+}
+
+func (s *Store) UpdatePrivateKeyProfile(ctx context.Context, params sqlc.UpdatePrivateKeyProfileParams) (sqlc.UpdatePrivateKeyProfileRow, error) {
+	return s.queries.UpdatePrivateKeyProfile(ctx, params)
+}
+
+func (s *Store) LockPrivateKey(ctx context.Context, id pgtype.UUID) (pgtype.UUID, error) {
+	return s.queries.LockPrivateKey(ctx, id)
+}
+
+func (s *Store) DeletePrivateKeyIfUnused(ctx context.Context, id pgtype.UUID) (int64, error) {
+	return s.queries.DeletePrivateKeyIfUnused(ctx, id)
+}

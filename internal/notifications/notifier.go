@@ -133,7 +133,7 @@ func (n *emailNotifier) Notify(ctx context.Context, event Event) error {
 		To:           append([]string(nil), n.config.To...),
 		Subject:      defaultSubjectPrefix + event.Summary(),
 		Body:         event.Message() + "\n",
-		AllowPrivate: n.config.AllowPrivate != nil && *n.config.AllowPrivate,
+		AllowPrivate: n.config.AllowPrivate,
 	})
 }
 
@@ -256,7 +256,7 @@ func transportCategory(err error) string {
 	}
 	switch {
 	case errors.Is(err, netguard.ErrDenied):
-		return "destination is not allowed"
+		return "destination is not allowed; edit and save the channel as the owner to allow it"
 	case errors.Is(err, context.DeadlineExceeded):
 		return "timed out"
 	case errors.Is(err, context.Canceled):

@@ -125,9 +125,9 @@ func (q *Queries) CleanupNotificationDeliveries(ctx context.Context, cutoff pgty
 
 const createNotificationChannel = `-- name: CreateNotificationChannel :one
 INSERT INTO notification_channels (
-    id, name, kind, config, enabled, resource_type, resource_id, events, created_by
-) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)
-RETURNING id, name, kind, config, enabled, resource_type, resource_id, events, created_at, updated_at, created_by
+    id, name, kind, config, enabled, resource_type, resource_id, events
+) VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
+RETURNING id, name, kind, config, enabled, resource_type, resource_id, events, created_at, updated_at
 `
 
 type CreateNotificationChannelParams struct {
@@ -139,7 +139,6 @@ type CreateNotificationChannelParams struct {
 	ResourceType *string     `json:"resource_type"`
 	ResourceID   pgtype.UUID `json:"resource_id"`
 	Events       []string    `json:"events"`
-	CreatedBy    pgtype.UUID `json:"created_by"`
 }
 
 func (q *Queries) CreateNotificationChannel(ctx context.Context, arg CreateNotificationChannelParams) (NotificationChannel, error) {
@@ -152,7 +151,6 @@ func (q *Queries) CreateNotificationChannel(ctx context.Context, arg CreateNotif
 		arg.ResourceType,
 		arg.ResourceID,
 		arg.Events,
-		arg.CreatedBy,
 	)
 	var i NotificationChannel
 	err := row.Scan(
@@ -166,7 +164,6 @@ func (q *Queries) CreateNotificationChannel(ctx context.Context, arg CreateNotif
 		&i.Events,
 		&i.CreatedAt,
 		&i.UpdatedAt,
-		&i.CreatedBy,
 	)
 	return i, err
 }
@@ -371,7 +368,7 @@ func (q *Queries) FinishNotificationDelivery(ctx context.Context, arg FinishNoti
 }
 
 const getNotificationChannel = `-- name: GetNotificationChannel :one
-SELECT id, name, kind, config, enabled, resource_type, resource_id, events, created_at, updated_at, created_by FROM notification_channels WHERE id = $1
+SELECT id, name, kind, config, enabled, resource_type, resource_id, events, created_at, updated_at FROM notification_channels WHERE id = $1
 `
 
 func (q *Queries) GetNotificationChannel(ctx context.Context, id pgtype.UUID) (NotificationChannel, error) {
@@ -388,7 +385,6 @@ func (q *Queries) GetNotificationChannel(ctx context.Context, id pgtype.UUID) (N
 		&i.Events,
 		&i.CreatedAt,
 		&i.UpdatedAt,
-		&i.CreatedBy,
 	)
 	return i, err
 }
@@ -548,7 +544,7 @@ func (q *Queries) ListNotificationChannelHealth(ctx context.Context) ([]ListNoti
 }
 
 const listNotificationChannels = `-- name: ListNotificationChannels :many
-SELECT id, name, kind, config, enabled, resource_type, resource_id, events, created_at, updated_at, created_by FROM notification_channels
+SELECT id, name, kind, config, enabled, resource_type, resource_id, events, created_at, updated_at FROM notification_channels
 ORDER BY created_at ASC, id ASC
 `
 
@@ -572,7 +568,6 @@ func (q *Queries) ListNotificationChannels(ctx context.Context) ([]NotificationC
 			&i.Events,
 			&i.CreatedAt,
 			&i.UpdatedAt,
-			&i.CreatedBy,
 		); err != nil {
 			return nil, err
 		}
@@ -585,7 +580,7 @@ func (q *Queries) ListNotificationChannels(ctx context.Context) ([]NotificationC
 }
 
 const listNotificationChannelsForEvent = `-- name: ListNotificationChannelsForEvent :many
-SELECT id, name, kind, config, enabled, resource_type, resource_id, events, created_at, updated_at, created_by FROM notification_channels
+SELECT id, name, kind, config, enabled, resource_type, resource_id, events, created_at, updated_at FROM notification_channels
 WHERE enabled
   AND (resource_type IS NULL OR (resource_type = $1 AND resource_id = $2))
 ORDER BY created_at ASC, id ASC
@@ -619,7 +614,6 @@ func (q *Queries) ListNotificationChannelsForEvent(ctx context.Context, arg List
 			&i.Events,
 			&i.CreatedAt,
 			&i.UpdatedAt,
-			&i.CreatedBy,
 		); err != nil {
 			return nil, err
 		}
@@ -865,7 +859,7 @@ SET name = $2,
     events = $8,
     updated_at = now()
 WHERE id = $1
-RETURNING id, name, kind, config, enabled, resource_type, resource_id, events, created_at, updated_at, created_by
+RETURNING id, name, kind, config, enabled, resource_type, resource_id, events, created_at, updated_at
 `
 
 type UpdateNotificationChannelParams struct {
@@ -902,7 +896,6 @@ func (q *Queries) UpdateNotificationChannel(ctx context.Context, arg UpdateNotif
 		&i.Events,
 		&i.CreatedAt,
 		&i.UpdatedAt,
-		&i.CreatedBy,
 	)
 	return i, err
 }

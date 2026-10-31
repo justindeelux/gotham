@@ -75,7 +75,7 @@ func (m *smtpMailer) Send(ctx context.Context, mail Mail) error {
 	conn, err := dialer.DialContext(ctx, "tcp", address)
 	if err != nil {
 		if errors.Is(err, netguard.ErrDenied) {
-			return fmt.Errorf("%w: smtp destination is not allowed", ErrValidation)
+			return fmt.Errorf("%w: smtp destination is not allowed; edit and save the channel as the owner to allow it", ErrValidation)
 		}
 		return fmt.Errorf("notifications: dial smtp %s: %s", address, transportCategory(err))
 	}

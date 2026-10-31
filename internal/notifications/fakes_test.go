@@ -74,7 +74,6 @@ type fakeRepository struct {
 	lastResourceID    uuid.UUID
 
 	nonOwners map[uuid.UUID]bool
-	ownerErr  error
 }
 
 var _ Repository = (*fakeRepository)(nil)
@@ -199,9 +198,6 @@ func (r *fakeRepository) CreateNotification(_ context.Context, notification Noti
 func (r *fakeRepository) IsOwner(_ context.Context, userID uuid.UUID) (bool, error) {
 	r.mu.Lock()
 	defer r.mu.Unlock()
-	if r.ownerErr != nil {
-		return false, r.ownerErr
-	}
 	return !r.nonOwners[userID], nil
 }
 

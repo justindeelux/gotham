@@ -350,10 +350,10 @@ type ChannelConfig struct {
 
 	// AllowPrivate is set server-side, never from a request. Owner channels may
 	// target loopback, RFC1918 or unique-local hosts (a self-hosted chat on the
-	// LAN); member channels reach only public addresses. A nil value marks a
-	// config sealed before the field existed; delivery resolves trust from the
-	// channel creator's current role. The address is re-checked at dial time.
-	AllowPrivate *bool `json:"allow_private,omitempty"`
+	// LAN); member channels reach only public addresses. A channel saved before
+	// the field existed has no stored decision and is public-only until the
+	// owner saves it again. The address is re-checked at dial time.
+	AllowPrivate bool `json:"allow_private,omitempty"`
 }
 
 func (c ChannelConfig) validate(kind Kind) error {
@@ -488,6 +488,12 @@ func (c ChannelConfig) merged(update ChannelConfig) ChannelConfig {
 	return merged
 }
 
+// targetChangedFrom reports whether the fields that decide the destination
+// differ. A masked or unchanged save must not count as a retarget.
+func (c ChannelConfig) targetChangedFrom(other ChannelConfig) bool {
+	return c.WebhookURL != other.WebhookURL || c.Host != other.Host || c.Port != other.Port
+}
+
 func (c ChannelConfig) hasSecrets() bool {
 	return c.WebhookURL != "" || c.BotToken != "" || c.Password != ""
 }
@@ -549,7 +555,6 @@ type Channel struct {
 	ResourceType string
 	ResourceID   uuid.UUID
 	SealedConfig string
-	CreatedBy    uuid.UUID
 	CreatedAt    time.Time
 	UpdatedAt    time.Time
 }

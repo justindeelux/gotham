@@ -608,7 +608,6 @@ type NotificationChannel struct {
 	Events       []string           `json:"events"`
 	CreatedAt    pgtype.Timestamptz `json:"created_at"`
 	UpdatedAt    pgtype.Timestamptz `json:"updated_at"`
-	CreatedBy    pgtype.UUID        `json:"created_by"`
 }
 
 type NotificationDelivery struct {

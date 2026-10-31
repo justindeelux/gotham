@@ -1,0 +1,111 @@
+import type en from "./en";
+
+const vi: typeof en = {
+  page: {
+    eyebrow: "Bảo mật",
+    title: "Khóa riêng",
+    description:
+      "Khóa SSH Gotham dùng để kết nối máy chủ. Phần riêng tư được mã hóa và chỉ hiện khi bạn xác nhận.",
+    create: "Thêm khóa riêng",
+  },
+  list: {
+    title: "Danh sách khóa",
+    empty: "Chưa có khóa riêng nào.",
+    retry: "Thử lại",
+    columns: {
+      name: "Tên",
+      type: "Loại",
+      description: "Mô tả",
+      publicKey: "Khóa công khai",
+      created: "Ngày tạo",
+      usedBy: "Máy chủ dùng",
+      actions: "Thao tác",
+    },
+    usedByOne: "{count} máy chủ",
+    usedByOther: "{count} máy chủ",
+    emptyValue: "—",
+  },
+  create: {
+    title: "Thêm khóa riêng",
+    name: "Tên",
+    namePlaceholder: "vd: web-1-deploy",
+    nameHint: "Tên được tạo sẵn, bạn có thể sửa.",
+    description: "Mô tả",
+    descriptionPlaceholder: "Khóa này dùng để làm gì?",
+    tabs: {
+      generate: "Tạo mới",
+      import: "Nhập",
+    },
+    type: "Loại khóa",
+    typeHint: "Ed25519 là mặc định. Dùng RSA hoặc ECDSA cho máy chủ cũ.",
+    privateKey: "Khóa riêng",
+    privateKeyPlaceholder: "-----BEGIN OPENSSH PRIVATE KEY-----",
+    privateKeyHint: "Được lưu mã hóa. Không bao giờ hiển thị trong danh sách.",
+    publicKey: "Khóa công khai (không bắt buộc)",
+    publicKeyPlaceholder: "ssh-ed25519 AAAA...",
+    publicKeyHint: "Không bắt buộc. Sẽ được kiểm tra với khóa riêng trước khi lưu.",
+    submit: "Tạo khóa",
+    cancel: "Hủy",
+  },
+  edit: {
+    title: "Sửa khóa riêng",
+    submit: "Lưu",
+    cancel: "Hủy",
+  },
+  view: {
+    title: "Khóa riêng",
+    name: "Tên",
+    type: "Loại",
+    description: "Mô tả",
+    publicKey: "Khóa công khai",
+    created: "Ngày tạo",
+    usedBy: "Máy chủ dùng",
+    close: "Đóng",
+  },
+  reveal: {
+    title: "Khóa riêng",
+    warning:
+      "Khóa riêng là thông tin mật. Chỉ sao chép khi cần rồi đóng hộp thoại này.",
+    copy: "Sao chép khóa riêng",
+    done: "Xong",
+    aria: "Khóa riêng",
+  },
+  actions: {
+    view: "Xem",
+    copy: "Sao chép",
+    reveal: "Hiện khóa",
+    edit: "Sửa",
+    delete: "Xóa",
+    copyPublicKeyAria: "Sao chép khóa công khai của {name}",
+  },
+  confirm: {
+    reveal: "Hiện khóa riêng của {name}? Khóa sẽ hiển thị trên màn hình.",
+    revealPositive: "Hiện khóa",
+    delete: "Xóa {name}? Không thể hoàn tác.",
+    deletePositive: "Xóa",
+  },
+  toast: {
+    created: "Đã tạo khóa riêng",
+    updated: "Đã cập nhật khóa riêng",
+    deleted: "Đã xóa khóa riêng",
+  },
+  errors: {
+    loadFailed: "Không tải được khóa riêng.",
+    createFailed: "Không tạo được khóa riêng.",
+    updateFailed: "Không cập nhật được khóa riêng.",
+    deleteFailed: "Không xóa được khóa riêng.",
+    revealFailed: "Không hiện được khóa riêng.",
+    sessionExpired: "Phiên đăng nhập đã hết hạn. Hãy đăng nhập lại.",
+    forbidden: "Bạn không có quyền truy cập.",
+    notFound: "Không tìm thấy khóa riêng.",
+    inUse: "Khóa này vẫn đang được máy chủ sử dụng nên không thể xóa.",
+  },
+  validation: {
+    nameRequired: "Tên là bắt buộc",
+    nameMaxLength: "Tên tối đa 64 ký tự",
+    descriptionMaxLength: "Mô tả tối đa 500 ký tự",
+    privateKeyRequired: "Hãy dán khóa riêng",
+  },
+};
+
+export default vi;

@@ -53,6 +53,27 @@ export const navSections: NavSection[] = [
     ],
   },
   {
+    label: "Security",
+    labelKey: "nav.sections.security",
+    items: [
+      {
+        key: "private-keys",
+        label: "Private keys",
+        labelKey: "nav.items.privateKeys",
+        icon: "shield",
+        to: "private-keys",
+        ownerOnly: true,
+      },
+      {
+        key: "api-tokens",
+        label: "API tokens",
+        labelKey: "nav.items.apiTokens",
+        icon: "key",
+        to: "api-tokens",
+      },
+    ],
+  },
+  {
     label: "System",
     labelKey: "nav.sections.system",
     items: [
@@ -85,7 +106,7 @@ export function visibleNavSections(
 export function activeNavKey(path: string): string {
   const parts = path.split("/").filter(Boolean);
   const [segment = "dashboard", section] = parts;
-  if (segment === "settings") {
+  if (segment === "settings" || segment === "security") {
     return section ?? sectionAliases[segment] ?? segment;
   }
   if (segment === "servers" && parts[2] === "files") {

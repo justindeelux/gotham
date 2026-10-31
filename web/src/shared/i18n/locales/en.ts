@@ -49,6 +49,7 @@ const en = {
     sections: {
       operations: "Operations",
       access: "Access",
+      security: "Security",
       system: "System",
     },
     items: {
@@ -63,6 +64,8 @@ const en = {
       notifications: "Notification channels",
       gitSources: "Git sources",
       mcp: "MCP setup",
+      privateKeys: "Private keys",
+      apiTokens: "API tokens",
       settings: "Settings",
       monitoring: "Monitoring",
       cleanup: "Cleanup",
@@ -110,6 +113,7 @@ const en = {
     mcp: "MCP setup",
     profile: "Profile",
     apiTokens: "API tokens",
+    privateKeys: "Private keys",
     updates: "Updates",
     notFound: "Page not found",
     forbidden: "No permission",

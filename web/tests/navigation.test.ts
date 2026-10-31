@@ -16,6 +16,8 @@ describe("activeNavKey", () => {
   it("maps aliased sections", () => {
     expect(activeNavKey("/settings")).toBe("notifications");
     expect(activeNavKey("/settings/notifications")).toBe("notifications");
+    expect(activeNavKey("/security/private-keys")).toBe("private-keys");
+    expect(activeNavKey("/security/api-tokens")).toBe("api-tokens");
   });
 
   it("highlights File manager on both file routes (JUS-110)", () => {
@@ -69,9 +71,21 @@ describe("navSections", () => {
     }
   });
 
-  it("keeps API tokens in the account menu, not the sidebar", () => {
+  it("puts private keys and API tokens in the Security group", () => {
     const items = navSections.flatMap((section) => section.items);
-    expect(items.some((item) => item.key === "tokens")).toBe(false);
+    const security = navSections.find(
+      (section) => section.labelKey === "nav.sections.security",
+    );
+    expect(security?.items.map((item) => item.key)).toEqual([
+      "private-keys",
+      "api-tokens",
+    ]);
+    expect(
+      items.find((item) => item.key === "private-keys")?.ownerOnly,
+    ).toBe(true);
+    expect(items.find((item) => item.key === "api-tokens")?.ownerOnly).toBe(
+      undefined,
+    );
     for (const item of items) {
       expect(item.to).not.toBe("");
     }
@@ -83,7 +97,18 @@ describe("navSections", () => {
       items.filter((item) => item.ownerOnly).map((item) => item.key),
     );
     expect(flagged).toEqual(
-      new Set(["files", "terminal", "servers", "domains", "users", "instance", "monitoring", "cleanup", "updates"]),
+      new Set([
+        "files",
+        "terminal",
+        "servers",
+        "domains",
+        "users",
+        "private-keys",
+        "instance",
+        "monitoring",
+        "cleanup",
+        "updates",
+      ]),
     );
   });
 

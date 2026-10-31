@@ -9,6 +9,7 @@ import {
   Folder,
   Globe,
   History,
+  KeyRound,
   Languages,
   Layers,
   LayoutGrid,
@@ -29,6 +30,7 @@ import {
 export type IconName =
   | "server"
   | "shield"
+  | "key"
   | "refresh"
   | "rocket"
   | "grid"
@@ -59,6 +61,7 @@ const props = defineProps<Props>();
 const components: Record<IconName, Component> = {
   server: Server,
   shield: ShieldCheck,
+  key: KeyRound,
   refresh: RefreshCw,
   rocket: Rocket,
   grid: LayoutGrid,

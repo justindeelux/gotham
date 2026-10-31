@@ -49,6 +49,7 @@ const vi: ServersMessages = {
     containers: "Container",
     delete: "Xóa",
     deleteConfirm: "Gỡ {name}? Các container trên nút không bị ảnh hưởng.",
+    cleanUp: "Dọn dẹp",
   },
   credential: {
     passwordStored: "đã lưu mật khẩu",
@@ -106,6 +107,7 @@ const vi: ServersMessages = {
       "Xóa nút chỉ gỡ khỏi control plane. Container, volume và chứng chỉ trên máy được giữ lại.",
     deleteNode: "Xóa nút",
     deleteConfirm: "Xóa máy chủ {name}?",
+    cleanUp: "Dọn dẹp",
   },
   settings: {
     host: {

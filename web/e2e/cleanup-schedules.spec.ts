@@ -97,6 +97,19 @@ async function installRoutes(page: Page): Promise<{
   await page.route("**/api/v1/cleanup/categories", (route: Route) =>
     route.fulfill({ json: categories() }),
   );
+  await page.route("**/api/v1/cleanup/threshold", (route: Route) =>
+    route.fulfill({
+      json: {
+        threshold: {
+          enabled: false,
+          percent: 85,
+          categories: ["build_cache"],
+          min_age_hours: 24,
+          cooldown_hours: 6,
+        },
+      },
+    }),
+  );
   await page.route("**/api/v1/cleanup/cron/next**", (route: Route) =>
     route.fulfill({
       json: { next_run_at: new Date(Date.now() + 86_400_000).toISOString() },

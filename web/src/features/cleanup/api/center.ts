@@ -9,11 +9,14 @@ import {
   cleanupRunListSchema,
   cleanupScheduleEnvelopeSchema,
   cleanupScheduleListSchema,
+  cleanupThresholdEnvelopeSchema,
   type CleanupExclusion,
   type CleanupRun,
   type CleanupRunDetail,
   type CleanupSchedule,
+  type CleanupThreshold,
   type ScheduleForm,
+  type ThresholdForm,
 } from "../schemas/center";
 
 export interface CleanupRunQuery {
@@ -118,4 +121,20 @@ export async function createExclusion(input: ExclusionInput): Promise<CleanupExc
 
 export async function deleteExclusion(id: string): Promise<void> {
   await http.delete(`/cleanup/exclusions/${id}`);
+}
+
+export async function getThreshold(): Promise<CleanupThreshold> {
+  const response = await http.get<unknown>("/cleanup/threshold");
+  const parsed = parseWith(cleanupThresholdEnvelopeSchema, response.data, {
+    context: "cleanup threshold",
+  });
+  return parsed.threshold;
+}
+
+export async function updateThreshold(input: ThresholdForm): Promise<CleanupThreshold> {
+  const response = await http.put<unknown>("/cleanup/threshold", input);
+  const parsed = parseWith(cleanupThresholdEnvelopeSchema, response.data, {
+    context: "cleanup threshold",
+  });
+  return parsed.threshold;
 }

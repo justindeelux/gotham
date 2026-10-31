@@ -86,6 +86,7 @@ const en = {
     logs: "View logs",
     server: "View server",
     metrics: "View metrics",
+    cleanup: "Clean up",
   },
   status: {
     acknowledged: "Acknowledged",

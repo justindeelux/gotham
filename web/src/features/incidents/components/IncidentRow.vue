@@ -105,6 +105,14 @@ const logsLink = computed<boolean>(
     props.incident.detector.startsWith("runtime_"),
 );
 
+// A disk-space incident can go straight to cleaning up its node.
+const cleanupLink = computed<string>(() => {
+  if (!authStore.isOwner || props.incident.detector !== "filesystem_space") {
+    return "";
+  }
+  return props.incident.node_id ?? "";
+});
+
 const snoozeOptions = computed(() => [
   { label: t("incidents.actions.snoozeHour"), key: "1" },
   { label: t("incidents.actions.snoozeDay"), key: "24" },
@@ -116,6 +124,13 @@ function serverRoute(): { name: string; params: { id: string }; query: { tab: st
     return null;
   }
   return { name: "server-detail", params: { id }, query: { tab: "metrics" } };
+}
+
+async function openCleanup(): Promise<void> {
+  if (!cleanupLink.value) {
+    return;
+  }
+  await router.push({ name: "cleanup", query: { server: cleanupLink.value } });
 }
 
 async function openResource(logs = false): Promise<void> {
@@ -295,6 +310,14 @@ async function snooze(key: string): Promise<void> {
         @click="openResource()"
       >
         {{ link.label }}
+      </NButton>
+      <NButton
+        v-if="cleanupLink"
+        size="small"
+        quaternary
+        @click="() => void openCleanup()"
+      >
+        {{ t("incidents.actions.cleanup") }}
       </NButton>
       <NButton
         v-if="logsLink"

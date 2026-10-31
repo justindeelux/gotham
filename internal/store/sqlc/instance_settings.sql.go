@@ -12,7 +12,7 @@ import (
 )
 
 const getInstanceSettings = `-- name: GetInstanceSettings :one
-SELECT id, control_plane_url, instance_name, timezone, dns_servers, ipv4_mode, ipv4_address, ipv4_gateway, ipv6_enabled, ipv6_mode, ipv6_address, ipv6_gateway, hostname, ntp_enabled, ntp_servers, pending_network, pending_deadline, updated_at, pending_control_plane_url, cleanup_history_retention_days, cleanup_backup_file_min_age_days FROM instance_settings WHERE id = 1
+SELECT id, control_plane_url, instance_name, timezone, dns_servers, ipv4_mode, ipv4_address, ipv4_gateway, ipv6_enabled, ipv6_mode, ipv6_address, ipv6_gateway, hostname, ntp_enabled, ntp_servers, pending_network, pending_deadline, updated_at, pending_control_plane_url, cleanup_history_retention_days, cleanup_backup_file_min_age_days, cleanup_threshold_enabled, cleanup_threshold_percent, cleanup_threshold_categories, cleanup_threshold_min_age_hours, cleanup_threshold_cooldown_hours FROM instance_settings WHERE id = 1
 `
 
 func (q *Queries) GetInstanceSettings(ctx context.Context) (InstanceSetting, error) {
@@ -40,6 +40,11 @@ func (q *Queries) GetInstanceSettings(ctx context.Context) (InstanceSetting, err
 		&i.PendingControlPlaneUrl,
 		&i.CleanupHistoryRetentionDays,
 		&i.CleanupBackupFileMinAgeDays,
+		&i.CleanupThresholdEnabled,
+		&i.CleanupThresholdPercent,
+		&i.CleanupThresholdCategories,
+		&i.CleanupThresholdMinAgeHours,
+		&i.CleanupThresholdCooldownHours,
 	)
 	return i, err
 }
@@ -65,7 +70,7 @@ SET cleanup_history_retention_days = $1,
     cleanup_backup_file_min_age_days = $2,
     updated_at = now()
 WHERE id = 1
-RETURNING id, control_plane_url, instance_name, timezone, dns_servers, ipv4_mode, ipv4_address, ipv4_gateway, ipv6_enabled, ipv6_mode, ipv6_address, ipv6_gateway, hostname, ntp_enabled, ntp_servers, pending_network, pending_deadline, updated_at, pending_control_plane_url, cleanup_history_retention_days, cleanup_backup_file_min_age_days
+RETURNING id, control_plane_url, instance_name, timezone, dns_servers, ipv4_mode, ipv4_address, ipv4_gateway, ipv6_enabled, ipv6_mode, ipv6_address, ipv6_gateway, hostname, ntp_enabled, ntp_servers, pending_network, pending_deadline, updated_at, pending_control_plane_url, cleanup_history_retention_days, cleanup_backup_file_min_age_days, cleanup_threshold_enabled, cleanup_threshold_percent, cleanup_threshold_categories, cleanup_threshold_min_age_hours, cleanup_threshold_cooldown_hours
 `
 
 type UpdateInstanceCleanupParams struct {
@@ -98,6 +103,11 @@ func (q *Queries) UpdateInstanceCleanup(ctx context.Context, arg UpdateInstanceC
 		&i.PendingControlPlaneUrl,
 		&i.CleanupHistoryRetentionDays,
 		&i.CleanupBackupFileMinAgeDays,
+		&i.CleanupThresholdEnabled,
+		&i.CleanupThresholdPercent,
+		&i.CleanupThresholdCategories,
+		&i.CleanupThresholdMinAgeHours,
+		&i.CleanupThresholdCooldownHours,
 	)
 	return i, err
 }
@@ -107,7 +117,7 @@ UPDATE instance_settings
 SET control_plane_url = $1, instance_name = $2, timezone = $3,
     pending_control_plane_url = $4, updated_at = now()
 WHERE id = 1
-RETURNING id, control_plane_url, instance_name, timezone, dns_servers, ipv4_mode, ipv4_address, ipv4_gateway, ipv6_enabled, ipv6_mode, ipv6_address, ipv6_gateway, hostname, ntp_enabled, ntp_servers, pending_network, pending_deadline, updated_at, pending_control_plane_url, cleanup_history_retention_days, cleanup_backup_file_min_age_days
+RETURNING id, control_plane_url, instance_name, timezone, dns_servers, ipv4_mode, ipv4_address, ipv4_gateway, ipv6_enabled, ipv6_mode, ipv6_address, ipv6_gateway, hostname, ntp_enabled, ntp_servers, pending_network, pending_deadline, updated_at, pending_control_plane_url, cleanup_history_retention_days, cleanup_backup_file_min_age_days, cleanup_threshold_enabled, cleanup_threshold_percent, cleanup_threshold_categories, cleanup_threshold_min_age_hours, cleanup_threshold_cooldown_hours
 `
 
 type UpdateInstanceGeneralParams struct {
@@ -147,6 +157,11 @@ func (q *Queries) UpdateInstanceGeneral(ctx context.Context, arg UpdateInstanceG
 		&i.PendingControlPlaneUrl,
 		&i.CleanupHistoryRetentionDays,
 		&i.CleanupBackupFileMinAgeDays,
+		&i.CleanupThresholdEnabled,
+		&i.CleanupThresholdPercent,
+		&i.CleanupThresholdCategories,
+		&i.CleanupThresholdMinAgeHours,
+		&i.CleanupThresholdCooldownHours,
 	)
 	return i, err
 }
@@ -159,7 +174,7 @@ SET dns_servers = $1,
     pending_network = $9, pending_deadline = $10,
     updated_at = now()
 WHERE id = 1
-RETURNING id, control_plane_url, instance_name, timezone, dns_servers, ipv4_mode, ipv4_address, ipv4_gateway, ipv6_enabled, ipv6_mode, ipv6_address, ipv6_gateway, hostname, ntp_enabled, ntp_servers, pending_network, pending_deadline, updated_at, pending_control_plane_url, cleanup_history_retention_days, cleanup_backup_file_min_age_days
+RETURNING id, control_plane_url, instance_name, timezone, dns_servers, ipv4_mode, ipv4_address, ipv4_gateway, ipv6_enabled, ipv6_mode, ipv6_address, ipv6_gateway, hostname, ntp_enabled, ntp_servers, pending_network, pending_deadline, updated_at, pending_control_plane_url, cleanup_history_retention_days, cleanup_backup_file_min_age_days, cleanup_threshold_enabled, cleanup_threshold_percent, cleanup_threshold_categories, cleanup_threshold_min_age_hours, cleanup_threshold_cooldown_hours
 `
 
 type UpdateInstanceNetworkParams struct {
@@ -211,6 +226,11 @@ func (q *Queries) UpdateInstanceNetwork(ctx context.Context, arg UpdateInstanceN
 		&i.PendingControlPlaneUrl,
 		&i.CleanupHistoryRetentionDays,
 		&i.CleanupBackupFileMinAgeDays,
+		&i.CleanupThresholdEnabled,
+		&i.CleanupThresholdPercent,
+		&i.CleanupThresholdCategories,
+		&i.CleanupThresholdMinAgeHours,
+		&i.CleanupThresholdCooldownHours,
 	)
 	return i, err
 }
@@ -219,7 +239,7 @@ const updateInstanceSystem = `-- name: UpdateInstanceSystem :one
 UPDATE instance_settings
 SET hostname = $1, ntp_enabled = $2, ntp_servers = $3, updated_at = now()
 WHERE id = 1
-RETURNING id, control_plane_url, instance_name, timezone, dns_servers, ipv4_mode, ipv4_address, ipv4_gateway, ipv6_enabled, ipv6_mode, ipv6_address, ipv6_gateway, hostname, ntp_enabled, ntp_servers, pending_network, pending_deadline, updated_at, pending_control_plane_url, cleanup_history_retention_days, cleanup_backup_file_min_age_days
+RETURNING id, control_plane_url, instance_name, timezone, dns_servers, ipv4_mode, ipv4_address, ipv4_gateway, ipv6_enabled, ipv6_mode, ipv6_address, ipv6_gateway, hostname, ntp_enabled, ntp_servers, pending_network, pending_deadline, updated_at, pending_control_plane_url, cleanup_history_retention_days, cleanup_backup_file_min_age_days, cleanup_threshold_enabled, cleanup_threshold_percent, cleanup_threshold_categories, cleanup_threshold_min_age_hours, cleanup_threshold_cooldown_hours
 `
 
 type UpdateInstanceSystemParams struct {
@@ -253,6 +273,71 @@ func (q *Queries) UpdateInstanceSystem(ctx context.Context, arg UpdateInstanceSy
 		&i.PendingControlPlaneUrl,
 		&i.CleanupHistoryRetentionDays,
 		&i.CleanupBackupFileMinAgeDays,
+		&i.CleanupThresholdEnabled,
+		&i.CleanupThresholdPercent,
+		&i.CleanupThresholdCategories,
+		&i.CleanupThresholdMinAgeHours,
+		&i.CleanupThresholdCooldownHours,
+	)
+	return i, err
+}
+
+const updateInstanceThreshold = `-- name: UpdateInstanceThreshold :one
+UPDATE instance_settings
+SET cleanup_threshold_enabled = $1,
+    cleanup_threshold_percent = $2,
+    cleanup_threshold_categories = $3,
+    cleanup_threshold_min_age_hours = $4,
+    cleanup_threshold_cooldown_hours = $5,
+    updated_at = now()
+WHERE id = 1
+RETURNING id, control_plane_url, instance_name, timezone, dns_servers, ipv4_mode, ipv4_address, ipv4_gateway, ipv6_enabled, ipv6_mode, ipv6_address, ipv6_gateway, hostname, ntp_enabled, ntp_servers, pending_network, pending_deadline, updated_at, pending_control_plane_url, cleanup_history_retention_days, cleanup_backup_file_min_age_days, cleanup_threshold_enabled, cleanup_threshold_percent, cleanup_threshold_categories, cleanup_threshold_min_age_hours, cleanup_threshold_cooldown_hours
+`
+
+type UpdateInstanceThresholdParams struct {
+	CleanupThresholdEnabled       bool     `json:"cleanup_threshold_enabled"`
+	CleanupThresholdPercent       int32    `json:"cleanup_threshold_percent"`
+	CleanupThresholdCategories    []string `json:"cleanup_threshold_categories"`
+	CleanupThresholdMinAgeHours   int32    `json:"cleanup_threshold_min_age_hours"`
+	CleanupThresholdCooldownHours int32    `json:"cleanup_threshold_cooldown_hours"`
+}
+
+func (q *Queries) UpdateInstanceThreshold(ctx context.Context, arg UpdateInstanceThresholdParams) (InstanceSetting, error) {
+	row := q.db.QueryRow(ctx, updateInstanceThreshold,
+		arg.CleanupThresholdEnabled,
+		arg.CleanupThresholdPercent,
+		arg.CleanupThresholdCategories,
+		arg.CleanupThresholdMinAgeHours,
+		arg.CleanupThresholdCooldownHours,
+	)
+	var i InstanceSetting
+	err := row.Scan(
+		&i.ID,
+		&i.ControlPlaneUrl,
+		&i.InstanceName,
+		&i.Timezone,
+		&i.DnsServers,
+		&i.Ipv4Mode,
+		&i.Ipv4Address,
+		&i.Ipv4Gateway,
+		&i.Ipv6Enabled,
+		&i.Ipv6Mode,
+		&i.Ipv6Address,
+		&i.Ipv6Gateway,
+		&i.Hostname,
+		&i.NtpEnabled,
+		&i.NtpServers,
+		&i.PendingNetwork,
+		&i.PendingDeadline,
+		&i.UpdatedAt,
+		&i.PendingControlPlaneUrl,
+		&i.CleanupHistoryRetentionDays,
+		&i.CleanupBackupFileMinAgeDays,
+		&i.CleanupThresholdEnabled,
+		&i.CleanupThresholdPercent,
+		&i.CleanupThresholdCategories,
+		&i.CleanupThresholdMinAgeHours,
+		&i.CleanupThresholdCooldownHours,
 	)
 	return i, err
 }

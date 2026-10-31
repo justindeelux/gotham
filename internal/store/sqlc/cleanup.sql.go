@@ -193,6 +193,31 @@ func (q *Queries) GetCleanupSchedule(ctx context.Context, id pgtype.UUID) (Clean
 	return i, err
 }
 
+const getLatestCleanupThresholdRun = `-- name: GetLatestCleanupThresholdRun :one
+SELECT id, server_id, actor_user_id, trigger, started_at, finished_at, reclaimed_bytes, schedule_id, status, reason FROM cleanup_runs
+WHERE server_id = $1 AND trigger = 'threshold'
+ORDER BY started_at DESC, id DESC
+LIMIT 1
+`
+
+func (q *Queries) GetLatestCleanupThresholdRun(ctx context.Context, serverID pgtype.UUID) (CleanupRun, error) {
+	row := q.db.QueryRow(ctx, getLatestCleanupThresholdRun, serverID)
+	var i CleanupRun
+	err := row.Scan(
+		&i.ID,
+		&i.ServerID,
+		&i.ActorUserID,
+		&i.Trigger,
+		&i.StartedAt,
+		&i.FinishedAt,
+		&i.ReclaimedBytes,
+		&i.ScheduleID,
+		&i.Status,
+		&i.Reason,
+	)
+	return i, err
+}
+
 const insertCleanupExclusion = `-- name: InsertCleanupExclusion :one
 INSERT INTO cleanup_exclusions (id, server_id, category, match, note, created_by)
 VALUES ($1, $2, $3, $4, $5, $6)

@@ -506,27 +506,32 @@ type IncidentEvent struct {
 }
 
 type InstanceSetting struct {
-	ID                          int16              `json:"id"`
-	ControlPlaneUrl             *string            `json:"control_plane_url"`
-	InstanceName                *string            `json:"instance_name"`
-	Timezone                    *string            `json:"timezone"`
-	DnsServers                  []string           `json:"dns_servers"`
-	Ipv4Mode                    string             `json:"ipv4_mode"`
-	Ipv4Address                 string             `json:"ipv4_address"`
-	Ipv4Gateway                 string             `json:"ipv4_gateway"`
-	Ipv6Enabled                 bool               `json:"ipv6_enabled"`
-	Ipv6Mode                    string             `json:"ipv6_mode"`
-	Ipv6Address                 string             `json:"ipv6_address"`
-	Ipv6Gateway                 string             `json:"ipv6_gateway"`
-	Hostname                    string             `json:"hostname"`
-	NtpEnabled                  bool               `json:"ntp_enabled"`
-	NtpServers                  []string           `json:"ntp_servers"`
-	PendingNetwork              []byte             `json:"pending_network"`
-	PendingDeadline             pgtype.Timestamptz `json:"pending_deadline"`
-	UpdatedAt                   pgtype.Timestamptz `json:"updated_at"`
-	PendingControlPlaneUrl      []byte             `json:"pending_control_plane_url"`
-	CleanupHistoryRetentionDays int32              `json:"cleanup_history_retention_days"`
-	CleanupBackupFileMinAgeDays int32              `json:"cleanup_backup_file_min_age_days"`
+	ID                            int16              `json:"id"`
+	ControlPlaneUrl               *string            `json:"control_plane_url"`
+	InstanceName                  *string            `json:"instance_name"`
+	Timezone                      *string            `json:"timezone"`
+	DnsServers                    []string           `json:"dns_servers"`
+	Ipv4Mode                      string             `json:"ipv4_mode"`
+	Ipv4Address                   string             `json:"ipv4_address"`
+	Ipv4Gateway                   string             `json:"ipv4_gateway"`
+	Ipv6Enabled                   bool               `json:"ipv6_enabled"`
+	Ipv6Mode                      string             `json:"ipv6_mode"`
+	Ipv6Address                   string             `json:"ipv6_address"`
+	Ipv6Gateway                   string             `json:"ipv6_gateway"`
+	Hostname                      string             `json:"hostname"`
+	NtpEnabled                    bool               `json:"ntp_enabled"`
+	NtpServers                    []string           `json:"ntp_servers"`
+	PendingNetwork                []byte             `json:"pending_network"`
+	PendingDeadline               pgtype.Timestamptz `json:"pending_deadline"`
+	UpdatedAt                     pgtype.Timestamptz `json:"updated_at"`
+	PendingControlPlaneUrl        []byte             `json:"pending_control_plane_url"`
+	CleanupHistoryRetentionDays   int32              `json:"cleanup_history_retention_days"`
+	CleanupBackupFileMinAgeDays   int32              `json:"cleanup_backup_file_min_age_days"`
+	CleanupThresholdEnabled       bool               `json:"cleanup_threshold_enabled"`
+	CleanupThresholdPercent       int32              `json:"cleanup_threshold_percent"`
+	CleanupThresholdCategories    []string           `json:"cleanup_threshold_categories"`
+	CleanupThresholdMinAgeHours   int32              `json:"cleanup_threshold_min_age_hours"`
+	CleanupThresholdCooldownHours int32              `json:"cleanup_threshold_cooldown_hours"`
 }
 
 type InstanceSettingsAudit struct {

@@ -75,6 +75,12 @@ LEFT JOIN cleanup_schedules s ON s.id = r.schedule_id
 LEFT JOIN users u ON u.id = r.actor_user_id
 WHERE r.id = $1;
 
+-- name: GetLatestCleanupThresholdRun :one
+SELECT * FROM cleanup_runs
+WHERE server_id = $1 AND trigger = 'threshold'
+ORDER BY started_at DESC, id DESC
+LIMIT 1;
+
 -- name: ListCleanupRunItems :many
 SELECT * FROM cleanup_run_items WHERE run_id = $1 ORDER BY category, name, item_id;
 

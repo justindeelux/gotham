@@ -130,6 +130,19 @@ const vi = {
       invalid: "Kiểm tra lại tên, máy chủ, nhóm, cron và tuổi tối thiểu.",
     },
   },
+  threshold: {
+    title: "Tự động dọn khi đầy ổ đĩa",
+    description:
+      "Khi mức dùng ổ đĩa của máy chủ đạt hoặc vượt ngưỡng, Gotham dọn một lần các nhóm đã chọn. Sau đó Gotham chờ hết thời gian giãn cách mới thử lại, và báo cho chủ sở hữu nếu máy chủ vẫn vượt ngưỡng.",
+    enabled: "Tự động chạy khi ổ đĩa đầy",
+    percent: "Ngưỡng dùng ổ đĩa",
+    categories: "Nhóm",
+    minAge: "Tuổi tối thiểu",
+    cooldown: "Thời gian giãn cách",
+    save: "Lưu",
+    saved: "Đã lưu ngưỡng.",
+    invalid: "Kiểm tra lại phần trăm, nhóm, tuổi tối thiểu và thời gian giãn cách.",
+  },
   history: {
     description:
       "Mọi lần chạy thủ công, theo lịch và theo ngưỡng, kèm dung lượng từng nhóm thu hồi và các máy chủ bị bỏ qua.",

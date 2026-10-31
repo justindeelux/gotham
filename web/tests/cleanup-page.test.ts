@@ -12,6 +12,12 @@ import { useCleanupPage } from "@/features/cleanup/composables/useCleanupPage";
 import type { Server } from "@/features/servers/api/servers";
 import { useServersStore } from "@/features/servers/stores/servers";
 
+const route = vi.hoisted(() => ({ query: {} as Record<string, string> }));
+
+vi.mock("vue-router", () => ({
+  useRoute: () => route,
+}));
+
 vi.mock("@/features/cleanup/api/cleanup", async (importOriginal) => {
   const actual =
     await importOriginal<typeof import("@/features/cleanup/api/cleanup")>();
@@ -26,10 +32,10 @@ function deferred<T>() {
   return { promise, resolve };
 }
 
-function server(): Server {
+function server(id = "srv-1", name = "node-a"): Server {
   return {
-    id: "srv-1",
-    name: "node-a",
+    id,
+    name,
     ip: "10.0.0.1",
     port: 22,
     ssh_user: "root",
@@ -72,10 +78,10 @@ function scan(): CleanupNodeScan {
   };
 }
 
-function setup(): ReturnType<typeof useCleanupPage> {
+function setup(servers: Server[] = [server()]): ReturnType<typeof useCleanupPage> {
   setActivePinia(createPinia());
-  const servers = useServersStore();
-  servers.servers = [server()];
+  const store = useServersStore();
+  store.servers = servers;
   let page!: ReturnType<typeof useCleanupPage>;
   mount(
     defineComponent({
@@ -89,7 +95,22 @@ function setup(): ReturnType<typeof useCleanupPage> {
 }
 
 beforeEach(() => {
+  route.query = {};
   vi.resetAllMocks();
+});
+
+describe("cleanup deep link", () => {
+  it("preselects only the requested node", () => {
+    route.query = { server: "srv-2" };
+    const page = setup([server("srv-1", "node-a"), server("srv-2", "node-b")]);
+    expect([...page.selectedServerIds.value]).toEqual(["srv-2"]);
+  });
+
+  it("keeps the online default for an unknown node", () => {
+    route.query = { server: "gone" };
+    const page = setup([server("srv-1", "node-a"), server("srv-2", "node-b")]);
+    expect(page.selectedServerIds.value.size).toBe(2);
+  });
 });
 
 describe("cleanup in-flight guards", () => {

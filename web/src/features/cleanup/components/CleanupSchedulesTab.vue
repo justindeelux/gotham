@@ -20,6 +20,7 @@ import {
 } from "@/features/cleanup/api/center";
 import { listCleanupCategories, type CleanupCategory } from "@/features/cleanup/api/cleanup";
 import CleanupScheduleModal from "@/features/cleanup/components/CleanupScheduleModal.vue";
+import CleanupThresholdCard from "@/features/cleanup/components/CleanupThresholdCard.vue";
 import type { CleanupSchedule, ScheduleForm } from "@/features/cleanup/schemas/center";
 import { failureText } from "@/features/servers/api/servers";
 import { useServersStore } from "@/features/servers/stores/servers";
@@ -172,6 +173,8 @@ onMounted(() => {
 
     <NAlert v-if="error" type="error" :show-icon="true">{{ error }}</NAlert>
     <NAlert v-if="notice" type="success" :show-icon="true">{{ notice }}</NAlert>
+
+    <CleanupThresholdCard :categories="categories" />
 
     <NSpin :show="loading">
       <NEmpty v-if="schedules.length === 0" :description="t('cleanup.schedules.empty')" />

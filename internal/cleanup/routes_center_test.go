@@ -21,6 +21,7 @@ type fakeCenterService struct {
 	runs       []store.CleanupRunView
 	items      []store.CleanupRunItem
 	exclusions []store.CleanupExclusion
+	threshold  store.CleanupThreshold
 	err        error
 }
 
@@ -83,6 +84,22 @@ func (f *fakeCenterService) CreateExclusion(
 
 func (f *fakeCenterService) DeleteExclusion(context.Context, uuid.UUID) error { return f.err }
 
+func (f *fakeCenterService) Threshold(context.Context) (store.CleanupThreshold, error) {
+	return f.threshold, f.err
+}
+
+func (f *fakeCenterService) UpdateThreshold(
+	_ context.Context, _ uuid.UUID, input ThresholdInput,
+) (store.CleanupThreshold, error) {
+	if f.err != nil {
+		return store.CleanupThreshold{}, f.err
+	}
+	return store.CleanupThreshold{
+		Enabled: input.Enabled, Percent: input.Percent, Categories: input.Categories,
+		MinAgeHours: input.MinAgeHours, CooldownHours: input.CooldownHours,
+	}, nil
+}
+
 func newCenterRouter(svc CleanupCenter, userID UserIDFunc) http.Handler {
 	r := chi.NewRouter()
 	MountCenter(r, memberForbidden, userID, svc)
@@ -106,7 +123,7 @@ func serve(h http.Handler, req *http.Request) *httptest.ResponseRecorder {
 func TestCenterRoutesAreOwnerOnly(t *testing.T) {
 	router := newCenterRouter(&fakeCenterService{}, ownerID)
 	for _, path := range []string{
-		"/v1/cleanup/schedules", "/v1/cleanup/runs", "/v1/cleanup/exclusions",
+		"/v1/cleanup/schedules", "/v1/cleanup/runs", "/v1/cleanup/exclusions", "/v1/cleanup/threshold",
 	} {
 		req := newRequest(http.MethodGet, path, "")
 		req.Header.Set("X-Member", "1")
@@ -177,6 +194,42 @@ func TestScheduleRoutes(t *testing.T) {
 	rec = serve(router, newRequest(http.MethodPost, "/v1/cleanup/schedules", body))
 	if rec.Code != http.StatusBadRequest {
 		t.Fatalf("dangerous schedule = %d, want 400", rec.Code)
+	}
+}
+
+func TestThresholdRoutes(t *testing.T) {
+	svc := &fakeCenterService{threshold: store.CleanupThreshold{
+		Enabled: true, Percent: 85, Categories: []string{CategoryBuildCache},
+		MinAgeHours: 24, CooldownHours: 6,
+	}}
+	router := newCenterRouter(svc, ownerID)
+
+	rec := serve(router, newRequest(http.MethodGet, "/v1/cleanup/threshold", ""))
+	if rec.Code != http.StatusOK {
+		t.Fatalf("get threshold = %d", rec.Code)
+	}
+	var saved thresholdEnvelope
+	decodeTestJSON(t, rec, &saved)
+	if !saved.Threshold.Enabled || saved.Threshold.Percent != 85 ||
+		saved.Threshold.CooldownHours != 6 || len(saved.Threshold.Categories) != 1 {
+		t.Fatalf("threshold = %+v", saved.Threshold)
+	}
+
+	body := `{"enabled":false,"percent":90,"categories":["journal"],"min_age_hours":48,"cooldown_hours":12}`
+	rec = serve(router, newRequest(http.MethodPut, "/v1/cleanup/threshold", body))
+	if rec.Code != http.StatusOK {
+		t.Fatalf("put threshold = %d (%s)", rec.Code, rec.Body)
+	}
+	decodeTestJSON(t, rec, &saved)
+	if saved.Threshold.Enabled || saved.Threshold.Percent != 90 ||
+		saved.Threshold.MinAgeHours != 48 || saved.Threshold.CooldownHours != 12 {
+		t.Fatalf("updated threshold = %+v", saved.Threshold)
+	}
+
+	svc.err = ErrDangerousCategory
+	rec = serve(router, newRequest(http.MethodPut, "/v1/cleanup/threshold", body))
+	if rec.Code != http.StatusBadRequest {
+		t.Fatalf("dangerous threshold = %d, want 400", rec.Code)
 	}
 }
 

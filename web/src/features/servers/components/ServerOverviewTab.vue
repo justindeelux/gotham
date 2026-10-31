@@ -10,7 +10,9 @@ import {
   NText,
 } from "naive-ui";
 import { computed } from "vue";
+import { RouterLink } from "vue-router";
 
+import { useAuthStore } from "@/features/auth";
 import type { Server } from "@/features/servers/api/servers";
 import ServerPressureCard from "@/features/monitoring/components/ServerPressureCard.vue";
 import ServerUsageSegments from "@/features/servers/components/ServerUsageSegments.vue";
@@ -20,7 +22,7 @@ import {
   fallback,
   isUsageStale,
 } from "@/features/servers/utils/serverDetailView";
-import { relativeTime } from "@/shared/utils/format";
+import { relativeTime, toPercent, usageLevel } from "@/shared/utils/format";
 import { useI18n } from "vue-i18n";
 
 interface Props {
@@ -28,13 +30,15 @@ interface Props {
   deleting: boolean;
 }
 
-defineProps<Props>();
+const props = defineProps<Props>();
 const emit = defineEmits<{
   delete: [];
 }>();
 
 const { locale } = useI18n();
+const authStore = useAuthStore();
 const isNarrow = useMediaQuery("(max-width: 640px)");
+const diskHigh = computed(() => usageLevel(toPercent(props.server.disk_usage)) !== "ok");
 
 const descColumns = computed<number>(() => (isNarrow.value ? 1 : 2));
 </script>
@@ -55,11 +59,20 @@ const descColumns = computed<number>(() => (isNarrow.value ? 1 : 2));
             :value="server.mem_usage"
             :stale="isUsageStale(server.last_seen)"
           />
-          <ServerUsageSegments
-            :label="$t('servers.overview.diskUsage')"
-            :value="server.disk_usage"
-            :stale="isUsageStale(server.last_seen)"
-          />
+          <div class="usage-disk">
+            <ServerUsageSegments
+              :label="$t('servers.overview.diskUsage')"
+              :value="server.disk_usage"
+              :stale="isUsageStale(server.last_seen)"
+            />
+            <RouterLink
+              v-if="authStore.isOwner && diskHigh"
+              class="usage-cleanup-link"
+              :to="{ name: 'cleanup', query: { server: server.id } }"
+            >
+              {{ $t("servers.overview.cleanUp") }}
+            </RouterLink>
+          </div>
         </div>
         <NText v-if="isUsageStale(server.last_seen)" depth="3" class="usage-stale">
           {{ $t("servers.overview.usageStale") }}
@@ -141,6 +154,26 @@ const descColumns = computed<number>(() => (isNarrow.value ? 1 : 2));
 .usage-rows {
   display: grid;
   gap: var(--space-4);
+}
+
+.usage-disk {
+  display: grid;
+  gap: var(--space-1);
+  min-width: 0;
+}
+
+.usage-cleanup-link {
+  justify-self: end;
+  min-width: 0;
+  overflow-wrap: anywhere;
+  font-size: var(--text-xs);
+  color: var(--warn-ink, var(--warn));
+  text-decoration: none;
+}
+
+.usage-cleanup-link:hover,
+.usage-cleanup-link:focus-visible {
+  text-decoration: underline;
 }
 
 .usage-stale {

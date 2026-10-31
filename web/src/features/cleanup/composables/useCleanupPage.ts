@@ -1,4 +1,5 @@
 import { computed, onMounted, ref, watch } from "vue";
+import { useRoute } from "vue-router";
 
 import { createExclusion } from "@/features/cleanup/api/center";
 import {
@@ -58,6 +59,7 @@ function fromNodeScan(scan: CleanupNodeScan): ScanNodeState {
 
 export function useCleanupPage() {
   const serversStore = useServersStore();
+  const route = useRoute();
 
   const phase = ref<CleanupPhase>("select");
   const selectedServerIds = ref<Set<string>>(new Set());
@@ -85,6 +87,13 @@ export function useCleanupPage() {
         return;
       }
       initialized.value = true;
+      // A disk warning deep-links to one node; everything else keeps the
+      // default of every online node.
+      const requested = typeof route.query.server === "string" ? route.query.server : "";
+      if (requested && servers.some((server) => server.id === requested)) {
+        selectedServerIds.value = new Set([requested]);
+        return;
+      }
       selectedServerIds.value = new Set(
         servers.filter((server) => server.status === "ready").map((server) => server.id),
       );

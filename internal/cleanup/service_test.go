@@ -6,6 +6,8 @@ import (
 	"fmt"
 	"net/url"
 	"os"
+	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -39,12 +41,18 @@ func (f *fakeRegistry) Get(context.Context, uuid.UUID) (*servers.Server, error) 
 type fakeAgent struct {
 	scanResp  *agentv1.CleanupScanResponse
 	scanErr   error
+	scanBlock chan struct{}
+	scanCalls atomic.Int64
 	cleanResp *agentv1.CleanupCleanResponse
 	cleanErr  error
 	cleaned   []string
 }
 
 func (f *fakeAgent) ScanCleanup(context.Context, *agentv1.CleanupScanRequest, ...grpc.CallOption) (*agentv1.CleanupScanResponse, error) {
+	f.scanCalls.Add(1)
+	if f.scanBlock != nil {
+		<-f.scanBlock
+	}
 	if f.scanErr != nil {
 		return nil, f.scanErr
 	}
@@ -104,6 +112,7 @@ func (f *fakeHost) CleanupHost(_ context.Context, _ uuid.UUID, category string, 
 }
 
 type fakeStore struct {
+	mu         sync.Mutex
 	active     int64
 	err        error
 	runs       []store.CleanupRun
@@ -111,6 +120,12 @@ type fakeStore struct {
 	recordE    error
 	exclusions []store.CleanupExclusion
 	excludeErr error
+}
+
+func (f *fakeStore) recordedRuns() []store.CleanupRun {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	return append([]store.CleanupRun(nil), f.runs...)
 }
 
 func (f *fakeStore) ListCleanupExclusions(context.Context) ([]store.CleanupExclusion, error) {
@@ -125,6 +140,8 @@ func (f *fakeStore) RecordCleanupRun(_ context.Context, run store.CleanupRun, it
 	if f.recordE != nil {
 		return f.recordE
 	}
+	f.mu.Lock()
+	defer f.mu.Unlock()
 	f.runs = append(f.runs, run)
 	f.items = append(f.items, items)
 	return nil

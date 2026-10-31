@@ -15,8 +15,8 @@ const defaultManagedVolumeRoot = "/var/lib/gotham/volumes"
 
 const envManagedVolumeRoot = "GOTHAM_MANAGED_VOLUME_ROOT"
 
-// managedVolumeRoot mirrors internal/deploy: services and applications confine
-// host binds to the same tree.
+// managedVolumeRoot mirrors internal/deploy, which imports this package and so
+// cannot be reused here: services and applications confine binds to one tree.
 func managedVolumeRoot() string {
 	root := strings.TrimSpace(os.Getenv(envManagedVolumeRoot))
 	if root == "" || !strings.HasPrefix(root, "/") {

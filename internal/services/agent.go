@@ -76,8 +76,11 @@ func (a *GRPCComposeAgent) Up(ctx context.Context, projectName string, composeYA
 
 func (a *GRPCComposeAgent) Down(ctx context.Context, projectName string, composeYAML []byte, removeVolumes bool) ([]string, error) {
 	response, err := a.client.ComposeDown(ctx, &agentv1.ComposeDownRequest{
-		ProjectName:   projectName,
-		ComposeYaml:   composeYAML,
+		ProjectName: projectName,
+		ComposeYaml: composeYAML,
+		// Teardown runs no containers, and a document deployed before the
+		// confinement rules must still be stoppable and deletable.
+		Unconfined:    true,
 		RemoveVolumes: removeVolumes,
 	})
 	if err != nil {

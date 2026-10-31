@@ -257,7 +257,7 @@ func (c *capturingComposeClient) ComposeDown(_ context.Context, req *agentv1.Com
 
 func (c *capturingComposeClient) Close() error { return nil }
 
-func TestGRPCComposeAgentConfinesComposeRequests(t *testing.T) {
+func TestGRPCComposeAgentConfinesDeploysButNotTeardown(t *testing.T) {
 	client := &capturingComposeClient{}
 	agent := NewGRPCComposeAgent(client)
 	ctx := context.Background()
@@ -272,13 +272,10 @@ func TestGRPCComposeAgentConfinesComposeRequests(t *testing.T) {
 	if _, err := agent.Down(ctx, "gotham-x", document, false); err != nil {
 		t.Fatalf("Down: %v", err)
 	}
-	for name, unconfined := range map[string]bool{
-		"Validate": client.validate.GetUnconfined(),
-		"Up":       client.up.GetUnconfined(),
-		"Down":     client.down.GetUnconfined(),
-	} {
-		if unconfined {
-			t.Errorf("%s sent Unconfined, bypassing the node-side guard", name)
-		}
+	if client.validate.GetUnconfined() || client.up.GetUnconfined() {
+		t.Error("Validate or Up sent Unconfined, bypassing the node-side guard")
+	}
+	if !client.down.GetUnconfined() {
+		t.Error("Down did not send Unconfined, so a legacy document cannot be torn down")
 	}
 }

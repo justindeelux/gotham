@@ -76,6 +76,7 @@ type Registry interface {
 type Store interface {
 	CountActiveDeploymentsByServer(ctx context.Context, serverID uuid.UUID) (int64, error)
 	RecordCleanupRun(ctx context.Context, run store.CleanupRun, items []store.CleanupRunItem) error
+	ListCleanupExclusions(ctx context.Context) ([]store.CleanupExclusion, error)
 }
 
 // Config wires the cleanup service.
@@ -86,8 +87,14 @@ type Config struct {
 	Host      HostCleaner
 	Leftovers LeftoverSource
 	Store     Store
-	Logger    *slog.Logger
-	Timeout   time.Duration
+	// Center persists schedules, exclusions and history reads. When nil the
+	// control-plane store given as Store is used.
+	Center CenterStore
+	// Notifier receives the outcome of a scheduled run. Manual runs never
+	// notify.
+	Notifier ScheduleNotifier
+	Logger   *slog.Logger
+	Timeout  time.Duration
 }
 
 // Item is one reclaimable object.
@@ -143,11 +150,16 @@ type Service struct {
 	host      HostCleaner
 	leftovers LeftoverSource
 	store     Store
+	center    CenterStore
+	notifier  ScheduleNotifier
 	logger    *slog.Logger
 	timeout   time.Duration
+	now       func() time.Time
+	loc       *time.Location
 
-	mu    sync.Mutex
-	locks map[string]*sync.Mutex
+	mu       sync.Mutex
+	locks    map[string]*sync.Mutex
+	inflight map[uuid.UUID]bool
 }
 
 func NewService(cfg Config) *Service {
@@ -159,6 +171,10 @@ func NewService(cfg Config) *Service {
 	if timeout <= 0 {
 		timeout = defaultTimeout
 	}
+	center := cfg.Center
+	if center == nil {
+		center, _ = cfg.Store.(CenterStore)
+	}
 	return &Service{
 		registry:  cfg.Registry,
 		dial:      cfg.Dial,
@@ -166,22 +182,37 @@ func NewService(cfg Config) *Service {
 		host:      cfg.Host,
 		leftovers: cfg.Leftovers,
 		store:     cfg.Store,
+		center:    center,
+		notifier:  cfg.Notifier,
 		logger:    logger,
 		timeout:   timeout,
+		now:       time.Now,
+		loc:       time.Local,
 		locks:     map[string]*sync.Mutex{},
+		inflight:  map[uuid.UUID]bool{},
 	}
 }
 
 // Scan fans out over the requested nodes, bounded to a small parallelism, and
 // returns one outcome per input id in input order.
 func (s *Service) Scan(ctx context.Context, serverIDs []string, minAge time.Duration) []NodeScan {
+	exclusions, err := s.loadExclusions(ctx)
+	if err != nil {
+		// An exclusion list that cannot be read must not offer protected items
+		// for deletion.
+		scans := make([]NodeScan, len(serverIDs))
+		for i, raw := range serverIDs {
+			scans[i] = NodeScan{ServerID: raw, Status: StatusFailed, Reason: err.Error()}
+		}
+		return scans
+	}
 	scans := make([]NodeScan, len(serverIDs))
 	group, groupCtx := errgroup.WithContext(ctx)
 	group.SetLimit(maxScanParallel)
 	for i, raw := range serverIDs {
 		i, raw := i, raw
 		group.Go(func() error {
-			scans[i] = s.scanNode(groupCtx, raw, minAge)
+			scans[i] = s.scanNode(groupCtx, raw, minAge, exclusions)
 			return nil
 		})
 	}
@@ -189,7 +220,7 @@ func (s *Service) Scan(ctx context.Context, serverIDs []string, minAge time.Dura
 	return scans
 }
 
-func (s *Service) scanNode(ctx context.Context, raw string, minAge time.Duration) NodeScan {
+func (s *Service) scanNode(ctx context.Context, raw string, minAge time.Duration, exclusions exclusionIndex) NodeScan {
 	scan := NodeScan{ServerID: raw, Status: StatusOK}
 	serverID, err := uuid.Parse(strings.TrimSpace(raw))
 	if err != nil {
@@ -220,6 +251,7 @@ func (s *Service) scanNode(ctx context.Context, raw string, minAge time.Duration
 	scan.Items = append(scan.Items, hostItems...)
 	scan.Notices = notices
 	scan.Items = append(scan.Items, s.scanLeftovers(ctx, serverID)...)
+	scan.Items = exclusions.filter(serverID, scan.Items)
 	return scan
 }
 
@@ -353,7 +385,15 @@ func (s *Service) scanVolumes(ctx context.Context, serverID uuid.UUID, minAge ti
 func (s *Service) Clean(
 	ctx context.Context, actor uuid.UUID, trigger, rawServerID string, ids []string, minAge time.Duration,
 ) (result CleanResult) {
-	startedAt := time.Now()
+	return s.clean(ctx, actor, trigger, nil, rawServerID, ids, minAge)
+}
+
+// clean is the shared path for manual, scheduled and threshold runs.
+func (s *Service) clean(
+	ctx context.Context, actor uuid.UUID, trigger string, scheduleID *uuid.UUID,
+	rawServerID string, ids []string, minAge time.Duration,
+) (result CleanResult) {
+	startedAt := s.now()
 	result = CleanResult{ServerID: rawServerID, Status: StatusOK}
 	if !validTrigger(trigger) {
 		result.Status = StatusFailed
@@ -366,18 +406,38 @@ func (s *Service) Clean(
 		result.Reason = fmt.Errorf("%w: %q", ErrInvalidServerID, rawServerID).Error()
 		return result
 	}
+	// Exclusions protect every trigger; a list that cannot be read fails the
+	// clean instead of risking a protected removal.
+	exclusions, err := s.loadExclusions(ctx)
+	if err != nil {
+		result.Status = StatusFailed
+		result.Reason = err.Error()
+		return result
+	}
 	// Every accepted Clean writes one history run, including a skipped attempt:
 	// the audit shows what was asked of the node, not only what was removed.
 	defer func() {
-		if runID := s.record(ctx, actor, trigger, serverID, startedAt, result.Items); runID != uuid.Nil {
+		if runID := s.record(ctx, actor, trigger, scheduleID, serverID, startedAt, result); runID != uuid.Nil {
 			result.RunID = runID.String()
 		}
 	}()
 	ids = dedupeIDs(ids)
 
 	// ponytail: in-process lock, single control plane. A second Clean on the
-	// same node waits; a second control plane would need a distributed lock.
-	unlock := s.lockNode(rawServerID)
+	// same node waits; a scheduled run tries once and reports busy instead of
+	// stacking work. A second control plane would need a distributed lock.
+	var unlock func()
+	if trigger == TriggerManual {
+		unlock = s.lockNode(rawServerID)
+	} else {
+		var locked bool
+		unlock, locked = s.tryLockNode(rawServerID)
+		if !locked {
+			result.Status = StatusSkipped
+			result.Reason = ReasonBusy
+			return result
+		}
+	}
 	defer unlock()
 
 	busy, err := s.nodeBusy(ctx, serverID)
@@ -393,6 +453,7 @@ func (s *Service) Clean(
 	}
 
 	agentIDs, volumeIDs, hostIDs, leftoverIDs := splitIDs(ids)
+	var excluded []ItemResult
 	known := map[string]Item{}
 	if len(agentIDs) > 0 {
 		items, err := s.scanAgent(ctx, serverID, minAge)
@@ -402,26 +463,69 @@ func (s *Service) Clean(
 		for _, item := range items {
 			known[item.GetId()] = itemFromProto(item)
 		}
-		response, err := s.cleanAgent(ctx, serverID, agentIDs, minAge)
-		if err != nil {
-			return s.cleanFailure(result, err)
+		kept := make([]string, 0, len(agentIDs))
+		for _, id := range agentIDs {
+			info, ok := known[id]
+			if !ok {
+				category, name := describeID(id)
+				info = Item{ID: id, Category: category, Name: name}
+			}
+			if exclusions.matches(serverID, info.Category, info.Name, id) {
+				excluded = append(excluded, excludedResult(info))
+				continue
+			}
+			kept = append(kept, id)
 		}
-		for _, item := range response.GetResults() {
-			result.Items = append(result.Items, resultFromProto(item, known))
+		agentIDs = kept
+		if len(agentIDs) > 0 {
+			response, err := s.cleanAgent(ctx, serverID, agentIDs, minAge)
+			if err != nil {
+				return s.cleanFailure(result, err)
+			}
+			for _, item := range response.GetResults() {
+				result.Items = append(result.Items, resultFromProto(item, known))
+			}
 		}
 	}
 	if len(volumeIDs) > 0 {
-		result.Items = append(result.Items, s.cleanVolumes(ctx, serverID, trigger, volumeIDs, minAge)...)
+		cleaned, skipped := s.cleanVolumes(ctx, serverID, trigger, volumeIDs, minAge, exclusions)
+		result.Items = append(result.Items, cleaned...)
+		excluded = append(excluded, skipped...)
 	}
 	if len(hostIDs) > 0 {
-		result.Items = append(result.Items, s.cleanHost(ctx, serverID, hostIDs, minAge)...)
+		cleaned, skipped := s.cleanHost(ctx, serverID, hostIDs, minAge, exclusions)
+		result.Items = append(result.Items, cleaned...)
+		excluded = append(excluded, skipped...)
 	}
 	if len(leftoverIDs) > 0 {
-		result.Items = append(result.Items, s.cleanLeftovers(ctx, serverID, leftoverIDs, minAge)...)
+		kept := make([]string, 0, len(leftoverIDs))
+		for _, id := range leftoverIDs {
+			category, name := describeID(id)
+			if exclusions.matches(serverID, category, name, id) {
+				excluded = append(excluded, excludedResult(Item{ID: id, Category: category, Name: name}))
+				continue
+			}
+			kept = append(kept, id)
+		}
+		if len(kept) > 0 {
+			result.Items = append(result.Items, s.cleanLeftovers(ctx, serverID, kept, minAge)...)
+		}
 	}
 
+	result.Items = append(result.Items, excluded...)
 	result.Items = orderResults(ids, result.Items)
 	return result
+}
+
+// excludedResult reports an item the owner protected as skipped, never removed.
+func excludedResult(item Item) ItemResult {
+	return ItemResult{
+		ID:       item.ID,
+		Category: item.Category,
+		Name:     item.Name,
+		Status:   StatusSkipped,
+		Message:  "excluded",
+	}
 }
 
 func (s *Service) cleanFailure(result CleanResult, err error) CleanResult {
@@ -437,9 +541,9 @@ func (s *Service) cleanFailure(result CleanResult, err error) CleanResult {
 // cleanHost clears the selected root-only categories. They are safe at every
 // trigger, so unlike orphaned volumes there is no manual-only refusal.
 func (s *Service) cleanHost(
-	ctx context.Context, serverID uuid.UUID, ids []string, minAge time.Duration,
-) []ItemResult {
-	results := make([]ItemResult, 0, len(ids))
+	ctx context.Context, serverID uuid.UUID, ids []string, minAge time.Duration, exclusions exclusionIndex,
+) (results, excluded []ItemResult) {
+	results = make([]ItemResult, 0, len(ids))
 	for _, id := range ids {
 		category := strings.TrimPrefix(id, idHostPrefix)
 		result := ItemResult{
@@ -447,6 +551,10 @@ func (s *Service) cleanHost(
 			Category: category,
 			Name:     hostCategoryName(category),
 			Status:   statusRemoved,
+		}
+		if exclusions.matches(serverID, result.Category, result.Name, id) {
+			excluded = append(excluded, excludedResult(Item{ID: id, Category: result.Category, Name: result.Name}))
+			continue
 		}
 		if s.host == nil {
 			result.Status, result.Message = StatusSkipped, ReasonUnsupported
@@ -466,7 +574,7 @@ func (s *Service) cleanHost(
 		result.ReclaimedBytes = reclaimed
 		results = append(results, result)
 	}
-	return results
+	return results, excluded
 }
 
 // cleanLeftovers removes the selected control-plane leftovers. They are safe at
@@ -507,8 +615,9 @@ func hostSkipReason(err error) (string, string) {
 
 func (s *Service) cleanVolumes(
 	ctx context.Context, serverID uuid.UUID, trigger string, ids []string, minAge time.Duration,
-) []ItemResult {
-	results := make([]ItemResult, 0, len(ids))
+	exclusions exclusionIndex,
+) (results, excluded []ItemResult) {
+	results = make([]ItemResult, 0, len(ids))
 	if s.volumes == nil {
 		for _, id := range ids {
 			results = append(results, ItemResult{
@@ -519,7 +628,7 @@ func (s *Service) cleanVolumes(
 				Message:  "agent unavailable",
 			})
 		}
-		return results
+		return results, nil
 	}
 	if trigger != TriggerManual {
 		for _, id := range ids {
@@ -531,7 +640,7 @@ func (s *Service) cleanVolumes(
 				Message:  "manual only",
 			})
 		}
-		return results
+		return results, nil
 	}
 
 	volumes, err := s.volumes.ListOrphanedVolumes(ctx, serverID)
@@ -557,7 +666,7 @@ func (s *Service) cleanVolumes(
 			}
 			results = append(results, result)
 		}
-		return results
+		return results, nil
 	}
 	known := make(map[string]containers.OrphanedVolume, len(volumes))
 	for _, volume := range volumes {
@@ -567,6 +676,10 @@ func (s *Service) cleanVolumes(
 	for _, id := range ids {
 		name := strings.TrimPrefix(id, idVolumePrefix)
 		item := ItemResult{ID: id, Category: CategoryOrphanedVolumes, Name: name, Status: statusRemoved}
+		if exclusions.matches(serverID, item.Category, item.Name, id) {
+			excluded = append(excluded, excludedResult(Item{ID: id, Category: item.Category, Name: item.Name}))
+			continue
+		}
 		volume, ok := known[name]
 		switch {
 		case !ok:
@@ -591,7 +704,7 @@ func (s *Service) cleanVolumes(
 		}
 		results = append(results, item)
 	}
-	return results
+	return results, excluded
 }
 
 func orderResults(ids []string, results []ItemResult) []ItemResult {
@@ -641,15 +754,15 @@ func splitIDs(ids []string) (agentIDs, volumeIDs, hostIDs, leftoverIDs []string)
 }
 
 func (s *Service) record(
-	ctx context.Context, actor uuid.UUID, trigger string, serverID uuid.UUID,
-	startedAt time.Time, items []ItemResult,
+	ctx context.Context, actor uuid.UUID, trigger string, scheduleID *uuid.UUID, serverID uuid.UUID,
+	startedAt time.Time, result CleanResult,
 ) uuid.UUID {
 	if s.store == nil {
 		return uuid.Nil
 	}
 	runID := uuid.New()
 	reclaimed := int64(0)
-	for _, item := range items {
+	for _, item := range result.Items {
 		reclaimed += item.ReclaimedBytes
 	}
 	run := store.CleanupRun{
@@ -657,14 +770,17 @@ func (s *Service) record(
 		ServerID:       serverID,
 		Trigger:        trigger,
 		StartedAt:      startedAt,
-		FinishedAt:     time.Now(),
+		FinishedAt:     s.now(),
 		ReclaimedBytes: reclaimed,
+		ScheduleID:     scheduleID,
+		Status:         result.Status,
+		Reason:         result.Reason,
 	}
 	if actor != uuid.Nil {
 		run.ActorUserID = &actor
 	}
-	history := make([]store.CleanupRunItem, 0, len(items))
-	for _, item := range items {
+	history := make([]store.CleanupRunItem, 0, len(result.Items))
+	for _, item := range result.Items {
 		history = append(history, store.CleanupRunItem{
 			ItemID:         item.ID,
 			Category:       item.Category,
@@ -758,14 +874,31 @@ func (s *Service) nodeBusy(ctx context.Context, serverID uuid.UUID) (bool, error
 
 func (s *Service) lockNode(serverID string) func() {
 	s.mu.Lock()
+	lock := s.lockFor(serverID)
+	s.mu.Unlock()
+	lock.Lock()
+	return lock.Unlock
+}
+
+// tryLockNode takes the node lock only when it is free, so a scheduled run
+// reports busy instead of queuing behind a manual clean.
+func (s *Service) tryLockNode(serverID string) (func(), bool) {
+	s.mu.Lock()
+	lock := s.lockFor(serverID)
+	s.mu.Unlock()
+	if !lock.TryLock() {
+		return func() {}, false
+	}
+	return lock.Unlock, true
+}
+
+func (s *Service) lockFor(serverID string) *sync.Mutex {
 	lock := s.locks[serverID]
 	if lock == nil {
 		lock = &sync.Mutex{}
 		s.locks[serverID] = lock
 	}
-	s.mu.Unlock()
-	lock.Lock()
-	return lock.Unlock
+	return lock
 }
 
 func nodeFailure(err error) (nodeStatus, reason, message string) {

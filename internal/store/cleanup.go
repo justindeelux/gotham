@@ -19,6 +19,13 @@ type CleanupRun struct {
 	StartedAt      time.Time
 	FinishedAt     time.Time
 	ReclaimedBytes int64
+	// ScheduleID links a scheduled run to its schedule; nil for manual and
+	// threshold runs.
+	ScheduleID *uuid.UUID
+	// Status and Reason carry a node that was skipped (offline, busy,
+	// unsupported) and freed nothing.
+	Status string
+	Reason string
 }
 
 // CleanupRunItem is one requested object's outcome within a run.
@@ -45,6 +52,14 @@ func (s *Store) RecordCleanupRun(ctx context.Context, run CleanupRun, items []Cl
 		if run.ActorUserID != nil {
 			actor = uuidToPG(*run.ActorUserID)
 		}
+		scheduleID := pgtype.UUID{}
+		if run.ScheduleID != nil {
+			scheduleID = uuidToPG(*run.ScheduleID)
+		}
+		status := run.Status
+		if status == "" {
+			status = "ok"
+		}
 		if err := tx.queries.InsertCleanupRun(ctx, sqlc.InsertCleanupRunParams{
 			ID:             uuidToPG(run.ID),
 			ServerID:       uuidToPG(run.ServerID),
@@ -53,6 +68,9 @@ func (s *Store) RecordCleanupRun(ctx context.Context, run CleanupRun, items []Cl
 			StartedAt:      pgtype.Timestamptz{Time: run.StartedAt, Valid: true},
 			FinishedAt:     pgtype.Timestamptz{Time: run.FinishedAt, Valid: true},
 			ReclaimedBytes: run.ReclaimedBytes,
+			ScheduleID:     scheduleID,
+			Status:         status,
+			Reason:         run.Reason,
 		}); err != nil {
 			return err
 		}

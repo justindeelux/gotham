@@ -7,6 +7,8 @@ const knownEventKeys = [
   "deploy_success",
   "deploy_failure",
   "backup_success",
+  "cleanup_success",
+  "cleanup_failure",
   "backup_failure",
   "server_offline",
   "server_online",

@@ -103,6 +103,7 @@ type Server struct {
 	resourceHistory   *servers.ResourceHistorySweeper
 	sessionSweeper    *auth.SessionSweeper
 	databasesRetainer *databases.RetentionSweeper
+	cleanupScheduler  *cleanup.Scheduler
 	updates           updates.Service
 	terminal          *terminal.Service
 	realtime          *ws.Realtime
@@ -199,6 +200,9 @@ func New(cfg *config.Config, logger *slog.Logger, authService AuthService, oauth
 		}
 		if s.databasesRetainer != nil {
 			s.databasesRetainer.Close()
+		}
+		if s.cleanupScheduler != nil {
+			s.cleanupScheduler.Close()
 		}
 		if closer, ok := s.notify.(interface{ Close() error }); ok {
 			_ = closer.Close()
@@ -368,7 +372,15 @@ func (s *Server) routes() (http.Handler, error) {
 		if volumeService != nil {
 			containers.MountVolumes(api, platformOnly, volumeService)
 		}
-		cleanup.Mount(api, platformOnly, UserIDFromContext, s.cleanupService(volumeService))
+		cleanupSvc := s.cleanupService(volumeService)
+		cleanup.Mount(api, platformOnly, UserIDFromContext, cleanupSvc)
+		if center, ok := cleanupSvc.(cleanup.CleanupCenter); ok {
+			cleanup.MountCenter(api, platformOnly, UserIDFromContext, center)
+		}
+		if svc, ok := cleanupSvc.(*cleanup.Service); ok && svc != nil {
+			s.cleanupScheduler = cleanup.NewScheduler(svc, time.Minute)
+			s.cleanupScheduler.Start()
+		}
 
 		filesAuth := s.resourceAuth()
 		files.Mount(api, filesAuth, files.TransferAuthorizerFunc(s.authorizeFileTransfer), s.fileService(), s.logger)
@@ -743,6 +755,10 @@ func (s *Server) cleanupService(volumes containers.VolumeService) cleanup.Cleanu
 	if dialer, ok := s.servers.(hostDialer); ok {
 		host = cleanupHost{nodes: nodeHostResolver{nodes: s.servers, dialer: dialer}}
 	}
+	var notifier cleanup.ScheduleNotifier
+	if wired, ok := s.notify.(cleanup.ScheduleNotifier); ok {
+		notifier = wired
+	}
 	return cleanup.NewService(cleanup.Config{
 		Registry: s.servers,
 		Dial:     dial,
@@ -752,8 +768,10 @@ func (s *Server) cleanupService(volumes containers.VolumeService) cleanup.Cleanu
 			Store:  s.persistence,
 			Logger: s.logger,
 		}),
-		Store:  s.persistence,
-		Logger: s.logger,
+		Store:    s.persistence,
+		Center:   s.persistence,
+		Notifier: notifier,
+		Logger:   s.logger,
 	})
 }
 

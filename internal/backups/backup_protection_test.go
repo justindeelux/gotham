@@ -9,6 +9,7 @@ import (
 	"github.com/google/uuid"
 
 	"github.com/justindeelux/gotham/internal/backupwatch"
+	"github.com/justindeelux/gotham/internal/cronexpr"
 )
 
 func TestScheduleMaxRunSecondsDefaultsAndValidates(t *testing.T) {
@@ -201,7 +202,7 @@ func TestBackupProtectionDSTDeadlinesUseCronSlots(t *testing.T) {
 	}
 
 	// Spring forward: 02:00 does not exist; the scheduler serves 03:00.
-	springSlot, err := nextCronTime("0 2 * * *", time.Date(2025, 3, 9, 1, 0, 0, 0, loc), loc)
+	springSlot, err := cronexpr.Next("0 2 * * *", time.Date(2025, 3, 9, 1, 0, 0, 0, loc), loc)
 	if err != nil {
 		t.Fatalf("spring nextCronTime: %v", err)
 	}
@@ -211,12 +212,12 @@ func TestBackupProtectionDSTDeadlinesUseCronSlots(t *testing.T) {
 	assertDeadline(t, springSlot)
 
 	// Fall back: the 01:30 wall slot repeats; the served slot must not repeat.
-	fallSlot, err := nextCronTime("30 1 * * *", time.Date(2025, 11, 1, 12, 0, 0, 0, loc), loc)
+	fallSlot, err := cronexpr.Next("30 1 * * *", time.Date(2025, 11, 1, 12, 0, 0, 0, loc), loc)
 	if err != nil {
 		t.Fatalf("fall nextCronTime: %v", err)
 	}
 	assertDeadline(t, fallSlot)
-	nextSlot, err := nextRunTime("30 1 * * *", fallSlot, fallSlot.Add(10*time.Minute), loc)
+	nextSlot, err := cronexpr.NextRun("30 1 * * *", fallSlot, fallSlot.Add(10*time.Minute), loc)
 	if err != nil {
 		t.Fatalf("fall nextRunTime: %v", err)
 	}

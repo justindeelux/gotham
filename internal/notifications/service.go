@@ -17,6 +17,7 @@ import (
 	"github.com/google/uuid"
 
 	"github.com/justindeelux/gotham/internal/backups"
+	"github.com/justindeelux/gotham/internal/cleanup"
 	"github.com/justindeelux/gotham/internal/deploy"
 	"github.com/justindeelux/gotham/internal/proxy"
 	"github.com/justindeelux/gotham/internal/servers"
@@ -1142,4 +1143,68 @@ func (s *Service) notifierFor(channel Channel) (Notifier, error) {
 	default:
 		return nil, fmt.Errorf("%w: unknown channel kind %q", ErrValidation, channel.Kind)
 	}
+}
+
+// CleanupFinished turns one scheduled cleanup run into a single success or
+// failure event. Manual runs never reach this.
+func (s *Service) CleanupFinished(_ context.Context, summary cleanup.ScheduleRunSummary) {
+	if s == nil || !Enabled() {
+		return
+	}
+	outcome := OutcomeSuccess
+	detail := cleanupFreedDetail(summary)
+	errText := ""
+	if summary.Failed() {
+		outcome = OutcomeFailure
+		errText = cleanupFailureDetail(summary)
+	}
+	s.Dispatch(Event{
+		Kind:    EventCleanup,
+		Outcome: outcome,
+		Name:    summary.ScheduleName,
+		Detail:  detail,
+		Error:   errText,
+		At:      time.Now().UTC(),
+	})
+}
+
+func cleanupFreedDetail(summary cleanup.ScheduleRunSummary) string {
+	parts := make([]string, 0, len(summary.Nodes))
+	for _, node := range summary.Nodes {
+		parts = append(parts, cleanupBytes(node.ReclaimedBytes)+" on "+node.ServerName)
+	}
+	if len(parts) == 0 {
+		return ""
+	}
+	return "Freed: " + strings.Join(parts, ", ")
+}
+
+func cleanupFailureDetail(summary cleanup.ScheduleRunSummary) string {
+	parts := make([]string, 0, len(summary.Nodes))
+	for _, node := range summary.Nodes {
+		if node.Status != cleanup.StatusFailed {
+			continue
+		}
+		reason := node.Reason
+		if reason == "" {
+			reason = "failed"
+		}
+		parts = append(parts, node.ServerName+": "+reason)
+	}
+	return strings.Join(parts, "; ")
+}
+
+func cleanupBytes(bytes int64) string {
+	if bytes < 1024 {
+		return fmt.Sprintf("%d B", bytes)
+	}
+	units := []string{"KB", "MB", "GB", "TB"}
+	value := float64(bytes)
+	for _, unit := range units {
+		value /= 1024
+		if value < 1024 {
+			return fmt.Sprintf("%.1f %s", value, unit)
+		}
+	}
+	return fmt.Sprintf("%.1f PB", value/1024)
 }

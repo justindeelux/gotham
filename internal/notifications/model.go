@@ -75,6 +75,8 @@ const (
 	EventIncidentRecovered   EventKey = "incident_recovered"
 	EventRuntimeFailure      EventKey = "runtime_failure"
 	EventRuntimeRecovery     EventKey = "runtime_recovery"
+	EventCleanupSuccess      EventKey = "cleanup_success"
+	EventCleanupFailure      EventKey = "cleanup_failure"
 )
 
 var defaultEvents = []EventKey{
@@ -86,6 +88,7 @@ var AllEvents = append(
 	append([]EventKey(nil), defaultEvents...),
 	EventServerOffline, EventServerOnline, EventCertificateExpiring, EventUpdateAvailable,
 	EventRedeployNeeded, EventRuntimeFailure, EventRuntimeRecovery,
+	EventCleanupSuccess, EventCleanupFailure,
 )
 
 func (k EventKey) Valid() bool {
@@ -108,6 +111,7 @@ const (
 	EventUpdate      EventKind = "update"
 	EventRedeploy    EventKind = "redeploy"
 	EventIncident    EventKind = "incident"
+	EventCleanup     EventKind = "cleanup"
 )
 
 type Outcome string
@@ -169,6 +173,10 @@ func (e Event) Key() EventKey {
 		return EventBackupSuccess
 	case e.Kind == EventBackup && e.Outcome == OutcomeFailure:
 		return EventBackupFailure
+	case e.Kind == EventCleanup && e.Outcome == OutcomeSuccess:
+		return EventCleanupSuccess
+	case e.Kind == EventCleanup && e.Outcome == OutcomeFailure:
+		return EventCleanupFailure
 	default:
 		return ""
 	}
@@ -255,8 +263,11 @@ func (e Event) Summary() string {
 		return "Server is offline: " + e.Name
 	}
 	noun := "Deploy"
-	if e.Kind == EventBackup {
+	switch e.Kind {
+	case EventBackup:
 		noun = "Backup"
+	case EventCleanup:
+		noun = "Cleanup"
 	}
 	verb := "failed"
 	if e.Outcome == OutcomeSuccess {
@@ -274,6 +285,9 @@ func (e Event) Message() string {
 	}
 	if e.Host != "" {
 		lines = append(lines, "Host: "+e.Host)
+	}
+	if e.Kind == EventCleanup && e.Detail != "" {
+		lines = append(lines, e.Detail)
 	}
 	if e.Error != "" {
 		lines = append(lines, "Error: "+truncateText(e.Error, maxEventError))

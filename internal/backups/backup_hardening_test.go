@@ -7,112 +7,11 @@ import (
 	"os"
 	"path/filepath"
 	"testing"
-	"time"
 
 	"github.com/google/uuid"
 
 	"github.com/justindeelux/gotham/internal/containers"
 )
-
-func TestNextCronTimeSurvivesSpringForward(t *testing.T) {
-	loc, err := time.LoadLocation("America/New_York")
-	if err != nil {
-		t.Skipf("tzdata unavailable: %v", err)
-	}
-	after := time.Date(2025, 3, 9, 1, 0, 0, 0, loc)
-
-	type answer struct {
-		next time.Time
-		err  error
-	}
-	done := make(chan answer, 1)
-	go func() {
-		next, err := nextCronTime("0 2 * * *", after, loc)
-		done <- answer{next: next, err: err}
-	}()
-	var got answer
-	select {
-	case got = <-done:
-	case <-time.After(5 * time.Second):
-		t.Fatal("nextCronTime did not return across the spring-forward gap")
-	}
-	if got.err != nil {
-		t.Fatalf("nextCronTime: %v", got.err)
-	}
-	want := time.Date(2025, 3, 9, 3, 0, 0, 0, loc)
-	if !got.next.Equal(want) {
-		t.Errorf("next = %v, want %v (first instant after the gap)", got.next, want)
-	}
-	if !got.next.After(after) {
-		t.Errorf("next = %v, want strictly after %v", got.next, after)
-	}
-}
-
-func TestNextCronTimeFallBackDoesNotRepeatHour(t *testing.T) {
-	loc, err := time.LoadLocation("America/New_York")
-	if err != nil {
-		t.Skipf("tzdata unavailable: %v", err)
-	}
-	after := time.Date(2025, 11, 1, 12, 0, 0, 0, loc)
-
-	first, err := nextCronTime("30 1 * * *", after, loc)
-	if err != nil {
-		t.Fatalf("first nextCronTime: %v", err)
-	}
-	wantFirst := time.Date(2025, 11, 2, 1, 30, 0, 0, loc)
-	if !first.Equal(wantFirst) {
-		t.Fatalf("first = %v, want %v (EDT occurrence)", first, wantFirst)
-	}
-	second, err := nextCronTime("30 1 * * *", first, loc)
-	if err != nil {
-		t.Fatalf("second nextCronTime: %v", err)
-	}
-	wantSecond := time.Date(2025, 11, 3, 1, 30, 0, 0, loc)
-	if !second.Equal(wantSecond) {
-		t.Errorf("second = %v, want %v (no repeat of the 01:30 wall slot)", second, wantSecond)
-	}
-}
-
-func TestNextCronTimeSpringForwardDoesNotMissDay(t *testing.T) {
-	loc, err := time.LoadLocation("America/New_York")
-	if err != nil {
-		t.Skipf("tzdata unavailable: %v", err)
-	}
-	after := time.Date(2025, 3, 8, 12, 0, 0, 0, loc)
-
-	first, err := nextCronTime("30 2 * * *", after, loc)
-	if err != nil {
-		t.Fatalf("nextCronTime: %v", err)
-	}
-	want := time.Date(2025, 3, 9, 3, 0, 0, 0, loc)
-	if !first.Equal(want) {
-		t.Fatalf("next = %v, want %v (gap day not missed)", first, want)
-	}
-	second, err := nextCronTime("30 2 * * *", first, loc)
-	if err != nil {
-		t.Fatalf("second nextCronTime: %v", err)
-	}
-	wantSecond := time.Date(2025, 3, 10, 2, 30, 0, 0, loc)
-	if !second.Equal(wantSecond) {
-		t.Errorf("second = %v, want %v", second, wantSecond)
-	}
-}
-
-func TestNextCronTimeStepsToNextTopOfHour(t *testing.T) {
-	loc, err := time.LoadLocation("America/New_York")
-	if err != nil {
-		t.Skipf("tzdata unavailable: %v", err)
-	}
-	after := time.Date(2025, 3, 9, 1, 30, 0, 0, loc)
-	got, err := nextCronTime("0 3 * * *", after, loc)
-	if err != nil {
-		t.Fatalf("nextCronTime: %v", err)
-	}
-	want := time.Date(2025, 3, 9, 3, 0, 0, 0, loc)
-	if !got.Equal(want) {
-		t.Errorf("next = %v, want %v (same day, not skipped)", got, want)
-	}
-}
 
 func TestLocalStoreFlushesBeforeReturning(t *testing.T) {
 	store, err := newLocalStore(t.TempDir())
@@ -184,58 +83,6 @@ func TestLocalStoreFlushesCreatedAncestors(t *testing.T) {
 		if !found {
 			t.Errorf("did not flush directory %s; flushed %v", dir, synced)
 		}
-	}
-}
-
-func TestNextRunTimeFallBackRecoveryDoesNotDoubleFire(t *testing.T) {
-	loc, err := time.LoadLocation("America/New_York")
-	if err != nil {
-		t.Skipf("tzdata unavailable: %v", err)
-	}
-	served := time.Date(2025, 11, 2, 5, 30, 0, 0, time.UTC).In(loc)
-	now := time.Date(2025, 11, 2, 6, 0, 0, 0, time.UTC).In(loc)
-	next, err := nextRunTime("30 1 * * *", served, now, loc)
-	if err != nil {
-		t.Fatalf("nextRunTime: %v", err)
-	}
-	want := time.Date(2025, 11, 3, 1, 30, 0, 0, loc)
-	if !next.Equal(want) {
-		t.Fatalf("next = %v, want %v (the repeated slot must not fire twice)", next, want)
-	}
-	if second := time.Date(2025, 11, 2, 6, 30, 0, 0, time.UTC).In(loc); next.Equal(second) {
-		t.Fatal("next re-scheduled the second occurrence of the served slot")
-	}
-}
-
-func TestNextCronTimeWildcardHourSkipsRepeatedHour(t *testing.T) {
-	loc, err := time.LoadLocation("America/New_York")
-	if err != nil {
-		t.Skipf("tzdata unavailable: %v", err)
-	}
-	after := time.Date(2025, 11, 2, 5, 59, 0, 0, time.UTC).In(loc)
-	next, err := nextCronTime("* * * * *", after, loc)
-	if err != nil {
-		t.Fatalf("nextCronTime: %v", err)
-	}
-	want := time.Date(2025, 11, 2, 7, 0, 0, 0, time.UTC).In(loc)
-	if !next.Equal(want) {
-		t.Errorf("next = %v, want %v (the second pass of 01:00-01:59 must be skipped)", next, want)
-	}
-}
-
-func TestNextCronTimeSpringForwardEastOfUTC(t *testing.T) {
-	loc, err := time.LoadLocation("Europe/Paris")
-	if err != nil {
-		t.Skipf("tzdata unavailable: %v", err)
-	}
-	after := time.Date(2025, 3, 30, 1, 0, 0, 0, loc)
-	next, err := nextCronTime("30 2 * * *", after, loc)
-	if err != nil {
-		t.Fatalf("nextCronTime: %v", err)
-	}
-	want := time.Date(2025, 3, 30, 3, 0, 0, 0, loc)
-	if !next.Equal(want) {
-		t.Errorf("next = %v, want %v (the transition instant)", next, want)
 	}
 }
 

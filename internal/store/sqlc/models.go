@@ -171,6 +171,16 @@ type BackupTargetSecret struct {
 	CreatedAt  pgtype.Timestamptz `json:"created_at"`
 }
 
+type CleanupExclusion struct {
+	ID        pgtype.UUID        `json:"id"`
+	ServerID  pgtype.UUID        `json:"server_id"`
+	Category  string             `json:"category"`
+	Match     string             `json:"match"`
+	Note      string             `json:"note"`
+	CreatedBy pgtype.UUID        `json:"created_by"`
+	CreatedAt pgtype.Timestamptz `json:"created_at"`
+}
+
 type CleanupRun struct {
 	ID             pgtype.UUID        `json:"id"`
 	ServerID       pgtype.UUID        `json:"server_id"`
@@ -179,6 +189,9 @@ type CleanupRun struct {
 	StartedAt      pgtype.Timestamptz `json:"started_at"`
 	FinishedAt     pgtype.Timestamptz `json:"finished_at"`
 	ReclaimedBytes int64              `json:"reclaimed_bytes"`
+	ScheduleID     pgtype.UUID        `json:"schedule_id"`
+	Status         string             `json:"status"`
+	Reason         string             `json:"reason"`
 }
 
 type CleanupRunItem struct {
@@ -190,6 +203,21 @@ type CleanupRunItem struct {
 	Status         string      `json:"status"`
 	Message        string      `json:"message"`
 	ReclaimedBytes int64       `json:"reclaimed_bytes"`
+}
+
+type CleanupSchedule struct {
+	ID          pgtype.UUID        `json:"id"`
+	Name        string             `json:"name"`
+	ServerIds   []pgtype.UUID      `json:"server_ids"`
+	Categories  []string           `json:"categories"`
+	Cron        string             `json:"cron"`
+	MinAgeHours int32              `json:"min_age_hours"`
+	Enabled     bool               `json:"enabled"`
+	NextRunAt   pgtype.Timestamptz `json:"next_run_at"`
+	LastRunAt   pgtype.Timestamptz `json:"last_run_at"`
+	CreatedBy   pgtype.UUID        `json:"created_by"`
+	CreatedAt   pgtype.Timestamptz `json:"created_at"`
+	UpdatedAt   pgtype.Timestamptz `json:"updated_at"`
 }
 
 type Database struct {

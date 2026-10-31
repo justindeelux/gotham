@@ -9,6 +9,8 @@ export type NotificationEventKey =
   | "deploy_failure"
   | "backup_success"
   | "backup_failure"
+  | "cleanup_success"
+  | "cleanup_failure"
   | "server_offline"
   | "server_online"
   | "certificate_expiring"
@@ -36,6 +38,8 @@ export const allNotificationEvents: NotificationEventKey[] = [
   "redeploy_needed",
   "runtime_failure",
   "runtime_recovery",
+  "cleanup_success",
+  "cleanup_failure",
 ];
 
 export interface ChannelConfig {
@@ -256,6 +260,16 @@ export function eventLabel(event: NotificationEventKey): string {
       return channelText(
         "notifications.events.backup_failure",
         "Backup failed",
+      );
+    case "cleanup_success":
+      return channelText(
+        "notifications.events.cleanup_success",
+        "Scheduled cleanup succeeded",
+      );
+    case "cleanup_failure":
+      return channelText(
+        "notifications.events.cleanup_failure",
+        "Scheduled cleanup failed",
       );
     case "server_offline":
       return channelText("notifications.events.server_offline", "Server offline");

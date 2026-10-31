@@ -1270,8 +1270,8 @@ func TestComposeSweepLabelsRejected(t *testing.T) {
 		t.Errorf("service routing label = %v, want nil (Services surface)", err)
 	}
 	if _, _, err := server.validateComposeInput(context.Background(), composeTestProject,
-		[]byte(routed), false); status.Code(err) != codes.InvalidArgument {
-		t.Errorf("confined routing label code = %v, want InvalidArgument", status.Code(err))
+		[]byte(routed), false); err != nil {
+		t.Errorf("confined routing label = %v, want nil (service route labels)", err)
 	}
 }
 

@@ -36,7 +36,7 @@ func (v *validator) service(name string, service map[string]any, networks map[st
 		case "healthcheck":
 			err = checkHealthcheck(path+"."+key, value)
 		case "labels":
-			err = checkLabels(path+"."+key, value)
+			err = v.checkLabels(path+"."+key, value)
 		case "working_dir", "user":
 			err = checkNonEmptyString(path+"."+key, value)
 		case "deploy":
@@ -134,6 +134,11 @@ func checkEnvironment(path string, value any) error {
 		return at(path, "environment must be a mapping or a list of KEY=VALUE strings")
 	}
 }
+
+const (
+	serviceDomainLabel     = "gotham.domain"
+	serviceDomainPortLabel = "gotham.domain.port"
+)
 
 var dockerAPIPorts = []int{2375, 2376}
 
@@ -352,11 +357,20 @@ func checkHealthcheck(path string, value any) error {
 	return nil
 }
 
-func checkLabels(path string, value any) error {
+func (v *validator) checkLabels(path string, value any) error {
+	reserved := func(key string) bool {
+		if !strings.HasPrefix(key, "gotham.") {
+			return false
+		}
+		if v.serviceRouteLabels && (key == serviceDomainLabel || key == serviceDomainPortLabel) {
+			return false
+		}
+		return true
+	}
 	switch entries := value.(type) {
 	case map[string]any:
 		for key, entry := range entries {
-			if strings.HasPrefix(key, "gotham.") {
+			if reserved(key) {
 				return at(path, "label %q is reserved for Gotham", key)
 			}
 			if entry == nil {
@@ -373,7 +387,7 @@ func checkLabels(path string, value any) error {
 			if !ok || !strings.Contains(text, "=") {
 				return at(path, "label list entries must be KEY=VALUE strings")
 			}
-			if key, _, _ := strings.Cut(text, "="); strings.HasPrefix(strings.TrimSpace(key), "gotham.") {
+			if key, _, _ := strings.Cut(text, "="); reserved(strings.TrimSpace(key)) {
 				return at(path, "label %q is reserved for Gotham", strings.TrimSpace(key))
 			}
 		}

@@ -467,8 +467,9 @@ func (s *ComposeServer) validateComposeInput(ctx context.Context, projectName st
 		appID := strings.TrimPrefix(project, "gotham-")
 		document := string(composeYAML)
 		if err := composeguard.Validate(document, composeguard.Options{
-			AppID:       appID,
-			ManagedRoot: s.volumeRoot,
+			AppID:              appID,
+			ManagedRoot:        s.volumeRoot,
+			ServiceRouteLabels: true,
 		}); err != nil {
 			return "", nil, status.Errorf(codes.InvalidArgument, "compose: confined document rejected: %v", err)
 		}

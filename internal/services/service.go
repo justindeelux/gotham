@@ -280,13 +280,17 @@ func (s *service) Create(ctx context.Context, userID uuid.UUID, req CreateReques
 	if templateSlug != "" && (s.templateExists == nil || !s.templateExists(templateSlug)) {
 		return Service{}, fmt.Errorf("%w: unknown template %q", ErrValidation, templateSlug)
 	}
-	_, hosts, err := RenderService(req.ComposeYAML, req.Env, nil)
+	id := uuid.New()
+	rendered, hosts, err := RenderService(req.ComposeYAML, req.Env, nil)
 	if err != nil {
+		return Service{}, RedactError(err, req.Env)
+	}
+	if err := guardServiceDocument(id, rendered.ComposeYAML); err != nil {
 		return Service{}, RedactError(err, req.Env)
 	}
 	now := time.Now().UTC()
 	service := Service{
-		ID:            uuid.New(),
+		ID:            id,
 		UserID:        userID,
 		ServerID:      req.ServerID,
 		EnvironmentID: req.EnvironmentID,
@@ -439,8 +443,11 @@ func (s *service) Update(ctx context.Context, userID, serviceID uuid.UUID, req U
 	if err != nil {
 		return Service{}, err
 	}
-	_, hosts, err := RenderService(service.ComposeYAML, service.Env, managed)
+	rendered, hosts, err := RenderService(service.ComposeYAML, service.Env, managed)
 	if err != nil {
+		return Service{}, RedactError(err, service.Env)
+	}
+	if err := guardServiceDocument(service.ID, rendered.ComposeYAML); err != nil {
 		return Service{}, RedactError(err, service.Env)
 	}
 	releaseDomain, err := s.guardHosts(ctx, hosts)
@@ -558,6 +565,10 @@ func (s *service) Deploy(ctx context.Context, userID, serviceID uuid.UUID) (Serv
 
 	rendered, hosts, err := s.renderService(ctx, service)
 	if err != nil {
+		release()
+		return Service{}, Deploy{}, RedactError(err, service.Env)
+	}
+	if err := guardServiceDocument(service.ID, rendered.ComposeYAML); err != nil {
 		release()
 		return Service{}, Deploy{}, RedactError(err, service.Env)
 	}

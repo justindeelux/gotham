@@ -445,3 +445,28 @@ func TestValidateEmptyTail(t *testing.T) {
 		})
 	}
 }
+
+func TestServiceRouteLabelsOption(t *testing.T) {
+	doc := serviceDoc("    labels:\n      gotham.domain: app.example.com\n      gotham.domain.port: \"8080\"\n")
+	if err := Validate(doc, guardOpts()); err == nil {
+		t.Fatal("a gotham.domain label was accepted without the service option")
+	}
+	opts := guardOpts()
+	opts.ServiceRouteLabels = true
+	if err := Validate(doc, opts); err != nil {
+		t.Fatalf("service route labels rejected: %v", err)
+	}
+	list := serviceDoc("    labels:\n      - gotham.domain=app.example.com\n      - gotham.domain.port=8080\n")
+	if err := Validate(list, opts); err != nil {
+		t.Fatalf("service route label list rejected: %v", err)
+	}
+	for _, body := range []string{
+		"    labels:\n      gotham.app_id: 00000000-0000-0000-0000-000000000000\n",
+		"    labels:\n      gotham.deployment_id: 00000000-0000-0000-0000-000000000000\n",
+		"    labels:\n      gotham.other: value\n",
+	} {
+		if err := Validate(serviceDoc(body), opts); err == nil {
+			t.Errorf("label in %q was accepted with the service option", body)
+		}
+	}
+}

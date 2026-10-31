@@ -232,3 +232,50 @@ func TestGRPCComposeAgentStreamLifecycle(t *testing.T) {
 		t.Fatalf("cancelled stream Err = %v, want nil", err)
 	}
 }
+
+type capturingComposeClient struct {
+	agentv1.ComposeServiceClient
+	validate *agentv1.ComposeValidateRequest
+	up       *agentv1.ComposeUpRequest
+	down     *agentv1.ComposeDownRequest
+}
+
+func (c *capturingComposeClient) ComposeValidate(_ context.Context, req *agentv1.ComposeValidateRequest, _ ...grpc.CallOption) (*agentv1.ComposeValidateResponse, error) {
+	c.validate = req
+	return &agentv1.ComposeValidateResponse{Services: []string{"web"}}, nil
+}
+
+func (c *capturingComposeClient) ComposeUp(_ context.Context, req *agentv1.ComposeUpRequest, _ ...grpc.CallOption) (*agentv1.ComposeUpResponse, error) {
+	c.up = req
+	return &agentv1.ComposeUpResponse{}, nil
+}
+
+func (c *capturingComposeClient) ComposeDown(_ context.Context, req *agentv1.ComposeDownRequest, _ ...grpc.CallOption) (*agentv1.ComposeDownResponse, error) {
+	c.down = req
+	return &agentv1.ComposeDownResponse{}, nil
+}
+
+func (c *capturingComposeClient) Close() error { return nil }
+
+func TestGRPCComposeAgentConfinesDeploysButNotTeardown(t *testing.T) {
+	client := &capturingComposeClient{}
+	agent := NewGRPCComposeAgent(client)
+	ctx := context.Background()
+	document := []byte("services:\n  web:\n    image: nginx:1.27\n")
+
+	if _, err := agent.Validate(ctx, "gotham-x", document); err != nil {
+		t.Fatalf("Validate: %v", err)
+	}
+	if err := agent.Up(ctx, "gotham-x", document, false); err != nil {
+		t.Fatalf("Up: %v", err)
+	}
+	if _, err := agent.Down(ctx, "gotham-x", document, false); err != nil {
+		t.Fatalf("Down: %v", err)
+	}
+	if client.validate.GetUnconfined() || client.up.GetUnconfined() {
+		t.Error("Validate or Up sent Unconfined, bypassing the node-side guard")
+	}
+	if !client.down.GetUnconfined() {
+		t.Error("Down did not send Unconfined, so a legacy document cannot be torn down")
+	}
+}

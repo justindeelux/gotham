@@ -22,12 +22,22 @@ const en = {
   },
   health: {
     title: "Server health",
+    openServer: "Open server {name}",
     moreOne: "+{count} more node",
     moreOther: "+{count} more nodes",
     viewAll: "view all servers",
     heartbeatMeta: "Live status, updated every 10 seconds",
     containersOne: "{count} container",
     containersOther: "{count} containers",
+  },
+  projects: {
+    title: "Projects",
+    viewAll: "view all projects",
+    loading: "Loading projects…",
+    empty: "No projects yet",
+    emptyHint:
+      "Create a project to group the applications, services and databases for one product.",
+    emptyAction: "Open projects",
   },
   empty: {
     title: "Your dashboard is ready",

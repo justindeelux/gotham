@@ -26,6 +26,7 @@ import type { ServerNodeCardModel } from "@/features/dashboard/utils/serverNode"
 import { buildServerNodeCard } from "@/features/dashboard/utils/serverNode";
 import { usageView } from "@/shared/utils/format";
 import DashboardHeader from "@/features/dashboard/components/DashboardHeader.vue";
+import DashboardProjectsSection from "@/features/dashboard/components/DashboardProjectsSection.vue";
 import RecentDeploysPanel from "@/features/dashboard/components/RecentDeploysPanel.vue";
 import ServerHealthSection from "@/features/dashboard/components/ServerHealthSection.vue";
 import NeedsAttentionSection from "@/features/incidents/components/NeedsAttentionSection.vue";
@@ -310,6 +311,8 @@ onMounted(() => {
       </NCard>
 
       <NeedsAttentionSection />
+
+      <DashboardProjectsSection />
 
       <ServerHealthSection
         v-if="authStore.isOwner && totalCount > 0"

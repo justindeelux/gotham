@@ -24,12 +24,22 @@ const vi: DashboardMessages = {
   },
   health: {
     title: "Tình trạng máy chủ",
+    openServer: "Mở máy chủ {name}",
     moreOne: "+{count} nút nữa",
     moreOther: "+{count} nút nữa",
     viewAll: "xem tất cả máy chủ",
     heartbeatMeta: "Cập nhật trực tiếp mỗi 10 giây",
     containersOne: "{count} container",
     containersOther: "{count} container",
+  },
+  projects: {
+    title: "Dự án",
+    viewAll: "xem tất cả dự án",
+    loading: "Đang tải dự án…",
+    empty: "Chưa có dự án nào",
+    emptyHint:
+      "Hãy tạo dự án để gom các ứng dụng, dịch vụ và cơ sở dữ liệu của một sản phẩm.",
+    emptyAction: "Mở dự án",
   },
   empty: {
     title: "Bảng điều khiển đã sẵn sàng",

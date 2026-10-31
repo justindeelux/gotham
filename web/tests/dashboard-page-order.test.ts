@@ -98,6 +98,9 @@ vi.mock("@/features/dashboard/components/DashboardHeader.vue", () => ({
 vi.mock("@/features/dashboard/components/RecentDeploysPanel.vue", () => ({
   default: { template: '<div data-test="deploys" />' },
 }));
+vi.mock("@/features/dashboard/components/DashboardProjectsSection.vue", () => ({
+  default: { template: '<div data-test="projects" />' },
+}));
 vi.mock("@/features/dashboard/components/ServerHealthSection.vue", () => ({
   default: { template: '<div data-test="health" />' },
 }));
@@ -133,30 +136,33 @@ beforeEach(() => {
 });
 
 describe("DashboardPage order", () => {
-  it("puts status, attention, server health and deploys in that order for the owner", async () => {
+  it("puts status, attention, projects, server health and deploys in that order for the owner", async () => {
     const wrapper = mountPage();
     await flushPromises();
 
-    const [status, attention, health, deploys] = markerOrder(wrapper.html(), [
+    const [status, attention, projects, health, deploys] = markerOrder(wrapper.html(), [
       "status",
       "attention",
+      "projects",
       "health",
       "deploys",
     ]);
     expect(status, "status strip comes first").toBeGreaterThanOrEqual(0);
     expect(attention).toBeGreaterThan(status);
-    expect(health).toBeGreaterThan(attention);
+    expect(projects).toBeGreaterThan(attention);
+    expect(health).toBeGreaterThan(projects);
     expect(deploys).toBeGreaterThan(health);
     wrapper.unmount();
   });
 
-  it("keeps the status strip and deploys but drops owner-only sections for non-owners", async () => {
+  it("keeps the status strip, projects and deploys but drops owner-only sections for non-owners", async () => {
     state.isOwner = false;
     const wrapper = mountPage();
     await flushPromises();
 
     const html = wrapper.html();
     expect(html).toContain('data-test="status"');
+    expect(html).toContain('data-test="projects"');
     expect(html).toContain('data-test="deploys"');
     expect(html).not.toContain('data-test="health"');
     expect(html).not.toContain('data-testid="dashboard-servers-figure"');
@@ -172,6 +178,7 @@ describe("DashboardPage order", () => {
     expect(html).toContain('data-testid="dashboard-first-run"');
     expect(html).not.toContain('data-test="status"');
     expect(html).not.toContain('data-test="attention"');
+    expect(html).not.toContain('data-test="projects"');
     expect(html).not.toContain('data-test="health"');
     expect(html).not.toContain('data-test="deploys"');
     expect(wrapper.text()).toContain("Add your first server");

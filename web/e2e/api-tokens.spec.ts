@@ -90,12 +90,8 @@ async function signInAs(page: Page, session: Session): Promise<void> {
 }
 
 async function openApiTokens(page: Page): Promise<void> {
-  await page.getByRole("button", { name: "Account" }).first().click();
-  await page
-    .locator(".n-dropdown-option")
-    .filter({ hasText: "API tokens" })
-    .click();
-  await expect(page).toHaveURL(/\/settings\/api-tokens$/);
+  await page.getByRole("link", { name: "API tokens" }).click();
+  await expect(page).toHaveURL(/\/security\/api-tokens$/);
   await expect(
     page.getByRole("heading", { name: "API tokens", level: 1 }),
   ).toBeVisible();
@@ -146,7 +142,7 @@ test("creates, rotates and revokes a token as the owner", async ({
   await openApiTokens(page);
 
   const firstSecret = await createToken(page, name, "Deploy");
-  await expect(page).toHaveURL(/\/settings\/api-tokens$/);
+  await expect(page).toHaveURL(/\/security\/api-tokens$/);
   expect(page.url()).not.toContain(firstSecret);
   const storage = await page.evaluate(() => JSON.stringify(localStorage));
   expect(storage).not.toContain(firstSecret);
@@ -200,6 +196,7 @@ test("creates and revokes a token as a member without the admin scope", async ({
   const name = `ui-e2e-member-${uniqueSuffix()}`;
   await signInAs(page, session);
   await page.goto("/settings/api-tokens");
+  await expect(page).toHaveURL(/\/security\/api-tokens$/);
   await expect(
     page.getByRole("heading", { name: "API tokens", level: 1 }),
   ).toBeVisible();

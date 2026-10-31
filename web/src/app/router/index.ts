@@ -219,10 +219,20 @@ const routes: RouteRecordRaw[] = [
         meta: { titleKey: "titles.profile", requiresAuth: true },
       },
       {
-        path: "settings/api-tokens",
+        path: "security/private-keys",
+        name: "private-keys",
+        component: () => import("@/features/private-keys/pages/PrivateKeysPage.vue"),
+        meta: { titleKey: "titles.privateKeys", requiresAuth: true, requiresOwner: true },
+      },
+      {
+        path: "security/api-tokens",
         name: "api-tokens",
         component: () => import("@/features/api-tokens/pages/ApiTokensPage.vue"),
         meta: { titleKey: "titles.apiTokens", requiresAuth: true },
+      },
+      {
+        path: "settings/api-tokens",
+        redirect: { name: "api-tokens" },
       },
       {
         path: "settings/mcp",

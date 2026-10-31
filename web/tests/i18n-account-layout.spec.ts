@@ -257,8 +257,12 @@ for (const locale of ["en", "vi"]) {
       expect(await page.locator(".topbar .search").count()).toBe(0);
       expect(await page.locator(".topbar .is-stub").count()).toBe(0);
       expect(await page.locator("#app-nav .is-disabled").count()).toBe(0);
-      expect(await page.locator("#app-nav").innerText()).not.toContain(
-        "API tokens",
+      const navText = await page.locator("#app-nav").textContent();
+      expect(navText).toContain(
+        locale === "vi" ? "API token" : "API tokens",
+      );
+      expect(navText).not.toContain(
+        locale === "vi" ? "Khóa riêng" : "Private keys",
       );
     });
 

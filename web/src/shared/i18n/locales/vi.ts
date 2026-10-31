@@ -51,6 +51,7 @@ const vi: CommonMessages = {
     sections: {
       operations: "Vận hành",
       access: "Truy cập",
+      security: "Bảo mật",
       system: "Hệ thống",
     },
     items: {
@@ -65,6 +66,8 @@ const vi: CommonMessages = {
       notifications: "Kênh thông báo",
       gitSources: "Nguồn Git",
       mcp: "Thiết lập MCP",
+      privateKeys: "Khóa riêng",
+      apiTokens: "API token",
       settings: "Cài đặt",
       monitoring: "Giám sát",
       cleanup: "Dọn dẹp",
@@ -112,6 +115,7 @@ const vi: CommonMessages = {
     mcp: "Thiết lập MCP",
     profile: "Hồ sơ",
     apiTokens: "API token",
+    privateKeys: "Khóa riêng",
     updates: "Cập nhật",
     notFound: "Không tìm thấy trang",
     forbidden: "Không có quyền",

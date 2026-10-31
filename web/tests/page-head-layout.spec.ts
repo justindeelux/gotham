@@ -51,7 +51,7 @@ const ordinaryRoutes = [
   "/settings/instance",
   "/settings/updates",
   "/settings/profile",
-  "/settings/api-tokens",
+  "/security/api-tokens",
   "/settings/mcp",
   "/toolchain",
 ];
@@ -64,7 +64,7 @@ const actionRoutes = new Set([
   "/users",
   "/settings/notifications",
   "/settings/git-sources",
-  "/settings/api-tokens",
+  "/security/api-tokens",
 ]);
 
 function json(status: number, body: unknown) {

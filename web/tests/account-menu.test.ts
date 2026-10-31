@@ -69,7 +69,7 @@ describe("shared account menu", () => {
     expect(header.querySelector("button, a, [tabindex]")).toBeNull();
     const dropdown = wrapper.findComponent(NDropdown);
     expect(dropdown.props("options").map((option) => option.key)).toEqual([
-      "user-info", "header-divider", "profile", "api-tokens", "footer-divider", "sign-out",
+      "user-info", "header-divider", "profile", "footer-divider", "sign-out",
     ]);
     expect(dropdown.props("keyboard")).toBe(true);
     expect(globalThis.document.querySelector<HTMLElement>(".n-dropdown")!.style.minWidth)
@@ -92,7 +92,6 @@ describe("shared account menu", () => {
       .map((node) => node.textContent?.trim());
     expect(labels).toEqual([
       i18n.global.t("shell.profile"),
-      i18n.global.t("shell.apiTokens"),
       i18n.global.t("shell.signOut"),
     ]);
     wrapper.unmount();

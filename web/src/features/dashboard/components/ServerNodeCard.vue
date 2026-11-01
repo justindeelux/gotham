@@ -37,10 +37,16 @@ const stale = computed<boolean>(() => isUsageStale(props.card.lastSeen));
             {{ props.card.initials }}
           </div>
           <div class="node-head">
-            <NText strong>{{ props.card.name }}</NText>
-            <NText depth="3" class="node-sub" :title="props.card.subtitle">{{ props.card.subtitle }}</NText>
+            <NText strong class="node-name" :title="props.card.name">
+              {{ props.card.name }}
+            </NText>
+            <div class="node-meta">
+              <NText depth="3" class="node-sub" :title="props.card.subtitle">
+                {{ props.card.subtitle }}
+              </NText>
+              <ServerStatusTag class="node-status" :status="props.card.status" />
+            </div>
           </div>
-          <ServerStatusTag class="node-status" :status="props.card.status" />
         </div>
         <div class="node-metrics">
           <ServerUsageSegments
@@ -121,11 +127,29 @@ const stale = computed<boolean>(() => isUsageStale(props.card.lastSeen));
 .node-head {
   display: flex;
   flex-direction: column;
+  gap: var(--space-1);
   min-width: 0;
   flex: 1 1 auto;
 }
 
+.node-name {
+  display: block;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.node-meta {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  min-width: 0;
+}
+
 .node-sub {
+  flex: 1 1 auto;
+  min-width: 0;
   font-size: var(--text-xs);
   overflow: hidden;
   text-overflow: ellipsis;

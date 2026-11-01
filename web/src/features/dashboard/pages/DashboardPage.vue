@@ -227,84 +227,84 @@ onMounted(() => {
     </NCard>
 
     <template v-else>
-      <NCard size="small" data-test="status">
-        <div class="status-inner">
-          <div class="status-sentence">
-            <NSkeleton
-              v-if="statusState === 'loading'"
-              text
-              class="status-skeleton"
-            />
-            <h2
-              v-else
-              class="status-heading"
-              data-testid="dashboard-status"
-            >
-              {{ statusText }}
-            </h2>
-          </div>
-
-          <div class="status-figures">
-            <RouterLink
-              v-if="authStore.isOwner"
-              :to="{ name: 'servers' }"
-              class="status-figure"
-              data-testid="dashboard-servers-figure"
-            >
-              <NSkeleton
-                v-if="serversStore.loading && totalCount === 0"
-                text
-                class="figure-skeleton"
-              />
-              <template v-else>
-                <span class="figure-value">
-                  {{ readyCount }}<span class="figure-unit">/{{ totalCount }}</span>
-                </span>
-                <span class="figure-label">{{ $t("dashboard.status.serversReady") }}</span>
-              </template>
-            </RouterLink>
-
-            <div class="status-figure" data-testid="dashboard-apps-figure">
-              <NSkeleton
-                v-if="tile.state === 'loading'"
-                text
-                class="figure-skeleton"
-              />
-              <template v-else-if="tile.state === 'error'">
-                <span class="figure-value">—</span>
-                <span class="figure-label">{{ tile.error }}</span>
-                <NButton
-                  size="tiny"
-                  quaternary
-                  @click="() => void fetchApplicationCounts()"
-                >
-                  {{ $t("dashboard.status.retry") }}
-                </NButton>
-              </template>
-              <RouterLink
-                v-else
-                :to="{ name: 'projects' }"
-                class="figure-link"
-              >
-                <span class="figure-value">
-                  {{ tile.runningText }}
-                </span>
-                <span class="figure-label">{{ $t("dashboard.status.appsRunning") }}</span>
-              </RouterLink>
-              <NText
-                v-if="tile.state !== 'loading' && tile.state !== 'error' && tile.hint"
-                depth="3"
-                class="figure-hint"
-              >
-                {{ tile.hint }}
-              </NText>
-            </div>
-          </div>
-        </div>
-      </NCard>
-
       <div class="dash-columns">
         <div class="dash-main">
+          <NCard size="small" data-test="status">
+            <div class="status-inner">
+              <div class="status-sentence">
+                <NSkeleton
+                  v-if="statusState === 'loading'"
+                  text
+                  class="status-skeleton"
+                />
+                <h2
+                  v-else
+                  class="status-heading"
+                  data-testid="dashboard-status"
+                >
+                  {{ statusText }}
+                </h2>
+              </div>
+
+              <div class="status-figures">
+                <RouterLink
+                  v-if="authStore.isOwner"
+                  :to="{ name: 'servers' }"
+                  class="status-figure"
+                  data-testid="dashboard-servers-figure"
+                >
+                  <NSkeleton
+                    v-if="serversStore.loading && totalCount === 0"
+                    text
+                    class="figure-skeleton"
+                  />
+                  <template v-else>
+                    <span class="figure-value">
+                      {{ readyCount }}<span class="figure-unit">/{{ totalCount }}</span>
+                    </span>
+                    <span class="figure-label">{{ $t("dashboard.status.serversReady") }}</span>
+                  </template>
+                </RouterLink>
+
+                <div class="status-figure" data-testid="dashboard-apps-figure">
+                  <NSkeleton
+                    v-if="tile.state === 'loading'"
+                    text
+                    class="figure-skeleton"
+                  />
+                  <template v-else-if="tile.state === 'error'">
+                    <span class="figure-value">—</span>
+                    <span class="figure-label">{{ tile.error }}</span>
+                    <NButton
+                      size="tiny"
+                      quaternary
+                      @click="() => void fetchApplicationCounts()"
+                    >
+                      {{ $t("dashboard.status.retry") }}
+                    </NButton>
+                  </template>
+                  <RouterLink
+                    v-else
+                    :to="{ name: 'projects' }"
+                    class="figure-link"
+                  >
+                    <span class="figure-value">
+                      {{ tile.runningText }}
+                    </span>
+                    <span class="figure-label">{{ $t("dashboard.status.appsRunning") }}</span>
+                  </RouterLink>
+                  <NText
+                    v-if="tile.state !== 'loading' && tile.state !== 'error' && tile.hint"
+                    depth="3"
+                    class="figure-hint"
+                  >
+                    {{ tile.hint }}
+                  </NText>
+                </div>
+              </div>
+            </div>
+          </NCard>
+
           <NeedsAttentionSection />
 
           <DashboardProjectsSection />
@@ -340,7 +340,6 @@ onMounted(() => {
   display: grid;
   grid-template-columns: minmax(0, 2fr) minmax(0, 1fr);
   gap: var(--space-5);
-  align-items: start;
 }
 
 .dash-main,

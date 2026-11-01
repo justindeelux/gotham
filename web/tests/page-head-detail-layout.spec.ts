@@ -963,7 +963,7 @@ test("A settings tab without slot content keeps the move card full width", async
 });
 
 
-test("dashboard keeps projects and servers in the main column and deploys beside them", async ({
+test("dashboard keeps both grids at three columns and deploys full height beside them", async ({
   page,
 }) => {
   test.setTimeout(120_000);
@@ -972,10 +972,12 @@ test("dashboard keeps projects and servers in the main column and deploys beside
   await page.goto(`${baseURL}/dashboard`);
   await page.locator(".dash-columns").waitFor();
   await page.locator(".project-card-link").first().waitFor();
+  await waitForLayoutSettled(page);
 
   const desktop = await page.evaluate(() => {
     const main = document.querySelector<HTMLElement>(".dash-main")!;
     const side = document.querySelector<HTMLElement>(".dash-side")!;
+    const deploysCard = side.querySelector<HTMLElement>(".deploys-card")!;
     const mainRect = main.getBoundingClientRect();
     const sideRect = side.getBoundingClientRect();
     return {
@@ -985,26 +987,41 @@ test("dashboard keeps projects and servers in the main column and deploys beside
       sideLeft: sideRect.left,
       mainTop: mainRect.top,
       sideTop: sideRect.top,
+      mainBottom: mainRect.bottom,
+      sideBottom: sideRect.bottom,
+      deploysCardBottom: deploysCard.getBoundingClientRect().bottom,
     };
   });
 
   expect(desktop.mainWidth / desktop.sideWidth, "main column is 2/3").toBeGreaterThan(1.8);
   expect(desktop.mainWidth / desktop.sideWidth, "deploys column is 1/3").toBeLessThan(2.2);
   expect(desktop.mainRight).toBeLessThanOrEqual(desktop.sideLeft + 1);
-  expect(desktop.sideTop, "deploys start beside the main content").toBeCloseTo(desktop.mainTop, 0);
+  expect(desktop.sideTop, "deploys start level with the status card").toBeCloseTo(
+    desktop.mainTop,
+    0,
+  );
+  expect(desktop.sideBottom, "deploys column spans the left height").toBeCloseTo(
+    desktop.mainBottom,
+    0,
+  );
+  expect(desktop.deploysCardBottom, "the deploys card fills its column").toBeCloseTo(
+    desktop.sideBottom,
+    0,
+  );
 
   await expect(page.locator(".project-grid .project-card-link")).toHaveCount(6);
-  const projectColumns = await page.locator(".project-grid").evaluate((grid) => {
-    return getComputedStyle(grid).gridTemplateColumns
-      .split(" ")
-      .filter((part) => part.length > 0).length;
-  });
-  expect(projectColumns, "several projects share the main column").toBeGreaterThan(1);
   const firstProject = page.getByRole("link", {
     name: "Open project project-1",
     exact: true,
   });
   await expect(firstProject).toBeVisible();
+  await expect(firstProject).toContainText("Product number 1");
+  await expect(firstProject, "dashboard project cards skip environment counts").not.toContainText(
+    "environment",
+  );
+  await expect(firstProject, "dashboard project cards skip resource counts").not.toContainText(
+    "resource",
+  );
   await expect(
     page.getByRole("link", { name: "Open project project-7", exact: true }),
   ).toHaveCount(0);
@@ -1020,6 +1037,13 @@ test("dashboard keeps projects and servers in the main column and deploys beside
   await expect(serverLink).toHaveAttribute("href", "/servers/srv-1");
   await expect(page.locator(".dash-side")).toContainText("Recent deploys");
   await expect(page.locator(".dash-main")).not.toContainText("Recent deploys");
+
+  await expect(serverLink.locator(".node-name")).toHaveAttribute("title", longName);
+  await expect(serverLink.locator(".node-name")).toHaveText(longName);
+  await expect(serverLink.locator(".node-sub")).toHaveAttribute(
+    "title",
+    "10.0.0.5:22 · Ubuntu 22.04 · Docker 27.0.3",
+  );
 
   const meter = serverLink.locator(".usage-segments").first();
   await expect(meter.locator(".usage-block")).toHaveCount(50);
@@ -1040,47 +1064,122 @@ test("dashboard keeps projects and servers in the main column and deploys beside
     await page.setViewportSize({ width, height: 900 });
     await waitForLayoutSettled(page);
     const layout = await page.evaluate(() => {
+      const trackCount = (element: HTMLElement): number =>
+        getComputedStyle(element).gridTemplateColumns
+          .split(" ")
+          .filter((part) => part.length > 0).length;
       const main = document.querySelector<HTMLElement>(".dash-main")!;
       const side = document.querySelector<HTMLElement>(".dash-side")!;
-      const card = document.querySelector<HTMLElement>(".node-card-link")!;
-      const meter = card.querySelector<HTMLElement>(".usage-segments")!;
+      const projectGrid = document.querySelector<HTMLElement>(".project-grid")!;
+      const nodeGrid = document.querySelector<HTMLElement>(".node-grid")!;
+      const projectCard = projectGrid.querySelector<HTMLElement>(".project-card-link")!;
+      const nodeCard = document.querySelector<HTMLElement>(".node-card-link")!;
+      const meter = nodeCard.querySelector<HTMLElement>(".usage-segments")!;
       const block = meter.querySelector<HTMLElement>(".usage-block")!;
+      const nodeName = nodeCard.querySelector<HTMLElement>(".node-name")!;
+      const nodeHead = nodeCard.querySelector<HTMLElement>(".node-head")!;
+      const nodeStatus = nodeCard.querySelector<HTMLElement>(".node-status")!;
+      const nodeTop = nodeCard.querySelector<HTMLElement>(".node-top")!;
+      const nodeMetrics = nodeCard.querySelector<HTMLElement>(".node-metrics")!;
+      const nodeTags = nodeCard.querySelector<HTMLElement>(".node-stack .n-space")!;
+      const nodeSub = nodeCard.querySelector<HTMLElement>(".node-sub")!;
+      const nameStyle = getComputedStyle(nodeName);
+      const subStyle = getComputedStyle(nodeSub);
       const mainRect = main.getBoundingClientRect();
       const sideRect = side.getBoundingClientRect();
-      const cardRect = card.getBoundingClientRect();
+      const projectCardRect = projectCard.getBoundingClientRect();
+      const nodeCardRect = nodeCard.getBoundingClientRect();
       const blockRect = block.getBoundingClientRect();
+      const nameRect = nodeName.getBoundingClientRect();
+      const headRect = nodeHead.getBoundingClientRect();
+      const statusRect = nodeStatus.getBoundingClientRect();
+      const subRect = nodeSub.getBoundingClientRect();
       return {
         overflow:
           document.documentElement.scrollWidth >
           document.documentElement.clientWidth + 1,
         mainTop: mainRect.top,
         mainLeft: mainRect.left,
-        mainWidth: mainRect.width,
+        mainBottom: mainRect.bottom,
         sideTop: sideRect.top,
         sideLeft: sideRect.left,
-        cardWidth: cardRect.width,
+        sideBottom: sideRect.bottom,
+        projectColumns: trackCount(projectGrid),
+        nodeColumns: trackCount(nodeGrid),
+        projectCardWidth: projectCardRect.width,
+        projectGridWidth: projectGrid.clientWidth,
+        projectGap: parseFloat(getComputedStyle(projectGrid).gap),
+        nodeCardWidth: nodeCardRect.width,
+        nodeGridWidth: nodeGrid.clientWidth,
+        nodeGap: parseFloat(getComputedStyle(nodeGrid).gap),
         blockWidth: blockRect.width,
         blockHeight: blockRect.height,
-        gap: getComputedStyle(meter).gap,
+        segmentGap: getComputedStyle(meter).gap,
+        projectCardOverflow: projectCard.scrollWidth > projectCard.clientWidth + 1,
+        nodeCardOverflow: nodeCard.scrollWidth > nodeCard.clientWidth + 1,
+        nameWidth: nameRect.width,
+        headWidth: headRect.width,
+        nameHeight: nameRect.height,
+        nameLineHeight: parseFloat(nameStyle.lineHeight),
+        nameWhiteSpace: nameStyle.whiteSpace,
+        nameTextOverflow: nameStyle.textOverflow,
+        nameEllipsized: nodeName.scrollWidth > nodeName.clientWidth + 1,
+        statusTop: statusRect.top,
+        nameBottom: nameRect.bottom,
+        subHeight: subRect.height,
+        subLineHeight: parseFloat(subStyle.lineHeight),
+        subTextOverflow: subStyle.textOverflow,
+        topOverflow: nodeTop.scrollWidth > nodeTop.clientWidth + 1,
+        metricsOverflow: nodeMetrics.scrollWidth > nodeMetrics.clientWidth + 1,
+        tagsOverflow: nodeTags.scrollWidth > nodeTags.clientWidth + 1,
       };
     });
     expect(layout.overflow, `no horizontal overflow at ${width}px`).toBe(false);
-    expect(layout.gap, `segment gap at ${width}px`).toBe("2px");
+    expect(layout.segmentGap, `segment gap at ${width}px`).toBe("2px");
     expect(
       Math.abs(layout.blockWidth - layout.blockHeight),
       `usage blocks are square at ${width}px`,
     ).toBeLessThanOrEqual(0.5);
-    if (width >= 1280) {
-      expect(
-        layout.blockWidth,
-        `usage blocks are readable at ${width}px`,
-      ).toBeGreaterThanOrEqual(6);
-      expect(
-        layout.cardWidth,
-        `the single server card fills more than half the main column at ${width}px`,
-      ).toBeGreaterThan(layout.mainWidth / 2);
-    }
+    expect(
+      layout.projectCardOverflow,
+      `project cards fit their track at ${width}px`,
+    ).toBe(false);
+    expect(layout.nodeCardOverflow, `server cards fit their track at ${width}px`).toBe(
+      false,
+    );
+    expect(layout.topOverflow, `server card header fits at ${width}px`).toBe(false);
+    expect(layout.metricsOverflow, `server card meters fit at ${width}px`).toBe(false);
+    expect(layout.tagsOverflow, `server card tags fit at ${width}px`).toBe(false);
+    expect(
+      layout.nameWhiteSpace,
+      `server name does not wrap at ${width}px`,
+    ).toBe("nowrap");
+    expect(layout.nameTextOverflow, `server name ellipsizes at ${width}px`).toBe(
+      "ellipsis",
+    );
+    expect(
+      layout.nameHeight,
+      `server name stays on one line at ${width}px`,
+    ).toBeLessThanOrEqual(layout.nameLineHeight + 1);
+    expect(
+      layout.nameWidth,
+      `status badge never squeezes the server name at ${width}px`,
+    ).toBeGreaterThanOrEqual(layout.headWidth - 1);
+    expect(
+      layout.statusTop,
+      `status badge sits below the server name at ${width}px`,
+    ).toBeGreaterThanOrEqual(layout.nameBottom - 0.5);
+    expect(
+      layout.subTextOverflow,
+      `server address ellipsizes at ${width}px`,
+    ).toBe("ellipsis");
+    expect(
+      layout.subHeight,
+      `server address stays on one line at ${width}px`,
+    ).toBeLessThanOrEqual(layout.subLineHeight + 1);
     if (width <= 1024) {
+      expect(layout.projectColumns, `projects stack at ${width}px`).toBe(1);
+      expect(layout.nodeColumns, `servers stack at ${width}px`).toBe(1);
       expect(layout.sideTop, `deploys stack under the main column at ${width}px`).toBeGreaterThan(
         layout.mainTop,
       );
@@ -1089,8 +1188,26 @@ test("dashboard keeps projects and servers in the main column and deploys beside
         0,
       );
     } else {
-      expect(layout.sideTop, `deploys stay beside the main column at ${width}px`).toBeCloseTo(
+      expect(layout.projectColumns, `three projects per row at ${width}px`).toBe(3);
+      expect(layout.nodeColumns, `three servers per row at ${width}px`).toBe(3);
+      expect(layout.projectCardWidth, `each project is one third at ${width}px`).toBeCloseTo(
+        (layout.projectGridWidth - 2 * layout.projectGap) / 3,
+        0,
+      );
+      expect(layout.nodeCardWidth, `each server is one third at ${width}px`).toBeCloseTo(
+        (layout.nodeGridWidth - 2 * layout.nodeGap) / 3,
+        0,
+      );
+      expect(
+        layout.nameEllipsized,
+        `the long server name ellipsizes instead of wrapping at ${width}px`,
+      ).toBe(true);
+      expect(layout.sideTop, `deploys stay level with the status card at ${width}px`).toBeCloseTo(
         layout.mainTop,
+        0,
+      );
+      expect(layout.sideBottom, `deploys span the left height at ${width}px`).toBeCloseTo(
+        layout.mainBottom,
         0,
       );
     }

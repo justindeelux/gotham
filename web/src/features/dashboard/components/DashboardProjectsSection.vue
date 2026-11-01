@@ -61,6 +61,7 @@ function retry(): void {
         v-for="project in visibleProjects"
         :key="project.id"
         :project="project"
+        :show-stats="false"
       />
     </div>
   </section>
@@ -105,7 +106,7 @@ function retry(): void {
 
 .project-grid {
   display: grid;
-  grid-template-columns: repeat(auto-fit, minmax(min(100%, 300px), 1fr));
+  grid-template-columns: repeat(3, minmax(0, 1fr));
   gap: var(--space-4);
 }
 

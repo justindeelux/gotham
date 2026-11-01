@@ -4,16 +4,10 @@ import { fieldErrors } from "@/shared/validation/naiveAdapter";
 import {
   registerDiscoveredCatalogs,
   resetLocaleState,
-  resolveValidationMessage,
   setLocale,
   syncComposerLocale,
 } from "@/shared/i18n";
-import {
-  backupMessages,
-  cronSchema,
-  isCronPresent,
-  validateProviderForm,
-} from "@/features/backups/schemas/backups";
+import { cronSchema, isCronPresent } from "@/features/backups/schemas/backups";
 import {
   databaseNameSchema,
   isDatabaseNameValid,
@@ -87,59 +81,6 @@ describe("cronSchema keeps non-empty-only, no grammar check", () => {
       "Biểu thức cron là bắt buộc, ví dụ 0 2 * * *.",
     ]);
     expect(isCronPresent("0 2 * * *")).toBe(true);
-  });
-});
-
-describe("validateProviderForm keeps guard order and messages", () => {
-  const base = {
-    name: "t",
-    kind: "s3" as const,
-    endpoint: "https://s3.example.com",
-    bucket: "b",
-    accessKey: "a",
-    secretKey: "s",
-    isNew: true,
-  };
-  const rows: Array<[string, typeof base, string | null]> = [
-    ["ok", base, null],
-    ["empty name", { ...base, name: "  " }, backupMessages.providerNameRequired],
-    ["blank endpoint", { ...base, endpoint: " " }, backupMessages.s3LocationRequired],
-    ["blank bucket", { ...base, bucket: "" }, backupMessages.s3LocationRequired],
-    ["new missing secret", { ...base, secretKey: "" }, backupMessages.s3KeysRequired],
-    ["new missing access", { ...base, accessKey: "" }, backupMessages.s3KeysRequired],
-    ["new blank-space keys still pass (no trim)", { ...base, accessKey: " ", secretKey: " " }, null],
-    ["edit keeps stored keys", { ...base, accessKey: "", secretKey: "", isNew: false }, null],
-    ["local needs nothing", { ...base, kind: "local" as const, endpoint: "", bucket: "", accessKey: "", secretKey: "" }, null],
-    ["name wins over location", { ...base, name: "", endpoint: "" }, backupMessages.providerNameRequired],
-  ];
-  it("returns the recorded first message per row", () => {
-    for (const [label, draft, message] of rows) {
-      expect(validateProviderForm(draft), label).toBe(message);
-    }
-  });
-  it("resolves the keys to the recorded English display text", () => {
-    const resolved = new Map([
-      [backupMessages.providerNameRequired, "Target name is required."],
-      [
-        backupMessages.s3LocationRequired,
-        "Endpoint and bucket are required for an S3 target.",
-      ],
-      [
-        backupMessages.s3KeysRequired,
-        "Access key and secret key are required for a new S3 target.",
-      ],
-    ]);
-    for (const [, draft, message] of rows) {
-      if (message === null) {
-        continue;
-      }
-      expect(validateProviderForm(draft)).toBe(message);
-      expect(resolveValidationMessage(message)).toBe(resolved.get(message));
-    }
-    setLocale("vi", null);
-    expect(
-      resolveValidationMessage(backupMessages.providerNameRequired),
-    ).toBe("Tên đích lưu trữ là bắt buộc.");
   });
 });
 

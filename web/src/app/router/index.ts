@@ -240,7 +240,7 @@ const routes: RouteRecordRaw[] = [
         path: "integrations/storages",
         name: "storages",
         component: () => import("@/features/storages/pages/StoragesPage.vue"),
-        meta: { titleKey: "titles.storages", requiresAuth: true },
+        meta: { titleKey: "titles.storages", requiresAuth: true, requiresOwner: true },
       },
       { path: "settings/notifications", redirect: { name: "notifications" } },
       { path: "settings/git-sources", redirect: { name: "git-sources" } },

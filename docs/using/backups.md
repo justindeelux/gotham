@@ -5,10 +5,10 @@ title: Backups
 # Backups
 
 The **Backups** page is the product-wide home for data protection. It lists every
-backup run and schedule across the resources you can access, and it is the only
-place the owner manages storage destinations. A database page still has its own
-**Backups** tab for that database; anything that applies to all resources lives
-here.
+backup run and schedule across the resources you can access. A database page
+still has its own **Backups** tab for that database; anything that applies to
+all resources lives here. Storage destinations have their own page under
+**Manage → Integrations → Storages**.
 
 ## Backups tab
 
@@ -60,29 +60,18 @@ Backups written before checksums existed have no stored value. They restore as
 before and the restore dialog says that no verification will run; the run list
 labels them **Not verified**. Take a new backup if the data matters.
 
-## Storage tab
+## Storages
 
-The **Storage** tab is visible to the owner only. It is an owner-level
-catalogue: configure a destination once and use it from every schedule and
-manual run.
+Destinations are configured on **Manage → Integrations → Storages** (owner
+only). Every install ships a built-in **Local disk** destination that needs no
+setup; S3-compatible destinations add a name, endpoint, region, bucket, optional
+key prefix and write-only credentials. **Test** writes, reads back and deletes a
+small probe object before the first real run.
 
-Every install ships a built-in **Local disk** provider, which writes to the
-control plane's backup directory. It cannot be deleted, so a fresh install can
-back up with no setup.
-
-S3-compatible storage works with AWS S3, Cloudflare R2, MinIO and similar
-services. A provider has a name, endpoint, region, bucket, optional key prefix,
-access key and secret key. The keys are sealed on the server and never shown
-back; leaving them blank on an edit keeps the stored ones. **Test** writes,
-reads back and deletes a small probe object, so a destination that is read-only
-or blocks deletes is reported before the first real backup; for the local
-directory it proves the same round trip. The result is shown inline.
-
-Deleting a provider does not delete past backups, but they can no longer be read
-back from it, so restores from those runs fail and the runs stay listed as
-**Provider removed**. A provider still used by a schedule cannot be deleted:
-move or delete those schedules first, so no schedule silently falls back to the
-local disk.
+Deleting a destination does not delete past backups, but they can no longer be
+read back from it, so restores from those runs fail and the runs stay listed as
+**Provider removed**. A destination still used by a schedule cannot be deleted.
+See [Storages](/using/storages) for the full behaviour and the API.
 
 ## Retention and cleanup
 
@@ -110,8 +99,8 @@ artifacts are queued for deletion before its rows disappear. A database still
 keeps its soft-delete grace window first, so nothing is removed early. The queue
 survives a provider outage and is drained by the same sweeper.
 
-The Storage tab shows, per provider, how many backups it holds and their total
-size, and for Local disk the free space. Before a run goes to Local disk, the
+The Storages page shows, per destination, how many backups it holds and their
+total size, and for Local disk the free space. Before a run goes to Local disk, the
 control plane checks that the free space covers the size of the previous run of
 that resource plus 20% (or 64 MiB when there is no previous run) and refuses the
 run with a plain message instead of filling the disk.

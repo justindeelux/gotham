@@ -5,10 +5,10 @@ title: Bản sao lưu
 # Bản sao lưu
 
 Trang **Bản sao lưu** là nơi quản lý bảo vệ dữ liệu cho toàn sản phẩm. Trang
-liệt kê mọi lần sao lưu và lịch chạy trên các tài nguyên bạn có quyền truy cập,
-và đây là nơi duy nhất chủ sở hữu quản lý các nơi lưu trữ. Trang của cơ sở dữ
-liệu vẫn có tab **Bản sao lưu** riêng cho cơ sở dữ liệu đó; mọi thứ áp dụng cho
-tất cả tài nguyên nằm ở đây.
+liệt kê mọi lần sao lưu và lịch chạy trên các tài nguyên bạn có quyền truy cập.
+Trang của cơ sở dữ liệu vẫn có tab **Bản sao lưu** riêng cho cơ sở dữ liệu đó;
+mọi thứ áp dụng cho tất cả tài nguyên nằm ở đây. Nơi lưu trữ có trang riêng dưới
+**Quản lý → Tích hợp → Lưu trữ**.
 
 ## Tab Bản sao lưu
 
@@ -61,28 +61,18 @@ phục như trước và hộp thoại khôi phục ghi rõ rằng sẽ không x
 lần chạy gắn nhãn **Chưa xác thực**. Hãy tạo bản sao mới nếu dữ liệu còn quan
 trọng.
 
-## Tab Lưu trữ
+## Nơi lưu trữ
 
-Tab **Lưu trữ** chỉ chủ sở hữu thấy. Đây là danh mục cấp chủ sở hữu: cấu hình
-một lần và dùng cho mọi lịch chạy cùng lần chạy thủ công.
+Các điểm đến được cấu hình tại **Quản lý → Tích hợp → Lưu trữ** (chỉ chủ sở hữu).
+Mỗi bản cài có sẵn **Đĩa cục bộ** không cần cấu hình; điểm đến tương thích S3
+thêm tên, endpoint, vùng, bucket, tiền tố khóa tùy chọn và thông tin đăng nhập
+chỉ ghi một chiều. **Kiểm tra** ghi, đọc lại rồi xóa một tệp thử nhỏ trước lần
+chạy thật đầu tiên.
 
-Mỗi bản cài có sẵn nơi lưu trữ **Đĩa cục bộ**, ghi vào thư mục sao lưu của máy
-điều khiển. Không thể xóa, nên bản cài mới có thể sao lưu mà không cần cấu
-hình.
-
-Lưu trữ tương thích S3 hoạt động với AWS S3, Cloudflare R2, MinIO và các dịch
-vụ tương tự. Một nơi lưu trữ gồm tên, endpoint, vùng, bucket, tiền tố tùy chọn,
-access key và secret key. Khóa được niêm phong trên máy chủ và không bao giờ
-hiện lại; để trống khi sửa sẽ giữ khóa đã lưu. **Kiểm tra** ghi, đọc lại và xóa
-một tệp thử nhỏ, nên nơi lưu trữ chỉ đọc hoặc chặn xóa được phát hiện trước lần
-sao lưu thật đầu tiên; với thư mục cục bộ cũng chứng minh đủ vòng ghi-đọc-xóa.
-Kết quả hiện ngay tại chỗ.
-
-Xóa nơi lưu trữ không xóa các bản sao cũ, nhưng không thể đọc lại từ đó, nên
-khôi phục từ các lần chạy đó sẽ thất bại và các lần chạy vẫn hiện là **Nơi lưu
-trữ đã bị xóa**. Không thể xóa nơi lưu trữ đang được một lịch sử dụng: hãy
-chuyển hoặc xóa các lịch đó trước, để không lịch nào âm thầm quay về đĩa cục
-bộ.
+Xóa điểm đến không xóa bản sao cũ, nhưng chúng không đọc lại được từ đó, nên
+khôi phục từ các lần chạy đó thất bại và vẫn hiện là **Nơi lưu trữ đã bị xóa**.
+Không thể xóa điểm đến còn được một lịch chạy dùng. Xem
+[Lưu trữ](/vi/using/storages) để biết đầy đủ và API.
 
 ## Giữ lại và dọn dẹp
 
@@ -110,7 +100,7 @@ của nó được xếp vào hàng đợi xóa trước khi các dòng biến m
 giữ thời gian ân hạn xóa mềm trước, nên không có gì bị xóa sớm. Hàng đợi sống
 sót qua sự cố nơi lưu trữ và được dọn bởi cùng tiến trình.
 
-Tab Lưu trữ hiện, theo từng nơi lưu trữ, số bản sao và tổng dung lượng, và với
+Trang Lưu trữ hiện, theo từng điểm đến, số bản sao và tổng dung lượng, và với
 Đĩa cục bộ là dung lượng trống. Trước khi chạy vào Đĩa cục bộ, bảng điều khiển
 kiểm tra dung lượng trống đủ cho lần chạy trước của tài nguyên đó cộng 20% (hoặc
 64 MiB khi chưa có lần chạy trước) và từ chối chạy với thông báo dễ hiểu thay vì

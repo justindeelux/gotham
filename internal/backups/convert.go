@@ -1,11 +1,9 @@
 package backups
 
 import (
-	"errors"
 	"time"
 
 	"github.com/google/uuid"
-	"github.com/jackc/pgx/v5/pgconn"
 	"github.com/jackc/pgx/v5/pgtype"
 )
 
@@ -39,9 +37,4 @@ func optionalString(v string) *string {
 		return nil
 	}
 	return &v
-}
-
-func isUniqueViolation(err error) bool {
-	var pgErr *pgconn.PgError
-	return errors.As(err, &pgErr) && pgErr.Code == "23505"
 }

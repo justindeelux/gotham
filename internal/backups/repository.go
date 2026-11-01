@@ -47,27 +47,9 @@ type BackupRepository interface {
 	ListDueBackupSchedules(ctx context.Context, now time.Time) ([]BackupSchedule, error)
 	MarkBackupScheduleRun(ctx context.Context, scheduleID uuid.UUID, lastRun, nextRun time.Time) (BackupSchedule, error)
 
-	CreateBackupTarget(ctx context.Context, target BackupTarget) (BackupTarget, error)
-	CreateBackupTargetWithSecrets(ctx context.Context, target BackupTarget, secrets []TargetSecret) (BackupTarget, error)
-	EnsureBuiltinTarget(ctx context.Context, userID uuid.UUID) (BackupTarget, error)
-	GetBuiltinTarget(ctx context.Context, userID uuid.UUID) (BackupTarget, error)
-	GetBackupTarget(ctx context.Context, targetID uuid.UUID) (BackupTarget, error)
-	ListBackupTargetsByUser(ctx context.Context, userID uuid.UUID) ([]BackupTarget, error)
-	UpdateBackupTarget(ctx context.Context, target BackupTarget) (BackupTarget, error)
-	UpdateBackupTargetWithSecrets(ctx context.Context, target BackupTarget, secrets []TargetSecret) (BackupTarget, error)
-	DeleteBackupTarget(ctx context.Context, targetID, userID uuid.UUID) (BackupTarget, error)
-	HasBackupsForTarget(ctx context.Context, targetID uuid.UUID) (bool, error)
-	CountBackupsForTarget(ctx context.Context, targetID uuid.UUID) (int64, error)
-	ListBackupScheduleIDsForTarget(ctx context.Context, targetID uuid.UUID) ([]uuid.UUID, error)
-	BackupUsageByTarget(ctx context.Context, userID uuid.UUID) (map[uuid.UUID]ProviderUsage, error)
-
 	ListDueArtifactCleanups(ctx context.Context, now time.Time) ([]ArtifactCleanup, error)
 	SetArtifactCleanupError(ctx context.Context, id uuid.UUID, message string, attempts int, next time.Time) error
 	DeleteArtifactCleanup(ctx context.Context, id uuid.UUID) error
-
-	CreateTargetSecret(ctx context.Context, secret TargetSecret) (TargetSecret, error)
-	UpsertTargetSecret(ctx context.Context, secret TargetSecret) (TargetSecret, error)
-	ListTargetSecrets(ctx context.Context, targetID uuid.UUID) ([]TargetSecret, error)
 }
 
 type storeBackupRepository struct {
@@ -355,6 +337,11 @@ func (r *storeBackupRepository) CreateBackupSchedule(ctx context.Context, schedu
 		KeepLast:          keepLastParam(schedule.KeepLast),
 	})
 	if err != nil {
+		if errors.Is(err, pgx.ErrNoRows) {
+			// The destination was deleted between the ownership check and the
+			// insert; report a missing storage instead of an internal error.
+			return BackupSchedule{}, ErrNotFound
+		}
 		return BackupSchedule{}, fmt.Errorf("backups: create backup schedule: %w", err)
 	}
 	return scheduleFromRow(row), nil
@@ -464,154 +451,6 @@ func (r *storeBackupRepository) MarkBackupScheduleRun(ctx context.Context, sched
 	return scheduleFromRow(row), nil
 }
 
-func (r *storeBackupRepository) CreateBackupTarget(ctx context.Context, target BackupTarget) (BackupTarget, error) {
-	row, err := r.store.CreateBackupTarget(ctx, createTargetParams(target))
-	if err != nil {
-		if isUniqueViolation(err) {
-			return BackupTarget{}, ErrConflict
-		}
-		return BackupTarget{}, fmt.Errorf("backups: create storage provider: %w", err)
-	}
-	return targetFromRow(row), nil
-}
-
-func (r *storeBackupRepository) CreateBackupTargetWithSecrets(ctx context.Context, target BackupTarget, secrets []TargetSecret) (BackupTarget, error) {
-	row, err := r.store.CreateBackupTargetWithSecrets(ctx, createTargetParams(target), targetSecretParams(secrets))
-	if err != nil {
-		if isUniqueViolation(err) {
-			return BackupTarget{}, ErrConflict
-		}
-		return BackupTarget{}, fmt.Errorf("backups: create storage provider: %w", err)
-	}
-	return targetFromRow(row), nil
-}
-
-func (r *storeBackupRepository) EnsureBuiltinTarget(ctx context.Context, userID uuid.UUID) (BackupTarget, error) {
-	// Resolve an existing builtin first: the seeding is keyed on the flag, not
-	// on the name, so a renamed or differently named row can never grow a
-	// second "Local disk" provider.
-	if existing, err := r.GetBuiltinTarget(ctx, userID); err == nil {
-		return existing, nil
-	} else if !errors.Is(err, ErrNotFound) {
-		return BackupTarget{}, err
-	}
-	row, err := r.store.EnsureBuiltinBackupTarget(ctx, pgUUID(userID))
-	if err != nil {
-		// A user-created provider already holds the name; the account still has
-		// no builtin, so surface the cause instead of inserting a duplicate.
-		return BackupTarget{}, fmt.Errorf("backups: create the built-in provider: %w", err)
-	}
-	return targetFromRow(row), nil
-}
-
-func (r *storeBackupRepository) GetBuiltinTarget(ctx context.Context, userID uuid.UUID) (BackupTarget, error) {
-	row, err := r.store.GetBuiltinBackupTarget(ctx, pgUUID(userID))
-	if err != nil {
-		if errors.Is(err, pgx.ErrNoRows) {
-			return BackupTarget{}, ErrNotFound
-		}
-		return BackupTarget{}, fmt.Errorf("backups: get the built-in provider: %w", err)
-	}
-	return targetFromRow(row), nil
-}
-
-func (r *storeBackupRepository) GetBackupTarget(ctx context.Context, targetID uuid.UUID) (BackupTarget, error) {
-	row, err := r.store.GetBackupTarget(ctx, pgUUID(targetID))
-	if err != nil {
-		if errors.Is(err, pgx.ErrNoRows) {
-			return BackupTarget{}, ErrNotFound
-		}
-		return BackupTarget{}, fmt.Errorf("backups: get storage provider: %w", err)
-	}
-	return targetFromRow(row), nil
-}
-
-func (r *storeBackupRepository) ListBackupTargetsByUser(ctx context.Context, userID uuid.UUID) ([]BackupTarget, error) {
-	rows, err := r.store.ListBackupTargetsByUser(ctx, pgUUID(userID))
-	if err != nil {
-		return nil, fmt.Errorf("backups: list storage providers: %w", err)
-	}
-	targets := make([]BackupTarget, 0, len(rows))
-	for _, row := range rows {
-		targets = append(targets, targetFromRow(row))
-	}
-	return targets, nil
-}
-
-func (r *storeBackupRepository) UpdateBackupTarget(ctx context.Context, target BackupTarget) (BackupTarget, error) {
-	row, err := r.store.UpdateBackupTarget(ctx, updateTargetParams(target))
-	if err != nil {
-		if isUniqueViolation(err) {
-			return BackupTarget{}, ErrConflict
-		}
-		if errors.Is(err, pgx.ErrNoRows) {
-			return BackupTarget{}, ErrNotFound
-		}
-		return BackupTarget{}, fmt.Errorf("backups: update storage provider: %w", err)
-	}
-	return targetFromRow(row), nil
-}
-
-func (r *storeBackupRepository) UpdateBackupTargetWithSecrets(ctx context.Context, target BackupTarget, secrets []TargetSecret) (BackupTarget, error) {
-	row, stranded, err := r.store.UpdateBackupTargetWithSecrets(ctx, updateTargetParams(target), targetSecretParams(secrets))
-	if err != nil {
-		if isUniqueViolation(err) {
-			return BackupTarget{}, ErrConflict
-		}
-		if errors.Is(err, pgx.ErrNoRows) {
-			return BackupTarget{}, ErrNotFound
-		}
-		return BackupTarget{}, fmt.Errorf("backups: update storage provider: %w", err)
-	}
-	if stranded {
-		return BackupTarget{}, ErrTargetStranded
-	}
-	return targetFromRow(row), nil
-}
-
-func (r *storeBackupRepository) HasBackupsForTarget(ctx context.Context, targetID uuid.UUID) (bool, error) {
-	exists, err := r.store.HasBackupsForTarget(ctx, pgUUID(targetID))
-	if err != nil {
-		return false, fmt.Errorf("backups: check provider backups: %w", err)
-	}
-	return exists, nil
-}
-
-func (r *storeBackupRepository) CountBackupsForTarget(ctx context.Context, targetID uuid.UUID) (int64, error) {
-	count, err := r.store.CountBackupsForTarget(ctx, pgUUID(targetID))
-	if err != nil {
-		return 0, fmt.Errorf("backups: count provider backups: %w", err)
-	}
-	return count, nil
-}
-
-func (r *storeBackupRepository) ListBackupScheduleIDsForTarget(ctx context.Context, targetID uuid.UUID) ([]uuid.UUID, error) {
-	rows, err := r.store.ListBackupScheduleIDsForTarget(ctx, pgUUID(targetID))
-	if err != nil {
-		return nil, fmt.Errorf("backups: list schedules using the provider: %w", err)
-	}
-	ids := make([]uuid.UUID, 0, len(rows))
-	for _, row := range rows {
-		ids = append(ids, uuidFromPG(row))
-	}
-	return ids, nil
-}
-
-func (r *storeBackupRepository) BackupUsageByTarget(ctx context.Context, userID uuid.UUID) (map[uuid.UUID]ProviderUsage, error) {
-	rows, err := r.store.BackupUsageByTarget(ctx, pgUUID(userID))
-	if err != nil {
-		return nil, fmt.Errorf("backups: provider usage: %w", err)
-	}
-	usage := make(map[uuid.UUID]ProviderUsage, len(rows))
-	for _, row := range rows {
-		usage[uuidFromPG(row.TargetID)] = ProviderUsage{
-			BackupCount: row.BackupCount,
-			TotalSize:   row.TotalSize,
-		}
-	}
-	return usage, nil
-}
-
 func (r *storeBackupRepository) ListDueArtifactCleanups(ctx context.Context, now time.Time) ([]ArtifactCleanup, error) {
 	rows, err := r.store.ListDueArtifactCleanups(ctx, timeToPG(now))
 	if err != nil {
@@ -667,59 +506,6 @@ func (r *storeBackupRepository) ListOwnerIDs(ctx context.Context) ([]uuid.UUID, 
 	return ids, nil
 }
 
-func (r *storeBackupRepository) DeleteBackupTarget(ctx context.Context, targetID, userID uuid.UUID) (BackupTarget, error) {
-	if err := r.store.MarkBackupSchedulesTargetChanged(ctx, pgUUID(targetID)); err != nil {
-		return BackupTarget{}, fmt.Errorf("backups: record provider change: %w", err)
-	}
-	row, err := r.store.DeleteBackupTarget(ctx, sqlc.DeleteBackupTargetParams{
-		ID:     pgUUID(targetID),
-		UserID: pgUUID(userID),
-	})
-	if err != nil {
-		if errors.Is(err, pgx.ErrNoRows) {
-			return BackupTarget{}, ErrNotFound
-		}
-		return BackupTarget{}, fmt.Errorf("backups: delete storage provider: %w", err)
-	}
-	return targetFromRow(row), nil
-}
-
-func (r *storeBackupRepository) CreateTargetSecret(ctx context.Context, secret TargetSecret) (TargetSecret, error) {
-	row, err := r.store.CreateBackupTargetSecret(ctx, sqlc.CreateBackupTargetSecretParams{
-		TargetID:   pgUUID(secret.TargetID),
-		Key:        secret.Key,
-		Ciphertext: secret.Ciphertext,
-	})
-	if err != nil {
-		return TargetSecret{}, fmt.Errorf("backups: create provider secret: %w", err)
-	}
-	return targetSecretFromRow(row), nil
-}
-
-func (r *storeBackupRepository) UpsertTargetSecret(ctx context.Context, secret TargetSecret) (TargetSecret, error) {
-	row, err := r.store.UpsertBackupTargetSecret(ctx, sqlc.UpsertBackupTargetSecretParams{
-		TargetID:   pgUUID(secret.TargetID),
-		Key:        secret.Key,
-		Ciphertext: secret.Ciphertext,
-	})
-	if err != nil {
-		return TargetSecret{}, fmt.Errorf("backups: upsert provider secret: %w", err)
-	}
-	return targetSecretFromRow(row), nil
-}
-
-func (r *storeBackupRepository) ListTargetSecrets(ctx context.Context, targetID uuid.UUID) ([]TargetSecret, error) {
-	rows, err := r.store.ListBackupTargetSecrets(ctx, pgUUID(targetID))
-	if err != nil {
-		return nil, fmt.Errorf("backups: list provider secrets: %w", err)
-	}
-	secrets := make([]TargetSecret, 0, len(rows))
-	for _, row := range rows {
-		secrets = append(secrets, targetSecretFromRow(row))
-	}
-	return secrets, nil
-}
-
 func createBackupParams(backup Backup) sqlc.CreateBackupParams {
 	db, app, svc := resourceColumns(backup.ResourceRef)
 	return sqlc.CreateBackupParams{
@@ -738,43 +524,6 @@ func createBackupParams(backup Backup) sqlc.CreateBackupParams {
 		FinishedAt:        timeToPG(backup.FinishedAt),
 		PauseDuringBackup: backup.PauseDuringBackup,
 	}
-}
-
-func createTargetParams(target BackupTarget) sqlc.CreateBackupTargetParams {
-	return sqlc.CreateBackupTargetParams{
-		ID:       pgUUID(target.ID),
-		UserID:   pgUUID(target.UserID),
-		Name:     target.Name,
-		Kind:     string(target.Kind),
-		Endpoint: target.Endpoint,
-		Region:   target.Region,
-		Bucket:   target.Bucket,
-		Prefix:   target.Prefix,
-	}
-}
-
-func updateTargetParams(target BackupTarget) sqlc.UpdateBackupTargetParams {
-	return sqlc.UpdateBackupTargetParams{
-		ID:       pgUUID(target.ID),
-		Name:     target.Name,
-		Kind:     string(target.Kind),
-		Endpoint: target.Endpoint,
-		Region:   target.Region,
-		Bucket:   target.Bucket,
-		Prefix:   target.Prefix,
-	}
-}
-
-func targetSecretParams(secrets []TargetSecret) []sqlc.UpsertBackupTargetSecretParams {
-	params := make([]sqlc.UpsertBackupTargetSecretParams, 0, len(secrets))
-	for _, secret := range secrets {
-		params = append(params, sqlc.UpsertBackupTargetSecretParams{
-			TargetID:   pgUUID(secret.TargetID),
-			Key:        secret.Key,
-			Ciphertext: secret.Ciphertext,
-		})
-	}
-	return params
 }
 
 func backupsFromRows(rows []sqlc.Backup) []Backup {
@@ -894,17 +643,6 @@ func targetFromRow(row sqlc.BackupTarget) BackupTarget {
 	}
 }
 
-func targetSecretFromRow(row sqlc.BackupTargetSecret) TargetSecret {
-	return TargetSecret{
-		ID:         uuidFromPG(row.ID),
-		TargetID:   uuidFromPG(row.TargetID),
-		Key:        row.Key,
-		Ciphertext: row.Ciphertext,
-		CreatedAt:  timeFromPG(row.CreatedAt),
-	}
-}
-
-// resourceRef picks the single resource a row belongs to. A row always has
 // exactly one of the three columns set (CHECK constraint).
 func resourceRef(database, application, service pgtype.UUID) ResourceRef {
 	switch {

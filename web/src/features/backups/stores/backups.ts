@@ -3,10 +3,8 @@ import { computed, ref } from "vue";
 
 import {
   createBackup,
-  createProvider,
   createSchedule,
   deleteBackup,
-  deleteProvider,
   deleteSchedule,
   describeBackupError,
   discardBackup,
@@ -17,8 +15,6 @@ import {
   listSchedules,
   restoreBackup,
   retryBackupCleanup,
-  testProvider,
-  updateProvider,
   updateSchedule,
 } from "@/features/backups/api/backups";
 import type {
@@ -27,13 +23,10 @@ import type {
   BackupRun,
   BackupRunStatus,
   BackupSchedule,
-  CreateProviderInput,
   CreateScheduleInput,
-  ProviderCheck,
   ResourceRef,
   RestoreResult,
   StorageProvider,
-  UpdateProviderInput,
   UpdateScheduleInput,
 } from "@/features/backups/api/backups";
 import { mergeBackupsById } from "@/features/backups/utils/backupMerge";
@@ -377,71 +370,6 @@ export const useBackupsStore = defineStore("backups", () => {
     }
   }
 
-  function applyProvider(updated: StorageProvider): void {
-    const index = providers.value.findIndex((item) => item.id === updated.id);
-    providers.value =
-      index === -1
-        ? [updated, ...providers.value]
-        : providers.value.map((item) => (item.id === updated.id ? updated : item));
-  }
-
-  async function addProvider(
-    input: CreateProviderInput,
-  ): Promise<StorageProvider> {
-    providersActing.value = true;
-    try {
-      const provider = await createProvider(input);
-      applyProvider(provider);
-      return provider;
-    } catch (err) {
-      providersErrorRaw.value = err;
-      throw err;
-    } finally {
-      providersActing.value = false;
-    }
-  }
-
-  async function editProvider(
-    providerId: string,
-    input: UpdateProviderInput,
-  ): Promise<StorageProvider> {
-    providersActing.value = true;
-    try {
-      const provider = await updateProvider(providerId, input);
-      applyProvider(provider);
-      return provider;
-    } catch (err) {
-      providersErrorRaw.value = err;
-      throw err;
-    } finally {
-      providersActing.value = false;
-    }
-  }
-
-  async function removeProvider(
-    providerId: string,
-    confirm = false,
-  ): Promise<void> {
-    providersActing.value = true;
-    try {
-      await deleteProvider(providerId, confirm);
-      providers.value = providers.value.filter((item) => item.id !== providerId);
-    } catch (err) {
-      providersErrorRaw.value = err;
-      throw err;
-    } finally {
-      providersActing.value = false;
-    }
-  }
-
-  async function checkProvider(providerId: string): Promise<ProviderCheck> {
-    try {
-      return await testProvider(providerId);
-    } catch (err) {
-      throw new Error(describeBackupError(err), { cause: err });
-    }
-  }
-
   function reset(): void {
     backupsByResource.value = {};
     restoresByResource.value = {};
@@ -509,10 +437,6 @@ export const useBackupsStore = defineStore("backups", () => {
     editSchedule,
     removeSchedule,
     fetchProviders,
-    addProvider,
-    editProvider,
-    removeProvider,
-    checkProvider,
     reset,
   };
 });

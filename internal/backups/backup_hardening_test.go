@@ -11,6 +11,7 @@ import (
 	"github.com/google/uuid"
 
 	"github.com/justindeelux/gotham/internal/containers"
+	"github.com/justindeelux/gotham/internal/storages"
 )
 
 func TestLocalStoreFlushesBeforeReturning(t *testing.T) {
@@ -18,12 +19,12 @@ func TestLocalStoreFlushesBeforeReturning(t *testing.T) {
 	if err != nil {
 		t.Fatalf("newLocalStore: %v", err)
 	}
-	originalFile, originalDir := fsyncFile, fsyncDir
-	t.Cleanup(func() { fsyncFile, fsyncDir = originalFile, originalDir })
+	originalFile, originalDir := storages.FSyncFile, storages.FSyncDir
+	t.Cleanup(func() { storages.FSyncFile, storages.FSyncDir = originalFile, originalDir })
 
 	var fileFlushed, dirFlushed bool
-	fsyncFile = func(file *os.File) error { fileFlushed = true; return originalFile(file) }
-	fsyncDir = func(dir string) error { dirFlushed = true; return originalDir(dir) }
+	storages.FSyncFile = func(file *os.File) error { fileFlushed = true; return originalFile(file) }
+	storages.FSyncDir = func(dir string) error { dirFlushed = true; return originalDir(dir) }
 
 	payload := []byte("payload")
 	if _, err := store.Put(context.Background(), "k", bytes.NewReader(payload), int64(len(payload))); err != nil {
@@ -40,9 +41,9 @@ func TestLocalStoreRemovesArtifactWhenFlushFails(t *testing.T) {
 	if err != nil {
 		t.Fatalf("newLocalStore: %v", err)
 	}
-	originalFile := fsyncFile
-	t.Cleanup(func() { fsyncFile = originalFile })
-	fsyncFile = func(*os.File) error { return errors.New("flush failed") }
+	originalFile := storages.FSyncFile
+	t.Cleanup(func() { storages.FSyncFile = originalFile })
+	storages.FSyncFile = func(*os.File) error { return errors.New("flush failed") }
 
 	if _, err := store.Put(context.Background(), "k", bytes.NewReader([]byte("x")), 1); err == nil {
 		t.Fatal("Put reported success although the flush failed")
@@ -58,10 +59,10 @@ func TestLocalStoreFlushesCreatedAncestors(t *testing.T) {
 	if err != nil {
 		t.Fatalf("newLocalStore: %v", err)
 	}
-	originalDir := fsyncDir
-	t.Cleanup(func() { fsyncDir = originalDir })
+	originalDir := storages.FSyncDir
+	t.Cleanup(func() { storages.FSyncDir = originalDir })
 	var synced []string
-	fsyncDir = func(dir string) error {
+	storages.FSyncDir = func(dir string) error {
 		synced = append(synced, dir)
 		return originalDir(dir)
 	}
@@ -88,11 +89,11 @@ func TestLocalStoreFlushesCreatedAncestors(t *testing.T) {
 
 func TestBackupFlushesArtifactBeforeRecordingCompletion(t *testing.T) {
 	fixture := newBackupFixture(t)
-	originalFile := fsyncFile
-	t.Cleanup(func() { fsyncFile = originalFile })
+	originalFile := storages.FSyncFile
+	t.Cleanup(func() { storages.FSyncFile = originalFile })
 
 	flushed := false
-	fsyncFile = func(file *os.File) error { flushed = true; return originalFile(file) }
+	storages.FSyncFile = func(file *os.File) error { flushed = true; return originalFile(file) }
 	violation := false
 	fixture.backups.finishHook = func(backup Backup) {
 		if backup.Status == BackupCompleted && !flushed {

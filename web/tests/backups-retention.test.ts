@@ -4,7 +4,7 @@ import { defineComponent, h, ref } from "vue";
 import { flushPromises, mount } from "@vue/test-utils";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
-import BackupProvidersPanel from "@/features/backups/components/BackupProvidersPanel.vue";
+import StoragesPanel from "@/features/storages/components/StoragesPanel.vue";
 import {
   backupMessages,
   isKeepLastValid,
@@ -14,6 +14,7 @@ import type { BackupSchedule } from "@/features/backups/api/backups";
 import type { ResourceBackups } from "@/features/backups/composables/useResourceBackups";
 import { useResourceBackups } from "@/features/backups/composables/useResourceBackups";
 import { useBackupsStore } from "@/features/backups/stores/backups";
+import { useStoragesStore } from "@/features/storages/stores/storages";
 import { i18n, registerDiscoveredCatalogs } from "@/shared/i18n";
 
 describe("backup retention form schema", () => {
@@ -132,8 +133,9 @@ describe("storage usage view", () => {
   });
 
   it("shows artifact count, size and local free space", async () => {
-    const store = useBackupsStore();
-    store.providers = [
+    const store = useStoragesStore();
+    vi.spyOn(store, "fetch").mockResolvedValue(undefined);
+    store.items = [
       {
         id: "p-1",
         name: "Local disk",
@@ -152,7 +154,7 @@ describe("storage usage view", () => {
       defineComponent({
         render() {
           return h(NMessageProvider, null, {
-            default: () => h(BackupProvidersPanel),
+            default: () => h(StoragesPanel),
           });
         },
       }),

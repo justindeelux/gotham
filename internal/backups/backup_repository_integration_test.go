@@ -2,6 +2,7 @@ package backups
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"os"
 	"testing"
@@ -9,6 +10,7 @@ import (
 
 	"github.com/google/uuid"
 
+	"github.com/justindeelux/gotham/internal/storages"
 	"github.com/justindeelux/gotham/internal/store"
 )
 
@@ -207,21 +209,22 @@ func TestBackupRepositoryRoundTrip(t *testing.T) {
 		t.Fatalf("schedules = %d (%v), want 1", len(schedules), err)
 	}
 
-	target, err := repo.EnsureBuiltinTarget(ctx, ownerID)
+	storageRepo := storages.NewStoreRepository(st)
+	target, err := storageRepo.EnsureBuiltinTarget(ctx, ownerID)
 	if err != nil {
 		t.Fatalf("EnsureBuiltinTarget: %v", err)
 	}
 	if !target.Builtin || target.Kind != TargetLocal {
 		t.Errorf("builtin = %+v", target)
 	}
-	if again, err := repo.GetBuiltinTarget(ctx, ownerID); err != nil || again.ID != target.ID {
+	if again, err := storageRepo.GetBuiltinTarget(ctx, ownerID); err != nil || again.ID != target.ID {
 		t.Errorf("GetBuiltinTarget = %+v, %v", again, err)
 	}
 	// Renaming the builtin row behind the API must not seed a second one.
 	if _, err := st.DB.Exec(ctx, `UPDATE backup_targets SET name=$2 WHERE id=$1`, target.ID, "Renamed-"+target.ID.String()); err != nil {
 		t.Fatalf("rename builtin: %v", err)
 	}
-	seeded, err := repo.EnsureBuiltinTarget(ctx, ownerID)
+	seeded, err := storageRepo.EnsureBuiltinTarget(ctx, ownerID)
 	if err != nil {
 		t.Fatalf("EnsureBuiltinTarget after rename: %v", err)
 	}
@@ -385,5 +388,23 @@ func TestListBackupsPagesWithinTheMembersGrant(t *testing.T) {
 	}
 	if len(everyone) != 0 {
 		t.Errorf("an unprivileged viewer saw %d rows, want 0", len(everyone))
+	}
+}
+
+func TestCreateScheduleAgainstADeletedTargetIsNotFound(t *testing.T) {
+	repo, st := backupIntegrationRepo(t)
+	_, databaseID := backupIntegrationResources(t, st)
+
+	_, err := repo.CreateBackupSchedule(context.Background(), BackupSchedule{
+		ID:            uuid.New(),
+		ResourceRef:   databaseRef(databaseID),
+		Cron:          "0 2 * * *",
+		TargetID:      uuid.New(),
+		Enabled:       true,
+		NextRunAt:     time.Now().UTC(),
+		MaxRunSeconds: DefaultMaxBackupRunSeconds,
+	})
+	if !errors.Is(err, ErrNotFound) {
+		t.Fatalf("create against a missing storage err = %v, want ErrNotFound", err)
 	}
 }

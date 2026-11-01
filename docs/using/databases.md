@@ -94,8 +94,9 @@ The connection string depends on how the database is exposed:
 ## Backups
 
 Open the **Backups** tab of a database to manage runs and schedules. Storage
-providers are managed once for the whole product in **Backups → Storage**; see
-[Backups](/using/backups) for the shared page. A backup is an engine dump taken by a temporary container on the same
+destinations are managed once for the whole product in
+**Manage → Integrations → Storages**; see [Storages](/using/storages) for the
+shared page. A backup is an engine dump taken by a temporary container on the same
 node; the artifact is compressed and stored in the selected destination. Runs
 are listed with type (`manual` or `scheduled`), status, size, destination and
 timestamps. A failed run keeps its row and error text, so you can see what went
@@ -106,8 +107,9 @@ will serve application storage and service volumes, and the **Backups** page
 lists every run and schedule in one place. Next to it, `GET /v1/backups`,
 `POST /v1/backups`, `GET /v1/backups/{id}`, `POST /v1/backups/{id}/restore`,
 `GET/POST /v1/backups/schedules`, `PATCH/DELETE /v1/backups/schedules/{id}`,
-`GET /v1/backups/restores` and `GET/POST /v1/backups/providers` are the
-resource-agnostic API. Collection routes take `limit` and `offset` and order
+`GET /v1/backups/restores` are the resource-agnostic API, and
+`GET/POST/PATCH/DELETE /v1/storages` plus `POST /v1/storages/{id}/test` manage
+destinations. `/v1/backups/providers` remains a deprecated alias. Collection routes take `limit` and `offset` and order
 newest first, and the grant is applied before paging, so a member's page is
 filled from the runs they can actually reach. Only `database` is accepted as a resource type for now;
 other types answer `400` until their driver lands.

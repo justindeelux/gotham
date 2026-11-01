@@ -6,6 +6,8 @@ import (
 	"time"
 
 	"github.com/google/uuid"
+
+	"github.com/justindeelux/gotham/internal/storages"
 )
 
 // ResourceType names a kind of resource the backup core can capture. Only
@@ -146,48 +148,24 @@ type BackupSchedule struct {
 	UpdatedAt time.Time
 }
 
-type TargetKind string
-
-const (
-	TargetS3    TargetKind = "s3"
-	TargetLocal TargetKind = "local"
+// Storage destinations are owned by internal/storages now. The names below are
+// kept so the backup code and its API aliases read naturally.
+type (
+	BackupTarget  = storages.Storage
+	ProviderUsage = storages.Usage
+	TargetKind    = storages.Kind
+	TargetCheck   = storages.Check
+	TargetSecret  = storages.Secret
 )
 
 const (
-	targetSecretAccessKey = "access_key"
-	targetSecretSecretKey = "secret_key"
+	TargetS3    = storages.KindS3
+	TargetLocal = storages.KindLocal
 
-	// BuiltinProviderName is the name of the provider every owner gets on
+	// BuiltinProviderName is the name of the storage every owner gets on
 	// first start. It always points at the control-plane disk.
-	BuiltinProviderName = "Local disk"
+	BuiltinProviderName = storages.BuiltinName
 )
-
-type BackupTarget struct {
-	ID        uuid.UUID
-	UserID    uuid.UUID
-	Name      string
-	Kind      TargetKind
-	Endpoint  string
-	Region    string
-	Bucket    string
-	Prefix    string
-	Builtin   bool
-	CreatedAt time.Time
-	UpdatedAt time.Time
-
-	// Usage is display data for the Storage view; it is never persisted on the
-	// provider row.
-	Usage ProviderUsage
-}
-
-// ProviderUsage is per-provider storage usage from run rows. FreeSpace and
-// TotalSpace are only meaningful for the local disk.
-type ProviderUsage struct {
-	BackupCount int64 `json:"backup_count"`
-	TotalSize   int64 `json:"total_size"`
-	FreeSpace   int64 `json:"free_space,omitempty"`
-	TotalSpace  int64 `json:"total_space,omitempty"`
-}
 
 // ArtifactCleanup is an artifact left behind by a hard-deleted resource. It has
 // no resource foreign key on purpose: it must outlive the backup row cascade.
@@ -207,12 +185,4 @@ type Content struct {
 	Name   string `json:"name"`
 	Kind   string `json:"kind"`
 	Target string `json:"target,omitempty"`
-}
-
-type TargetSecret struct {
-	ID         uuid.UUID
-	TargetID   uuid.UUID
-	Key        string
-	Ciphertext string
-	CreatedAt  time.Time
 }

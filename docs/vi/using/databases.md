@@ -88,9 +88,9 @@ Chuỗi kết nối phụ thuộc vào cách cơ sở dữ liệu được phơi
 
 ## Sao lưu
 
-Mở tab **Sao lưu** của một cơ sở dữ liệu để quản lý các lần chạy và lịch. Nhà
-cung cấp lưu trữ được quản lý một lần cho toàn sản phẩm trong
-**Bản sao lưu → Lưu trữ**; xem [Bản sao lưu](/vi/using/backups). Một bản sao lưu là một lần kết xuất dữ liệu (dump) của engine do một
+Mở tab **Sao lưu** của một cơ sở dữ liệu để quản lý các lần chạy và lịch. Các
+điểm đến lưu trữ được quản lý một lần cho toàn sản phẩm trong
+**Quản lý → Tích hợp → Lưu trữ**; xem [Lưu trữ](/vi/using/storages). Một bản sao lưu là một lần kết xuất dữ liệu (dump) của engine do một
 container tạm thời thực hiện trên cùng node; artifact được nén và lưu vào đích đã
 chọn. Các lần chạy được liệt kê kèm loại (`manual` hoặc `scheduled`), trạng thái,
 kích thước, đích đến và dấu thời gian. Một lần chạy thất bại vẫn giữ dòng và văn
@@ -101,8 +101,10 @@ phục vụ lưu trữ của ứng dụng cùng volume của service, và trang 
 mọi lần chạy cùng lịch ở một chỗ. Bên cạnh đó, `GET /v1/backups`, `POST /v1/backups`,
 `GET /v1/backups/{id}`, `POST /v1/backups/{id}/restore`,
 `GET/POST /v1/backups/schedules`, `PATCH/DELETE /v1/backups/schedules/{id}`,
-`GET /v1/backups/restores` và `GET/POST /v1/backups/providers` là API độc lập với
-loại tài nguyên. Các tuyến dạng bộ sưu tập nhận `limit` và `offset`, sắp xếp mới
+`GET /v1/backups/restores` là API độc lập với
+loại tài nguyên. `GET/POST/PATCH/DELETE /v1/storages` cùng
+`POST /v1/storages/{id}/test` quản lý điểm đến; `/v1/backups/providers` là bí
+danh đã lỗi thời. Các tuyến dạng bộ sưu tập nhận `limit` và `offset`, sắp xếp mới
 nhất trước, và quyền truy cập được áp dụng trước khi phân trang, nên trang của
 thành viên chứa đầy các lần chạy họ thực sự với tới được. Hiện chỉ `database` được chấp nhận làm loại tài nguyên; các loại
 khác trả `400` cho tới khi driver của chúng có mặt.
@@ -146,13 +148,13 @@ cung cấp **Đĩa cục bộ** có sẵn. Xóa một lịch không đụng tớ
 
 Nhà cung cấp là một danh mục ở cấp chủ sở hữu: cấu hình một lần và dùng cho mọi cơ
 sở dữ liệu. Mỗi bản cài có sẵn nhà cung cấp **Đĩa cục bộ** ghi vào thư mục sao lưu
-của control plane. Nó luôn được liệt kê, không thể đổi sang loại khác và không thể
+của máy điều khiển. Nó luôn được liệt kê, không thể đổi sang loại khác và không thể
 xóa, nên bản cài mới sao lưu được mà không cần thiết lập gì và artifact không bao
 giờ rơi vào một đích không tên.
 
 Lưu trữ tương thích S3 được hỗ trợ với AWS S3, Cloudflare R2, MinIO và các dịch vụ
 tương tự: cấu hình endpoint, region, bucket, tiền tố khóa tùy chọn, access key và
-secret key. Các nhà cung cấp được cấu hình trong **Sao lưu → Nhà cung cấp lưu trữ**,
+secret key. Các điểm đến được cấu hình tại **Quản lý → Tích hợp → Lưu trữ**,
 một lần cho tài khoản chủ sở hữu chứ không phải cho mỗi cơ sở dữ liệu. Chỉ chủ sở
 hữu cấu hình chúng; thành viên có thể chạy, liệt kê và khôi phục bản sao lưu của
 cơ sở dữ liệu thuộc dự án mình tham gia, nhưng không thể chọn hay đọc nhà cung cấp.

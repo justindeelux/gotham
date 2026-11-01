@@ -145,6 +145,7 @@ describe("navSections", () => {
         "instance",
         "monitoring",
         "cleanup",
+        "storages",
         "updates",
       ]),
     );
@@ -195,7 +196,6 @@ describe("navSections", () => {
     expect(integrations?.children?.map((item) => item.key)).toEqual([
       "git-sources",
       "mcp",
-      "storages",
     ]);
   });
 });

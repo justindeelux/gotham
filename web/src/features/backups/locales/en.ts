@@ -3,12 +3,8 @@ const en = {
     eyebrow: "Operations · Data protection",
     title: "Backups",
     description:
-      "Every backup run and schedule across your projects, and the storage " +
-      "destinations the control plane writes to.",
-  },
-  tabs: {
-    backups: "Backups",
-    storage: "Storage",
+      "Every backup run and schedule across your projects, with the storage " +
+      "destination each run used.",
   },
   filters: {
     allTypes: "All resource types",
@@ -77,32 +73,13 @@ const en = {
     preset: "How often",
   },
   storage: {
-    title: "Storage providers",
-    add: "Add storage provider",
-    addTitle: "Add storage provider",
-    editTitle: "Edit storage provider",
-    name: "Name",
-    kind: "Kind",
-    endpoint: "Endpoint",
-    region: "Region",
-    bucket: "Bucket",
-    prefix: "Prefix",
-    accessKey: "Access key",
-    secretKey: "Secret key",
-    localNote:
-      "Local disk keeps artifacts on the control plane. It needs no setup and cannot be deleted.",
-    builtin: "Built in",
-    empty: "No storage providers yet",
-    onlyBuiltin:
-      "Backups are kept on the control plane disk. Add an S3-compatible provider to keep copies somewhere else.",
     localDisk: "Local disk",
-    deletedProvider: "Deleted storage",
     providerRemoved: "Provider removed",
     unknownProvider: "Storage",
-    usage: "{count} backups · {size}",
-    freeSpace: "{free} free of {total}",
-    deleteConfirm:
-      "Delete {name}? Backups stored there become unreadable and cannot be restored. A provider still used by a schedule cannot be deleted.",
+    noneHint:
+      "Backups are kept on the built-in Local disk. Add an S3-compatible " +
+      "destination in Storages to keep copies somewhere else.",
+    manage: "Manage storages",
   },
   resourceTypes: {
     application: "Application",

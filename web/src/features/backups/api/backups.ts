@@ -1,7 +1,8 @@
 import { http } from "@/shared/api/http";
 import { isApiError, stripErrorPrefix } from "@/features/servers";
 import { i18n } from "@/shared/i18n";
-import { toProviderBody } from "@/features/backups/utils/providerBody";
+import { listStorages } from "@/features/storages/api/storages";
+import type { Storage } from "@/features/storages/schemas/storages";
 
 export type ResourceType = "application" | "database" | "service";
 
@@ -14,7 +15,7 @@ export type BackupRunType = "manual" | "scheduled";
 
 export type BackupRunStatus = "running" | "completed" | "failed";
 
-export type StorageProviderKind = "s3" | "local";
+export type StorageProviderKind = Storage["kind"];
 
 export interface BackupRun {
   id: string;
@@ -76,41 +77,7 @@ export interface RestoreResult {
   status: RestoreStatus;
 }
 
-export interface StorageProvider {
-  id: string;
-  name: string;
-  kind: StorageProviderKind;
-  endpoint?: string;
-  region?: string;
-  bucket?: string;
-  prefix?: string;
-  builtin: boolean;
-  has_credentials: boolean;
-  backup_count: number;
-  total_size: number;
-  free_space?: number;
-  total_space?: number;
-  created_at: string;
-  updated_at: string;
-}
-
-export interface ProviderCheck {
-  ok: boolean;
-  message: string;
-}
-
-export interface CreateProviderInput {
-  name: string;
-  kind: StorageProviderKind;
-  endpoint?: string;
-  region?: string;
-  bucket?: string;
-  prefix?: string;
-  access_key?: string;
-  secret_key?: string;
-}
-
-export interface UpdateProviderInput extends CreateProviderInput {}
+export type StorageProvider = Storage;
 
 export interface CreateScheduleInput {
   resource: ResourceRef;
@@ -193,18 +160,6 @@ interface ScheduleEnvelope {
 
 interface ScheduleListEnvelope {
   schedules: BackupSchedule[];
-}
-
-interface ProviderEnvelope {
-  provider: StorageProvider;
-}
-
-interface ProviderListEnvelope {
-  providers: StorageProvider[];
-}
-
-interface ProviderCheckEnvelope {
-  check: ProviderCheck;
 }
 
 interface BackupProtectionEnvelope {
@@ -352,48 +307,9 @@ export async function deleteSchedule(scheduleId: string): Promise<void> {
 }
 
 export async function listProviders(): Promise<StorageProvider[]> {
-  const response = await http.get<ProviderListEnvelope>("/backups/providers");
-  return response.data.providers ?? [];
-}
-
-export async function createProvider(
-  input: CreateProviderInput,
-): Promise<StorageProvider> {
-  const response = await http.post<ProviderEnvelope>(
-    "/backups/providers",
-    toProviderBody(input),
-  );
-  return response.data.provider;
-}
-
-export async function updateProvider(
-  providerId: string,
-  input: UpdateProviderInput,
-): Promise<StorageProvider> {
-  const response = await http.patch<ProviderEnvelope>(
-    `/backups/providers/${providerId}`,
-    toProviderBody(input),
-  );
-  return response.data.provider;
-}
-
-export async function deleteProvider(
-  providerId: string,
-  confirm = false,
-): Promise<void> {
-  await http.delete(`/backups/providers/${providerId}`, {
-    params: confirm ? { confirm: "true" } : undefined,
-  });
-}
-
-export async function testProvider(
-  providerId: string,
-): Promise<ProviderCheck> {
-  const response = await http.post<ProviderCheckEnvelope>(
-    `/backups/providers/${providerId}/test`,
-    {},
-  );
-  return response.data.check;
+  // The run and schedule pickers only read the destination list; creating and
+  // editing moved to the Storages page.
+  return listStorages();
 }
 
 export type BackupProtectionResource = "applications" | "databases" | "services";

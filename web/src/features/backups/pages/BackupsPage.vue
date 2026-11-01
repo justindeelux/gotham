@@ -11,16 +11,12 @@ import {
   NSpace,
   NSpin,
   NSwitch,
-  NTabPane,
-  NTabs,
   NTag,
   NText,
 } from "naive-ui";
-import { onMounted, ref, watch } from "vue";
-import { useRoute } from "vue-router";
+import { computed, onMounted } from "vue";
 
 import { BrandIcon } from "@/features/add-resource";
-import BackupProvidersPanel from "@/features/backups/components/BackupProvidersPanel.vue";
 import { useBackupsOverview } from "@/features/backups/composables/useBackupsOverview";
 import type { BackupRun } from "@/features/backups/api/backups";
 import { CRON_PRESETS, describeCron, runDisplay, runDuration, statusTagType } from "@/features/backups/utils/backupStatus";
@@ -33,27 +29,22 @@ function t(key: string, params?: Record<string, string | number>): string {
   return String(i18n.global.t(key, params ?? {}));
 }
 
-const route = useRoute();
 const authStore = useAuthStore();
 const overview = useBackupsOverview();
 
-const activeTab = ref(
-  route.query.tab === "storage" && authStore.isOwner ? "storage" : "backups",
+// The built-in Local disk is always present; "none configured" means the owner
+// has not added a destination of their own yet.
+const onlyBuiltinStorage = computed(
+  () =>
+    authStore.isOwner &&
+    overview.backupsStore.providers.length > 0 &&
+    overview.backupsStore.providers.every((item) => item.builtin),
 );
 
 const presetOptions = CRON_PRESETS.map((cron) => ({
   label: describeCron(cron),
   value: cron,
 }));
-
-watch(
-  () => authStore.isOwner,
-  (isOwner) => {
-    if (!isOwner) {
-      activeTab.value = "backups";
-    }
-  },
-);
 
 onMounted(() => {
   void overview.load();
@@ -85,18 +76,25 @@ function restorePrompt(backup: BackupRun): string {
         <p class="page-desc">{{ t("backups.page.description") }}</p>
       </div>
       <div class="page-actions">
-        <NButton
-          v-if="activeTab === 'backups'"
-          type="primary"
-          @click="overview.openBackupNow()"
-        >
+        <NButton type="primary" @click="overview.openBackupNow()">
           {{ t("backups.backupNow.action") }}
         </NButton>
       </div>
     </div>
 
-    <NTabs v-model:value="activeTab" type="line" animated class="tabs">
-      <NTabPane name="backups" :tab="t('backups.tabs.backups')">
+    <NAlert
+      v-if="onlyBuiltinStorage"
+      type="info"
+      :show-icon="false"
+      class="storage-hint"
+    >
+      {{ t("backups.storage.noneHint") }}
+      <RouterLink :to="{ name: 'storages' }">
+        {{ t("backups.storage.manage") }}
+      </RouterLink>
+    </NAlert>
+
+    <div class="backups-content">
         <div class="filters">
           <NSelect
             v-model:value="overview.typeFilter.value"
@@ -367,16 +365,7 @@ function restorePrompt(backup: BackupRun): string {
             </NSpace>
           </NSpin>
         </NCard>
-      </NTabPane>
-
-      <NTabPane
-        v-if="authStore.isOwner"
-        name="storage"
-        :tab="t('backups.tabs.storage')"
-      >
-        <BackupProvidersPanel />
-      </NTabPane>
-    </NTabs>
+    </div>
 
     <NModal
       v-model:show="overview.backupDialogOpen.value"

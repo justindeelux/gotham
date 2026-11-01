@@ -5,7 +5,7 @@ import { defineComponent, h, nextTick } from "vue";
 import { createPinia, setActivePinia } from "pinia";
 
 import { useBackupsStore } from "@/features/backups/stores/backups";
-import { useProviderCatalog } from "@/features/backups/composables/useProviderCatalog";
+import { useStoragesPage } from "@/features/storages/composables/useStoragesPage";
 import {
   registerDiscoveredCatalogs,
   resetLocaleState,
@@ -19,6 +19,19 @@ declare global {
   var __backupsCalls: number | undefined;
 }
 
+vi.mock("@/features/storages/api/storages", async (importOriginal) => {
+  const mod =
+    await importOriginal<typeof import("@/features/storages/api/storages")>();
+  return {
+    ...mod,
+    testStorage: async () => {
+      globalThis.__providerTestPosts =
+        (globalThis.__providerTestPosts ?? 0) + 1;
+      throw { status: 502, message: "agent: unreachable" };
+    },
+  };
+});
+
 vi.mock("@/features/backups/api/backups", async (importOriginal) => {
   const mod =
     await importOriginal<typeof import("@/features/backups/api/backups")>();
@@ -29,11 +42,6 @@ vi.mock("@/features/backups/api/backups", async (importOriginal) => {
       throw (
         globalThis.__backupsFailure ?? { status: 401, message: "auth: expired" }
       );
-    },
-    testProvider: async () => {
-      globalThis.__providerTestPosts =
-        (globalThis.__providerTestPosts ?? 0) + 1;
-      throw { status: 502, message: "agent: unreachable" };
     },
   };
 });
@@ -100,30 +108,30 @@ describe("retained 409 refusal refreshes en-vi-en with zero refetch", () => {
 describe("retained provider-test failure refreshes on switch", () => {
   it("derives the mocked 502 from raw cause once, with no resend", async () => {
     globalThis.__providerTestPosts = 0;
-    let catalog: ReturnType<typeof useProviderCatalog> | null = null;
+    let page: ReturnType<typeof useStoragesPage> | null = null;
     const Harness = defineComponent({
-      name: "ProviderTestHarness",
+      name: "StorageTestHarness",
       setup() {
-        catalog = useProviderCatalog();
+        page = useStoragesPage();
         return () => h("div");
       },
     });
     const wrapper = mount(
       defineComponent({
-        name: "ProviderTestRoot",
+        name: "StorageTestRoot",
         setup: () =>
           () => h(NMessageProvider, null, { default: () => h(Harness) }),
       }),
     );
     try {
-      await catalog!.test("provider-1");
+      await page!.test("storage-1");
       expect(globalThis.__providerTestPosts).toBe(1);
-      expect(catalog!.checkMessage("provider-1")).toBe(
+      expect(page!.checkMessage("storage-1")).toBe(
         "The node agent is unreachable or the job failed on the node. Check the node status and retry. (agent: unreachable)",
       );
       setLocale("vi", null);
       await nextTick();
-      expect(catalog!.checkMessage("provider-1")).toBe(
+      expect(page!.checkMessage("storage-1")).toBe(
         "Không kết nối được node agent hoặc tác vụ thất bại trên node. Kiểm tra trạng thái node rồi thử lại. (agent: unreachable)",
       );
       expect(globalThis.__providerTestPosts).toBe(1);

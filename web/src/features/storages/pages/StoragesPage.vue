@@ -1,8 +1,11 @@
 <script setup lang="ts">
-import { NEmpty } from "naive-ui";
-import { useI18n } from "vue-i18n";
+import StoragesPanel from "@/features/storages/components/StoragesPanel.vue";
 
-const { t } = useI18n();
+import { i18n } from "@/shared/i18n";
+
+function t(key: string): string {
+  return String(i18n.global.t(key));
+}
 </script>
 
 <template>
@@ -15,6 +18,6 @@ const { t } = useI18n();
       </div>
     </div>
 
-    <NEmpty :description="t('storages.page.empty')" />
+    <StoragesPanel />
   </div>
 </template>

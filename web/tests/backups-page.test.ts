@@ -3,12 +3,12 @@ import { mount } from "@vue/test-utils";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { nextTick, ref } from "vue";
 
-import type { BackupRun, StorageProviderKind } from "@/features/backups/api/backups";
-import BackupProviderDialog from "@/features/backups/components/BackupProviderDialog.vue";
+import type { BackupRun } from "@/features/backups/api/backups";
 import en from "@/features/backups/locales/en";
 import viMessages from "@/features/backups/locales/vi";
-import type { ProviderCatalog } from "@/features/backups/composables/useProviderCatalog";
-import { providerCatalogKey } from "@/features/backups/composables/useProviderCatalog";
+import StorageDialog from "@/features/storages/components/StorageDialog.vue";
+import type { StoragesPageState } from "@/features/storages/composables/useStoragesPage";
+import type { StorageKind } from "@/features/storages/schemas/storages";
 import {
   CRON_PRESETS,
   describeCron,
@@ -151,13 +151,13 @@ describe("run duration", () => {
   });
 });
 
-function providerCatalog(overrides: Partial<ProviderCatalog> = {}): ProviderCatalog {
+function storageState(overrides: Record<string, unknown> = {}): StoragesPageState {
   return {
-    backupsStore: { providersActing: false },
+    store: { acting: false },
     dialogOpen: ref(true),
     editingId: ref(null),
     name: ref(""),
-    kind: ref<StorageProviderKind>("s3"),
+    kind: ref<StorageKind>("s3"),
     endpoint: ref(""),
     region: ref(""),
     bucket: ref(""),
@@ -165,6 +165,7 @@ function providerCatalog(overrides: Partial<ProviderCatalog> = {}): ProviderCata
     accessKey: ref(""),
     secretKey: ref(""),
     checks: ref({}),
+    onlyBuiltin: ref(false),
     resetForm: vi.fn(),
     openCreate: vi.fn(),
     openEdit: vi.fn(),
@@ -174,22 +175,19 @@ function providerCatalog(overrides: Partial<ProviderCatalog> = {}): ProviderCata
     test: vi.fn(),
     checkMessage: vi.fn(() => ""),
     ...overrides,
-  } as unknown as ProviderCatalog;
+  } as unknown as StoragesPageState;
 }
 
-describe("storage provider dialog", () => {
+describe("storage dialog", () => {
   it("shows the S3 fields and the write-only key note", async () => {
-    const catalog = providerCatalog();
-    const wrapper = mount(BackupProviderDialog, {
+    const wrapper = mount(StorageDialog, {
       attachTo: document.body,
-      global: {
-        provide: { [providerCatalogKey as symbol]: catalog },
-      },
+      props: { state: storageState() },
     });
     try {
       await nextTick();
       const text = document.body.textContent ?? "";
-      expect(text).toContain("Add storage provider");
+      expect(text).toContain("Add storage");
       expect(text).toContain("Endpoint");
       expect(text).toContain("Bucket");
       expect(text).toContain("Secret key");
@@ -200,12 +198,9 @@ describe("storage provider dialog", () => {
   });
 
   it("hides the S3 fields for the local disk kind", async () => {
-    const catalog = providerCatalog({ kind: ref<StorageProviderKind>("local") });
-    const wrapper = mount(BackupProviderDialog, {
+    const wrapper = mount(StorageDialog, {
       attachTo: document.body,
-      global: {
-        provide: { [providerCatalogKey as symbol]: catalog },
-      },
+      props: { state: storageState({ kind: ref<StorageKind>("local") }) },
     });
     try {
       await nextTick();

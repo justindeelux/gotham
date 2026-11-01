@@ -3,12 +3,8 @@ const vi = {
     eyebrow: "Vận hành · Bảo vệ dữ liệu",
     title: "Bản sao lưu",
     description:
-      "Mọi lần sao lưu và lịch chạy trên các dự án của bạn, cùng các nơi " +
-      "lưu trữ mà bảng điều khiển ghi vào.",
-  },
-  tabs: {
-    backups: "Bản sao lưu",
-    storage: "Lưu trữ",
+      "Mọi lần sao lưu và lịch chạy trên các dự án của bạn, kèm nơi lưu trữ " +
+      "mà mỗi lần chạy đã dùng.",
   },
   filters: {
     allTypes: "Mọi loại tài nguyên",
@@ -78,33 +74,13 @@ const vi = {
     preset: "Tần suất",
   },
   storage: {
-    title: "Nơi lưu trữ",
-    add: "Thêm nơi lưu trữ",
-    addTitle: "Thêm nơi lưu trữ",
-    editTitle: "Sửa nơi lưu trữ",
-    name: "Tên",
-    kind: "Loại",
-    endpoint: "Endpoint",
-    region: "Vùng",
-    bucket: "Bucket",
-    prefix: "Tiền tố",
-    accessKey: "Access key",
-    secretKey: "Secret key",
-    localNote:
-      "Đĩa cục bộ giữ bản sao trên máy điều khiển. Không cần cấu hình và không thể xóa.",
-    builtin: "Có sẵn",
-    empty: "Chưa có nơi lưu trữ nào",
-    onlyBuiltin:
-      "Bản sao lưu đang nằm trên đĩa của máy điều khiển. Thêm một nơi lưu trữ " +
-      "tương thích S3 để giữ bản sao ở nơi khác.",
     localDisk: "Đĩa cục bộ",
-    deletedProvider: "Nơi lưu trữ đã xóa",
     providerRemoved: "Nơi lưu trữ đã bị xóa",
     unknownProvider: "Lưu trữ",
-    usage: "{count} bản sao lưu · {size}",
-    freeSpace: "Còn {free} trống trên {total}",
-    deleteConfirm:
-      "Xóa {name}? Các bản sao lưu ở đó sẽ không đọc được và không thể khôi phục. Không thể xóa nơi lưu trữ đang được một lịch sử dụng.",
+    noneHint:
+      "Bản sao lưu đang nằm trên Đĩa cục bộ có sẵn. Thêm một nơi lưu trữ " +
+      "tương thích S3 trong Lưu trữ để giữ bản sao ở chỗ khác.",
+    manage: "Quản lý lưu trữ",
   },
   resourceTypes: {
     application: "Ứng dụng",

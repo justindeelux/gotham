@@ -273,6 +273,7 @@ const errorPrefixPackages = new Set([
   "instance",
   "monitoring",
   "notifications",
+  "storages",
   "oauth",
   "providers",
   "projects",

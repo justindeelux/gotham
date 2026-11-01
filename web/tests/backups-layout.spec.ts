@@ -172,6 +172,10 @@ const providers = [
     kind: "local",
     builtin: true,
     has_credentials: false,
+    backup_count: 0,
+    total_size: 0,
+    free_space: 40 * 1024 ** 3,
+    total_space: 80 * 1024 ** 3,
     created_at: now,
     updated_at: now,
   },
@@ -185,6 +189,8 @@ const providers = [
     prefix: "logs/",
     builtin: false,
     has_credentials: true,
+    backup_count: 3,
+    total_size: 2 * 1024 ** 3,
     created_at: now,
     updated_at: now,
   },
@@ -252,8 +258,8 @@ async function openBackups(
   await page.route(/\/api\/v1\/backups\/schedules(\?.*)?$/, async (route) => {
     await route.fulfill({ json: { schedules } });
   });
-  await page.route("**/api/v1/backups/providers", async (route) => {
-    await route.fulfill({ json: { providers } });
+  await page.route("**/api/v1/storages", async (route) => {
+    await route.fulfill({ json: { storages: providers } });
   });
   await page.route(/\/api\/v1\/databases(\?.*)?$/, async (route) => {
     await route.fulfill({ json: { databases: [database] } });
@@ -371,25 +377,40 @@ test("stacks runs as cards without overflow at 390px", async ({ page }) => {
   expect(display).toBe("block");
 });
 
-test("hides storage editing from a member", async ({ page }) => {
+test("hides storage management from a member", async ({ page }) => {
   await openBackups(page, "member");
   await expect(
     page.locator(".n-tabs-tab").filter({ hasText: "Storage" }),
   ).toHaveCount(0);
-  await page.goto(`${baseURL}/backups?tab=storage`);
-  await page.getByRole("heading", { name: "Backups", level: 1 }).waitFor();
-  await expect(
-    page.locator(".backups-table tbody tr"),
-  ).toHaveCount(3);
-  await expect(page.getByText("Storage providers")).toHaveCount(0);
+  await expect(page.getByText("Storage destinations")).toHaveCount(0);
+  await page.goto(`${baseURL}/integrations/storages`);
+  // Storages is an owner route; a member never sees the management surface.
+  await expect(page.locator(".storage-row")).toHaveCount(0);
 });
 
-test("keeps the provider prefix clearable and keys write-only", async ({
+test("keeps the prefix clearable and keys write-only on the Storages page", async ({
   page,
 }) => {
-  await openBackups(page);
-  await page.locator(".n-tabs-tab").filter({ hasText: "Storage" }).click();
-  const row = page.locator(".backup-row").filter({ hasText: "Offsite" });
+  const state = session("owner");
+  await page.addInitScript((value) => {
+    document.defaultView?.localStorage.setItem("gotham.auth.session", value);
+  }, JSON.stringify(state));
+  await page.route("**/api/v1/**", async (route) => {
+    await route.fulfill({ json: {} });
+  });
+  await page.route("**/api/v1/auth/me", async (route) => {
+    await route.fulfill({ json: { user: state.user } });
+  });
+  await page.route("**/api/v1/version", async (route) => {
+    await route.fulfill({ json: { version: "v0.2.1-dev" } });
+  });
+  await page.route("**/api/v1/storages", async (route) => {
+    await route.fulfill({ json: { storages: providers } });
+  });
+  await page.goto(`${baseURL}/integrations/storages`);
+  await page.getByRole("heading", { name: "Storages", level: 1 }).waitFor();
+
+  const row = page.locator(".storage-row").filter({ hasText: "Offsite" });
   await row.getByRole("button", { name: "Edit" }).click();
 
   const prefix = page.getByLabel("Prefix").locator("input");
@@ -397,11 +418,11 @@ test("keeps the provider prefix clearable and keys write-only", async ({
 
   const patch = page.waitForRequest(
     (request) =>
-      request.url().includes(`/api/v1/backups/providers/${providerId}`) &&
+      request.url().includes(`/api/v1/storages/${providerId}`) &&
       request.method() === "PATCH",
   );
-  await page.route(`**/api/v1/backups/providers/${providerId}`, async (route) => {
-    await route.fulfill({ json: { provider: { ...providers[1], prefix: "" } } });
+  await page.route(`**/api/v1/storages/${providerId}`, async (route) => {
+    await route.fulfill({ json: { storage: { ...providers[1], prefix: "" } } });
   });
   await prefix.fill("");
   await page.getByRole("button", { name: "Save" }).click();
@@ -410,6 +431,20 @@ test("keeps the provider prefix clearable and keys write-only", async ({
   expect(body["prefix"]).toBe("");
   expect(body).not.toHaveProperty("access_key");
   expect(body).not.toHaveProperty("secret_key");
+});
+
+test("links to Storages when only the built-in destination is configured", async ({
+  page,
+}) => {
+  await openBackups(page);
+  await page.route("**/api/v1/storages", async (route) => {
+    await route.fulfill({ json: { storages: [providers[0]] } });
+  });
+  await page.reload();
+  await page.getByRole("heading", { name: "Backups", level: 1 }).waitFor();
+  const link = page.getByRole("link", { name: "Manage storages" });
+  await expect(link).toBeVisible();
+  await expect(link).toHaveAttribute("href", "/integrations/storages");
 });
 
 test("schedule form reads vertically and fits at 390px", async ({ page }) => {

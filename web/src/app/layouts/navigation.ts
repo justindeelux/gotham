@@ -85,6 +85,7 @@ export const navSections: NavSection[] = [
             labelKey: "nav.items.storages",
             icon: "db",
             to: "storages",
+            ownerOnly: true,
           },
         ],
       },

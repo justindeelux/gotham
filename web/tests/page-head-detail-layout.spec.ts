@@ -1038,6 +1038,13 @@ test("dashboard keeps both grids at three columns and deploys full height beside
   await expect(page.locator(".dash-side")).toContainText("Recent deploys");
   await expect(page.locator(".dash-main")).not.toContainText("Recent deploys");
 
+  await expect(serverLink.locator(".node-name")).toHaveAttribute("title", longName);
+  await expect(serverLink.locator(".node-name")).toHaveText(longName);
+  await expect(serverLink.locator(".node-sub")).toHaveAttribute(
+    "title",
+    "10.0.0.5:22 · Ubuntu 22.04 · Docker 27.0.3",
+  );
+
   const meter = serverLink.locator(".usage-segments").first();
   await expect(meter.locator(".usage-block")).toHaveCount(50);
 
@@ -1069,11 +1076,24 @@ test("dashboard keeps both grids at three columns and deploys full height beside
       const nodeCard = document.querySelector<HTMLElement>(".node-card-link")!;
       const meter = nodeCard.querySelector<HTMLElement>(".usage-segments")!;
       const block = meter.querySelector<HTMLElement>(".usage-block")!;
+      const nodeName = nodeCard.querySelector<HTMLElement>(".node-name")!;
+      const nodeHead = nodeCard.querySelector<HTMLElement>(".node-head")!;
+      const nodeStatus = nodeCard.querySelector<HTMLElement>(".node-status")!;
+      const nodeTop = nodeCard.querySelector<HTMLElement>(".node-top")!;
+      const nodeMetrics = nodeCard.querySelector<HTMLElement>(".node-metrics")!;
+      const nodeTags = nodeCard.querySelector<HTMLElement>(".node-stack .n-space")!;
+      const nodeSub = nodeCard.querySelector<HTMLElement>(".node-sub")!;
+      const nameStyle = getComputedStyle(nodeName);
+      const subStyle = getComputedStyle(nodeSub);
       const mainRect = main.getBoundingClientRect();
       const sideRect = side.getBoundingClientRect();
       const projectCardRect = projectCard.getBoundingClientRect();
       const nodeCardRect = nodeCard.getBoundingClientRect();
       const blockRect = block.getBoundingClientRect();
+      const nameRect = nodeName.getBoundingClientRect();
+      const headRect = nodeHead.getBoundingClientRect();
+      const statusRect = nodeStatus.getBoundingClientRect();
+      const subRect = nodeSub.getBoundingClientRect();
       return {
         overflow:
           document.documentElement.scrollWidth >
@@ -1097,6 +1117,21 @@ test("dashboard keeps both grids at three columns and deploys full height beside
         segmentGap: getComputedStyle(meter).gap,
         projectCardOverflow: projectCard.scrollWidth > projectCard.clientWidth + 1,
         nodeCardOverflow: nodeCard.scrollWidth > nodeCard.clientWidth + 1,
+        nameWidth: nameRect.width,
+        headWidth: headRect.width,
+        nameHeight: nameRect.height,
+        nameLineHeight: parseFloat(nameStyle.lineHeight),
+        nameWhiteSpace: nameStyle.whiteSpace,
+        nameTextOverflow: nameStyle.textOverflow,
+        nameEllipsized: nodeName.scrollWidth > nodeName.clientWidth + 1,
+        statusTop: statusRect.top,
+        nameBottom: nameRect.bottom,
+        subHeight: subRect.height,
+        subLineHeight: parseFloat(subStyle.lineHeight),
+        subTextOverflow: subStyle.textOverflow,
+        topOverflow: nodeTop.scrollWidth > nodeTop.clientWidth + 1,
+        metricsOverflow: nodeMetrics.scrollWidth > nodeMetrics.clientWidth + 1,
+        tagsOverflow: nodeTags.scrollWidth > nodeTags.clientWidth + 1,
       };
     });
     expect(layout.overflow, `no horizontal overflow at ${width}px`).toBe(false);
@@ -1112,6 +1147,36 @@ test("dashboard keeps both grids at three columns and deploys full height beside
     expect(layout.nodeCardOverflow, `server cards fit their track at ${width}px`).toBe(
       false,
     );
+    expect(layout.topOverflow, `server card header fits at ${width}px`).toBe(false);
+    expect(layout.metricsOverflow, `server card meters fit at ${width}px`).toBe(false);
+    expect(layout.tagsOverflow, `server card tags fit at ${width}px`).toBe(false);
+    expect(
+      layout.nameWhiteSpace,
+      `server name does not wrap at ${width}px`,
+    ).toBe("nowrap");
+    expect(layout.nameTextOverflow, `server name ellipsizes at ${width}px`).toBe(
+      "ellipsis",
+    );
+    expect(
+      layout.nameHeight,
+      `server name stays on one line at ${width}px`,
+    ).toBeLessThanOrEqual(layout.nameLineHeight + 1);
+    expect(
+      layout.nameWidth,
+      `status badge never squeezes the server name at ${width}px`,
+    ).toBeGreaterThanOrEqual(layout.headWidth - 1);
+    expect(
+      layout.statusTop,
+      `status badge sits below the server name at ${width}px`,
+    ).toBeGreaterThanOrEqual(layout.nameBottom - 0.5);
+    expect(
+      layout.subTextOverflow,
+      `server address ellipsizes at ${width}px`,
+    ).toBe("ellipsis");
+    expect(
+      layout.subHeight,
+      `server address stays on one line at ${width}px`,
+    ).toBeLessThanOrEqual(layout.subLineHeight + 1);
     if (width <= 1024) {
       expect(layout.projectColumns, `projects stack at ${width}px`).toBe(1);
       expect(layout.nodeColumns, `servers stack at ${width}px`).toBe(1);
@@ -1133,6 +1198,10 @@ test("dashboard keeps both grids at three columns and deploys full height beside
         (layout.nodeGridWidth - 2 * layout.nodeGap) / 3,
         0,
       );
+      expect(
+        layout.nameEllipsized,
+        `the long server name ellipsizes instead of wrapping at ${width}px`,
+      ).toBe(true);
       expect(layout.sideTop, `deploys stay level with the status card at ${width}px`).toBeCloseTo(
         layout.mainTop,
         0,

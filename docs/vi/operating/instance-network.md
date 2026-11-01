@@ -1,15 +1,15 @@
 ---
-title: Cài đặt và cài đặt máy chủ của nút
+title: Chung và cài đặt máy chủ của nút
 ---
 
-# Cài đặt và cài đặt máy chủ của nút
+# Chung và cài đặt máy chủ của nút
 
-**Cài đặt** (`/settings/instance`) cấu hình chính instance Gotham: địa chỉ
-control plane công khai và tên của nó. Mọi thứ mô tả một máy cụ thể — múi giờ,
-mạng và các tùy chọn hệ thống Linux — nằm trên trang nút của máy đó, trong
-**Máy chủ → [nút] → Cài đặt nút**. Cả hai nơi chỉ chủ sở hữu thấy được.
+**Hệ thống → Cài đặt → Chung** (`/settings/general`) cấu hình chính instance
+Gotham: địa chỉ control plane công khai và tên của nó. Mọi thứ mô tả một máy cụ
+thể — múi giờ, mạng và các tùy chọn hệ thống Linux — nằm trên trang nút của máy
+đó, trong **Máy chủ → [nút] → Cài đặt nút**. Cả hai nơi chỉ chủ sở hữu thấy được.
 
-## Cài đặt
+## Chung
 
 | Cài đặt | Mục đích |
 |---|---|

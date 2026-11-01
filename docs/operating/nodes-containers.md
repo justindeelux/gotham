@@ -106,7 +106,7 @@ A node whose agent is old or unreachable, or whose host lacks the systemd
 network and time stack, shows the sections read-only with a plain-language
 reason instead of failing a save. Remote nodes need a current agent: re-run the
 agent installer to add host settings support. See
-[Settings and node host settings](/operating/instance-network) for the
+[General and node host settings](/operating/instance-network) for the
 capability states and the keep/revert countdown.
 
 ## Node overview

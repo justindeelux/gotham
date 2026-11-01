@@ -78,7 +78,7 @@ có thể thu hồi lời mời đang chờ trên cùng trang. Lời mời chỉ
 
 ## Cài đặt tài khoản
 
-Mở **Cài đặt → Hồ sơ** (`/settings/profile`).
+Mở **Hồ sơ** từ menu tài khoản (`/settings/profile`).
 
 - **Tài khoản** hiển thị email, vai trò và ngày tham gia của bạn. Địa chỉ email
   không thể đổi ở đây.
@@ -106,6 +106,6 @@ liệt kê hay thu hồi được phiên.
 ## API token
 
 API token (`gt1_` với phạm vi read, deploy hoặc admin) có thể được tạo, xoay vòng và
-thu hồi từ **Cài đặt → API token** hoặc qua API. Xem
+thu hồi từ **Quản lý → Bảo mật → API token** hoặc qua API. Xem
 [API token](/vi/reference/api-tokens). Token của thành viên không bao giờ mang phạm
 vi `admin` và chỉ hoạt động trong các dự án được cấp.

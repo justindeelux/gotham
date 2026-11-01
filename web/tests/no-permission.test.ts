@@ -60,9 +60,9 @@ describe("owner route guard", () => {
     signInAsOwner(false);
     await router.push("/domains");
     expect(router.currentRoute.value.name).toBe("forbidden");
-    await router.push("/settings/updates");
+    await router.push("/updates");
     expect(router.currentRoute.value.name).toBe("forbidden");
-    await router.push("/settings/instance");
+    await router.push("/settings/general");
     expect(router.currentRoute.value.name).toBe("forbidden");
   });
 
@@ -70,9 +70,9 @@ describe("owner route guard", () => {
     signInAsOwner(true);
     await router.push("/domains");
     expect(router.currentRoute.value.name).toBe("domains");
-    await router.push("/settings/updates");
+    await router.push("/updates");
     expect(router.currentRoute.value.name).toBe("updates");
-    await router.push("/settings/instance");
+    await router.push("/settings/general");
     expect(router.currentRoute.value.name).toBe("instance");
   });
 });

@@ -42,7 +42,7 @@ thông báo đó; thông báo không thuộc dự án nào chỉ hiện với ch
 
 ## Kênh tùy chọn
 
-Mở **Cài đặt → Thông báo** (`/settings/notifications`). Kênh có phạm vi **Mọi tài
+Mở **Quản lý → Thông báo** (`/notifications`). Kênh có phạm vi **Mọi tài
 nguyên**, một ứng dụng hoặc một cơ sở dữ liệu. Chỉ chủ sở hữu thấy và quản lý kênh
 Mọi tài nguyên; người truy cập được tài nguyên sẽ thấy kênh thuộc tài nguyên đó.
 
@@ -202,7 +202,7 @@ chuyển trạng thái của từng sự cố/kênh được giữ, nên một l
 đã phục hồi; nếu lần mở hết hạn hoặc bị hủy trước khi gửi thành công, thông báo phục
 hồi cho kênh đó bị chặn và lý do được giữ trong lịch sử.
 
-Cài đặt hiển thị tình trạng hiện tại của từng kênh: **Đang gửi được**, **Đang thử
+Trang này hiển thị tình trạng hiện tại của từng kênh: **Đang gửi được**, **Đang thử
 lại**, **Không gửi được** hoặc **Chưa gửi lần nào**. Khi chủ sở hữu có lần gửi thất
 bại vĩnh viễn, **Cần chú ý** liệt kê chúng kèm kênh, sự kiện và lỗi có giới hạn, và
 có nút **Thử lại**. Một lần gửi thử thành công hoặc một lần gửi hợp lệ sau đó xóa tình

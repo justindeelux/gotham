@@ -47,7 +47,7 @@ connection** before deploying. Both credentials can be replaced or removed
 there.
 
 **Connected providers.** Connect a GitHub App or a GitLab connection once under
-**Settings → Git sources**, then pick the account and repository in the wizard.
+**Manage → Integrations → Git sources**, then pick the account and repository in the wizard.
 Connections belong to your account, and a private repository still deploys with
 an SSH deploy key.
 

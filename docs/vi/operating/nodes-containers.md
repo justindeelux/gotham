@@ -99,7 +99,7 @@ thay đổi mạng đang chờ. Chỉ chủ sở hữu mới mở được các 
 Nút có agent cũ hoặc không kết nối được, hoặc thiếu ngăn xếp mạng và thời gian
 systemd, sẽ hiển thị các phần ở chế độ chỉ đọc kèm lý do rõ ràng thay vì lưu thất
 bại. Nút từ xa cần agent mới: hãy chạy lại trình cài agent để có hỗ trợ cài đặt
-máy chủ. Xem [Cài đặt và cài đặt máy chủ của nút](/vi/operating/instance-network)
+máy chủ. Xem [Chung và cài đặt máy chủ của nút](/vi/operating/instance-network)
 để biết các trạng thái khả năng và đếm ngược giữ/hoàn tác.
 
 ## Tổng quan node

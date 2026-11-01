@@ -1,8 +1,8 @@
 ---
-title: Thiết lập MCP
+title: MCP
 ---
 
-# Thiết lập MCP
+# MCP
 
 MCP (Model Context Protocol) cho phép trợ lý AI như Claude Code hay Cursor làm
 việc với instance Gotham của bạn: liệt kê dự án, máy chủ và ứng dụng, đọc log và
@@ -16,13 +16,12 @@ cảnh báo rằng token và dữ liệu công cụ sẽ truyền đi không đ�
 chỉ HTTPS trước khi kết nối ứng dụng; HTTP thường chỉ phù hợp với địa chỉ loopback
 trên cùng máy khi phát triển.
 
-Chủ sở hữu đặt địa chỉ trong **Hệ thống Gotham → Chung → URL control plane**.
-Thành viên không đổi được, nên hãy đề nghị chủ sở hữu khi thấy cảnh báo.
+Chủ sở hữu đặt địa chỉ trong **Hệ thống → Cài đặt → Chung → URL control
+plane**. Thành viên không đổi được, nên hãy đề nghị chủ sở hữu khi thấy cảnh báo.
 
 ## Tạo kết nối
 
-1. Mở **Thiết lập MCP** ở sidebar trong mục **Truy cập** (hoặc vào
-   `/settings/mcp`).
+1. Mở **Quản lý → Tích hợp → MCP** (hoặc vào `/integrations/mcp`).
 2. Chọn mức truy cập:
    - **Chỉ đọc** — xem dự án, máy chủ, ứng dụng và tài nguyên. Không thể tạo,
      thay đổi hay triển khai gì.
@@ -36,8 +35,8 @@ Trang thiết lập không bao giờ cung cấp phạm vi `admin`. Phạm vi đ�
 tác instance chỉ chủ sở hữu và không thuộc kết nối của trợ lý. Cả chủ sở hữu và
 thành viên đều tạo được token chỉ đọc hoặc triển khai ở đây.
 
-Token có tên `MCP setup <ngày>` và xuất hiện trong **Cài đặt → API token**, nơi
-bạn có thể xoay vòng hoặc thu hồi sau này.
+Token có tên `MCP setup <ngày>` và xuất hiện trong **Quản lý → Bảo mật → API
+token**, nơi bạn có thể xoay vòng hoặc thu hồi sau này.
 
 ## Ứng dụng của thành viên chạm tới được gì
 
@@ -83,7 +82,7 @@ dạng `Authorization: Bearer <YOUR_TOKEN>`.
 
 ## Xoay vòng hoặc thu hồi
 
-Mở **Cài đặt → API token** từ menu tài khoản. **Xoay vòng** thay bí mật và dừng
+Mở **Quản lý → Bảo mật → API token**. **Xoay vòng** thay bí mật và dừng
 bí mật cũ ngay lập tức; hãy cập nhật token mới vào ứng dụng. **Thu hồi** kết thúc
 quyền truy cập ngay và không thể hoàn tác. Token đã thu hồi nhận `401`, nên hãy xóa
 mục cũ trong ứng dụng nữa.

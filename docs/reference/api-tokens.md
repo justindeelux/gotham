@@ -17,9 +17,9 @@ only its SHA-256 hash is stored. Send it in the standard header:
 Authorization: Bearer gt1_<token>
 ```
 
-In the console, open **Settings → API tokens** from the account menu to create,
-list, rotate and revoke your own tokens. They can also be managed through the
-API itself, using either a signed-in session or an existing token.
+In the console, open **Manage → Security → API tokens** (the account menu links
+here too) to create, list, rotate and revoke your own tokens. They can also be
+managed through the API itself, using either a signed-in session or an existing token.
 
 ## Scopes
 
@@ -83,8 +83,8 @@ so the console can warn before a client sends a credential. `role` is `owner` or
 `member`, and `capabilities` lists what the MCP endpoint supports on this
 instance. The response contains no token or secret.
 
-The console's **MCP setup** page uses this route and turns it into ready-made
-client configurations; see [MCP setup](/using/mcp).
+The console's **MCP** page uses this route and turns it into ready-made
+client configurations; see [MCP](/using/mcp).
 
 ## Create
 

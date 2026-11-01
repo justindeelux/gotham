@@ -181,7 +181,7 @@ own root, so the two values must be the same.
 | `GOTHAM_UPDATE_CURRENT` | running version | Override the reported version (wrappers and tests). |
 | `GOTHAM_UPDATE_OFFER_CACHE_TTL` | `10m` | How long an agent release offer is cached. |
 
-The console's **Settings → Updates** schedule takes precedence over
+The console's **System → Updates** schedule takes precedence over
 `AUTO_UPDATE` and `AUTO_UPDATE_INTERVAL` once a schedule has been saved. See
 [Updates](/guide/updates).
 

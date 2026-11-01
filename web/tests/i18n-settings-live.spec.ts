@@ -247,7 +247,7 @@ test("I18N-8 channel draft survives a switch with zero API calls", async ({
   const log: ApiLog = { calls: [] };
   const { context, page } = await openPage(
     browser,
-    "/settings/notifications",
+    "/notifications",
     "en",
     900,
     log,
@@ -288,7 +288,7 @@ test("I18N-8 channel test failure rederives with exactly one POST per attempt", 
   });
   const { context, page } = await openPage(
     browser,
-    "/settings/notifications",
+    "/notifications",
     "en",
     900,
     log,
@@ -320,7 +320,7 @@ test("I18N-8 open delete confirm refreshes with zero DELETE sent", async ({
   const log: ApiLog = { calls: [] };
   const { context, page } = await openPage(
     browser,
-    "/settings/notifications",
+    "/notifications",
     "en",
     900,
     log,

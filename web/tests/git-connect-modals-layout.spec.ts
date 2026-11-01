@@ -100,7 +100,7 @@ async function mockApi(page: Page): Promise<void> {
 async function openDialog(page: Page, name: string): Promise<Locator> {
   await page.setViewportSize({ width: 1440, height: 900 });
   await mockApi(page);
-  await page.goto(`${baseURL}/settings/git-sources`);
+  await page.goto(`${baseURL}/integrations/git-sources`);
   await page.getByRole("button", { name, exact: true }).first().click();
   const dialog = page.locator(".n-modal.n-card");
   await expect(dialog).toBeVisible();

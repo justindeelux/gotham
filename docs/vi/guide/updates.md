@@ -46,7 +46,7 @@ thất bại với thông báo rõ ràng thay vì làm hỏng lần cập nhật
 
 ## Lịch trên bảng điều khiển
 
-**Cài đặt → Cập nhật** chỉ dành cho chủ sở hữu. Trang này hiển thị
+**Hệ thống → Cập nhật** chỉ dành cho chủ sở hữu. Trang này hiển thị
 phiên bản hiện tại, phiên bản mới nhất, lần kiểm tra gần nhất, nhật ký thay đổi và
 kết quả của lần cập nhật gần nhất, đồng thời có **Kiểm tra cập nhật** và
 **Cập nhật ngay**.

@@ -179,7 +179,7 @@ mình, nên hai giá trị phải giống nhau.
 | `GOTHAM_UPDATE_CURRENT` | phiên bản đang chạy | Ghi đè phiên bản được báo (cho wrapper và kiểm thử). |
 | `GOTHAM_UPDATE_OFFER_CACHE_TTL` | `10m` | Thời gian cache một đề nghị cập nhật cho agent. |
 
-Lịch trong **Cài đặt → Cập nhật** của bảng điều khiển được ưu tiên hơn `AUTO_UPDATE`
+Lịch trong **Hệ thống → Cập nhật** của bảng điều khiển được ưu tiên hơn `AUTO_UPDATE`
 và `AUTO_UPDATE_INTERVAL` khi một lịch đã được lưu. Xem
 [Cập nhật](/vi/guide/updates).
 

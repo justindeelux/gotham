@@ -44,7 +44,7 @@ owner-only. See [Members and access](/using/members-access).
 
 ## Optional channels
 
-Open **Settings → Notifications** (`/settings/notifications`). A channel belongs
+Open **Manage → Notifications** (`/notifications`). A channel belongs
 to **All resources**, one application or one database. Only the owner can see or
 manage an All resources channel; a scoped channel is visible to people who can
 reach its resource.
@@ -212,7 +212,7 @@ not delivered after its recovery; if an opening expired or was cancelled before
 any successful send, the recovery for that channel is suppressed with the reason
 kept in history.
 
-Settings shows each channel's current health: **Delivering**, **Retrying**,
+The page shows each channel's current health: **Delivering**, **Retrying**,
 **Cannot deliver** or **No attempts yet**. When the owner has terminal delivery
 failures, **Needs attention** lists them with the channel, event and bounded
 error, and offers **Retry**. A successful explicit retest or a later valid

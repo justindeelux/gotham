@@ -34,7 +34,7 @@ See [Security](/operating/security) for the trust model behind these routes.
 - [Terminal and files](/operating/terminal-files) — host shells on a node and the
   remote file manager, with the feature flags that gate both.
 - [App store](/operating/app-store) — install and remove host tools on a node.
-- [Settings and node host settings](/operating/instance-network) — the
+- [General and node host settings](/operating/instance-network) — the
   control-plane address and name, plus each node's timezone, network and
   system settings.
 - [Proxy and DNS](/operating/proxy-dns) — Traefik routers, certificates and DNS

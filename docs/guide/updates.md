@@ -45,7 +45,7 @@ message instead of breaking the next update.
 
 ## The console schedule
 
-**Settings → Updates** is owner-only. It shows the current version, the
+**System → Updates** is owner-only. It shows the current version, the
 latest available version, the last check, the changelog and the outcome of the
 last update attempt, and offers **Check for updates** and **Update now**.
 

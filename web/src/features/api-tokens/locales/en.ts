@@ -21,7 +21,6 @@ const en = {
     neverUsed: "Never",
     active: "Active",
     revoked: "Revoked",
-    revokedOn: "Revoked {date}",
     rotate: "Rotate",
     revoke: "Revoke",
     rotateConfirm:

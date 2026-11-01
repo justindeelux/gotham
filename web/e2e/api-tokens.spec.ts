@@ -167,7 +167,11 @@ test("creates, rotates and revokes a token as the owner", async ({
   const revokedRow = page
     .locator('[data-testid="api-tokens-table"] tbody tr.is-revoked')
     .filter({ hasText: name });
-  await expect(revokedRow).toContainText("Revoked");
+  const statusCell = revokedRow.getByTestId("token-status");
+  await expect(statusCell).toContainText("Revoked");
+  const revokedTime = statusCell.locator(".status-time");
+  await expect(revokedTime).toHaveText(/\w/);
+  await expect(revokedTime).not.toContainText("Revoked");
   await expect(revokedRow.getByRole("button", { name: "Revoke" })).toHaveCount(0);
 
   const listed = await request.get("/api/v1/tokens", { headers: authHeaders() });
@@ -219,11 +223,13 @@ test("creates and revokes a token as a member without the admin scope", async ({
   await expect(row).toBeVisible();
   await row.getByRole("button", { name: "Revoke" }).click();
   await confirmPopover(page, "Revoke");
-  await expect(
-    page
-      .locator('[data-testid="api-tokens-table"] tbody tr.is-revoked')
-      .filter({ hasText: name }),
-  ).toContainText("Revoked");
+  const revokedMemberRow = page
+    .locator('[data-testid="api-tokens-table"] tbody tr.is-revoked')
+    .filter({ hasText: name });
+  await expect(revokedMemberRow).toContainText("Revoked");
+  await expect(revokedMemberRow.locator(".status-time")).not.toContainText(
+    "Revoked",
+  );
 
   expect(
     guardrails.apiFailures,

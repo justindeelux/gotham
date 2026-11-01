@@ -23,7 +23,6 @@ const vi: ApiTokensMessages = {
     neverUsed: "Chưa dùng",
     active: "Đang hoạt động",
     revoked: "Đã thu hồi",
-    revokedOn: "Thu hồi {date}",
     rotate: "Xoay vòng",
     revoke: "Thu hồi",
     rotateConfirm:

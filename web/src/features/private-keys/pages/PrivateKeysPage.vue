@@ -24,7 +24,6 @@ import { useI18n } from "vue-i18n";
 
 import { usePrivateKeysPage } from "@/features/private-keys/composables/usePrivateKeysPage";
 import type { PrivateKey } from "@/features/private-keys/schemas/keys";
-import { compactPublicKey } from "@/features/private-keys/utils/randomName";
 import { useCopyText } from "@/shared/composables/useCopyText";
 import { formatDate } from "@/shared/utils/format";
 
@@ -76,30 +75,6 @@ const columns: DataTableColumns<PrivateKey> = [
         : t("private-keys.list.emptyValue"),
   },
   {
-    title: String(t("private-keys.list.columns.description")),
-    key: "description",
-    width: 220,
-    render: (key) =>
-      h(
-        "span",
-        { class: "description-cell" },
-        key.description || t("private-keys.list.emptyValue"),
-      ),
-  },
-  {
-    title: String(t("private-keys.list.columns.publicKey")),
-    key: "public_key",
-    width: 240,
-    render: (key) =>
-      key.public_key
-        ? h(
-            "code",
-            { class: "public-key", title: key.public_key },
-            compactPublicKey(key.public_key),
-          )
-        : t("private-keys.list.emptyValue"),
-  },
-  {
     title: String(t("private-keys.list.columns.created")),
     key: "created_at",
     width: 130,
@@ -139,10 +114,7 @@ const columns: DataTableColumns<PrivateKey> = [
               }),
               disabled: !key.public_key,
               onClick: () =>
-                void copyText(
-                  key.public_key,
-                  t("private-keys.list.columns.publicKey"),
-                ),
+                void copyText(key.public_key, t("private-keys.view.publicKey")),
             },
             { default: () => t("private-keys.actions.copy") },
           ),
@@ -250,7 +222,7 @@ const columns: DataTableColumns<PrivateKey> = [
           :data="page.keys.value"
           :row-key="(key: PrivateKey) => key.id"
           :bordered="false"
-          :scroll-x="1400"
+          :scroll-x="940"
         />
       </NSpin>
     </NCard>
@@ -587,30 +559,10 @@ const columns: DataTableColumns<PrivateKey> = [
   margin-top: calc(var(--space-2) * -1);
 }
 
-.description-cell {
-  color: var(--fg-2);
-  display: block;
-  max-width: 100%;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-}
-
-.public-key,
 .detail-value {
   font-family: var(--font-mono);
   font-size: var(--text-xs);
   color: var(--fg-2);
-}
-
-.public-key {
-  display: block;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-}
-
-.detail-value {
   overflow-wrap: anywhere;
 }
 

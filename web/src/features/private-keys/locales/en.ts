@@ -13,8 +13,6 @@ const en = {
     columns: {
       name: "Name",
       type: "Type",
-      description: "Description",
-      publicKey: "Public key",
       created: "Created",
       usedBy: "Servers",
       actions: "Actions",

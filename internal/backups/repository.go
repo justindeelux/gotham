@@ -337,6 +337,11 @@ func (r *storeBackupRepository) CreateBackupSchedule(ctx context.Context, schedu
 		KeepLast:          keepLastParam(schedule.KeepLast),
 	})
 	if err != nil {
+		if errors.Is(err, pgx.ErrNoRows) {
+			// The destination was deleted between the ownership check and the
+			// insert; report a missing storage instead of an internal error.
+			return BackupSchedule{}, ErrNotFound
+		}
 		return BackupSchedule{}, fmt.Errorf("backups: create backup schedule: %w", err)
 	}
 	return scheduleFromRow(row), nil

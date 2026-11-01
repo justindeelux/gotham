@@ -235,17 +235,14 @@ func (m *Manager) Test(ctx context.Context, userID, storageID uuid.UUID) (Check,
 	}
 	store, err := m.Open(ctx, *target)
 	if err != nil {
-		if errors.Is(err, netguard.ErrDenied) {
-			return Check{OK: false, Message: "storage endpoint is not allowed"}, nil
-		}
-		return Check{OK: false, Message: boundedDiag(err.Error())}, nil
+		return m.connectionFailure(storageID, err), nil
 	}
 	if s3, ok := store.(interface {
 		BucketExists(context.Context) (bool, error)
 	}); ok {
 		exists, err := s3.BucketExists(ctx)
 		if err != nil {
-			return Check{OK: false, Message: boundedDiag(err.Error())}, nil
+			return m.connectionFailure(storageID, err), nil
 		}
 		if !exists {
 			return Check{OK: false, Message: "bucket " + target.Bucket + " does not exist or is not accessible"}, nil
@@ -254,10 +251,7 @@ func (m *Manager) Test(ctx context.Context, userID, storageID uuid.UUID) (Check,
 	// A read-only or lifecycle-restricted destination must be reported now,
 	// not after the first real backup has already failed.
 	if err := probe(ctx, store); err != nil {
-		if errors.Is(err, netguard.ErrDenied) {
-			return Check{OK: false, Message: "storage endpoint is not allowed"}, nil
-		}
-		return Check{OK: false, Message: boundedDiag(err.Error())}, nil
+		return m.connectionFailure(storageID, err), nil
 	}
 	if store.Kind() == string(KindS3) {
 		return Check{OK: true, Message: "connected to " + target.Bucket}, nil
@@ -486,6 +480,22 @@ func probe(ctx context.Context, store ObjectStore) error {
 		return fmt.Errorf("%w: the storage does not allow deleting a backup: %v", ErrValidation, deleteErr)
 	}
 	return nil
+}
+
+// connectionFailure keeps our own actionable probe/validation messages but
+// never echoes a raw dial or DNS error back to the caller; the full error goes
+// to the log instead.
+func (m *Manager) connectionFailure(storageID uuid.UUID, err error) Check {
+	switch {
+	case errors.Is(err, netguard.ErrDenied):
+		return Check{OK: false, Message: "storage endpoint is not allowed"}
+	case errors.Is(err, ErrValidation):
+		return Check{OK: false, Message: boundedDiag(err.Error())}
+	default:
+		m.logger.Warn("storages: connection test failed",
+			"storage_id", storageID.String(), "error", err)
+		return Check{OK: false, Message: "could not connect to the storage endpoint"}
+	}
 }
 
 const diagLimit = 600

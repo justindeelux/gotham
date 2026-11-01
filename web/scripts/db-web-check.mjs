@@ -53,7 +53,7 @@ function isoOffset(deltaSeconds) {
 
 async function main() {
   const format = await loadModule("../src/shared/utils/format.ts");
-  const targetBody = await loadModule("../src/features/backups/utils/providerBody.ts");
+  const targetBody = await loadModule("../src/features/storages/utils/providerBody.ts");
   const storeMerge = await loadModule("../src/features/databases/utils/storeMerge.ts");
   const backupMerge = await loadModule("../src/features/backups/utils/backupMerge.ts");
   const restoreOutcomes = await loadModule("../src/features/backups/utils/restoreOutcomes.ts");

@@ -181,9 +181,15 @@ func (b *fakeBackend) Delete(context.Context, string) error {
 	return nil
 }
 
-type fakeBackends struct{ backend *fakeBackend }
+type fakeBackends struct {
+	backend *fakeBackend
+	openErr error
+}
 
 func (f fakeBackends) Open(context.Context, Storage, Credentials) (ObjectStore, error) {
+	if f.openErr != nil {
+		return nil, f.openErr
+	}
 	return f.backend, nil
 }
 
@@ -478,6 +484,38 @@ func TestPrivateMinIOEndpointIsAllowed(t *testing.T) {
 		AccessKey: "ak", SecretKey: "sk",
 	}); err != nil {
 		t.Fatalf("Create with a private endpoint: %v", err)
+	}
+}
+
+func TestTestHidesRawDialErrors(t *testing.T) {
+	repo := newFakeRepository()
+	backend := &fakeBackend{kind: string(KindS3)}
+	manager := New(Config{
+		Repository: repo,
+		Secret:     "0123456789abcdef0123456789abcdef",
+		LocalDir:   t.TempDir(),
+		Backends:   fakeBackends{backend: backend, openErr: errors.New("dial tcp 10.0.0.9:9000: connect: connection refused")},
+	})
+	userID := uuid.New()
+	created, err := manager.Create(context.Background(), userID, Request{
+		Name: "bucket", Kind: "s3", Endpoint: "http://127.0.0.1:9000", Bucket: "b",
+		AccessKey: "ak", SecretKey: "sk",
+	})
+	if err != nil {
+		t.Fatalf("Create: %v", err)
+	}
+	check, err := manager.Test(context.Background(), userID, created.ID)
+	if err != nil {
+		t.Fatalf("Test: %v", err)
+	}
+	if check.OK {
+		t.Fatalf("check = %+v, want failure", check)
+	}
+	if strings.Contains(check.Message, "dial tcp") || strings.Contains(check.Message, "10.0.0.9") {
+		t.Fatalf("probe leaked raw dial text: %s", check.Message)
+	}
+	if check.Message != "could not connect to the storage endpoint" {
+		t.Errorf("message = %q, want the generic connection failure", check.Message)
 	}
 }
 

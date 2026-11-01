@@ -6,6 +6,7 @@ import {
   storageListEnvelopeSchema,
 } from "@/features/storages/schemas/storages";
 import type { Storage, StorageCheck, StorageKind } from "@/features/storages/schemas/storages";
+import { toProviderBody } from "@/features/storages/utils/providerBody";
 import { http } from "@/shared/api/http";
 import { i18n } from "@/shared/i18n";
 import { parseWith } from "@/shared/validation/parse";
@@ -23,24 +24,6 @@ export interface CreateStorageInput {
 
 export interface UpdateStorageInput extends CreateStorageInput {}
 
-function toStorageBody(
-  input: CreateStorageInput | UpdateStorageInput,
-): Record<string, unknown> {
-  const body: Record<string, unknown> = { kind: input.kind };
-  for (const [key, value] of Object.entries(input)) {
-    if (typeof value === "string") {
-      // region/prefix are cleared explicitly; other blank fields are omitted
-      // so the legacy server keeps the stored value.
-      if (value.trim() !== "" || key === "region" || key === "prefix") {
-        body[key] = value;
-      }
-    } else if (value !== undefined) {
-      body[key] = value;
-    }
-  }
-  return body;
-}
-
 export async function listStorages(): Promise<Storage[]> {
   const response = await http.get<unknown>("/storages");
   return parseWith(storageListEnvelopeSchema, response.data, {
@@ -49,7 +32,7 @@ export async function listStorages(): Promise<Storage[]> {
 }
 
 export async function createStorage(input: CreateStorageInput): Promise<Storage> {
-  const response = await http.post<unknown>("/storages", toStorageBody(input));
+  const response = await http.post<unknown>("/storages", toProviderBody(input));
   return parseWith(storageEnvelopeSchema, response.data, {
     context: "Storage",
   }).storage;
@@ -61,7 +44,7 @@ export async function updateStorage(
 ): Promise<Storage> {
   const response = await http.patch<unknown>(
     `/storages/${storageId}`,
-    toStorageBody(input),
+    toProviderBody(input),
   );
   return parseWith(storageEnvelopeSchema, response.data, {
     context: "Storage",

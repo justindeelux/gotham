@@ -35,6 +35,12 @@ async function isOwner(request: APIRequestContext): Promise<boolean> {
 
 async function openPrivateKeys(page: Page): Promise<void> {
   await page.goto("/dashboard");
+  const security = page
+    .locator("#app-nav")
+    .getByRole("button", { name: "Security" });
+  if ((await security.getAttribute("aria-expanded")) !== "true") {
+    await security.click();
+  }
   await page.getByRole("link", { name: "Private keys" }).click();
   await expect(page).toHaveURL(/\/security\/private-keys$/);
   await expect(

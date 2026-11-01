@@ -1,16 +1,16 @@
 ---
-title: Settings and node host settings
+title: General and node host settings
 ---
 
-# Settings and node host settings
+# General and node host settings
 
-**Settings** (`/settings/instance`) configures the Gotham instance itself: its
-public control-plane address and name. Everything that describes one machine —
-timezone, network and Linux system options — lives on that machine's node page
-under **Servers → [node] → Node settings** instead. Both surfaces are visible
-to the owner only.
+**System → Settings → General** (`/settings/general`) configures the Gotham
+instance itself: its public control-plane address and name. Everything that
+describes one machine — timezone, network and Linux system options — lives on
+that machine's node page under **Servers → [node] → Node settings** instead.
+Both surfaces are visible to the owner only.
 
-## Settings
+## General
 
 | Setting | Purpose |
 |---|---|

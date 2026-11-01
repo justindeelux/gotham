@@ -1,7 +1,7 @@
 const en = {
   page: {
     eyebrow: "Access · Notifications",
-    title: "Notification channels",
+    title: "Notifications",
     description:
       "Deploy and backup events are delivered to your channels: " +
       "Discord and Slack webhooks, a Telegram bot, or SMTP email. Channels " +

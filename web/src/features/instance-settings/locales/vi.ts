@@ -3,7 +3,7 @@ import type en from "./en";
 const vi: typeof en = {
   page: {
     eyebrow: "Hệ thống · Chủ sở hữu",
-    title: "Cài đặt",
+    title: "Chung",
     description:
       "Cấu hình chính instance Gotham: địa chỉ control plane công khai và tên của nó. Chỉ dành cho chủ sở hữu.",
   },

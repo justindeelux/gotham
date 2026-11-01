@@ -78,7 +78,7 @@ miền & SSL của chủ sở hữu; xem [Proxy và DNS](/vi/operating/proxy-dns
 
 ## Nguồn Git
 
-Mở **Cài đặt → Nguồn Git** (`/settings/git-sources`). Chỉ chủ sở hữu quản lý kết
+Mở **Quản lý → Tích hợp → Nguồn Git** (`/integrations/git-sources`). Chỉ chủ sở hữu quản lý kết
 nối Git và GitHub App. Phạm vi của API token vẫn áp dụng cho các lệnh gọi API. Bí
 mật — client secret, admin token và webhook secret — là chỉ ghi và không bao giờ
 hiển thị sau khi lưu.

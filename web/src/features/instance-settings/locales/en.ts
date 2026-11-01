@@ -1,7 +1,7 @@
 const en = {
   page: {
     eyebrow: "System · Owner",
-    title: "Settings",
+    title: "General",
     description:
       "Configure the Gotham instance itself: its public control-plane address and name. Visible to the owner only.",
   },

@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { computed } from "vue";
+import { computed, ref, watch } from "vue";
 import { useI18n } from "vue-i18n";
 import { RouterLink, useRoute } from "vue-router";
 
@@ -23,6 +23,47 @@ const serversCount = computed<number>(() => serversStore.servers.length);
 const activeKey = computed<string>(() => activeNavKey(route.path));
 
 const sections = computed(() => visibleNavSections(navSections, authStore.isOwner));
+
+const activeGroupKey = computed<string | null>(() => {
+  for (const section of sections.value) {
+    for (const item of section.items) {
+      if (item.children?.some((child) => child.key === activeKey.value)) {
+        return item.key;
+      }
+    }
+  }
+  return null;
+});
+
+const expandedGroups = ref<Set<string>>(new Set());
+
+watch(
+  activeGroupKey,
+  (key) => {
+    if (key && !expandedGroups.value.has(key)) {
+      expandedGroups.value = new Set([...expandedGroups.value, key]);
+    }
+  },
+  { immediate: true },
+);
+
+function isGroupOpen(key: string): boolean {
+  return expandedGroups.value.has(key);
+}
+
+function toggleGroup(key: string): void {
+  const next = new Set(expandedGroups.value);
+  if (next.has(key)) {
+    next.delete(key);
+  } else {
+    next.add(key);
+  }
+  expandedGroups.value = next;
+}
+
+function groupPanelId(key: string): string {
+  return `nav-group-${key}`;
+}
 </script>
 
 <template>
@@ -42,17 +83,52 @@ const sections = computed(() => visibleNavSections(navSections, authStore.isOwne
     <nav class="sidebar-body">
       <template v-for="section in sections" :key="section.labelKey">
         <p class="nav-label">{{ t(section.labelKey) }}</p>
-        <RouterLink
-          v-for="item in section.items"
-          :key="item.key"
-          class="nav-item"
-          :class="{ 'is-active': activeKey === item.key }"
-          :to="{ name: item.to }"
-        >
-          <GothamIcon :name="item.icon" />
-          <span>{{ t(item.labelKey) }}</span>
-          <span v-if="item.key === 'servers'" class="nav-count">{{ serversCount }}</span>
-        </RouterLink>
+        <template v-for="item in section.items" :key="item.key">
+          <div v-if="item.children" class="nav-group">
+            <button
+              type="button"
+              class="nav-item nav-group-toggle"
+              :class="{ 'is-open': isGroupOpen(item.key) }"
+              :aria-expanded="isGroupOpen(item.key)"
+              :aria-controls="groupPanelId(item.key)"
+              @click="toggleGroup(item.key)"
+            >
+              <GothamIcon :name="item.icon" />
+              <span>{{ t(item.labelKey) }}</span>
+              <GothamIcon
+                class="nav-chevron"
+                name="chevron-down"
+                aria-hidden="true"
+              />
+            </button>
+            <div
+              v-show="isGroupOpen(item.key)"
+              :id="groupPanelId(item.key)"
+              class="nav-subitems"
+            >
+              <RouterLink
+                v-for="child in item.children"
+                :key="child.key"
+                class="nav-item nav-subitem"
+                :class="{ 'is-active': activeKey === child.key }"
+                :to="{ name: child.to }"
+              >
+                <GothamIcon :name="child.icon" />
+                <span>{{ t(child.labelKey) }}</span>
+              </RouterLink>
+            </div>
+          </div>
+          <RouterLink
+            v-else
+            class="nav-item"
+            :class="{ 'is-active': activeKey === item.key }"
+            :to="{ name: item.to }"
+          >
+            <GothamIcon :name="item.icon" />
+            <span>{{ t(item.labelKey) }}</span>
+            <span v-if="item.key === 'servers'" class="nav-count">{{ serversCount }}</span>
+          </RouterLink>
+        </template>
       </template>
     </nav>
     <div class="sidebar-foot">
@@ -154,6 +230,15 @@ const sections = computed(() => visibleNavSections(navSections, authStore.isOwne
     color var(--motion-base) var(--ease-standard);
 }
 
+button.nav-item {
+  appearance: none;
+  border: 0;
+  background: transparent;
+  font-family: inherit;
+  text-align: left;
+  cursor: pointer;
+}
+
 .nav-item :deep(svg) {
   width: 18px;
   height: 18px;
@@ -161,12 +246,14 @@ const sections = computed(() => visibleNavSections(navSections, authStore.isOwne
   color: var(--meta);
 }
 
-a.nav-item:hover {
+a.nav-item:hover,
+button.nav-item:hover {
   background: var(--hover-row);
   color: var(--fg-2);
 }
 
-a.nav-item:hover :deep(svg) {
+a.nav-item:hover :deep(svg),
+button.nav-item:hover :deep(svg) {
   color: var(--fg);
 }
 
@@ -177,6 +264,35 @@ a.nav-item.is-active {
 
 a.nav-item.is-active :deep(svg) {
   color: var(--fg-2);
+}
+
+button.nav-item.is-open {
+  color: var(--fg-2);
+}
+
+button.nav-item.is-open :deep(svg) {
+  color: var(--fg-2);
+}
+
+.nav-chevron {
+  width: 14px;
+  height: 14px;
+  margin-left: auto;
+  transition: transform var(--motion-base) var(--ease-standard);
+}
+
+button.nav-item.is-open .nav-chevron {
+  transform: rotate(180deg);
+}
+
+.nav-subitems {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-1);
+}
+
+.nav-subitem {
+  padding-left: var(--space-6);
 }
 
 .nav-item .nav-count {

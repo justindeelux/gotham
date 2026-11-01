@@ -79,7 +79,7 @@ owner's Domains & SSL page; see [Proxy and DNS](/operating/proxy-dns).
 
 ## Git sources
 
-Open **Settings → Git sources** (`/settings/git-sources`). Only the owner manages
+Open **Manage → Integrations → Git sources** (`/integrations/git-sources`). Only the owner manages
 Git connections and GitHub Apps. API-token scopes still apply to API calls.
 Secrets — client secrets, admin tokens and webhook secrets — are write-only
 and never displayed after they are stored.

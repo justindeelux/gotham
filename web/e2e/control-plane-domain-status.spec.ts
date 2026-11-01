@@ -33,7 +33,7 @@ test("URL status follows edits and warns when localhost is missing", async ({ pa
       server_id: "local", server_name: "localhost", sync_status: "synced",
     }],
   } }));
-  await page.goto("/settings/instance");
+  await page.goto("/settings/general");
   const status = page.getByRole("status", { name: "Control-plane domain status" });
   await expect(status).toContainText("Router: synced");
   await expect(status).toContainText("DNS: not reported");

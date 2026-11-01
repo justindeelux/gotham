@@ -248,7 +248,7 @@ for (const width of [390, 1280]) {
     await expect(
       page.getByRole("heading", { name: "You don't have permission to view this" }),
     ).toBeVisible();
-    for (const href of ["/domains", "/servers", "/users", "/settings/updates"]) {
+    for (const href of ["/domains", "/servers", "/users", "/updates"]) {
       await expect(page.locator(`#app-nav a[href="${href}"]`)).toHaveCount(0);
     }
     expect(await pageOverflowX(page), `denial page fits ${width}px`).toBeLessThanOrEqual(1);

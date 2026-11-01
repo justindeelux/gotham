@@ -164,9 +164,9 @@ test.describe("notification channels", () => {
       }),
     );
 
-    await page.goto("/settings/notifications");
+    await page.goto("/notifications");
     await expect(
-      page.getByRole("heading", { name: "Notification channels", level: 1 }),
+      page.getByRole("heading", { name: "Notifications", level: 1 }),
     ).toBeVisible();
 
     await page.getByRole("button", { name: "New channel" }).click();
@@ -283,7 +283,7 @@ test.describe("notification channels", () => {
       return channels.find((item) => item.name === channelName)?.events ?? [];
     };
 
-    await page.goto("/settings/notifications");
+    await page.goto("/notifications");
     const card = page.locator(".n-card").filter({ hasText: name });
     await expect(card).toBeVisible();
 

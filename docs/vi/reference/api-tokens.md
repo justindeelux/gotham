@@ -16,9 +16,9 @@ hash SHA-256 của nó được lưu. Hãy gửi nó trong header chuẩn:
 Authorization: Bearer gt1_<token>
 ```
 
-Trong bảng điều khiển, mở **Cài đặt → API token** từ menu tài khoản để tạo, liệt
-kê, xoay vòng và thu hồi token của bạn. Chúng cũng có thể được quản lý qua chính
-API, dùng một phiên đã đăng nhập hoặc một token sẵn có.
+Trong bảng điều khiển, mở **Quản lý → Bảo mật → API token** (menu tài khoản
+cũng dẫn tới đây) để tạo, liệt kê, xoay vòng và thu hồi token của bạn. Chúng cũng
+có thể được quản lý qua chính API, dùng một phiên đã đăng nhập hoặc một token sẵn có.
 
 ## Phạm vi
 
@@ -82,8 +82,8 @@ cảnh báo trước khi ứng dụng gửi thông tin xác thực. `role` là `
 `member`, và `capabilities` liệt kê những gì điểm cuối MCP hỗ trợ trên instance
 này. Phản hồi không chứa token hay bí mật.
 
-Trang **Thiết lập MCP** trong bảng điều khiển dùng tuyến này và biến nó thành cấu
-hình sẵn cho ứng dụng; xem [Thiết lập MCP](/vi/using/mcp).
+Trang **MCP** trong bảng điều khiển dùng tuyến này và biến nó thành cấu
+hình sẵn cho ứng dụng; xem [MCP](/vi/using/mcp).
 
 ## Tạo
 

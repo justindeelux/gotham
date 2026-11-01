@@ -81,7 +81,7 @@ invited, so grant projects from **Project access** instead.
 
 ## Account settings
 
-Open **Settings → Profile** (`/settings/profile`).
+Open **Profile** from the account menu (`/settings/profile`).
 
 - **Account** shows your email, role and member-since date. Your email address
   cannot be changed here.
@@ -109,6 +109,6 @@ list or revoke sessions.
 ## API tokens
 
 API tokens (`gt1_` with read, deploy or admin scope) can be created, rotated
-and revoked from **Settings → API tokens** or through the API. See
+and revoked from **Manage → Security → API tokens** or through the API. See
 [API tokens](/reference/api-tokens). A member's token can never hold the `admin`
 scope and stays inside the member's project grants.

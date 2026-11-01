@@ -46,13 +46,13 @@ const ordinaryRoutes = [
   "/terminal",
   "/domains",
   "/users",
-  "/settings/notifications",
-  "/settings/git-sources",
-  "/settings/instance",
-  "/settings/updates",
+  "/notifications",
+  "/integrations/git-sources",
+  "/settings/general",
+  "/updates",
   "/settings/profile",
   "/security/api-tokens",
-  "/settings/mcp",
+  "/integrations/mcp",
   "/toolchain",
 ];
 
@@ -62,8 +62,8 @@ const actionRoutes = new Set([
   "/projects",
   "/domains",
   "/users",
-  "/settings/notifications",
-  "/settings/git-sources",
+  "/notifications",
+  "/integrations/git-sources",
   "/security/api-tokens",
 ]);
 

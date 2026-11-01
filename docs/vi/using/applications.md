@@ -47,7 +47,7 @@ sang kho dưới dạng khóa triển khai chỉ đọc (hoặc lưu token), và
 thể thay hoặc gỡ ở đó.
 
 **Nhà cung cấp đã kết nối.** Kết nối một GitHub App hoặc một kết nối GitLab một
-lần trong **Cài đặt → Nguồn Git**, rồi chọn tài khoản và kho trong wizard. Các kết
+lần trong **Quản lý → Tích hợp → Nguồn Git**, rồi chọn tài khoản và kho trong wizard. Các kết
 nối thuộc về tài khoản của bạn, và kho riêng vẫn được triển khai bằng khóa triển
 khai SSH.
 

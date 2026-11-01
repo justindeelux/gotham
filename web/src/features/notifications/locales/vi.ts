@@ -1,7 +1,7 @@
 const vi = {
   page: {
     eyebrow: "Truy cập · Thông báo",
-    title: "Kênh thông báo",
+    title: "Thông báo",
     description:
       "Sự kiện triển khai và sao lưu được gửi tới các kênh của bạn: " +
       "webhook Discord và Slack, bot Telegram, hoặc email SMTP. Kênh thuộc " +

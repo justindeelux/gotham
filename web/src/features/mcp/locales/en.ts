@@ -1,7 +1,7 @@
 const en = {
   page: {
     eyebrow: "Settings · Connect",
-    title: "MCP setup",
+    title: "MCP",
     description:
       "Connect Claude Code, Cursor or another MCP client to this control plane. Pick an access level, create a token and paste a ready-made configuration into the client.",
   },

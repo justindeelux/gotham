@@ -107,7 +107,7 @@ shown date is approximate ("at the current rate"), not a guarantee.
 
 ## Configure rules in the UI
 
-Open **Monitoring** in the sidebar (owner only). Choose **Instance defaults** to
+Open **System → Settings → Monitoring** (owner only). Choose **Instance defaults** to
 change the rules inherited by every node, or pick a node to save an override.
 Edit warning, critical, downgrade, clear percentages and their sustained
 seconds, then **Save rules**. **Restore defaults** deletes the saved policy for

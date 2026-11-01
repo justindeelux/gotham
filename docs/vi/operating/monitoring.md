@@ -102,7 +102,7 @@ ngày hiển thị chỉ là gần đúng ("với tốc độ hiện tại"), kh
 
 ## Cấu hình quy tắc trên giao diện
 
-Mở **Giám sát** ở thanh bên (chỉ chủ sở hữu). Chọn **Mặc định của instance** để
+Mở **Hệ thống → Cài đặt → Giám sát** (chỉ chủ sở hữu). Chọn **Mặc định của instance** để
 sửa quy tắc mọi nút kế thừa, hoặc chọn một nút để lưu thiết lập riêng. Sửa phần
 trăm cảnh báo, nghiêm trọng, hạ mức, xóa và số giây yêu cầu, rồi **Lưu quy tắc**.
 **Khôi phục mặc định** xóa chính sách đã lưu của phạm vi đang chọn: quy tắc

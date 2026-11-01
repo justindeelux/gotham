@@ -90,6 +90,12 @@ async function signInAs(page: Page, session: Session): Promise<void> {
 }
 
 async function openApiTokens(page: Page): Promise<void> {
+  const security = page
+    .locator("#app-nav")
+    .getByRole("button", { name: "Security" });
+  if ((await security.getAttribute("aria-expanded")) !== "true") {
+    await security.click();
+  }
   await page.getByRole("link", { name: "API tokens" }).click();
   await expect(page).toHaveURL(/\/security\/api-tokens$/);
   await expect(
@@ -199,7 +205,7 @@ test("creates and revokes a token as a member without the admin scope", async ({
 
   const name = `ui-e2e-member-${uniqueSuffix()}`;
   await signInAs(page, session);
-  await page.goto("/settings/api-tokens");
+  await page.goto("/security/api-tokens");
   await expect(page).toHaveURL(/\/security\/api-tokens$/);
   await expect(
     page.getByRole("heading", { name: "API tokens", level: 1 }),

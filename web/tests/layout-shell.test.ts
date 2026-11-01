@@ -57,7 +57,7 @@ function server(): Server {
   } as Server;
 }
 
-async function mountShell(): Promise<ReturnType<typeof mount>> {
+async function mountShell(path = "/dashboard"): Promise<ReturnType<typeof mount>> {
   setActivePinia(createPinia());
   const auth = useAuthStore();
   auth.user = { email: "a@x.y", role: "owner" } as never;
@@ -82,15 +82,15 @@ async function mountShell(): Promise<ReturnType<typeof mount>> {
           { path: "backups", name: "backups", component: stub },
           { path: "terminal", name: "terminal", component: stub },
           { path: "users", name: "users", component: stub },
-          { path: "terminal", name: "terminal", component: stub },
           { path: "notifications", name: "notifications", component: stub },
-          { path: "git-sources", name: "git-sources", component: stub },
-          { path: "mcp", name: "mcp", component: stub },
-          { path: "private-keys", name: "private-keys", component: stub },
-          { path: "api-tokens", name: "api-tokens", component: stub },
+          { path: "integrations/git-sources", name: "git-sources", component: stub },
+          { path: "integrations/mcp", name: "mcp", component: stub },
+          { path: "integrations/storages", name: "storages", component: stub },
+          { path: "security/private-keys", name: "private-keys", component: stub },
+          { path: "security/api-tokens", name: "api-tokens", component: stub },
           { path: "files", name: "files", component: stub },
-          { path: "instance", name: "instance", component: stub },
-          { path: "monitoring", name: "monitoring", component: stub },
+          { path: "settings/general", name: "instance", component: stub },
+          { path: "settings/monitoring", name: "monitoring", component: stub },
           { path: "cleanup", name: "cleanup", component: stub },
           { path: "updates", name: "updates", component: stub },
           { path: "servers/:id", name: "server-detail", component: stub },
@@ -98,7 +98,7 @@ async function mountShell(): Promise<ReturnType<typeof mount>> {
       },
     ],
   });
-  await router.push("/dashboard");
+  await router.push(path);
   await router.isReady();
   const shell = defineComponent({
     render: () =>
@@ -150,6 +150,41 @@ describe("shell drawer DOM", () => {
     expect(second.find(".backdrop").exists()).toBe(false);
     expect(second.find("#app-nav").exists()).toBe(true);
     second.unmount();
+  });
+});
+
+describe("sidebar submenus", () => {
+  it("opens the group that holds the active route and highlights its item", async () => {
+    const layout = await mountShell("/settings/general");
+    const settingsToggle = layout.get('button[aria-controls="nav-group-settings"]');
+    const securityToggle = layout.get('button[aria-controls="nav-group-security"]');
+    expect(settingsToggle.attributes("aria-expanded")).toBe("true");
+    expect(securityToggle.attributes("aria-expanded")).toBe("false");
+    expect(layout.find('a[href="/settings/general"]').classes()).toContain("is-active");
+    layout.unmount();
+  });
+
+  it("expands and collapses a submenu from its toggle", async () => {
+    const layout = await mountShell();
+    const toggle = layout.get('button[aria-controls="nav-group-security"]');
+    const tokenLink = layout.find('a[href="/security/api-tokens"]');
+    expect(toggle.attributes("aria-expanded")).toBe("false");
+    expect(tokenLink.isVisible()).toBe(false);
+    await toggle.trigger("click");
+    expect(toggle.attributes("aria-expanded")).toBe("true");
+    expect(tokenLink.isVisible()).toBe(true);
+    await toggle.trigger("click");
+    expect(toggle.attributes("aria-expanded")).toBe("false");
+    expect(tokenLink.isVisible()).toBe(false);
+    layout.unmount();
+  });
+
+  it("uses a native button for keyboard operation", async () => {
+    const layout = await mountShell();
+    const toggle = layout.get('button[aria-controls="nav-group-integrations"]');
+    expect(toggle.element.tagName).toBe("BUTTON");
+    expect(toggle.attributes("type")).toBe("button");
+    layout.unmount();
   });
 });
 

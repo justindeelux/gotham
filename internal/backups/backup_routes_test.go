@@ -194,7 +194,7 @@ func passthroughUser(_ context.Context) (uuid.UUID, bool) { return uuid.Nil, fal
 func newBackupRouter(t *testing.T, svc BackupService, user uuid.UUID, present bool) http.Handler {
 	t.Helper()
 	r := chi.NewRouter()
-	Mount(r, passthroughAuth, func(context.Context) (uuid.UUID, bool) {
+	Mount(r, passthroughAuth, passthroughAuth, func(context.Context) (uuid.UUID, bool) {
 		if !present {
 			return uuid.Nil, false
 		}
@@ -228,7 +228,7 @@ func backupRequest(t *testing.T, handler http.Handler, method, path, body string
 
 func TestMountWithoutServiceMountsNothing(t *testing.T) {
 	r := chi.NewRouter()
-	Mount(r, passthroughAuth, passthroughUser, nil)
+	Mount(r, passthroughAuth, passthroughAuth, passthroughUser, nil)
 	MountLegacy(r, passthroughAuth, passthroughAuth, passthroughUser, nil)
 
 	id := uuid.New()

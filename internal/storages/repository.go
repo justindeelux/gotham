@@ -25,10 +25,10 @@ type Repository interface {
 	ListBackupTargetsByUser(ctx context.Context, userID uuid.UUID) ([]Storage, error)
 	CreateBackupTargetWithSecrets(ctx context.Context, target Storage, secrets []Secret) (Storage, error)
 	UpdateBackupTargetWithSecrets(ctx context.Context, target Storage, secrets []Secret) (Storage, error)
-	DeleteBackupTarget(ctx context.Context, id, userID uuid.UUID) (Storage, error)
-	CountBackupsForTarget(ctx context.Context, id uuid.UUID) (int64, error)
-	ListBackupScheduleIDsForTarget(ctx context.Context, id uuid.UUID) ([]uuid.UUID, error)
-	MarkBackupsProviderRemoved(ctx context.Context, id uuid.UUID) error
+	// DeleteGuarded locks the row and deletes it atomically with its usage
+	// checks. deleted is false when the row is built-in, still used by a
+	// schedule, or still holds backups without confirm.
+	DeleteGuarded(ctx context.Context, id, userID uuid.UUID, confirm bool) (Storage, []uuid.UUID, int64, bool, error)
 	BackupUsageByTarget(ctx context.Context, userID uuid.UUID) (map[uuid.UUID]Usage, error)
 	ListTargetSecrets(ctx context.Context, id uuid.UUID) ([]Secret, error)
 }
@@ -124,48 +124,19 @@ func (r *storeRepository) UpdateBackupTargetWithSecrets(ctx context.Context, tar
 	return storageFromRow(row), nil
 }
 
-func (r *storeRepository) DeleteBackupTarget(ctx context.Context, id, userID uuid.UUID) (Storage, error) {
-	if err := r.store.MarkBackupSchedulesTargetChanged(ctx, pgUUID(id)); err != nil {
-		return Storage{}, fmt.Errorf("storages: record storage change: %w", err)
-	}
-	row, err := r.store.DeleteBackupTarget(ctx, sqlc.DeleteBackupTargetParams{
-		ID:     pgUUID(id),
-		UserID: pgUUID(userID),
-	})
+func (r *storeRepository) DeleteGuarded(ctx context.Context, id, userID uuid.UUID, confirm bool) (Storage, []uuid.UUID, int64, bool, error) {
+	row, scheduleRows, backups, deleted, err := r.store.DeleteBackupTargetGuarded(ctx, pgUUID(id), pgUUID(userID), confirm)
 	if err != nil {
 		if errors.Is(err, pgx.ErrNoRows) {
-			return Storage{}, ErrNotFound
+			return Storage{}, nil, 0, false, ErrNotFound
 		}
-		return Storage{}, fmt.Errorf("storages: delete storage: %w", err)
+		return Storage{}, nil, 0, false, fmt.Errorf("storages: delete storage: %w", err)
 	}
-	return storageFromRow(row), nil
-}
-
-func (r *storeRepository) CountBackupsForTarget(ctx context.Context, id uuid.UUID) (int64, error) {
-	count, err := r.store.CountBackupsForTarget(ctx, pgUUID(id))
-	if err != nil {
-		return 0, fmt.Errorf("storages: count storage backups: %w", err)
+	schedules := make([]uuid.UUID, 0, len(scheduleRows))
+	for _, scheduleID := range scheduleRows {
+		schedules = append(schedules, uuidFromPG(scheduleID))
 	}
-	return count, nil
-}
-
-func (r *storeRepository) ListBackupScheduleIDsForTarget(ctx context.Context, id uuid.UUID) ([]uuid.UUID, error) {
-	rows, err := r.store.ListBackupScheduleIDsForTarget(ctx, pgUUID(id))
-	if err != nil {
-		return nil, fmt.Errorf("storages: list schedules using the storage: %w", err)
-	}
-	ids := make([]uuid.UUID, 0, len(rows))
-	for _, row := range rows {
-		ids = append(ids, uuidFromPG(row))
-	}
-	return ids, nil
-}
-
-func (r *storeRepository) MarkBackupsProviderRemoved(ctx context.Context, id uuid.UUID) error {
-	if err := r.store.MarkBackupsProviderRemoved(ctx, pgUUID(id)); err != nil {
-		return fmt.Errorf("storages: mark backups without storage: %w", err)
-	}
-	return nil
+	return storageFromRow(row), schedules, backups, deleted, nil
 }
 
 func (r *storeRepository) BackupUsageByTarget(ctx context.Context, userID uuid.UUID) (map[uuid.UUID]Usage, error) {

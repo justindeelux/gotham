@@ -232,7 +232,7 @@ func (m *BackupManager) storeForCleanupLocation(ctx context.Context, item Artifa
 		if m.storages == nil {
 			return nil, ErrValidation
 		}
-		target, err := m.storages.Resolve(ctx, uuid.Nil, item.TargetID)
+		target, err := m.storages.ResolveAny(ctx, item.TargetID)
 		if err != nil {
 			return nil, err
 		}

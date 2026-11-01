@@ -60,4 +60,5 @@ account plus the `admin` scope on API tokens:
 
 The old `/api/v1/backups/providers` routes remain as a deprecated compatibility
 alias for existing API tokens and MCP clients. They delegate to the same
-service and accept the same payloads; new clients should use `/storages`.
+service, accept the same payloads and sit behind the same owner + `admin` gate;
+new clients should use `/storages`.

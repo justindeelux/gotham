@@ -64,6 +64,13 @@ func (s *Server) requireOwnerAccount(next http.Handler) http.Handler {
 const ownerScopeDenied = "requesting the admin scope requires owner access"
 
 // resourceAuth combines token scopes with the central project access policy.
+// platformOnlyAuth is the owner account plus admin-scope gate used by
+// platform-operator routes (an owner session, or an owner API token that
+// carries the admin scope).
+func (s *Server) platformOnlyAuth(next http.Handler) http.Handler {
+	return s.RequireAuth(s.RequireOwner(next))
+}
+
 func (s *Server) resourceAuth() func(http.Handler) http.Handler {
 	return func(next http.Handler) http.Handler {
 		return s.RequireAuth(requireResourceScopes(s.projectAccess(next)))

@@ -124,7 +124,13 @@ func (m *BackupManager) storeForLocation(ctx context.Context, backup Backup, own
 	case strings.HasPrefix(backup.Location, locationFilePrefix):
 		return newLocalStore(m.localDir)
 	case strings.HasPrefix(backup.Location, locationS3Prefix):
-		target, err := m.storages.Resolve(ctx, ownerID, backup.TargetID)
+		var target *BackupTarget
+		var err error
+		if ownerID == uuid.Nil {
+			target, err = m.storages.ResolveAny(ctx, backup.TargetID)
+		} else {
+			target, err = m.storages.Resolve(ctx, ownerID, backup.TargetID)
+		}
 		if err != nil {
 			return nil, err
 		}
@@ -165,7 +171,7 @@ func (m *BackupManager) targetOwnedByResource(ctx context.Context, targetID, res
 	if m.storages == nil {
 		return storages.ErrNotReady
 	}
-	target, err := m.storages.Resolve(ctx, uuid.Nil, targetID)
+	target, err := m.storages.ResolveAny(ctx, targetID)
 	if err != nil {
 		return err
 	}

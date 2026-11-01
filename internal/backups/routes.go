@@ -176,7 +176,7 @@ type backupHandler struct {
 // Mount registers the resource-agnostic backup surface. Providers stay
 // owner-only through the central project policy; runs, schedules and restores
 // are reachable by a member with access to the resource.
-func Mount(r chi.Router, auth func(http.Handler) http.Handler, userID UserIDFunc, svc BackupService) {
+func Mount(r chi.Router, auth func(http.Handler) http.Handler, operatorAuth func(http.Handler) http.Handler, userID UserIDFunc, svc BackupService) {
 	if svc == nil || !Enabled() {
 		return
 	}
@@ -193,18 +193,22 @@ func Mount(r chi.Router, auth func(http.Handler) http.Handler, userID UserIDFunc
 		protected.Post("/v1/backups/schedules", h.createSchedule)
 		protected.Patch("/v1/backups/schedules/{id}", h.updateSchedule)
 		protected.Delete("/v1/backups/schedules/{id}", h.deleteSchedule)
-		// Deprecated: /backups/providers is a compatibility alias kept for
-		// existing API tokens and MCP clients. New clients use /storages, which
-		// delegates to the same storage service.
-		protected.Get("/v1/backups/providers", h.listProviders)
-		protected.Post("/v1/backups/providers", h.createProvider)
-		protected.Patch("/v1/backups/providers/{id}", h.updateProvider)
-		protected.Delete("/v1/backups/providers/{id}", h.deleteProvider)
-		protected.Post("/v1/backups/providers/{id}/test", h.testProvider)
 		protected.Get("/v1/backups/{id}", h.getBackup)
 		protected.Delete("/v1/backups/{id}", h.deleteBackup)
 		protected.Post("/v1/backups/{id}/cleanup", h.retryCleanup)
 		protected.Post("/v1/backups/{id}/restore", h.restore)
+	})
+	// Deprecated: /backups/providers is a compatibility alias kept for
+	// existing API tokens and MCP clients. New clients use /storages.
+	// It delegates to the same storage service, so it must not weaken the
+	// operator gate: a read/deploy token must not reach a storage mutation here.
+	r.Group(func(operators chi.Router) {
+		operators.Use(operatorAuth)
+		operators.Get("/v1/backups/providers", h.listProviders)
+		operators.Post("/v1/backups/providers", h.createProvider)
+		operators.Patch("/v1/backups/providers/{id}", h.updateProvider)
+		operators.Delete("/v1/backups/providers/{id}", h.deleteProvider)
+		operators.Post("/v1/backups/providers/{id}/test", h.testProvider)
 	})
 }
 

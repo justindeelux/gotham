@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"io"
+	"net"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -91,6 +92,25 @@ func (r *fakeRepository) UpdateBackupTargetWithSecrets(_ context.Context, target
 		r.secrets[target.ID] = secrets
 	}
 	return target, nil
+}
+
+func (r *fakeRepository) DeleteGuarded(_ context.Context, id, userID uuid.UUID, confirm bool) (Storage, []uuid.UUID, int64, bool, error) {
+	item, ok := r.byID[id]
+	if !ok || item.UserID != userID {
+		return Storage{}, nil, 0, false, ErrNotFound
+	}
+	if item.Builtin {
+		return item, nil, 0, false, nil
+	}
+	if len(r.scheduleIDs) > 0 {
+		return item, r.scheduleIDs, 0, false, nil
+	}
+	if r.backupCount > 0 && !confirm {
+		return item, nil, r.backupCount, false, nil
+	}
+	delete(r.byID, id)
+	delete(r.secrets, id)
+	return item, nil, r.backupCount, true, nil
 }
 
 func (r *fakeRepository) DeleteBackupTarget(_ context.Context, id, userID uuid.UUID) (Storage, error) {
@@ -364,5 +384,127 @@ func TestRoutesExposeStoragesWithoutSecrets(t *testing.T) {
 	r.ServeHTTP(rec, httptest.NewRequest(http.MethodDelete, "/v1/storages/"+envelope.Storage.ID, nil))
 	if rec.Code != http.StatusNoContent {
 		t.Fatalf("delete = %d, want 204 (body %s)", rec.Code, rec.Body.String())
+	}
+}
+
+func TestStorageAccessIsOwnerScoped(t *testing.T) {
+	repo := newFakeRepository()
+	manager, _ := newTestManager(t, repo)
+	ownerID, stranger := uuid.New(), uuid.New()
+
+	created, err := manager.Create(context.Background(), ownerID, Request{
+		Name: "bucket", Kind: "s3", Endpoint: "https://s3.example.test", Bucket: "b",
+		AccessKey: "ak", SecretKey: "sk",
+	})
+	if err != nil {
+		t.Fatalf("Create: %v", err)
+	}
+
+	if _, err := manager.Update(context.Background(), stranger, created.ID, Request{Name: "stolen"}); !errors.Is(err, ErrNotFound) {
+		t.Errorf("cross-owner update err = %v, want ErrNotFound", err)
+	}
+	if err := manager.Delete(context.Background(), stranger, created.ID, true); !errors.Is(err, ErrNotFound) {
+		t.Errorf("cross-owner delete err = %v, want ErrNotFound", err)
+	}
+	if _, err := manager.Test(context.Background(), stranger, created.ID); !errors.Is(err, ErrNotFound) {
+		t.Errorf("cross-owner test err = %v, want ErrNotFound", err)
+	}
+	if _, err := manager.Resolve(context.Background(), stranger, created.ID); !errors.Is(err, ErrNotFound) {
+		t.Errorf("cross-owner resolve err = %v, want ErrNotFound", err)
+	}
+	// A zero owner must not fall back to an unchecked lookup.
+	if _, err := manager.Resolve(context.Background(), uuid.Nil, created.ID); !errors.Is(err, ErrNotFound) {
+		t.Errorf("zero-owner resolve err = %v, want ErrNotFound", err)
+	}
+	if got, err := manager.ResolveAny(context.Background(), created.ID); err != nil || got.ID != created.ID {
+		t.Errorf("ResolveAny = %+v, %v, want the row", got, err)
+	}
+}
+
+func withLookup(t *testing.T, fn func(context.Context, string) ([]net.IPAddr, error)) {
+	t.Helper()
+	original := lookupHost
+	lookupHost = fn
+	t.Cleanup(func() { lookupHost = original })
+}
+
+func TestCreateRejectsReservedEndpoints(t *testing.T) {
+	repo := newFakeRepository()
+	manager, _ := newTestManager(t, repo)
+	userID := uuid.New()
+	withLookup(t, func(context.Context, string) ([]net.IPAddr, error) {
+		return nil, errors.New("no such host")
+	})
+
+	for _, endpoint := range []string{
+		"http://169.254.169.254",
+		"http://[fe80::1]:9000",
+		"http://100.64.0.1",
+	} {
+		if _, err := manager.Create(context.Background(), userID, Request{
+			Name: "bad", Kind: "s3", Endpoint: endpoint, Bucket: "b",
+			AccessKey: "ak", SecretKey: "sk",
+		}); !errors.Is(err, ErrValidation) {
+			t.Errorf("Create(%q) err = %v, want ErrValidation", endpoint, err)
+		}
+	}
+}
+
+func TestCreateChecksTheResolvedAddress(t *testing.T) {
+	repo := newFakeRepository()
+	manager, _ := newTestManager(t, repo)
+	userID := uuid.New()
+	withLookup(t, func(context.Context, string) ([]net.IPAddr, error) {
+		return []net.IPAddr{{IP: net.ParseIP("169.254.169.254")}}, nil
+	})
+
+	if _, err := manager.Create(context.Background(), userID, Request{
+		Name: "rebind", Kind: "s3", Endpoint: "https://metadata.example.test", Bucket: "b",
+		AccessKey: "ak", SecretKey: "sk",
+	}); !errors.Is(err, ErrValidation) {
+		t.Fatalf("Create with a reserved DNS answer err = %v, want ErrValidation", err)
+	}
+}
+
+func TestPrivateMinIOEndpointIsAllowed(t *testing.T) {
+	repo := newFakeRepository()
+	manager, _ := newTestManager(t, repo)
+	withLookup(t, func(context.Context, string) ([]net.IPAddr, error) {
+		return []net.IPAddr{{IP: net.ParseIP("10.0.0.12")}}, nil
+	})
+
+	if _, err := manager.Create(context.Background(), uuid.New(), Request{
+		Name: "minio", Kind: "s3", Endpoint: "http://minio.gotham.internal:9000", Bucket: "b",
+		AccessKey: "ak", SecretKey: "sk",
+	}); err != nil {
+		t.Fatalf("Create with a private endpoint: %v", err)
+	}
+}
+
+func TestProbeFailureMessageNeverCarriesTheSecret(t *testing.T) {
+	repo := newFakeRepository()
+	manager, backend := newTestManager(t, repo)
+	userID := uuid.New()
+	withLookup(t, func(context.Context, string) ([]net.IPAddr, error) {
+		return nil, errors.New("no such host")
+	})
+
+	created, err := manager.Create(context.Background(), userID, Request{
+		Name: "bucket", Kind: "s3", Endpoint: "https://s3.example.test", Bucket: "b",
+		AccessKey: "ak", SecretKey: "super-secret-value",
+	})
+	if err != nil {
+		t.Fatalf("Create: %v", err)
+	}
+	backend.putErr = errors.New("access denied")
+	check, err := manager.Test(context.Background(), userID, created.ID)
+	if err != nil {
+		t.Fatalf("Test: %v", err)
+	}
+	if check.OK {
+		t.Fatalf("check = %+v, want failure", check)
+	}
+	if strings.Contains(check.Message, "super-secret-value") {
+		t.Fatalf("probe message leaked the secret: %s", check.Message)
 	}
 }

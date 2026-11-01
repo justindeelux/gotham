@@ -8,6 +8,7 @@ import (
 	"io"
 	"log/slog"
 	"os"
+	"sort"
 	"strings"
 	"sync"
 	"testing"
@@ -899,6 +900,53 @@ func (r *fakeBackupRepository) ListServerIDs(_ context.Context) ([]uuid.UUID, er
 	ids := make([]uuid.UUID, len(r.serverIDs))
 	copy(ids, r.serverIDs)
 	return ids, nil
+}
+
+func (r *fakeBackupRepository) DeleteGuarded(_ context.Context, id, userID uuid.UUID, confirm bool) (BackupTarget, []uuid.UUID, int64, bool, error) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	target, ok := r.targets[id]
+	if !ok || target.UserID != userID {
+		return BackupTarget{}, nil, 0, false, ErrNotFound
+	}
+	if target.Builtin {
+		return target, nil, 0, false, nil
+	}
+	var schedules []uuid.UUID
+	for scheduleID, schedule := range r.schedules {
+		if schedule.TargetID == id {
+			schedules = append(schedules, scheduleID)
+		}
+	}
+	sort.Slice(schedules, func(i, j int) bool { return schedules[i].String() < schedules[j].String() })
+	if len(schedules) > 0 {
+		return target, schedules, 0, false, nil
+	}
+	var backups int64
+	for _, backup := range r.backups {
+		if backup.TargetID == id {
+			backups++
+		}
+	}
+	if backups > 0 && !confirm {
+		return target, nil, backups, false, nil
+	}
+	for backupID, backup := range r.backups {
+		if backup.TargetID == id {
+			backup.ProviderRemoved = true
+			backup.TargetID = uuid.Nil
+			r.backups[backupID] = backup
+		}
+	}
+	delete(r.targets, id)
+	delete(r.secrets, id)
+	for i, targetID := range r.targetOrder {
+		if targetID == id {
+			r.targetOrder = append(r.targetOrder[:i], r.targetOrder[i+1:]...)
+			break
+		}
+	}
+	return target, nil, backups, true, nil
 }
 
 func (r *fakeBackupRepository) DeleteBackupTarget(_ context.Context, targetID, userID uuid.UUID) (BackupTarget, error) {

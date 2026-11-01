@@ -499,7 +499,7 @@ func (m *BackupManager) attachProviderNames(ctx context.Context, list []Backup) 
 		if m.storages == nil {
 			continue
 		}
-		target, err := m.storages.Resolve(ctx, uuid.Nil, list[i].TargetID)
+		target, err := m.storages.ResolveAny(ctx, list[i].TargetID)
 		if err != nil || target == nil {
 			continue
 		}
@@ -572,7 +572,7 @@ func (m *BackupManager) nameForProvider(ctx context.Context, targetID uuid.UUID)
 	if m.storages == nil {
 		return ""
 	}
-	target, err := m.storages.Resolve(ctx, uuid.Nil, targetID)
+	target, err := m.storages.ResolveAny(ctx, targetID)
 	if err != nil || target == nil {
 		return ""
 	}

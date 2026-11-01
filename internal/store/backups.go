@@ -3,6 +3,7 @@ package store
 import (
 	"context"
 
+	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgtype"
 
 	"github.com/justindeelux/gotham/internal/store/sqlc"
@@ -147,7 +148,28 @@ func (s *Store) ListRestores(ctx context.Context, params sqlc.ListRestoresParams
 }
 
 func (s *Store) CreateBackupSchedule(ctx context.Context, params sqlc.CreateBackupScheduleParams) (sqlc.BackupSchedule, error) {
-	return s.queries.CreateBackupSchedule(ctx, params)
+	// A schedule write locks its destination so a concurrent delete cannot
+	// pass the in-use guard and NULL the FK underneath the new row.
+	tx, err := s.DB.Begin(ctx)
+	if err != nil {
+		return sqlc.BackupSchedule{}, err
+	}
+	defer func() { _ = tx.Rollback(ctx) }()
+
+	queries := s.queries.WithTx(tx)
+	if params.TargetID.Valid {
+		if _, err := queries.GetBackupTargetForShare(ctx, params.TargetID); err != nil {
+			return sqlc.BackupSchedule{}, err
+		}
+	}
+	row, err := queries.CreateBackupSchedule(ctx, params)
+	if err != nil {
+		return sqlc.BackupSchedule{}, err
+	}
+	if err := tx.Commit(ctx); err != nil {
+		return sqlc.BackupSchedule{}, err
+	}
+	return row, nil
 }
 
 func (s *Store) GetBackupSchedule(ctx context.Context, id pgtype.UUID) (sqlc.BackupSchedule, error) {
@@ -163,7 +185,26 @@ func (s *Store) ListBackupSchedules(ctx context.Context, viewerID pgtype.UUID) (
 }
 
 func (s *Store) UpdateBackupSchedule(ctx context.Context, params sqlc.UpdateBackupScheduleParams) (sqlc.BackupSchedule, error) {
-	return s.queries.UpdateBackupSchedule(ctx, params)
+	tx, err := s.DB.Begin(ctx)
+	if err != nil {
+		return sqlc.BackupSchedule{}, err
+	}
+	defer func() { _ = tx.Rollback(ctx) }()
+
+	queries := s.queries.WithTx(tx)
+	if params.TargetID.Valid {
+		if _, err := queries.GetBackupTargetForShare(ctx, params.TargetID); err != nil {
+			return sqlc.BackupSchedule{}, err
+		}
+	}
+	row, err := queries.UpdateBackupSchedule(ctx, params)
+	if err != nil {
+		return sqlc.BackupSchedule{}, err
+	}
+	if err := tx.Commit(ctx); err != nil {
+		return sqlc.BackupSchedule{}, err
+	}
+	return row, nil
 }
 
 func (s *Store) DeleteBackupSchedule(ctx context.Context, id pgtype.UUID) (sqlc.BackupSchedule, error) {
@@ -274,6 +315,64 @@ func backupTargetDestinationChanged(current sqlc.BackupTarget, next sqlc.UpdateB
 
 func (s *Store) DeleteBackupTarget(ctx context.Context, params sqlc.DeleteBackupTargetParams) (sqlc.BackupTarget, error) {
 	return s.queries.DeleteBackupTarget(ctx, params)
+}
+
+// DeleteBackupTargetGuarded locks the target row, re-checks its schedules and
+// runs and then deletes it inside one transaction. Schedule and run inserts
+// take FOR SHARE on the same row, so neither can commit between the guard and
+// the delete. deleted is false when the row is built-in, still used by a
+// schedule, or still holds backups without confirm.
+func (s *Store) DeleteBackupTargetGuarded(ctx context.Context, id, userID pgtype.UUID, confirm bool) (sqlc.BackupTarget, []pgtype.UUID, int64, bool, error) {
+	tx, err := s.DB.Begin(ctx)
+	if err != nil {
+		return sqlc.BackupTarget{}, nil, 0, false, err
+	}
+	defer func() { _ = tx.Rollback(ctx) }()
+
+	queries := s.queries.WithTx(tx)
+	current, err := queries.GetBackupTargetForUpdate(ctx, id)
+	if err != nil {
+		return sqlc.BackupTarget{}, nil, 0, false, err
+	}
+	if current.UserID != userID {
+		return sqlc.BackupTarget{}, nil, 0, false, pgx.ErrNoRows
+	}
+	if current.Builtin {
+		return current, nil, 0, false, nil
+	}
+	schedules, err := queries.ListBackupScheduleIDsForTarget(ctx, id)
+	if err != nil {
+		return sqlc.BackupTarget{}, nil, 0, false, err
+	}
+	if len(schedules) > 0 {
+		return current, schedules, 0, false, nil
+	}
+	backups, err := queries.CountBackupsForTarget(ctx, id)
+	if err != nil {
+		return sqlc.BackupTarget{}, nil, 0, false, err
+	}
+	if backups > 0 && !confirm {
+		return current, nil, backups, false, nil
+	}
+	if backups > 0 {
+		if err := queries.MarkBackupsProviderRemoved(ctx, id); err != nil {
+			return sqlc.BackupTarget{}, nil, 0, false, err
+		}
+	}
+	if err := queries.MarkBackupSchedulesTargetChanged(ctx, id); err != nil {
+		return sqlc.BackupTarget{}, nil, 0, false, err
+	}
+	row, err := queries.DeleteBackupTarget(ctx, sqlc.DeleteBackupTargetParams{
+		ID:     id,
+		UserID: userID,
+	})
+	if err != nil {
+		return sqlc.BackupTarget{}, nil, 0, false, err
+	}
+	if err := tx.Commit(ctx); err != nil {
+		return sqlc.BackupTarget{}, nil, 0, false, err
+	}
+	return row, nil, backups, true, nil
 }
 
 func (s *Store) CreateBackupTargetSecret(ctx context.Context, params sqlc.CreateBackupTargetSecretParams) (sqlc.BackupTargetSecret, error) {

@@ -368,9 +368,7 @@ func (s *Server) routes() (http.Handler, error) {
 		s.domainwatch = s.domainwatchService()
 		domainwatch.Mount(api, s.resourceAuth(), s.domainwatch)
 
-		platformOnly := func(next http.Handler) http.Handler {
-			return s.RequireAuth(s.RequireOwner(next))
-		}
+		platformOnly := s.platformOnlyAuth
 		containerService := s.containerService()
 		containers.Mount(api, s.resourceAuth(), containerService)
 		volumeService, _ := containerService.(containers.VolumeService)
@@ -551,7 +549,7 @@ func (s *Server) routes() (http.Handler, error) {
 			storages.Mount(api, platformOnly, UserIDFromContext, storageSvc)
 		}
 		s.backups = s.backupService(containerService, databaseSvc, s.deploy, composeSvc, storageSvc)
-		backups.Mount(api, s.resourceAuth(), UserIDFromContext, s.backups)
+		backups.Mount(api, s.resourceAuth(), platformOnly, UserIDFromContext, s.backups)
 		backups.MountLegacy(api, s.resourceAuth(), s.resourceAuth(), UserIDFromContext, s.backups)
 		s.backupwatch = s.backupwatchService()
 		backupwatch.Mount(api, s.resourceAuth(), s.backupwatch)

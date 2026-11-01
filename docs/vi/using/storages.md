@@ -58,5 +58,5 @@ quyền `admin` trên API token:
 | `POST` | `/api/v1/storages/{id}/test` | Chạy kiểm tra kết nối |
 
 Các tuyến `/api/v1/backups/providers` cũ vẫn còn như bí danh tương thích đã lỗi
-thời cho API token và MCP client hiện có. Chúng dùng chung dịch vụ và nhận cùng
-payload; client mới nên dùng `/storages`.
+thời cho API token và MCP client hiện có. Chúng dùng chung dịch vụ, nhận cùng
+payload và cùng cổng chủ sở hữu + `admin`; client mới nên dùng `/storages`.

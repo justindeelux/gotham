@@ -128,7 +128,7 @@ func (s *backupScheduler) fire(ctx context.Context, schedule BackupSchedule, now
 				"schedule_id", schedule.ID.String())
 			return 0
 		}
-		stored, err := s.manager.storages.Resolve(ctx, uuid.Nil, schedule.TargetID)
+		stored, err := s.manager.storages.ResolveAny(ctx, schedule.TargetID)
 		if err != nil || stored == nil {
 			s.logger.Warn("backups: skipping backup schedule, storage is gone",
 				"schedule_id", schedule.ID.String(), "error", err)

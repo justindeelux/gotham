@@ -5,13 +5,18 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"net"
+	"net/http"
 	"os"
 	"path"
 	"path/filepath"
 	"strings"
+	"time"
 
 	"github.com/minio/minio-go/v7"
 	"github.com/minio/minio-go/v7/pkg/credentials"
+
+	"github.com/justindeelux/gotham/internal/netguard"
 )
 
 // ObjectStore is the write/read/delete surface a backup run needs from a
@@ -240,9 +245,10 @@ func NewS3Store(cfg S3Config) (*S3Store, error) {
 		return nil, err
 	}
 	client, err := minio.New(endpoint, &minio.Options{
-		Creds:  credentials.NewStaticV4(cfg.AccessKey, cfg.SecretKey, ""),
-		Secure: secure,
-		Region: cfg.Region,
+		Creds:     credentials.NewStaticV4(cfg.AccessKey, cfg.SecretKey, ""),
+		Secure:    secure,
+		Region:    cfg.Region,
+		Transport: s3Transport(),
 	})
 	if err != nil {
 		return nil, fmt.Errorf("storages: build s3 client: %w", err)
@@ -318,6 +324,24 @@ func (s *S3Store) EnsureBucket(ctx context.Context) error {
 		return fmt.Errorf("storages: create s3 bucket: %w", err)
 	}
 	return nil
+}
+
+// s3Transport refuses reserved outbound addresses at dial time (private and
+// loopback hosts stay allowed for self-hosted MinIO) and lets minio keep its
+// own no-redirect client.
+func s3Transport() *http.Transport {
+	base, ok := http.DefaultTransport.(*http.Transport)
+	if !ok {
+		base = &http.Transport{Proxy: http.ProxyFromEnvironment}
+	}
+	transport := base.Clone()
+	dialer := &net.Dialer{
+		Timeout:   10 * time.Second,
+		KeepAlive: 30 * time.Second,
+		Control:   netguard.Control(true),
+	}
+	transport.DialContext = dialer.DialContext
+	return transport
 }
 
 // BucketExists proves the bucket is reachable before the probe writes to it.

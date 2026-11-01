@@ -11,6 +11,7 @@ import (
 
 	"github.com/google/uuid"
 
+	"github.com/justindeelux/gotham/internal/netguard"
 	"github.com/justindeelux/gotham/internal/providers"
 )
 
@@ -119,8 +120,13 @@ func (m *Manager) Create(ctx context.Context, userID uuid.UUID, req Request) (St
 	if err := applyRequest(&target, req); err != nil {
 		return Storage{}, err
 	}
-	if target.Kind == KindS3 && !requestCarriesCredentials(req) {
-		return Storage{}, s3CredentialsRequired()
+	if target.Kind == KindS3 {
+		if err := validateEndpoint(ctx, target.Endpoint); err != nil {
+			return Storage{}, err
+		}
+		if !requestCarriesCredentials(req) {
+			return Storage{}, s3CredentialsRequired()
+		}
 	}
 	now := m.now()
 	target.CreatedAt, target.UpdatedAt = now, now
@@ -161,6 +167,11 @@ func (m *Manager) Update(ctx context.Context, userID, storageID uuid.UUID, req R
 	if err := applyRequest(target, req); err != nil {
 		return Storage{}, err
 	}
+	if target.Kind == KindS3 {
+		if err := validateEndpoint(ctx, target.Endpoint); err != nil {
+			return Storage{}, err
+		}
+	}
 	if target.Kind == KindS3 && !requestCarriesCredentials(req) {
 		stored, err := m.hasStoredCredentials(ctx, storageID)
 		if err != nil {
@@ -184,19 +195,12 @@ func (m *Manager) Delete(ctx context.Context, userID, storageID uuid.UUID, confi
 	if err := m.ready(); err != nil {
 		return err
 	}
-	target, err := m.owned(ctx, userID, storageID)
+	target, schedules, backups, deleted, err := m.repo.DeleteGuarded(ctx, storageID, userID, confirm)
 	if err != nil {
 		return err
-	}
-	if target == nil {
-		return ErrNotFound
 	}
 	if target.Builtin {
 		return fmt.Errorf("%w: the built-in Local disk storage cannot be deleted", ErrBuiltin)
-	}
-	schedules, err := m.repo.ListBackupScheduleIDsForTarget(ctx, storageID)
-	if err != nil {
-		return err
 	}
 	if len(schedules) > 0 {
 		ids := make([]string, 0, len(schedules))
@@ -206,21 +210,14 @@ func (m *Manager) Delete(ctx context.Context, userID, storageID uuid.UUID, confi
 		return fmt.Errorf("%w: %d schedule(s) still use this storage (%s); move or delete them first",
 			ErrInUse, len(schedules), strings.Join(ids, ", "))
 	}
-	backups, err := m.repo.CountBackupsForTarget(ctx, storageID)
-	if err != nil {
-		return err
-	}
 	if backups > 0 && !confirm {
 		return fmt.Errorf("%w: %d backup(s) use this storage and become unreadable; confirm to delete it",
 			ErrHasBackups, backups)
 	}
-	if backups > 0 {
-		if err := m.repo.MarkBackupsProviderRemoved(ctx, storageID); err != nil {
-			return err
-		}
+	if !deleted {
+		return ErrNotFound
 	}
-	_, err = m.repo.DeleteBackupTarget(ctx, storageID, userID)
-	return err
+	return nil
 }
 
 // Test proves the destination can hold and return an artifact, not just accept
@@ -238,6 +235,9 @@ func (m *Manager) Test(ctx context.Context, userID, storageID uuid.UUID) (Check,
 	}
 	store, err := m.Open(ctx, *target)
 	if err != nil {
+		if errors.Is(err, netguard.ErrDenied) {
+			return Check{OK: false, Message: "storage endpoint is not allowed"}, nil
+		}
 		return Check{OK: false, Message: boundedDiag(err.Error())}, nil
 	}
 	if s3, ok := store.(interface {
@@ -254,6 +254,9 @@ func (m *Manager) Test(ctx context.Context, userID, storageID uuid.UUID) (Check,
 	// A read-only or lifecycle-restricted destination must be reported now,
 	// not after the first real backup has already failed.
 	if err := probe(ctx, store); err != nil {
+		if errors.Is(err, netguard.ErrDenied) {
+			return Check{OK: false, Message: "storage endpoint is not allowed"}, nil
+		}
 		return Check{OK: false, Message: boundedDiag(err.Error())}, nil
 	}
 	if store.Kind() == string(KindS3) {
@@ -267,6 +270,11 @@ func (m *Manager) Test(ctx context.Context, userID, storageID uuid.UUID) (Check,
 func (m *Manager) Open(ctx context.Context, storage Storage) (ObjectStore, error) {
 	if err := m.ready(); err != nil {
 		return nil, err
+	}
+	if storage.Kind == KindS3 {
+		if err := validateEndpoint(ctx, storage.Endpoint); err != nil {
+			return nil, err
+		}
 	}
 	secrets, err := m.repo.ListTargetSecrets(ctx, storage.ID)
 	if err != nil {
@@ -303,8 +311,19 @@ func (m *Manager) Builtin(ctx context.Context, userID uuid.UUID) (*Storage, erro
 	return &target, nil
 }
 
-// Resolve looks a storage up and enforces ownership. A nil id resolves to nil.
+// Resolve looks a storage up for an owning account. No owner means no access:
+// internal callers that already resolved the owner use ResolveAny instead.
 func (m *Manager) Resolve(ctx context.Context, ownerID, storageID uuid.UUID) (*Storage, error) {
+	if ownerID == uuid.Nil {
+		return nil, ErrNotFound
+	}
+	return m.owned(ctx, ownerID, storageID)
+}
+
+// ResolveAny looks a storage up by id without an ownership check. It exists
+// only for trusted internal callers (scheduler, cleanup, run labelling) that
+// already hold the row id from another owned record.
+func (m *Manager) ResolveAny(ctx context.Context, storageID uuid.UUID) (*Storage, error) {
 	if err := m.ready(); err != nil {
 		return nil, err
 	}
@@ -314,9 +333,6 @@ func (m *Manager) Resolve(ctx context.Context, ownerID, storageID uuid.UUID) (*S
 	target, err := m.repo.GetBackupTarget(ctx, storageID)
 	if err != nil {
 		return nil, err
-	}
-	if ownerID != uuid.Nil && target.UserID != ownerID {
-		return nil, ErrNotFound
 	}
 	return &target, nil
 }

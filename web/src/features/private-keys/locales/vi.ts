@@ -15,8 +15,6 @@ const vi: typeof en = {
     columns: {
       name: "Tên",
       type: "Loại",
-      description: "Mô tả",
-      publicKey: "Khóa công khai",
       created: "Ngày tạo",
       usedBy: "Máy chủ dùng",
       actions: "Thao tác",

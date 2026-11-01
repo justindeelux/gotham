@@ -103,9 +103,14 @@ test("creates, copies, reveals, edits and deletes a private key", async ({
   const row = keyRow(page, name);
   await expect(row).toBeVisible();
   await expect(row).toContainText("ed25519");
+  const table = page.locator('[data-testid="private-keys-table"]');
   await expect(
-    page.locator('[data-testid="private-keys-table"]'),
-  ).not.toContainText("BEGIN OPENSSH PRIVATE KEY");
+    table.getByRole("columnheader", { name: "Description", exact: true }),
+  ).toHaveCount(0);
+  await expect(
+    table.getByRole("columnheader", { name: "Public key", exact: true }),
+  ).toHaveCount(0);
+  await expect(table).not.toContainText("BEGIN OPENSSH PRIVATE KEY");
 
   await row.getByTestId("private-key-copy-public").click();
   const publicKey = await page.evaluate(() => navigator.clipboard.readText());
@@ -132,7 +137,12 @@ test("creates, copies, reveals, edits and deletes a private key", async ({
   await editDialog.locator("#private-key-edit-description").fill(description);
   await editDialog.getByTestId("private-keys-edit-save").click();
   await expect(editDialog).toBeHidden();
-  await expect(row).toContainText(description);
+
+  await row.getByTestId("private-key-view").click();
+  const viewDialog = page.locator(".n-modal").last();
+  await expect(viewDialog).toContainText(description);
+  await viewDialog.getByRole("button", { name: "Close", exact: true }).click();
+  await expect(viewDialog).toBeHidden();
 
   await row.getByTestId("private-key-delete").click();
   await confirmPopover(page, "Delete");

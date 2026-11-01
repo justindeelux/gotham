@@ -15,11 +15,3 @@ export function randomKeyName(): string {
   ).join("");
   return `${firstName || "key"}-${suffix}`;
 }
-
-export function compactPublicKey(publicKey: string): string {
-  const value = publicKey.trim();
-  if (value.length <= 40) {
-    return value;
-  }
-  return `${value.slice(0, 28)}…${value.slice(-10)}`;
-}

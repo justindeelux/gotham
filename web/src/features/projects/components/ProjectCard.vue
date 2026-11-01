@@ -11,9 +11,10 @@ import { activeLocale, i18n } from "@/shared/i18n";
 
 interface Props {
   project: Project;
+  showStats?: boolean;
 }
 
-const props = defineProps<Props>();
+const props = withDefaults(defineProps<Props>(), { showStats: true });
 
 function t(key: string, params?: Record<string, string | number>): string {
   void activeLocale.value;
@@ -41,15 +42,17 @@ function unit(one: string, other: string, count: number): string {
         <NText v-if="props.project.description" depth="3" class="desc">
           {{ props.project.description }}
         </NText>
-        <NText depth="3" class="counts">
-          {{ unit("projects.list.environmentsOne", "projects.list.environmentsOther", props.project.environment_count) }}
-        </NText>
-        <NText depth="3" class="counts">
-          {{ resourceSummary(props.project.resource_counts) }}
-        </NText>
-        <NText depth="3" class="counts">
-          {{ unit("projects.list.resourcesTotalOne", "projects.list.resourcesTotalOther", projectResourceTotal(props.project)) }}
-        </NText>
+        <template v-if="props.showStats">
+          <NText depth="3" class="counts">
+            {{ unit("projects.list.environmentsOne", "projects.list.environmentsOther", props.project.environment_count) }}
+          </NText>
+          <NText depth="3" class="counts">
+            {{ resourceSummary(props.project.resource_counts) }}
+          </NText>
+          <NText depth="3" class="counts">
+            {{ unit("projects.list.resourcesTotalOne", "projects.list.resourcesTotalOther", projectResourceTotal(props.project)) }}
+          </NText>
+        </template>
       </NSpace>
     </NCard>
   </RouterLink>

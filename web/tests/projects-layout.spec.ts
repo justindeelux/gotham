@@ -161,6 +161,13 @@ test("projects grid shows three columns at 1280px", async ({ page }) => {
     page.getByRole("button", { name: "New project" }).first(),
   ).toBeVisible();
   await expect(page.locator(".project-grid")).toContainText("storefront");
+  await expect(
+    page.locator(".project-card-link").first(),
+    "the projects page keeps environment and resource counts",
+  ).toContainText("2 environments");
+  await expect(page.locator(".project-card-link").first()).toContainText(
+    "6 resources total",
+  );
 });
 
 test("projects grid collapses to one column at 480px", async ({ page }) => {

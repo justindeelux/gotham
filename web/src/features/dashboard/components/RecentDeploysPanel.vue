@@ -36,52 +36,66 @@ const rows = computed<RecentDeployment[]>(() => store.deployments);
 </script>
 
 <template>
-  <div class="section-title">
-    <h2>{{ $t("dashboard.deploys.title") }}</h2>
-  </div>
-  <NCard size="small">
-    <NSkeleton v-if="store.loading" text :repeat="3" />
-    <template v-else-if="store.error">
-      <NText depth="2">{{ $t("dashboard.deploys.loadFailed") }}</NText>
-      <NText depth="3" class="error-detail">{{ store.error }}</NText>
-      <div class="panel-action">
-        <NButton size="small" quaternary @click="() => void store.fetchRecentDeployments()">
-          {{ $t("dashboard.deploys.retry") }}
-        </NButton>
-      </div>
-    </template>
-    <NEmpty
-      v-else-if="rows.length === 0"
-      :description="$t('dashboard.deploys.empty')"
-    >
-      <template #icon>
-        <GothamIcon name="history" />
+  <section class="deploys-panel">
+    <div class="section-title">
+      <h2>{{ $t("dashboard.deploys.title") }}</h2>
+    </div>
+    <NCard size="small" class="deploys-card">
+      <NSkeleton v-if="store.loading" text :repeat="3" />
+      <template v-else-if="store.error">
+        <NText depth="2">{{ $t("dashboard.deploys.loadFailed") }}</NText>
+        <NText depth="3" class="error-detail">{{ store.error }}</NText>
+        <div class="panel-action">
+          <NButton size="small" quaternary @click="() => void store.fetchRecentDeployments()">
+            {{ $t("dashboard.deploys.retry") }}
+          </NButton>
+        </div>
       </template>
-      <template #extra>
-        <NText depth="3">
-          {{ $t("dashboard.deploys.emptyHint") }}
-        </NText>
-      </template>
-    </NEmpty>
-    <NSpace v-else vertical :size="12">
-      <div v-for="deployment in rows" :key="deployment.id" class="deploy-row">
-        <div class="deploy-main">
-          <NText strong class="deploy-app">{{ deployment.application_name }}</NText>
-          <NText depth="3" class="mono deploy-commit" :title="deployment.commit_message">
-            {{ commitLine(deployment) }}
+      <NEmpty
+        v-else-if="rows.length === 0"
+        :description="$t('dashboard.deploys.empty')"
+      >
+        <template #icon>
+          <GothamIcon name="history" />
+        </template>
+        <template #extra>
+          <NText depth="3">
+            {{ $t("dashboard.deploys.emptyHint") }}
           </NText>
+        </template>
+      </NEmpty>
+      <NSpace v-else vertical :size="12">
+        <div v-for="deployment in rows" :key="deployment.id" class="deploy-row">
+          <div class="deploy-main">
+            <NText strong class="deploy-app">{{ deployment.application_name }}</NText>
+            <NText depth="3" class="mono deploy-commit" :title="deployment.commit_message">
+              {{ commitLine(deployment) }}
+            </NText>
+          </div>
+          <div class="deploy-meta">
+            <NText depth="3" class="mono">{{ durationText(deployment) }}</NText>
+            <NText depth="3">{{ relativeTime(startedAt(deployment)) }}</NText>
+            <DeploymentStatusTag :state="deployment.state" />
+          </div>
         </div>
-        <div class="deploy-meta">
-          <NText depth="3" class="mono">{{ durationText(deployment) }}</NText>
-          <NText depth="3">{{ relativeTime(startedAt(deployment)) }}</NText>
-          <DeploymentStatusTag :state="deployment.state" />
-        </div>
-      </div>
-    </NSpace>
-  </NCard>
+      </NSpace>
+    </NCard>
+  </section>
 </template>
 
 <style scoped>
+.deploys-panel {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-5);
+  flex: 1 1 auto;
+  min-width: 0;
+}
+
+.deploys-card {
+  flex: 1 1 auto;
+}
+
 .section-title {
   display: flex;
   align-items: baseline;

@@ -61,31 +61,45 @@ export interface UsageSegments {
 
 export const usageBlockCount = 50;
 
-/** Fixed gauge mapping: blocks 1-30 success, 31-40 warning, 41-50 danger. */
-export function usageBlockLevel(index: number): UsageBlockLevel {
-  if (index < 30) {
+/** Fixed gauge block size; ServerUsageSegments.css keeps the same via --space-1/--space-2. */
+export const usageBlockWidth = 4;
+export const usageBlockGap = 2;
+
+/** Blocks that fit a measured width; falls back to the default before mount/SSR. */
+export function usageBlockCountForWidth(width: number): number {
+  if (!(width > 0)) {
+    return usageBlockCount;
+  }
+  return Math.max(1, Math.floor(width / (usageBlockWidth + usageBlockGap)));
+}
+
+/** Fixed gauge mapping by position: first 60% success, next 20% warning, last 20% danger. */
+export function usageBlockLevel(
+  index: number,
+  count = usageBlockCount,
+): UsageBlockLevel {
+  if (index < count * 0.6) {
     return "success";
   }
-  return index < 40 ? "warning" : "danger";
+  return index < count * 0.8 ? "warning" : "danger";
 }
 
 export function usageSegments(
   value: number | null | undefined,
+  count = usageBlockCount,
 ): UsageSegments | null {
   if (value === null || value === undefined || Number.isNaN(value)) {
     return null;
   }
+  const total = Math.max(1, Math.floor(count));
   const percentage = toPercent(value);
-  const filled = Math.min(
-    usageBlockCount,
-    Math.round((percentage * usageBlockCount) / 100),
-  );
+  const filled = Math.min(total, Math.round((percentage * total) / 100));
   return {
     percentage,
     filled,
-    blocks: Array.from({ length: usageBlockCount }, (_, index) => ({
+    blocks: Array.from({ length: total }, (_, index) => ({
       filled: index < filled,
-      level: usageBlockLevel(index),
+      level: usageBlockLevel(index, total),
     })),
   };
 }

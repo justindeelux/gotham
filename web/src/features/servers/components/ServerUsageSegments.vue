@@ -1,7 +1,11 @@
 <script setup lang="ts">
-import { computed } from "vue";
+import { computed, onBeforeUnmount, onMounted, ref } from "vue";
 
-import { usageBlockCount, usageSegments } from "@/features/servers/utils/serverDetailView";
+import {
+  usageBlockCount,
+  usageBlockCountForWidth,
+  usageSegments,
+} from "@/features/servers/utils/serverDetailView";
 
 interface Props {
   label: string;
@@ -10,11 +14,33 @@ interface Props {
 }
 
 const props = defineProps<Props>();
-const view = computed(() => usageSegments(props.value));
+
+const rowEl = ref<HTMLElement | null>(null);
+const blockCount = ref(usageBlockCount);
+const view = computed(() => usageSegments(props.value, blockCount.value));
+
+let observer: ResizeObserver | null = null;
+
+function measure(): void {
+  blockCount.value = usageBlockCountForWidth(rowEl.value?.clientWidth ?? 0);
+}
+
+onMounted(() => {
+  measure();
+  if (typeof ResizeObserver !== "undefined" && rowEl.value !== null) {
+    observer = new ResizeObserver(measure);
+    observer.observe(rowEl.value);
+  }
+});
+
+onBeforeUnmount(() => {
+  observer?.disconnect();
+  observer = null;
+});
 </script>
 
 <template>
-  <div class="usage-row" :class="{ 'is-stale': stale }">
+  <div ref="rowEl" class="usage-row" :class="{ 'is-stale': stale }">
     <div class="usage-head">
       <span class="usage-label">{{ label }}</span>
       <span class="usage-value">{{ view ? `${view.percentage}%` : "—" }}</span>
@@ -36,7 +62,7 @@ const view = computed(() => usageSegments(props.value));
       />
     </div>
     <div v-else class="usage-segments" aria-hidden="true">
-      <span v-for="index in usageBlockCount" :key="index" class="usage-block" />
+      <span v-for="index in blockCount" :key="index" class="usage-block" />
     </div>
   </div>
 </template>
@@ -45,6 +71,7 @@ const view = computed(() => usageSegments(props.value));
 .usage-row {
   display: grid;
   gap: var(--space-2);
+  min-width: 0;
 }
 
 .usage-head {
@@ -67,15 +94,15 @@ const view = computed(() => usageSegments(props.value));
 }
 
 .usage-segments {
-  display: grid;
-  grid-template-columns: repeat(50, minmax(0, 1fr));
-  gap: 2px;
+  display: flex;
+  gap: calc(var(--space-1) / 2);
   min-width: 0;
 }
 
 .usage-block {
-  min-width: 0;
-  aspect-ratio: 1 / 1;
+  flex: 0 0 auto;
+  width: var(--space-1);
+  height: var(--space-2);
   background: var(--border-soft);
   transition: background-color var(--motion-base) var(--ease-standard);
 }

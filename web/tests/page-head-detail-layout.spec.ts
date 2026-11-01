@@ -678,6 +678,7 @@ test("server overview puts usage beside node info and stacks on phones", async (
   await page.setViewportSize({ width: 1366, height: 900 });
   await page.goto(`${baseURL}/servers/srv-1`);
   await page.locator(".overview-grid").waitFor();
+  await waitForLayoutSettled(page);
 
   const desktop = await page.evaluate(() => {
     const grid = document.querySelector<HTMLElement>(".overview-grid")!;
@@ -702,8 +703,22 @@ test("server overview puts usage beside node info and stacks on phones", async (
 
   const usageRows = page.locator(".usage-panel .usage-row");
   await expect(usageRows).toHaveCount(3);
-  await expect(usageRows.first().locator(".usage-block")).toHaveCount(50);
-  await expect(usageRows.first().locator(".usage-block.is-filled")).toHaveCount(6);
+  const cpuGauge = await usageRows.first().locator(".usage-segments").evaluate((meter) => ({
+    width: meter.clientWidth,
+    blocks: meter.querySelectorAll(".usage-block").length,
+    filled: meter.querySelectorAll(".usage-block.is-filled").length,
+    blockWidth: meter.querySelector<HTMLElement>(".usage-block")?.getBoundingClientRect().width,
+    blockHeight:
+      meter.querySelector<HTMLElement>(".usage-block")?.getBoundingClientRect().height,
+  }));
+  expect(cpuGauge.blocks, "usage blocks fit the panel width").toBe(
+    Math.floor(cpuGauge.width / 6),
+  );
+  expect(cpuGauge.filled, "filled blocks match the reported 12%").toBe(
+    Math.round((12 * cpuGauge.blocks) / 100),
+  );
+  expect(cpuGauge.blockWidth, "usage blocks keep a 4px width").toBeCloseTo(4, 0);
+  expect(cpuGauge.blockHeight, "usage blocks keep an 8px height").toBeCloseTo(8, 0);
   await expect(page.locator(".node-info-panel")).not.toContainText("CPU usage");
   await expect(page.locator(".node-info-panel")).not.toContainText("Memory usage");
   await expect(page.locator(".node-info-panel")).not.toContainText("Disk usage");
@@ -963,7 +978,7 @@ test("A settings tab without slot content keeps the move card full width", async
 });
 
 
-test("dashboard keeps both grids at three columns and deploys full height beside them", async ({
+test("dashboard keeps projects at three columns, servers at two, and deploys full height", async ({
   page,
 }) => {
   test.setTimeout(120_000);
@@ -1046,7 +1061,17 @@ test("dashboard keeps both grids at three columns and deploys full height beside
   );
 
   const meter = serverLink.locator(".usage-segments").first();
-  await expect(meter.locator(".usage-block")).toHaveCount(50);
+  const gauge = await meter.evaluate((element) => ({
+    width: element.clientWidth,
+    blocks: element.querySelectorAll(".usage-block").length,
+    filled: element.querySelectorAll(".usage-block.is-filled").length,
+  }));
+  expect(gauge.blocks, "usage blocks fit the card width").toBe(
+    Math.floor(gauge.width / 6),
+  );
+  expect(gauge.filled, "filled blocks match the reported 12%").toBe(
+    Math.round((12 * gauge.blocks) / 100),
+  );
 
   await firstProject.click();
   await expect(page).toHaveURL(new RegExp(`/projects/${dashboardProjects[0].id}$`));
@@ -1090,6 +1115,9 @@ test("dashboard keeps both grids at three columns and deploys full height beside
       const projectCardRect = projectCard.getBoundingClientRect();
       const nodeCardRect = nodeCard.getBoundingClientRect();
       const blockRect = block.getBoundingClientRect();
+      const meterWidth = meter.clientWidth;
+      const blockCount = meter.querySelectorAll(".usage-block").length;
+      const filledCount = meter.querySelectorAll(".usage-block.is-filled").length;
       const nameRect = nodeName.getBoundingClientRect();
       const headRect = nodeHead.getBoundingClientRect();
       const statusRect = nodeStatus.getBoundingClientRect();
@@ -1114,6 +1142,9 @@ test("dashboard keeps both grids at three columns and deploys full height beside
         nodeGap: parseFloat(getComputedStyle(nodeGrid).gap),
         blockWidth: blockRect.width,
         blockHeight: blockRect.height,
+        meterWidth,
+        blockCount,
+        filledCount,
         segmentGap: getComputedStyle(meter).gap,
         projectCardOverflow: projectCard.scrollWidth > projectCard.clientWidth + 1,
         nodeCardOverflow: nodeCard.scrollWidth > nodeCard.clientWidth + 1,
@@ -1137,9 +1168,21 @@ test("dashboard keeps both grids at three columns and deploys full height beside
     expect(layout.overflow, `no horizontal overflow at ${width}px`).toBe(false);
     expect(layout.segmentGap, `segment gap at ${width}px`).toBe("2px");
     expect(
-      Math.abs(layout.blockWidth - layout.blockHeight),
-      `usage blocks are square at ${width}px`,
-    ).toBeLessThanOrEqual(0.5);
+      layout.blockWidth,
+      `usage blocks keep a 4px width at ${width}px`,
+    ).toBeCloseTo(4, 0);
+    expect(
+      layout.blockHeight,
+      `usage blocks keep an 8px height at ${width}px`,
+    ).toBeCloseTo(8, 0);
+    expect(
+      layout.blockCount,
+      `usage blocks fit the measured width at ${width}px`,
+    ).toBe(Math.floor(layout.meterWidth / 6));
+    expect(
+      layout.filledCount,
+      `filled blocks match the reported 12% at ${width}px`,
+    ).toBe(Math.round((12 * layout.blockCount) / 100));
     expect(
       layout.projectCardOverflow,
       `project cards fit their track at ${width}px`,
@@ -1189,13 +1232,13 @@ test("dashboard keeps both grids at three columns and deploys full height beside
       );
     } else {
       expect(layout.projectColumns, `three projects per row at ${width}px`).toBe(3);
-      expect(layout.nodeColumns, `three servers per row at ${width}px`).toBe(3);
+      expect(layout.nodeColumns, `two servers per row at ${width}px`).toBe(2);
       expect(layout.projectCardWidth, `each project is one third at ${width}px`).toBeCloseTo(
         (layout.projectGridWidth - 2 * layout.projectGap) / 3,
         0,
       );
-      expect(layout.nodeCardWidth, `each server is one third at ${width}px`).toBeCloseTo(
-        (layout.nodeGridWidth - 2 * layout.nodeGap) / 3,
+      expect(layout.nodeCardWidth, `each server is one half at ${width}px`).toBeCloseTo(
+        (layout.nodeGridWidth - layout.nodeGap) / 2,
         0,
       );
       expect(

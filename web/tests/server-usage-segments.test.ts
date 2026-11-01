@@ -1,9 +1,10 @@
 import { mount } from "@vue/test-utils";
-import { describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 
 import ServerUsageSegments from "../src/features/servers/components/ServerUsageSegments.vue";
 import {
   isUsageStale,
+  usageBlockCountForWidth,
   usageBlockLevel,
   usageSegments,
   usageStaleAfterMs,
@@ -68,6 +69,34 @@ describe("usageSegments", () => {
     expect(usageSegments(undefined)).toBeNull();
     expect(usageSegments(Number.NaN)).toBeNull();
   });
+
+  it("scales the block count and colour bands to the available width", () => {
+    const view = usageSegments(100, 10);
+    expect(view?.blocks.map((block) => block.level)).toEqual([
+      "success",
+      "success",
+      "success",
+      "success",
+      "success",
+      "success",
+      "warning",
+      "warning",
+      "danger",
+      "danger",
+    ]);
+    expect(usageSegments(45, 10)?.filled).toBe(5);
+    expect(
+      usageSegments(45, 10)?.blocks.filter((block) => block.filled),
+    ).toHaveLength(5);
+  });
+
+  it("fits the block count to the measured width", () => {
+    expect(usageBlockCountForWidth(600)).toBe(100);
+    expect(usageBlockCountForWidth(100)).toBe(16);
+    expect(usageBlockCountForWidth(5)).toBe(1);
+    expect(usageBlockCountForWidth(0)).toBe(50);
+    expect(usageBlockCountForWidth(Number.NaN)).toBe(50);
+  });
 });
 
 describe("isUsageStale", () => {
@@ -91,6 +120,10 @@ describe("isUsageStale", () => {
 });
 
 describe("ServerUsageSegments", () => {
+  afterEach(() => {
+    vi.unstubAllGlobals();
+  });
+
   it("renders fifty positioned blocks and a labelled meter", () => {
     const wrapper = mount(ServerUsageSegments, {
       props: { label: "CPU usage", value: 62 },
@@ -128,5 +161,36 @@ describe("ServerUsageSegments", () => {
     expect(wrapper.classes()).toContain("is-stale");
     expect(wrapper.text()).toContain("62%");
     expect(wrapper.get('[role="meter"]').attributes("aria-valuenow")).toBe("62");
+  });
+
+  it("fits the block count to the measured row width", async () => {
+    const callbacks: Array<() => void> = [];
+    vi.stubGlobal(
+      "ResizeObserver",
+      class {
+        constructor(callback: () => void) {
+          callbacks.push(callback);
+        }
+        observe(): void {}
+        disconnect(): void {}
+      },
+    );
+    const wrapper = mount(ServerUsageSegments, {
+      props: { label: "CPU usage", value: 50 },
+    });
+    expect(wrapper.findAll(".usage-block")).toHaveLength(50);
+
+    Object.defineProperty(wrapper.element, "clientWidth", {
+      value: 600,
+      configurable: true,
+    });
+    for (const callback of callbacks) {
+      callback();
+    }
+    await wrapper.vm.$nextTick();
+
+    expect(wrapper.findAll(".usage-block")).toHaveLength(100);
+    expect(wrapper.findAll(".usage-block.is-filled")).toHaveLength(50);
+    expect(wrapper.get('[role="meter"]').attributes("aria-valuenow")).toBe("50");
   });
 });

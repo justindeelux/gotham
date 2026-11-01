@@ -3,7 +3,7 @@ import type { McpMessages } from "./en";
 const vi: McpMessages = {
   page: {
     eyebrow: "Cài đặt · Kết nối",
-    title: "Thiết lập MCP",
+    title: "MCP",
     description:
       "Kết nối Claude Code, Cursor hoặc ứng dụng MCP khác với bảng điều khiển này. Chọn mức truy cập, tạo token và dán cấu hình có sẵn vào ứng dụng.",
   },

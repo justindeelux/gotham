@@ -88,9 +88,9 @@ async function signInAs(page: Page, session: Session): Promise<void> {
 }
 
 async function openMcpSetup(page: Page): Promise<void> {
-  await page.goto("/settings/mcp");
+  await page.goto("/integrations/mcp");
   await expect(
-    page.getByRole("heading", { name: "MCP setup", level: 1 }),
+    page.getByRole("heading", { name: "MCP", level: 1 }),
   ).toBeVisible();
   await expect(page.getByTestId("mcp-create-token")).toBeVisible();
 }

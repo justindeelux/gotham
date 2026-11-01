@@ -114,7 +114,7 @@ test.describe("notification delivery history", () => {
   }) => {
     await mockDeliveryHistory(page);
     await page.setViewportSize({ width: 1280, height: 900 });
-    await page.goto("/settings/notifications");
+    await page.goto("/notifications");
 
     await expect(page.getByText("Deploy alerts")).toBeVisible();
     await page.getByRole("button", { name: "Delivery history" }).click();

@@ -155,7 +155,9 @@ test.describe("app shell", () => {
     const { server } = (await created.json()) as { server: { id: string } };
 
     await page.goto("/dashboard");
-    const avatar = page.getByRole("link", { name: new RegExp(name) });
+    const avatar = page
+      .locator(".rail")
+      .getByRole("link", { name: new RegExp(name) });
     await expect(avatar).toHaveAttribute(
       "href",
       new RegExp(`/servers/${server.id}$`),

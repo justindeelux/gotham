@@ -193,6 +193,9 @@ func Mount(r chi.Router, auth func(http.Handler) http.Handler, userID UserIDFunc
 		protected.Post("/v1/backups/schedules", h.createSchedule)
 		protected.Patch("/v1/backups/schedules/{id}", h.updateSchedule)
 		protected.Delete("/v1/backups/schedules/{id}", h.deleteSchedule)
+		// Deprecated: /backups/providers is a compatibility alias kept for
+		// existing API tokens and MCP clients. New clients use /storages, which
+		// delegates to the same storage service.
 		protected.Get("/v1/backups/providers", h.listProviders)
 		protected.Post("/v1/backups/providers", h.createProvider)
 		protected.Patch("/v1/backups/providers/{id}", h.updateProvider)

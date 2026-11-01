@@ -1,10 +1,10 @@
 //go:build unix
 
-package backups
+package storages
 
 import "syscall"
 
-func diskStats(dir string) (free, total int64, err error) {
+func DiskStats(dir string) (free, total int64, err error) {
 	var stat syscall.Statfs_t
 	if err := syscall.Statfs(dir, &stat); err != nil {
 		return 0, 0, err

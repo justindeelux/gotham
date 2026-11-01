@@ -326,3 +326,8 @@ project POST /api/v1/backups/schedules
 project GET /api/v1/applications/{id}/backup-contents
 project GET /api/v1/databases/{id}/backup-contents
 project GET /api/v1/services/{id}/backup-contents
+owner GET /api/v1/storages
+owner POST /api/v1/storages
+owner PATCH /api/v1/storages/{id}
+owner DELETE /api/v1/storages/{id}
+owner POST /api/v1/storages/{id}/test

@@ -41,6 +41,7 @@ import (
 	"github.com/justindeelux/gotham/internal/server/ws"
 	"github.com/justindeelux/gotham/internal/servers"
 	"github.com/justindeelux/gotham/internal/services"
+	"github.com/justindeelux/gotham/internal/storages"
 	"github.com/justindeelux/gotham/internal/store"
 	"github.com/justindeelux/gotham/internal/taskevents"
 	"github.com/justindeelux/gotham/internal/templates"
@@ -539,7 +540,17 @@ func (s *Server) routes() (http.Handler, error) {
 		composeSvc := s.composeService(templateSvc)
 		s.composeSvc = composeSvc
 
-		s.backups = s.backupService(containerService, databaseSvc, s.deploy, composeSvc)
+		var storageSvc *storages.Manager
+		if s.persistence != nil {
+			storageSvc = storages.New(storages.Config{
+				Repository: storages.NewStoreRepository(s.persistence),
+				Secret:     s.secretKey,
+				LocalDir:   backups.LocalBackupDir(""),
+				Logger:     s.logger,
+			})
+			storages.Mount(api, platformOnly, UserIDFromContext, storageSvc)
+		}
+		s.backups = s.backupService(containerService, databaseSvc, s.deploy, composeSvc, storageSvc)
 		backups.Mount(api, s.resourceAuth(), UserIDFromContext, s.backups)
 		backups.MountLegacy(api, s.resourceAuth(), s.resourceAuth(), UserIDFromContext, s.backups)
 		s.backupwatch = s.backupwatchService()
@@ -905,7 +916,7 @@ func (s *Server) databaseService(containerService containers.ContainerService) d
 	})
 }
 
-func (s *Server) backupService(containerService containers.ContainerService, databaseSvc databases.DatabaseService, deploySvc deploy.DeployService, composeSvc services.ServiceService) backups.BackupService {
+func (s *Server) backupService(containerService containers.ContainerService, databaseSvc databases.DatabaseService, deploySvc deploy.DeployService, composeSvc services.ServiceService, storageSvc *storages.Manager) backups.BackupService {
 	if s.persistence == nil || containerService == nil || databaseSvc == nil {
 		return nil
 	}
@@ -920,6 +931,7 @@ func (s *Server) backupService(containerService containers.ContainerService, dat
 	}
 	cfg := backups.BackupConfig{
 		Store:      s.persistence,
+		Storages:   storageSvc,
 		Sources:    sources,
 		Containers: containerService,
 		Secret:     s.secretKey,

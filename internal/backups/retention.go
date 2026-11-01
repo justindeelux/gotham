@@ -10,6 +10,8 @@ import (
 	"time"
 
 	"github.com/google/uuid"
+
+	"github.com/justindeelux/gotham/internal/storages"
 )
 
 // Retention limits live here so every threshold is documented in one place.
@@ -227,11 +229,17 @@ func (m *BackupManager) storeForCleanupLocation(ctx context.Context, item Artifa
 		if item.TargetID == uuid.Nil {
 			return nil, fmt.Errorf("%w: the storage provider of this artifact no longer exists", ErrValidation)
 		}
-		target, err := m.backups.GetBackupTarget(ctx, item.TargetID)
+		if m.storages == nil {
+			return nil, ErrValidation
+		}
+		target, err := m.storages.Resolve(ctx, uuid.Nil, item.TargetID)
 		if err != nil {
 			return nil, err
 		}
-		return m.storeForTarget(ctx, &target)
+		if target == nil {
+			return nil, fmt.Errorf("%w: the storage of this artifact no longer exists", ErrValidation)
+		}
+		return m.storeForTarget(ctx, target)
 	default:
 		return nil, fmt.Errorf("%w: unknown artifact location %q", ErrValidation, item.Location)
 	}
@@ -266,7 +274,7 @@ func (m *BackupManager) checkLocalSpace(ctx context.Context, resource Resource) 
 }
 
 func diskFreeBytes(dir string) (int64, error) {
-	free, _, err := diskStats(dir)
+	free, _, err := storages.DiskStats(dir)
 	return free, err
 }
 

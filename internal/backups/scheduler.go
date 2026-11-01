@@ -123,13 +123,18 @@ func (s *backupScheduler) fire(ctx context.Context, schedule BackupSchedule, now
 
 	var target *BackupTarget
 	if schedule.TargetID != uuid.Nil {
-		stored, err := s.manager.backups.GetBackupTarget(ctx, schedule.TargetID)
-		if err != nil {
-			s.logger.Warn("backups: skipping backup schedule, storage provider is gone",
+		if s.manager.storages == nil {
+			s.logger.Warn("backups: skipping backup schedule, storage service is not configured",
+				"schedule_id", schedule.ID.String())
+			return 0
+		}
+		stored, err := s.manager.storages.Resolve(ctx, uuid.Nil, schedule.TargetID)
+		if err != nil || stored == nil {
+			s.logger.Warn("backups: skipping backup schedule, storage is gone",
 				"schedule_id", schedule.ID.String(), "error", err)
 			return 0
 		}
-		target = &stored
+		target = stored
 	} else if target, err = s.manager.defaultTarget(ctx, resource.OwnerID); err != nil {
 		s.logger.Error("backups: could not resolve the default storage provider",
 			"schedule_id", schedule.ID.String(), "error", err)

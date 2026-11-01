@@ -8,7 +8,6 @@ import (
 	"testing"
 
 	"github.com/google/uuid"
-	"github.com/minio/minio-go/v7"
 )
 
 // TestS3ArtifactCleanupRemovesTheObject is the throwaway-container check for
@@ -32,10 +31,8 @@ func TestS3ArtifactCleanupRemovesTheObject(t *testing.T) {
 	if err != nil {
 		t.Fatalf("newS3Store: %v", err)
 	}
-	if err := store.client.MakeBucket(ctx, bucket, minio.MakeBucketOptions{Region: "us-east-1"}); err != nil {
-		if minio.ToErrorResponse(err).Code != "BucketAlreadyOwnedByYou" {
-			t.Fatalf("create bucket: %v", err)
-		}
+	if err := store.EnsureBucket(ctx); err != nil {
+		t.Fatalf("create bucket: %v", err)
 	}
 	payload := []byte("dump")
 	location, err := store.Put(ctx, "retention/"+uuid.NewString()+".gz", bytes.NewReader(payload), int64(len(payload)))
@@ -71,8 +68,7 @@ func TestS3ArtifactCleanupRemovesTheObject(t *testing.T) {
 	if _, ok := fixture.backups.getBackup(backup.ID); ok {
 		t.Fatal("the run row must be removed after the artifact")
 	}
-	key := strings.TrimPrefix(location, locationS3Prefix+bucket+"/")
-	if _, err := store.client.StatObject(ctx, bucket, key, minio.StatObjectOptions{}); err == nil {
+	if _, err := store.Stat(ctx, location); err == nil {
 		t.Fatal("the artifact is still in the bucket")
 	}
 }

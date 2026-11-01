@@ -12,6 +12,7 @@ import (
 	"github.com/google/uuid"
 
 	"github.com/justindeelux/gotham/internal/containers"
+	"github.com/justindeelux/gotham/internal/storages"
 	"github.com/justindeelux/gotham/internal/store"
 )
 
@@ -42,6 +43,7 @@ func Enabled() bool {
 type BackupConfig struct {
 	Store             *store.Store
 	Repository        BackupRepository
+	Storages          *storages.Manager
 	Sources           map[ResourceType]Source
 	Secret            string
 	Logger            *slog.Logger
@@ -118,24 +120,12 @@ type ScheduleRequest struct {
 	KeepLast          *int        `json:"keep_last,omitempty"`
 }
 
-type ProviderRequest struct {
-	Name      string  `json:"name"`
-	Kind      string  `json:"kind"`
-	Endpoint  string  `json:"endpoint,omitempty"`
-	Region    *string `json:"region,omitempty"`
-	Bucket    string  `json:"bucket,omitempty"`
-	Prefix    *string `json:"prefix,omitempty"`
-	AccessKey string  `json:"access_key,omitempty"`
-	SecretKey string  `json:"secret_key,omitempty"`
-}
-
-type TargetCheck struct {
-	OK      bool   `json:"ok"`
-	Message string `json:"message"`
-}
+// ProviderRequest is the legacy name for a storage create/update payload.
+type ProviderRequest = storages.Request
 
 type BackupManager struct {
 	backups      BackupRepository
+	storages     *storages.Manager
 	objects      ObjectStore
 	sources      map[ResourceType]Source
 	containers   containers.ContainerService
@@ -186,19 +176,24 @@ func NewBackupService(cfg BackupConfig) *BackupManager {
 			sources[kind] = source
 		}
 	}
+	localDir := resolveLocalBackupDir(cfg.LocalDir)
 	manager := &BackupManager{
 		backups:      backupRepo,
 		objects:      cfg.ObjectStore,
 		sources:      sources,
 		containers:   cfg.Containers,
 		secret:       cfg.Secret,
-		localDir:     resolveLocalBackupDir(cfg.LocalDir),
+		localDir:     localDir,
 		jobTimeout:   timeout,
 		now:          func() time.Time { return time.Now().UTC() },
 		logger:       logger,
 		schedulerInt: interval,
 		notifier:     cfg.Notifier,
 		leases:       leases,
+	}
+	manager.storages = cfg.Storages
+	if manager.storages == nil {
+		manager.storages = newStorageManager(cfg, backupRepo, manager, localDir)
 	}
 	manager.scheduler = newBackupScheduler(manager, interval)
 	manager.cleanup = newCleanupSweeper(manager)
@@ -303,8 +298,8 @@ func (m *BackupManager) ensureBuiltinProviders() {
 		return
 	}
 	for _, id := range ids {
-		if _, err := m.backups.EnsureBuiltinTarget(ctx, id); err != nil {
-			m.logger.Warn("backups: could not create the built-in provider",
+		if _, err := m.storages.EnsureBuiltin(ctx, id); err != nil {
+			m.logger.Warn("backups: could not create the built-in storage",
 				"user_id", id.String(), "error", err)
 		}
 	}
@@ -501,8 +496,11 @@ func (m *BackupManager) attachProviderNames(ctx context.Context, list []Backup) 
 		if list[i].TargetID == uuid.Nil {
 			continue
 		}
-		target, err := m.backups.GetBackupTarget(ctx, list[i].TargetID)
-		if err != nil {
+		if m.storages == nil {
+			continue
+		}
+		target, err := m.storages.Resolve(ctx, uuid.Nil, list[i].TargetID)
+		if err != nil || target == nil {
 			continue
 		}
 		list[i].ProviderName = target.Name
@@ -571,8 +569,11 @@ func (m *BackupManager) nameForProvider(ctx context.Context, targetID uuid.UUID)
 	if targetID == uuid.Nil {
 		return ""
 	}
-	target, err := m.backups.GetBackupTarget(ctx, targetID)
-	if err != nil {
+	if m.storages == nil {
+		return ""
+	}
+	target, err := m.storages.Resolve(ctx, uuid.Nil, targetID)
+	if err != nil || target == nil {
 		return ""
 	}
 	return target.Name

@@ -77,20 +77,27 @@ const columns: DataTableColumns<ApiToken> = [
     width: 150,
     render: (token) =>
       token.revoked_at
-        ? h("div", { class: "status-cell" }, [
-            h(
-              NTag,
-              { size: "small", type: "error", bordered: false },
-              { default: () => t("api-tokens.list.revoked") },
-            ),
-            h(
-              "span",
-              { class: "muted small" },
-              t("api-tokens.list.revokedOn", {
-                date: formatDate(token.revoked_at),
-              }),
-            ),
-          ])
+        ? h(
+            NSpace,
+            { vertical: true, size: 2, "data-testid": "token-status" },
+            {
+              default: () => [
+                h(
+                  NTag,
+                  { size: "small", type: "error", bordered: false },
+                  { default: () => t("api-tokens.list.revoked") },
+                ),
+                h(
+                  "span",
+                  {
+                    class: "muted status-time",
+                    style: { fontSize: "var(--text-xs)" },
+                  },
+                  formatDate(token.revoked_at),
+                ),
+              ],
+            },
+          )
         : h(
             NTag,
             { size: "small", type: "success", bordered: false },
@@ -330,12 +337,6 @@ onMounted(() => {
 }
 
 .token-name {
-  display: flex;
-  flex-direction: column;
-  gap: 2px;
-}
-
-.status-cell {
   display: flex;
   flex-direction: column;
   gap: 2px;

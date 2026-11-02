@@ -35,24 +35,21 @@ Ask yourself: "Would a senior engineer say this is overcomplicated?" If yes, sim
 
 ## Development Workflow
 
-- Docs: `docs/` (VitePress, EN + `/vi/`), public. No internal planning docs live in the repo.
-- Personal tooling rules (orchestration, issue tracker) live in `.workflow/AGENTS.md` when present; it is untracked and optional. Follow it if it exists, otherwise ignore it.
-- **Size decides the PR.** Small changes (typo, copy, CSS tweak, small fix, docs, config) are batched: several related ones go in one branch/PR, one commit per item. A change with real logic, a migration, a security impact or several modules gets its own branch/PR. CI must be green before merge.
-- **Branch / worktree naming:** branch = `<type>/<slug>`, worktree = `<type>-<slug>` (`/` is not valid in a directory name); `<slug>` is short kebab-case, e.g. `feat/files-icon-tooltips` / `feat-files-icon-tooltips`. Batches use the shared theme as slug (`fix/files-polish`).
-- **Types:** `feat` new capability · `fix` bug fix · `refactor` no behaviour change · `perf` · `docs` · `test` · `ci` · `build` (build system, deps, packaging) · `chore` housekeeping.
-- **Commits and PR titles:** Conventional Commits, `<type>(<scope>): <subject>` (imperative, no period, ~50 chars), e.g. `fix(files): show owner / mode separately`. The squash-merge title is the PR title; for a batch use the theme. Git operations (branching, merge vs rebase, conflicts): use the `/git-workflow` skill.
-- **Pull requests:** state the context in plain text so the PR stands alone; list every item a batch covers. Two PRs touching the same file (e.g. `ci.yml`) merge sequentially; rebase the second onto the new `main`.
-- **Before pushing:** run the invariants below for the paths you touched, so CI confirms instead of discovering.
+- If you are an orchestrator, worker or reviewer, read the file for your role first: `.workflow/orchestration.md`, `.workflow/worker.md`, `.workflow/reviewer.md`.
+- `docs/` is the user guide, not a place for internal documentation.
+- Small changes (typos, wording, CSS, minor fixes, config, docs) are batched: related changes share one branch/PR, one commit per change. Real logic changes, migrations, security fixes and changes touching many modules get their own branch/PR.
+- Branch name: `<type>/<slug>`, e.g. `feat/files-icon-tooltips`. `<type>` is one of `feat` (new capability), `fix` (bug fix), `refactor` (no behaviour change), `perf`, `docs`, `test`, `ci`, `build` (build system, deps, packaging), `chore` (housekeeping).
+- Commits follow Conventional Commits: `<type>(<scope>): <subject>`, imperative, no trailing period, ~50 chars, e.g. `fix(files): show owner / mode separately`. The squash-merge title is the PR title; for a batch, use the theme. For branching, merge vs rebase and conflicts, see the `/git-workflow` skill.
+- PRs must be self-explanatory: give the context and list every item in a batch. If two PRs touch the same file, merge them in sequence and rebase the second onto the new `main`.
+- Before pushing, run the invariants below that match the paths you touched. CI must be green before merge.
 - Invariants (run after every task, before merge):
   1. `go build ./...` clean
   2. `go test ./...` green
   3. `golangci-lint run` + `go vet` clean
-  4. Migrations are **forward-only** — never edit a merged migration; schema change = new migration
-  5. `npm run build` + `npm run type-check` clean (web/)
+  4. Migrations are **forward-only**: never edit a merged migration; a schema change is a new migration
+  5. `npm run build` + `npm run type-check` clean (`web/`)
   6. No cross-scope imports: `agent/` must not import `internal/`; domain packages must not import the HTTP server
-  7. `cd docs && npm ci && npm run docs:build` clean (`docs/` only; Node 20+; no Go/`web/` impact)
-- UI e2e: run the Playwright smoke suite (`npm run e2e` in `web/`) when needed, against throwaway Postgres + Redis containers and its own `gotham serve` (see `web/playwright.config.ts`); never reuse the shared `gotham-dev-postgres` / `gotham-dev-redis`, and remove the containers when the run ends.
-- Minimum dev environment: Docker, PostgreSQL 16, Redis 7, Node 20+ (web/ only).
+  7. `cd docs && npm ci && npm run docs:build` clean (`docs/` only; no Go/`web/` impact)
 
 ## Code Style
 

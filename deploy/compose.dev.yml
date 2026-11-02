@@ -1,13 +1,17 @@
 # Gotham dev stack.
 #
-# Starts PostgreSQL 16 and Redis 7 with fixed host ports and a named data
-# volume so local development matches the production dependencies. The
-# published ports bind to 127.0.0.1 only, so a dev machine on an untrusted
-# network does not expose the databases; the credentials below are dev-only.
+# Starts PostgreSQL 16, Redis 7 and the VitePress docs dev server with fixed
+# host ports and a named data volume so local development matches the
+# production dependencies. The published ports bind to 127.0.0.1 only, so a dev
+# machine on an untrusted network does not expose the databases; the
+# credentials below are dev-only.
 #
 # Usage:
 #   docker compose -f deploy/compose.dev.yml up -d
 #   docker compose -f deploy/compose.dev.yml down
+#
+# Docs only: http://localhost:5173
+#   docker compose -f deploy/compose.dev.yml up docs
 name: gotham-dev
 
 services:
@@ -40,6 +44,24 @@ services:
       interval: 5s
       timeout: 5s
       retries: 10
+
+  docs:
+    image: node:22-alpine
+    container_name: gotham-dev-docs
+    restart: unless-stopped
+    # The repo root is mounted (not just docs/) so `lastUpdated` can read git
+    # history; git itself is missing from the alpine image.
+    working_dir: /repo/docs
+    command: sh -c "apk add --no-cache git && npm ci && npm run docs:dev -- --host 0.0.0.0 --port 5173"
+    ports:
+      - "127.0.0.1:5173:5173"
+    environment:
+      GIT_CONFIG_COUNT: 1
+      GIT_CONFIG_KEY_0: safe.directory
+      GIT_CONFIG_VALUE_0: /repo
+    volumes:
+      - ..:/repo
+      - /repo/docs/node_modules
 
 volumes:
   gotham-pg-data:

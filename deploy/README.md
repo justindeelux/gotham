@@ -246,11 +246,13 @@ validates it with `visudo`. Keep its id lists in sync with
 
 ### `compose.dev.yml`
 
-PostgreSQL 16 + Redis 7 for local development, bound to `127.0.0.1` only with
-dev-only credentials:
+PostgreSQL 16 + Redis 7 + the VitePress docs dev server
+(`http://localhost:5173`) for local development, bound to `127.0.0.1` only
+with dev-only credentials:
 
 ```sh
 docker compose -f deploy/compose.dev.yml up -d
+docker compose -f deploy/compose.dev.yml up docs   # docs only
 docker compose -f deploy/compose.dev.yml down
 ```
 

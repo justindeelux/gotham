@@ -19,6 +19,7 @@ import { describeServerError, failureText, getServer } from "@/features/servers/
 import EditServerModal from "@/features/servers/components/EditServerModal.vue";
 import ServerContainersTab from "@/features/servers/components/ServerContainersTab.vue";
 import ServerDetailHeader from "@/features/servers/components/ServerDetailHeader.vue";
+import ServerFirewallTab from "@/features/firewall/components/ServerFirewallTab.vue";
 import ServerMetricsTab from "@/features/servers/components/ServerMetricsTab.vue";
 import ServerOverviewTab from "@/features/servers/components/ServerOverviewTab.vue";
 import ServerProxyTab from "@/features/servers/components/ServerProxyTab.vue";
@@ -203,6 +204,14 @@ onMounted(() => {
             display-directive="if"
           >
             <ServerContainersTab :server-id="serverId" />
+          </NTabPane>
+
+          <NTabPane
+            name="firewall"
+            :tab="$t('firewall.tab')"
+            display-directive="if"
+          >
+            <ServerFirewallTab :server-id="serverId" />
           </NTabPane>
 
           <NTabPane

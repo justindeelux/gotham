@@ -7,6 +7,7 @@ import { useAuthStore } from "@/features/auth";
 const DETAIL_TABS = [
   "overview",
   "containers",
+  "firewall",
   "files",
   "terminal",
   "metrics",

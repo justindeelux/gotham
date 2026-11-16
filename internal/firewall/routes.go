@@ -44,8 +44,12 @@ type toggleRequest struct {
 	Enabled bool `json:"enabled"`
 }
 
+// errorBody carries a stable code the web translates and the English message
+// it falls back to when the code is unknown (an older agent sends none).
 type errorBody struct {
-	Message string `json:"message"`
+	Message string            `json:"message"`
+	Code    string            `json:"code,omitempty"`
+	Params  map[string]string `json:"params,omitempty"`
 }
 
 // Mount registers the per-server firewall routes behind the owner platform
@@ -166,15 +170,21 @@ func (h *handler) deleteRule(w http.ResponseWriter, r *http.Request) {
 }
 
 func (h *handler) replyError(w http.ResponseWriter, err error) {
+	d := detailOf(err)
 	switch {
 	case errors.Is(err, ErrNotFound):
-		writeJSON(w, http.StatusNotFound, errorBody{Message: "not found"})
+		d = d.withDefault(codeRuleNotFound)
+		writeJSON(w, http.StatusNotFound, errorBody{Message: "not found", Code: d.code, Params: d.params})
 	case errors.Is(err, ErrValidation):
-		writeJSON(w, http.StatusBadRequest, errorBody{Message: trimSentinel(err, ErrValidation)})
+		writeJSON(w, http.StatusBadRequest, errorBody{Message: trimSentinel(err, ErrValidation), Code: d.code, Params: d.params})
 	case errors.Is(err, ErrConflict):
-		writeJSON(w, http.StatusConflict, errorBody{Message: trimSentinel(err, ErrConflict)})
-	case errors.Is(err, ErrUnsupported), errors.Is(err, ErrUnavailable):
-		writeJSON(w, http.StatusBadGateway, errorBody{Message: err.Error()})
+		writeJSON(w, http.StatusConflict, errorBody{Message: trimSentinel(err, ErrConflict), Code: d.code, Params: d.params})
+	case errors.Is(err, ErrUnsupported):
+		d = d.withDefault(codeAgentOutdated)
+		writeJSON(w, http.StatusBadGateway, errorBody{Message: err.Error(), Code: d.code, Params: d.params})
+	case errors.Is(err, ErrUnavailable):
+		d = d.withDefault(codeAgentUnavailable)
+		writeJSON(w, http.StatusBadGateway, errorBody{Message: err.Error(), Code: d.code, Params: d.params})
 	default:
 		h.logger.Error("firewall: request failed", "error", err)
 		writeJSON(w, http.StatusInternalServerError, errorBody{Message: "internal error"})
@@ -190,7 +200,7 @@ func trimSentinel(err, sentinel error) string {
 func serverIDParam(w http.ResponseWriter, r *http.Request) (uuid.UUID, bool) {
 	id, err := uuid.Parse(chi.URLParam(r, "id"))
 	if err != nil {
-		writeJSON(w, http.StatusBadRequest, errorBody{Message: "invalid server id"})
+		writeJSON(w, http.StatusBadRequest, errorBody{Message: "invalid server id", Code: codeInvalidRequest})
 		return uuid.Nil, false
 	}
 	return id, true
@@ -199,17 +209,17 @@ func serverIDParam(w http.ResponseWriter, r *http.Request) (uuid.UUID, bool) {
 func decode(w http.ResponseWriter, r *http.Request, v any) bool {
 	body, err := io.ReadAll(io.LimitReader(r.Body, 1<<20))
 	if err != nil {
-		writeJSON(w, http.StatusBadRequest, errorBody{Message: "invalid body"})
+		writeJSON(w, http.StatusBadRequest, errorBody{Message: "invalid body", Code: codeInvalidRequest})
 		return false
 	}
 	if len(body) == 0 {
-		writeJSON(w, http.StatusBadRequest, errorBody{Message: "invalid body"})
+		writeJSON(w, http.StatusBadRequest, errorBody{Message: "invalid body", Code: codeInvalidRequest})
 		return false
 	}
 	decoder := json.NewDecoder(bytes.NewReader(body))
 	decoder.DisallowUnknownFields()
 	if err := decoder.Decode(v); err != nil {
-		writeJSON(w, http.StatusBadRequest, errorBody{Message: "invalid body"})
+		writeJSON(w, http.StatusBadRequest, errorBody{Message: "invalid body", Code: codeInvalidRequest})
 		return false
 	}
 	return true

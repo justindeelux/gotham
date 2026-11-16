@@ -1,4 +1,5 @@
 import { ref, watch } from "vue";
+import { useI18n } from "vue-i18n";
 
 import {
   addFirewallRule,
@@ -9,9 +10,10 @@ import {
   updateFirewallRule,
 } from "../api/firewall";
 import type { FirewallRule, FirewallRuleInput, FirewallStatus } from "../api/firewall";
-import { errorText } from "@/shared/api/errors";
+import { firewallErrorText } from "../utils/errors";
 
 export function useFirewall(serverId: () => string) {
+  const { t } = useI18n();
   const status = ref<FirewallStatus | null>(null);
   const rules = ref<FirewallRule[]>([]);
   const loading = ref(false);
@@ -40,7 +42,7 @@ export function useFirewall(serverId: () => string) {
       }
       status.value = null;
       rules.value = [];
-      loadError.value = errorText(error);
+      loadError.value = firewallErrorText(error, t, t("firewall.errors.load"));
     } finally {
       if (seq === requestSeq) {
         loading.value = false;

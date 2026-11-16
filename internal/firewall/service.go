@@ -128,7 +128,7 @@ func (s *Service) ListRules(ctx context.Context, serverID uuid.UUID) ([]Rule, er
 func (s *Service) AddRule(ctx context.Context, actor, serverID uuid.UUID, in RuleInput) ([]Rule, error) {
 	in, err := normalizeRule(in)
 	if err != nil {
-		return nil, fmt.Errorf("%w: %s", ErrValidation, err)
+		return nil, err
 	}
 	client, closeConn, err := s.client(ctx, serverID)
 	if err != nil {
@@ -151,11 +151,11 @@ func (s *Service) AddRule(ctx context.Context, actor, serverID uuid.UUID, in Rul
 
 func (s *Service) UpdateRule(ctx context.Context, actor, serverID uuid.UUID, ruleID string, in RuleInput) ([]Rule, error) {
 	if ruleID == "" {
-		return nil, fmt.Errorf("%w: rule id is required", ErrValidation)
+		return nil, coded(ErrValidation, detail{code: codeInvalidRule}, "rule id is required")
 	}
 	in, err := normalizeRule(in)
 	if err != nil {
-		return nil, fmt.Errorf("%w: %s", ErrValidation, err)
+		return nil, err
 	}
 	client, closeConn, err := s.client(ctx, serverID)
 	if err != nil {
@@ -179,7 +179,7 @@ func (s *Service) UpdateRule(ctx context.Context, actor, serverID uuid.UUID, rul
 
 func (s *Service) DeleteRule(ctx context.Context, actor, serverID uuid.UUID, ruleID string) ([]Rule, error) {
 	if ruleID == "" {
-		return nil, fmt.Errorf("%w: rule id is required", ErrValidation)
+		return nil, coded(ErrValidation, detail{code: codeInvalidRule}, "rule id is required")
 	}
 	client, closeConn, err := s.client(ctx, serverID)
 	if err != nil {
@@ -247,19 +247,28 @@ func nodeError(err error) error {
 	if !ok {
 		return fmt.Errorf("%w: %v", ErrUnavailable, err)
 	}
+	d, hasCode := nodeDetail(st)
+	refuse := func(sentinel error) error {
+		if !hasCode {
+			// An older agent sends no code; its English message is all we
+			// have, so the web keeps showing it.
+			return fmt.Errorf("%w: %s", sentinel, st.Message())
+		}
+		return &codedError{sentinel: sentinel, d: d, message: st.Message()}
+	}
 	switch st.Code() {
 	case codes.NotFound:
-		return ErrNotFound
+		return refuse(ErrNotFound)
 	case codes.InvalidArgument:
-		return fmt.Errorf("%w: %s", ErrValidation, st.Message())
+		return refuse(ErrValidation)
 	case codes.FailedPrecondition, codes.Aborted, codes.ResourceExhausted:
-		return fmt.Errorf("%w: %s", ErrConflict, st.Message())
+		return refuse(ErrConflict)
 	case codes.Unimplemented:
 		return ErrUnsupported
 	case codes.Unavailable, codes.DeadlineExceeded:
-		return fmt.Errorf("%w: %s", ErrUnavailable, st.Message())
+		return refuse(ErrUnavailable)
 	default:
-		return fmt.Errorf("%w: %s", ErrUnavailable, st.Message())
+		return refuse(ErrUnavailable)
 	}
 }
 
@@ -277,6 +286,8 @@ func statusFromProto(in *agentv1.FirewallStatusResponse) Status {
 		Enabled:          in.GetEnabled(),
 		Manageable:       in.GetManageable(),
 		Detail:           in.GetDetail(),
+		DetailCode:       in.GetDetailCode(),
+		DetailParams:     in.GetDetailParams(),
 		SSHPorts:         ports,
 		AgentPort:        in.GetAgentPort(),
 		ControlPlanePort: in.GetControlPlanePort(),

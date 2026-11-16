@@ -22,17 +22,17 @@ func normalizeRule(in RuleInput) (RuleInput, error) {
 	switch in.Action {
 	case ActionAllow, ActionDeny:
 	default:
-		return RuleInput{}, fmt.Errorf("action must be allow or deny")
+		return RuleInput{}, invalid(codeInvalidAction, "action must be allow or deny")
 	}
 	switch in.Direction {
 	case DirectionIn, DirectionOut:
 	default:
-		return RuleInput{}, fmt.Errorf("direction must be in or out")
+		return RuleInput{}, invalid(codeInvalidDirection, "direction must be in or out")
 	}
 	switch in.Protocol {
 	case ProtocolTCP, ProtocolUDP, ProtocolAny:
 	default:
-		return RuleInput{}, fmt.Errorf("protocol must be tcp, udp or any")
+		return RuleInput{}, invalid(codeInvalidProtocol, "protocol must be tcp, udp or any")
 	}
 	port, err := normalizePort(in.Port)
 	if err != nil {
@@ -45,7 +45,7 @@ func normalizeRule(in RuleInput) (RuleInput, error) {
 	}
 	in.Source = source
 	if in.Direction == DirectionOut && in.Source != "" {
-		return RuleInput{}, fmt.Errorf("outbound rules cannot have a source address")
+		return RuleInput{}, invalid(codeInvalidOutboundSource, "outbound rules cannot have a source address")
 	}
 	if err := validateComment(in.Comment); err != nil {
 		return RuleInput{}, err
@@ -70,7 +70,7 @@ func normalizePort(raw string) (string, error) {
 		return "", err
 	}
 	if first > last {
-		return "", fmt.Errorf("port range start must not be greater than its end")
+		return "", invalid(codeInvalidPort, "port range start must not be greater than its end")
 	}
 	return fmt.Sprintf("%d-%d", first, last), nil
 }
@@ -78,7 +78,7 @@ func normalizePort(raw string) (string, error) {
 func parsePort(raw string) (uint32, error) {
 	n, err := strconv.ParseUint(strings.TrimSpace(raw), 10, 32)
 	if err != nil || n < 1 || n > 65535 {
-		return 0, fmt.Errorf("port must be between 1 and 65535")
+		return 0, invalid(codeInvalidPort, "port must be between 1 and 65535")
 	}
 	return uint32(n), nil
 }
@@ -89,14 +89,14 @@ func normalizeSource(raw string) (string, error) {
 	}
 	if addr, err := netip.ParseAddr(raw); err == nil {
 		if addr.Zone() != "" {
-			return "", fmt.Errorf("source must be an IP address or CIDR")
+			return "", invalid(codeInvalidSource, "source must be an IP address or CIDR")
 		}
 		return addr.String(), nil
 	}
 	if prefix, err := netip.ParsePrefix(raw); err == nil {
 		return prefix.Masked().String(), nil
 	}
-	return "", fmt.Errorf("source must be an IP address or CIDR")
+	return "", invalid(codeInvalidSource, "source must be an IP address or CIDR")
 }
 
 func validateComment(raw string) error {
@@ -104,17 +104,17 @@ func validateComment(raw string) error {
 		return nil
 	}
 	if len(raw) > maxCommentLength {
-		return fmt.Errorf("comment must be at most %d characters", maxCommentLength)
+		return invalid(codeInvalidComment, "comment must be at most %d characters", maxCommentLength)
 	}
 	if strings.HasPrefix(raw, "-") {
-		return fmt.Errorf("comment must not start with a dash")
+		return invalid(codeInvalidComment, "comment must not start with a dash")
 	}
 	for _, r := range raw {
 		switch {
 		case r >= 'a' && r <= 'z', r >= 'A' && r <= 'Z', r >= '0' && r <= '9':
 		case strings.ContainsRune(" ._(),:/+-@", r):
 		default:
-			return fmt.Errorf("comment contains an unsupported character")
+			return invalid(codeInvalidComment, "comment contains an unsupported character")
 		}
 	}
 	return nil

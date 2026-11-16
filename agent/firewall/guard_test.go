@@ -31,7 +31,7 @@ func denyRule(port string) rule {
 }
 
 func TestDenyBlocksRejectsADenyForAProtectedPort(t *testing.T) {
-	ports := []accessPort{{port: 22, label: "SSH"}, {port: 9443, label: "the node agent"}}
+	ports := []accessPort{{port: 22, kind: accessSSH}, {port: 9443, kind: accessAgent}}
 	err := denyBlocks([]rule{allowRule("22", ""), allowRule("9000-9500", ""), denyRule("1-100")}, ports)
 	if err == nil || !strings.Contains(err.Error(), "denies port 22") {
 		t.Fatalf("deny check = %v", err)
@@ -39,7 +39,7 @@ func TestDenyBlocksRejectsADenyForAProtectedPort(t *testing.T) {
 }
 
 func TestDenyBlocksIgnoresOutboundAndUDP(t *testing.T) {
-	ports := []accessPort{{port: 22, label: "SSH"}}
+	ports := []accessPort{{port: 22, kind: accessSSH}}
 	outboundDeny := denyRule("22")
 	outboundDeny.Direction = agentv1.FirewallDirection_FIREWALL_DIRECTION_OUT
 	udpDeny := denyRule("22")
@@ -50,7 +50,7 @@ func TestDenyBlocksIgnoresOutboundAndUDP(t *testing.T) {
 }
 
 func TestLostAccessRefusesRemovingTheLastAllow(t *testing.T) {
-	ports := []accessPort{{port: 22, label: "SSH"}}
+	ports := []accessPort{{port: 22, kind: accessSSH}}
 	before := []rule{allowRule("22", "")}
 	after := []rule{}
 	err := lostAccess(before, after, ports)
@@ -60,7 +60,7 @@ func TestLostAccessRefusesRemovingTheLastAllow(t *testing.T) {
 }
 
 func TestLostAccessAllowsRemovingOneOfTwoAllows(t *testing.T) {
-	ports := []accessPort{{port: 22, label: "SSH"}}
+	ports := []accessPort{{port: 22, kind: accessSSH}}
 	first := allowRule("22", "")
 	second := allowRule("1-100", "")
 	second.ID = "allow-wide"
@@ -70,7 +70,7 @@ func TestLostAccessAllowsRemovingOneOfTwoAllows(t *testing.T) {
 }
 
 func TestLostAccessAllowsFixingAnAlreadyUncoveredPort(t *testing.T) {
-	ports := []accessPort{{port: 22, label: "SSH"}, {port: 9443, label: "the node agent"}}
+	ports := []accessPort{{port: 22, kind: accessSSH}, {port: 9443, kind: accessAgent}}
 	before := []rule{allowRule("22", "")}
 	after := append(append([]rule{}, before...), allowRule("9443", ""))
 	if err := lostAccess(before, after, ports); err != nil {
@@ -79,7 +79,7 @@ func TestLostAccessAllowsFixingAnAlreadyUncoveredPort(t *testing.T) {
 }
 
 func TestMissingAccessRulesAddsOnlyWhatIsMissing(t *testing.T) {
-	ports := []accessPort{{port: 22, label: "SSH"}, {port: 8000, label: "the control plane"}}
+	ports := []accessPort{{port: 22, kind: accessSSH}, {port: 8000, kind: accessControlPlane}}
 	missing := missingAccessRules([]rule{allowRule("22", "")}, ports)
 	if len(missing) != 1 || missing[0].Port != "8000" || !missing[0].Enabled {
 		t.Fatalf("missing = %#v", missing)
@@ -90,7 +90,7 @@ func TestMissingAccessRulesAddsOnlyWhatIsMissing(t *testing.T) {
 }
 
 func TestMissingAccessRulesDoesNotTrustAReadOnlyRule(t *testing.T) {
-	ports := []accessPort{{port: 22, label: "SSH"}}
+	ports := []accessPort{{port: 22, kind: accessSSH}}
 	appProfile := allowRule("", "")
 	appProfile.ReadOnly = true
 	missing := missingAccessRules([]rule{appProfile}, ports)
@@ -100,7 +100,7 @@ func TestMissingAccessRulesDoesNotTrustAReadOnlyRule(t *testing.T) {
 }
 
 func TestMarkProtectedOnlyFlagsExactAccessRules(t *testing.T) {
-	ports := []accessPort{{port: 22, label: "SSH"}}
+	ports := []accessPort{{port: 22, kind: accessSSH}}
 	rules := markProtected([]rule{
 		allowRule("22", ""),
 		allowRule("1-100", ""),
@@ -135,7 +135,7 @@ func TestPortCovers(t *testing.T) {
 }
 
 func TestMissingAccessRulesKeepsASourceRestrictedAllow(t *testing.T) {
-	ports := []accessPort{{port: 22, label: "SSH"}}
+	ports := []accessPort{{port: 22, kind: accessSSH}}
 	restricted := allowRule("22", "192.0.2.10")
 	missing := missingAccessRules([]rule{restricted}, ports)
 	if len(missing) != 0 {
@@ -144,7 +144,7 @@ func TestMissingAccessRulesKeepsASourceRestrictedAllow(t *testing.T) {
 }
 
 func TestLostAccessRefusesRemovingTheOnlySourceRestrictedAllow(t *testing.T) {
-	ports := []accessPort{{port: 22, label: "SSH"}}
+	ports := []accessPort{{port: 22, kind: accessSSH}}
 	restricted := allowRule("22", "192.0.2.10")
 	err := lostAccess([]rule{restricted}, nil, ports)
 	if err == nil || !strings.Contains(err.Error(), "block port 22") {
@@ -153,7 +153,7 @@ func TestLostAccessRefusesRemovingTheOnlySourceRestrictedAllow(t *testing.T) {
 }
 
 func TestDenyBlocksIncludesAReadOnlyDeny(t *testing.T) {
-	ports := []accessPort{{port: 22, label: "SSH"}}
+	ports := []accessPort{{port: 22, kind: accessSSH}}
 	reject := denyRule("22")
 	reject.ReadOnly = true
 	err := denyBlocks([]rule{allowRule("22", ""), reject}, ports)
@@ -172,7 +172,7 @@ func TestPortAllowedCountsAReadOnlyRowWithAKnownPort(t *testing.T) {
 
 func TestReadOnlyDeniesWithUnknownPortsDoNotBlockAccess(t *testing.T) {
 	rules := parseUFWRules(fixture(t, "ufw_readonly.txt"), "")
-	ports := []accessPort{{port: 22, label: "SSH"}, {port: 9443, label: "the node agent"}}
+	ports := []accessPort{{port: 22, kind: accessSSH}, {port: 9443, kind: accessAgent}}
 
 	// Samba AND 8080/tcp on docker0 are read-only denies with no parsed port.
 	// They must not be read as deny-all for every protected port.
@@ -182,7 +182,7 @@ func TestReadOnlyDeniesWithUnknownPortsDoNotBlockAccess(t *testing.T) {
 
 	// A read-only row with a known port still counts: the fixture's
 	// 3306/tcp REJECT must block a protected port on 3306.
-	err := denyBlocks(rules, []accessPort{{port: 3306, label: "the database"}})
+	err := denyBlocks(rules, []accessPort{{port: 3306, kind: accessControlPlane}})
 	if err == nil || !strings.Contains(err.Error(), "denies port 3306") {
 		t.Fatalf("a known-port REJECT was ignored: %v", err)
 	}

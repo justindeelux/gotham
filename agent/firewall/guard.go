@@ -1,8 +1,9 @@
 package firewall
 
 import (
-	"fmt"
 	"strconv"
+
+	"google.golang.org/grpc/codes"
 
 	agentv1 "github.com/justindeelux/gotham/proto/agent/v1"
 )
@@ -11,25 +12,52 @@ import (
 // node over SSH, the control plane dials the agent, and a browser opens the
 // control-plane UI.
 type accessPort struct {
-	port  uint32
-	label string
+	port uint32
+	// kind is the stable name of the access the port carries; the web
+	// translates it.
+	kind string
+}
+
+const (
+	accessSSH          = "ssh"
+	accessAgent        = "agent"
+	accessControlPlane = "control_plane"
+)
+
+func (p accessPort) label() string {
+	switch p.kind {
+	case accessSSH:
+		return "SSH"
+	case accessAgent:
+		return "the node agent"
+	default:
+		return "the control plane"
+	}
+}
+
+// lockout refuses a change that would leave an access port closed.
+func lockout(target accessPort, format string, args ...any) *failure {
+	return fail(codes.FailedPrecondition, detail{
+		code:   codeWouldLockOut,
+		params: map[string]string{"port": strconv.Itoa(int(target.port)), "access": target.kind},
+	}, format, args...)
 }
 
 func protectedPorts(status backendStatus, controlPlanePort uint32) []accessPort {
 	seen := make(map[uint32]bool, 3)
 	ports := make([]accessPort, 0, 3)
-	add := func(port uint32, label string) {
+	add := func(port uint32, kind string) {
 		if port == 0 || seen[port] {
 			return
 		}
 		seen[port] = true
-		ports = append(ports, accessPort{port: port, label: label})
+		ports = append(ports, accessPort{port: port, kind: kind})
 	}
 	for _, port := range status.SSHPorts {
-		add(port, "SSH")
+		add(port, accessSSH)
 	}
-	add(status.AgentPort, "the node agent")
-	add(controlPlanePort, "the control plane")
+	add(status.AgentPort, accessAgent)
+	add(controlPlanePort, accessControlPlane)
 	return ports
 }
 
@@ -37,7 +65,7 @@ func protectedPorts(status backendStatus, controlPlanePort uint32) []accessPort 
 // This check is deliberately conservative: it does not look at the source,
 // because the control plane cannot know which address the operator connects
 // from.
-func denyBlocks(rules []rule, ports []accessPort) error {
+func denyBlocks(rules []rule, ports []accessPort) *failure {
 	for _, target := range ports {
 		for _, r := range rules {
 			if !r.Enabled || r.Direction != agentv1.FirewallDirection_FIREWALL_DIRECTION_IN ||
@@ -53,9 +81,9 @@ func denyBlocks(rules []rule, ports []accessPort) error {
 			if !portCovers(r.Port, target.port) {
 				continue
 			}
-			return fmt.Errorf(
+			return lockout(target,
 				"this rule set denies port %d, which would block %s access; add an allow rule for that port instead",
-				target.port, target.label)
+				target.port, target.label())
 		}
 	}
 	return nil
@@ -64,15 +92,15 @@ func denyBlocks(rules []rule, ports []accessPort) error {
 // lostAccess refuses a change that removes the last open allow for a protected
 // port. A port that was already uncovered is not made worse by the change, so
 // an operator can still add the missing access rules one at a time.
-func lostAccess(before, after []rule, ports []accessPort) error {
+func lostAccess(before, after []rule, ports []accessPort) *failure {
 	if err := denyBlocks(after, ports); err != nil {
 		return err
 	}
 	for _, target := range ports {
 		if portAllowed(before, target.port) && !portAllowed(after, target.port) {
-			return fmt.Errorf(
+			return lockout(target,
 				"this change would block port %d, which is needed for %s access; keep an allow rule for that port",
-				target.port, target.label)
+				target.port, target.label())
 		}
 	}
 	return nil
@@ -117,7 +145,7 @@ func missingAccessRules(rules []rule, ports []accessPort) []rule {
 			Direction: agentv1.FirewallDirection_FIREWALL_DIRECTION_IN,
 			Protocol:  agentv1.FirewallProtocol_FIREWALL_PROTOCOL_TCP,
 			Port:      strconv.Itoa(int(target.port)),
-			Comment:   "Gotham: keep " + target.label + " access",
+			Comment:   "Gotham: keep " + target.label() + " access",
 			Enabled:   true,
 		})
 	}

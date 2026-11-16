@@ -18,6 +18,8 @@ export const firewallStatusSchema = z.object({
   enabled: z.boolean(),
   manageable: z.boolean(),
   detail: z.string().optional(),
+  detail_code: z.string().optional(),
+  detail_params: z.record(z.string(), z.string()).optional(),
   ssh_ports: z.array(z.number().int()),
   agent_port: z.number().int(),
   control_plane_port: z.number().int(),

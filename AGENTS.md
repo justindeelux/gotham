@@ -65,6 +65,7 @@ Ask yourself: "Would a senior engineer say this is overcomplicated?" If yes, sim
 - Any frontend (`web/`) work follows the design system in `DESIGN.md` (repo root): read it first and match its rules. Never edit `DESIGN.md`; if a change seems to need a deviation, stop and ask.
 - Keep Naive UI as the component base — do not rebuild components from raw CSS. Colors, fonts, spacing and radii come from the design tokens in `web/src/shared/styles/tokens.css`, not hard-coded hex/px.
 - UI copy follows the project's language policy (see Language below); rewrite from the mockups where they differ.
+- i18n: every user-facing string goes through vue-i18n, never hardcoded in components, schemas or toasts. Each feature's `locales/` ships both `en.ts` and `vi.ts` with identical keys, registered like the other features. A new or changed key is added to both files in the same PR; a missing `vi` key is a bug. Before opening the PR, switch the UI to Vietnamese and check that no English text or raw key shows.
 - Modals: header and footer stay fixed, only the content region scrolls, max-height is bounded to the viewport and a modal never exceeds it (shared `.app-modal`/`.wizard-modal` contract in `web/src/shared/styles/main.css`).
 - `internal/server/webdist` is not committed except a placeholder `index.html`; `make web-build` (or `npm run build` in `web/`) fills it, and release CI builds it before `go build`.
 

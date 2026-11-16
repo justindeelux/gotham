@@ -24,32 +24,44 @@ import (
 type fakeAgent struct {
 	agentv1.FirewallServiceClient
 
-	mu      sync.Mutex
-	status  *agentv1.FirewallStatusResponse
-	rules   []*agentv1.FirewallRule
-	addErr  error
-	lastAdd *agentv1.FirewallRuleCreateRequest
+	mu          sync.Mutex
+	status      *agentv1.FirewallStatusResponse
+	rules       []*agentv1.FirewallRule
+	addErr      error
+	lastAdd     *agentv1.FirewallRuleCreateRequest
+	lastStatus  *agentv1.FirewallStatusRequest
+	lastEnabled *agentv1.FirewallEnabledRequest
+	lastRules   *agentv1.FirewallRulesRequest
 }
 
-func (f *fakeAgent) GetStatus(context.Context, *agentv1.FirewallStatusRequest, ...grpc.CallOption) (*agentv1.FirewallStatusResponse, error) {
+func (f *fakeAgent) GetStatus(_ context.Context, in *agentv1.FirewallStatusRequest, _ ...grpc.CallOption) (*agentv1.FirewallStatusResponse, error) {
+	f.mu.Lock()
+	f.lastStatus = in
+	f.mu.Unlock()
 	return f.status, nil
 }
 
 func (f *fakeAgent) SetEnabled(_ context.Context, in *agentv1.FirewallEnabledRequest, _ ...grpc.CallOption) (*agentv1.FirewallState, error) {
+	f.mu.Lock()
+	f.lastEnabled = in
+	f.mu.Unlock()
 	next := &agentv1.FirewallStatusResponse{
 		Backend:          f.status.GetBackend(),
 		Available:        f.status.GetAvailable(),
 		Enabled:          in.GetEnabled(),
 		Manageable:       f.status.GetManageable(),
 		Detail:           f.status.GetDetail(),
-		SshPort:          f.status.GetSshPort(),
+		SshPorts:         f.status.GetSshPorts(),
 		AgentPort:        f.status.GetAgentPort(),
 		ControlPlanePort: f.status.GetControlPlanePort(),
 	}
 	return &agentv1.FirewallState{Status: next, Rules: f.rules}, nil
 }
 
-func (f *fakeAgent) ListRules(context.Context, *agentv1.FirewallRulesRequest, ...grpc.CallOption) (*agentv1.FirewallRules, error) {
+func (f *fakeAgent) ListRules(_ context.Context, in *agentv1.FirewallRulesRequest, _ ...grpc.CallOption) (*agentv1.FirewallRules, error) {
+	f.mu.Lock()
+	f.lastRules = in
+	f.mu.Unlock()
 	return &agentv1.FirewallRules{Rules: f.rules}, nil
 }
 
@@ -96,7 +108,7 @@ func testStatus() *agentv1.FirewallStatusResponse {
 		Available:        true,
 		Enabled:          true,
 		Manageable:       true,
-		SshPort:          22,
+		SshPorts:         []uint32{22},
 		AgentPort:        9443,
 		ControlPlanePort: 8000,
 	}
@@ -307,5 +319,43 @@ func TestNodeErrorMapping(t *testing.T) {
 		if got := nodeError(tc.err); !errors.Is(got, tc.want) {
 			t.Errorf("nodeError(%v) = %v, want %v", tc.err, got, tc.want)
 		}
+	}
+}
+
+func TestControlPlanePortIsProtectedOnTheLocalNodeOnly(t *testing.T) {
+	localID := uuid.New()
+	remoteID := uuid.New()
+	dialer := &fakeDialer{agents: map[uuid.UUID]*fakeAgent{
+		localID:  {status: testStatus()},
+		remoteID: {status: testStatus()},
+	}}
+	svc := NewService(Config{
+		Dial:             dialer.Dial,
+		ControlPlanePort: 8000,
+		ProtectControlPlane: func(_ context.Context, serverID uuid.UUID) bool {
+			return serverID == localID
+		},
+		Logger: slog.New(slog.NewTextHandler(io.Discard, nil)),
+	})
+
+	if _, err := svc.Status(context.Background(), localID); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := svc.Status(context.Background(), remoteID); err != nil {
+		t.Fatal(err)
+	}
+	local, remote := dialer.agents[localID], dialer.agents[remoteID]
+	if local.lastStatus.GetControlPlanePort() != 8000 {
+		t.Fatalf("local port = %d, want 8000", local.lastStatus.GetControlPlanePort())
+	}
+	if remote.lastStatus.GetControlPlanePort() != 0 {
+		t.Fatalf("remote port = %d, want 0", remote.lastStatus.GetControlPlanePort())
+	}
+
+	if _, err := svc.SetEnabled(context.Background(), uuid.Nil, remoteID, true); err != nil {
+		t.Fatal(err)
+	}
+	if remote.lastEnabled.GetControlPlanePort() != 0 {
+		t.Fatalf("remote toggle port = %d, want 0", remote.lastEnabled.GetControlPlanePort())
 	}
 }

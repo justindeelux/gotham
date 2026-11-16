@@ -58,6 +58,9 @@ func normalizeRule(in rule) (rule, error) {
 		return rule{}, err
 	}
 	in.Source = source
+	if in.Direction == agentv1.FirewallDirection_FIREWALL_DIRECTION_OUT && in.Source != "" {
+		return rule{}, fmt.Errorf("outbound rules cannot have a source address")
+	}
 	if err := validateComment(in.Comment); err != nil {
 		return rule{}, err
 	}
@@ -117,6 +120,9 @@ func validateComment(raw string) error {
 	if len(raw) > maxCommentLength {
 		return fmt.Errorf("comment must be at most %d characters", maxCommentLength)
 	}
+	if strings.HasPrefix(raw, "-") {
+		return fmt.Errorf("comment must not start with a dash")
+	}
 	for _, r := range raw {
 		switch {
 		case r >= 'a' && r <= 'z', r >= 'A' && r <= 'Z', r >= '0' && r <= '9':
@@ -140,6 +146,14 @@ func (r *rule) assignID() {
 	}
 	sum := sha256.Sum256([]byte(fingerprint(*r)))
 	r.ID = "r-" + hex.EncodeToString(sum[:8])
+}
+
+// assignReadOnlyID keys a read-only backend row by its own text instead of the
+// shared model: two app profiles both look like "allow any" in the model, and
+// keying them by an empty field would collapse them into one row.
+func (r *rule) assignReadOnlyID(key string) {
+	sum := sha256.Sum256([]byte("readonly|" + key))
+	r.ID = "ro-" + hex.EncodeToString(sum[:8])
 }
 
 func actionSlug(v agentv1.FirewallAction) string {

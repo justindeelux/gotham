@@ -133,3 +133,31 @@ func TestPortCovers(t *testing.T) {
 		}
 	}
 }
+
+func TestMissingAccessRulesKeepsASourceRestrictedAllow(t *testing.T) {
+	ports := []accessPort{{port: 22, label: "SSH"}}
+	restricted := allowRule("22", "192.0.2.10")
+	missing := missingAccessRules([]rule{restricted}, ports)
+	if len(missing) != 0 {
+		t.Fatalf("a source-restricted allow already covers SSH: %#v", missing)
+	}
+}
+
+func TestLostAccessRefusesRemovingTheOnlySourceRestrictedAllow(t *testing.T) {
+	ports := []accessPort{{port: 22, label: "SSH"}}
+	restricted := allowRule("22", "192.0.2.10")
+	err := lostAccess([]rule{restricted}, nil, ports)
+	if err == nil || !strings.Contains(err.Error(), "block port 22") {
+		t.Fatalf("lostAccess = %v", err)
+	}
+}
+
+func TestDenyBlocksIncludesAReadOnlyDeny(t *testing.T) {
+	ports := []accessPort{{port: 22, label: "SSH"}}
+	reject := denyRule("22")
+	reject.ReadOnly = true
+	err := denyBlocks([]rule{allowRule("22", ""), reject}, ports)
+	if err == nil || !strings.Contains(err.Error(), "denies port 22") {
+		t.Fatalf("denyBlocks = %v", err)
+	}
+}

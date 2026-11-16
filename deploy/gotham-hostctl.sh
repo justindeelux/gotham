@@ -633,6 +633,7 @@ fw_valid_source() {
 
 fw_valid_comment() {
     [ -z "$1" ] && return 0
+    case "$1" in -*) return 1 ;; esac
     [ "${#1}" -le 200 ] || return 1
     printf '%s\n' "$1" | grep -Eq '^[A-Za-z0-9 ._(),:/+@-]*$'
 }
@@ -646,13 +647,18 @@ fw_read_rule() {
     fw_valid_port "${K_port}" || die "invalid port" 2
     fw_valid_source "${K_source}" || die "invalid source" 2
     fw_valid_comment "${K_comment}" || die "invalid comment" 2
+    [ "${K_direction}" = "out" ] && [ -n "${K_source}" ] \
+        && die "outbound rules cannot have a source address" 2
 }
 
 # fw_ufw runs one ufw rule command. The field order follows ufw(8):
 # allow|deny [in|out] [proto P] [from SRC] [to ADDRESS [port P]] [comment C].
+# A deny is inserted at position 1, because ufw is first-match and an allow
+# appended earlier would otherwise shadow it.
 fw_ufw() {
     action="$1"; direction="$2"; protocol="$3"; port="$4"; source="$5"; comment="$6"
     set -- "${action}" "${direction}"
+    [ "${action}" = "deny" ] && set -- insert 1 "$@"
     [ "${protocol}" != "any" ] && set -- "$@" proto "${protocol}"
     if [ "${direction}" = "in" ] && [ -n "${source}" ]; then
         set -- "$@" from "${source}"
@@ -695,10 +701,12 @@ fw_firewalld_rule() {
     action="$1"; direction="$2"; protocol="$3"; port="$4"; source="$5"
     [ "${direction}" = "in" ] || die "firewalld rules from Gotham are inbound only" 3
     [ -n "${port}" ] || [ -n "${source}" ] || die "a firewalld rule needs a port or a source address" 2
-    family="ipv4"
-    case "${source}" in *:*) family="ipv6" ;; esac
-    FW_RULE="rule family=\"${family}\""
-    [ -n "${source}" ] && FW_RULE="${FW_RULE} source address=\"${source}\""
+    FW_RULE="rule"
+    if [ -n "${source}" ]; then
+        family="ipv4"
+        case "${source}" in *:*) family="ipv6" ;; esac
+        FW_RULE="rule family=\"${family}\" source address=\"${source}\""
+    fi
     if [ -n "${port}" ]; then
         [ "${protocol}" = "any" ] && die "choose tcp or udp for a firewalld port rule" 2
         FW_RULE="${FW_RULE} port port=\"${port}\" protocol=\"${protocol}\""
@@ -709,12 +717,21 @@ fw_firewalld_rule() {
     esac
 }
 
-fw_ssh_port() {
-    if ssh_available; then
-        p="$(ssh_live_port)"
-        case "${p}" in "" | *[!0-9]*) ;; *) echo "${p}"; return ;; esac
+fw_ssh_ports() {
+    if ! ssh_available; then
+        echo 0
+        return
     fi
-    echo 0
+    ports="$(
+        {
+            [ -f "${SSHD_DROPIN}" ] && awk 'tolower($1) == "port" { print $2 }' "${SSHD_DROPIN}"
+            ssh_effective | awk 'tolower($1) == "port" { print $2 }'
+        } 2>/dev/null \
+            | awk '$1 ~ /^[0-9]+$/ && $1 >= 1 && $1 <= 65535 { print $1 }' \
+            | sort -n | uniq | tr '\n' ',' | sed 's/,$//'
+    )"
+    [ -n "${ports}" ] || ports=22
+    echo "${ports}"
 }
 
 fw_list_status() {
@@ -1190,8 +1207,8 @@ firewall-status)
             active firewalld && enabled=true
             ;;
     esac
-    printf 'backend=%s\nenabled=%s\nmanageable=%s\nssh_port=%s\n' \
-        "${backend}" "${enabled}" "${manageable}" "$(fw_ssh_port)"
+    printf 'backend=%s\nenabled=%s\nmanageable=%s\nssh_ports=%s\n' \
+        "${backend}" "${enabled}" "${manageable}" "$(fw_ssh_ports)"
     ;;
 
 firewall-list)

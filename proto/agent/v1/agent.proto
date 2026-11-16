@@ -898,8 +898,8 @@ message RegisterRequest {
   string os = 2;
   string docker_version = 3;
   string arch = 4;
-  int64 total_mem = 5; // bytes
-  int64 total_disk = 6; // bytes
+  int64 total_mem = 5;   // bytes
+  int64 total_disk = 6;  // bytes
   // csr is a PEM-encoded PKCS#10 certificate signing request generated from
   // the agent's private key. When present, the CP signs it and returns the
   // resulting certificate in RegisterResponse.cert.
@@ -909,15 +909,15 @@ message RegisterRequest {
 // RegisterResponse returns the cert the agent must present to the CP when its
 // DockerService is dialed, plus the CP version for compatibility logging.
 message RegisterResponse {
-  bytes cert = 1; // PEM-encoded agent certificate
+  bytes cert = 1;        // PEM-encoded agent certificate
   string cp_version = 2;
 }
 
 // HeartbeatRequest reports live resource usage.
 message HeartbeatRequest {
-  double cpu_usage = 1; // fraction 0..1
-  double mem_usage = 2; // fraction 0..1
-  double disk_usage = 3; // fraction 0..1
+  double cpu_usage = 1;    // fraction 0..1
+  double mem_usage = 2;    // fraction 0..1
+  double disk_usage = 3;   // fraction 0..1
   int64 container_count = 4;
   google.protobuf.Timestamp sent_at = 5;
   // net_rx_bps, net_tx_bps, disk_read_bps and disk_write_bps are host I/O
@@ -966,15 +966,15 @@ message Metric {
 
 // HostObservation is the host-level evidence in one report.
 message HostObservation {
-  Metric cpu_usage = 1; // fraction 0..1
-  Metric mem_usage = 2; // fraction 0..1
-  Metric disk_usage = 3; // fraction 0..1
-  Metric net_rx_bps = 4; // bytes/second
-  Metric net_tx_bps = 5; // bytes/second
-  Metric disk_read_bps = 6; // bytes/second
-  Metric disk_write_bps = 7; // bytes/second
-  uint64 total_mem = 8; // bytes, 0 when unknown
-  uint64 total_disk = 9; // bytes, 0 when unknown
+  Metric cpu_usage = 1;       // fraction 0..1
+  Metric mem_usage = 2;       // fraction 0..1
+  Metric disk_usage = 3;      // fraction 0..1
+  Metric net_rx_bps = 4;      // bytes/second
+  Metric net_tx_bps = 5;      // bytes/second
+  Metric disk_read_bps = 6;   // bytes/second
+  Metric disk_write_bps = 7;  // bytes/second
+  uint64 total_mem = 8;       // bytes, 0 when unknown
+  uint64 total_disk = 9;      // bytes, 0 when unknown
 }
 
 // FilesystemObservation is one local filesystem's capacity evidence. Paths on
@@ -1683,12 +1683,12 @@ message PullImageResponse {
 message CreateContainerRequest {
   string image = 1;
   string name = 2;
-  repeated string env = 3; // KEY=VALUE
+  repeated string env = 3;       // KEY=VALUE
   repeated string command = 4;
   repeated string entrypoint = 5;
   map<string, string> labels = 6;
-  repeated string ports = 7; // [host-ip:]host:container (bare container port allowed)
-  repeated string volumes = 8; // host:container[:ro]
+  repeated string ports = 7;     // [host-ip:]host:container (bare container port allowed)
+  repeated string volumes = 8;   // host:container[:ro]
   repeated string networks = 9;
   // restart_policy is the native Docker restart policy name ("always",
   // "unless-stopped", "on-failure"); empty leaves Docker's default.
@@ -2221,8 +2221,8 @@ message FirewallStatusResponse {
   // its rules; detail explains why.
   bool manageable = 4;
   string detail = 5;
-  // ssh_port is the live SSH port (0 when sshd is not installed).
-  uint32 ssh_port = 6;
+  // ssh_ports are the live SSH ports (empty when sshd is not installed).
+  repeated uint32 ssh_ports = 6;
   // agent_port is the agent's own TLS port.
   uint32 agent_port = 7;
   // control_plane_port is the port this request supplied.

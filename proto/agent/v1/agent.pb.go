@@ -11863,8 +11863,8 @@ type FirewallStatusResponse struct {
 	// its rules; detail explains why.
 	Manageable bool   `protobuf:"varint,4,opt,name=manageable,proto3" json:"manageable,omitempty"`
 	Detail     string `protobuf:"bytes,5,opt,name=detail,proto3" json:"detail,omitempty"`
-	// ssh_port is the live SSH port (0 when sshd is not installed).
-	SshPort uint32 `protobuf:"varint,6,opt,name=ssh_port,json=sshPort,proto3" json:"ssh_port,omitempty"`
+	// ssh_ports are the live SSH ports (empty when sshd is not installed).
+	SshPorts []uint32 `protobuf:"varint,6,rep,packed,name=ssh_ports,json=sshPorts,proto3" json:"ssh_ports,omitempty"`
 	// agent_port is the agent's own TLS port.
 	AgentPort uint32 `protobuf:"varint,7,opt,name=agent_port,json=agentPort,proto3" json:"agent_port,omitempty"`
 	// control_plane_port is the port this request supplied.
@@ -11938,11 +11938,11 @@ func (x *FirewallStatusResponse) GetDetail() string {
 	return ""
 }
 
-func (x *FirewallStatusResponse) GetSshPort() uint32 {
+func (x *FirewallStatusResponse) GetSshPorts() []uint32 {
 	if x != nil {
-		return x.SshPort
+		return x.SshPorts
 	}
-	return 0
+	return nil
 }
 
 func (x *FirewallStatusResponse) GetAgentPort() uint32 {
@@ -13132,7 +13132,7 @@ const file_agent_v1_agent_proto_rawDesc = "" +
 	"\tread_only\x18\n" +
 	" \x01(\bR\breadOnly\"E\n" +
 	"\x15FirewallStatusRequest\x12,\n" +
-	"\x12control_plane_port\x18\x01 \x01(\rR\x10controlPlanePort\"\xa5\x02\n" +
+	"\x12control_plane_port\x18\x01 \x01(\rR\x10controlPlanePort\"\xa7\x02\n" +
 	"\x16FirewallStatusResponse\x123\n" +
 	"\abackend\x18\x01 \x01(\x0e2\x19.agent.v1.FirewallBackendR\abackend\x12\x1c\n" +
 	"\tavailable\x18\x02 \x01(\bR\tavailable\x12\x18\n" +
@@ -13140,8 +13140,8 @@ const file_agent_v1_agent_proto_rawDesc = "" +
 	"\n" +
 	"manageable\x18\x04 \x01(\bR\n" +
 	"manageable\x12\x16\n" +
-	"\x06detail\x18\x05 \x01(\tR\x06detail\x12\x19\n" +
-	"\bssh_port\x18\x06 \x01(\rR\asshPort\x12\x1d\n" +
+	"\x06detail\x18\x05 \x01(\tR\x06detail\x12\x1b\n" +
+	"\tssh_ports\x18\x06 \x03(\rR\bsshPorts\x12\x1d\n" +
 	"\n" +
 	"agent_port\x18\a \x01(\rR\tagentPort\x12,\n" +
 	"\x12control_plane_port\x18\b \x01(\rR\x10controlPlanePort\"`\n" +

@@ -44,6 +44,9 @@ func normalizeRule(in RuleInput) (RuleInput, error) {
 		return RuleInput{}, err
 	}
 	in.Source = source
+	if in.Direction == DirectionOut && in.Source != "" {
+		return RuleInput{}, fmt.Errorf("outbound rules cannot have a source address")
+	}
 	if err := validateComment(in.Comment); err != nil {
 		return RuleInput{}, err
 	}
@@ -102,6 +105,9 @@ func validateComment(raw string) error {
 	}
 	if len(raw) > maxCommentLength {
 		return fmt.Errorf("comment must be at most %d characters", maxCommentLength)
+	}
+	if strings.HasPrefix(raw, "-") {
+		return fmt.Errorf("comment must not start with a dash")
 	}
 	for _, r := range raw {
 		switch {

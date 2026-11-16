@@ -74,6 +74,7 @@ func parseUFWRules(listing, added string) []rule {
 		if !sourceOK {
 			readOnly = true
 		}
+		readOnly = readOnly || actionText == "LIMIT" || actionText == "REJECT"
 		r := rule{
 			Action:    action,
 			Direction: direction,
@@ -81,18 +82,58 @@ func parseUFWRules(listing, added string) []rule {
 			Port:      port,
 			Source:    source,
 			Enabled:   true,
-			ReadOnly:  readOnly || actionText == "LIMIT",
+			ReadOnly:  readOnly,
 		}
-		r.assignID()
-		key := fingerprint(r)
+		var key string
+		if readOnly {
+			// A read-only row is keyed by the columns ufw printed, so an app
+			// profile, an interface row and a LIMIT/REJECT sibling stay
+			// distinct and only the IPv4/IPv6 twin collapses.
+			rawKey := ufwRowKey(target, actionText, directionText, sourceText)
+			r.assignReadOnlyID(rawKey)
+			key = "ro|" + rawKey
+			r.Comment = ufwReadOnlyComment(target, sourceText)
+		} else {
+			r.assignID()
+			key = "rw|" + fingerprint(r)
+		}
 		if seen[key] {
 			continue
 		}
 		seen[key] = true
-		r.Comment = comments[key]
+		if !readOnly {
+			r.Comment = comments[fingerprint(r)]
+		}
 		rules = append(rules, r)
 	}
 	return rules
+}
+
+// ufwRowKey identifies a read-only ufw row by its printed columns. The v6
+// suffix is stripped so one rule's IPv4 and IPv6 rows collapse.
+func ufwRowKey(target, action, direction, source string) string {
+	clean := func(value string) string {
+		return strings.TrimSuffix(strings.TrimSpace(value), " (v6)")
+	}
+	return strings.Join([]string{
+		clean(target), action, direction, clean(source),
+	}, "|")
+}
+
+// ufwReadOnlyComment keeps the text the shared model cannot store, so two app
+// profiles or a source-scoped rule remain recognisable in the UI.
+func ufwReadOnlyComment(target, source string) string {
+	clean := func(value string) string {
+		return strings.TrimSuffix(strings.TrimSpace(value), " (v6)")
+	}
+	text := clean(target)
+	if source = clean(source); source != "" && source != "Anywhere" {
+		text += " from " + source
+	}
+	if text == "" {
+		text = "managed on the node"
+	}
+	return truncate("ufw: "+text, maxCommentLength)
 }
 
 func parseUFWTarget(raw string) (port string, protocol agentv1.FirewallProtocol, readOnly bool) {

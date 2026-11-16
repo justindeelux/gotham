@@ -34,13 +34,18 @@ type DialFunc func(ctx context.Context, serverID uuid.UUID) (AgentConn, error)
 type Config struct {
 	Dial             DialFunc
 	ControlPlanePort uint32
-	Logger           *slog.Logger
+	// ProtectControlPlane reports whether this server's firewall must keep the
+	// control-plane port open. Nil protects it everywhere (tests and a single
+	// local deployment); the server wiring protects it on the local node only.
+	ProtectControlPlane func(ctx context.Context, serverID uuid.UUID) bool
+	Logger              *slog.Logger
 }
 
 type Service struct {
-	dial             DialFunc
-	controlPlanePort uint32
-	logger           *slog.Logger
+	dial                DialFunc
+	controlPlanePort    uint32
+	protectControlPlane func(ctx context.Context, serverID uuid.UUID) bool
+	logger              *slog.Logger
 }
 
 func NewService(cfg Config) *Service {
@@ -48,7 +53,21 @@ func NewService(cfg Config) *Service {
 	if logger == nil {
 		logger = slog.Default()
 	}
-	return &Service{dial: cfg.Dial, controlPlanePort: cfg.ControlPlanePort, logger: logger}
+	return &Service{
+		dial:                cfg.Dial,
+		controlPlanePort:    cfg.ControlPlanePort,
+		protectControlPlane: cfg.ProtectControlPlane,
+		logger:              logger,
+	}
+}
+
+// controlPlanePort is the port the node must keep allowed. A remote node only
+// protects its own SSH and agent ports; the control plane runs elsewhere.
+func (s *Service) controlPlanePortFor(ctx context.Context, serverID uuid.UUID) uint32 {
+	if s.protectControlPlane != nil && !s.protectControlPlane(ctx, serverID) {
+		return 0
+	}
+	return s.controlPlanePort
 }
 
 func (s *Service) Status(ctx context.Context, serverID uuid.UUID) (Status, error) {
@@ -59,7 +78,7 @@ func (s *Service) Status(ctx context.Context, serverID uuid.UUID) (Status, error
 	defer closeConn()
 	ctx, cancel := context.WithTimeout(ctx, readTimeout)
 	defer cancel()
-	response, err := client.GetStatus(ctx, &agentv1.FirewallStatusRequest{ControlPlanePort: s.controlPlanePort})
+	response, err := client.GetStatus(ctx, &agentv1.FirewallStatusRequest{ControlPlanePort: s.controlPlanePortFor(ctx, serverID)})
 	if err != nil {
 		return Status{}, nodeError(err)
 	}
@@ -76,7 +95,7 @@ func (s *Service) SetEnabled(ctx context.Context, actor, serverID uuid.UUID, ena
 	defer cancel()
 	response, err := client.SetEnabled(ctx, &agentv1.FirewallEnabledRequest{
 		Enabled:          enabled,
-		ControlPlanePort: s.controlPlanePort,
+		ControlPlanePort: s.controlPlanePortFor(ctx, serverID),
 	})
 	action := "firewall.disable"
 	if enabled {
@@ -99,7 +118,7 @@ func (s *Service) ListRules(ctx context.Context, serverID uuid.UUID) ([]Rule, er
 	defer closeConn()
 	ctx, cancel := context.WithTimeout(ctx, readTimeout)
 	defer cancel()
-	response, err := client.ListRules(ctx, &agentv1.FirewallRulesRequest{ControlPlanePort: s.controlPlanePort})
+	response, err := client.ListRules(ctx, &agentv1.FirewallRulesRequest{ControlPlanePort: s.controlPlanePortFor(ctx, serverID)})
 	if err != nil {
 		return nil, nodeError(err)
 	}
@@ -120,7 +139,7 @@ func (s *Service) AddRule(ctx context.Context, actor, serverID uuid.UUID, in Rul
 	defer cancel()
 	response, err := client.AddRule(ctx, &agentv1.FirewallRuleCreateRequest{
 		Rule:             ruleInputProto(in),
-		ControlPlanePort: s.controlPlanePort,
+		ControlPlanePort: s.controlPlanePortFor(ctx, serverID),
 	})
 	if err != nil {
 		s.audit(actor, serverID, "firewall.rule.add", "", "failed", err, ruleAttrs(in)...)
@@ -148,7 +167,7 @@ func (s *Service) UpdateRule(ctx context.Context, actor, serverID uuid.UUID, rul
 	response, err := client.UpdateRule(ctx, &agentv1.FirewallRuleUpdateRequest{
 		Id:               ruleID,
 		Rule:             ruleInputProto(in),
-		ControlPlanePort: s.controlPlanePort,
+		ControlPlanePort: s.controlPlanePortFor(ctx, serverID),
 	})
 	if err != nil {
 		s.audit(actor, serverID, "firewall.rule.update", ruleID, "failed", err, ruleAttrs(in)...)
@@ -171,7 +190,7 @@ func (s *Service) DeleteRule(ctx context.Context, actor, serverID uuid.UUID, rul
 	defer cancel()
 	response, err := client.DeleteRule(ctx, &agentv1.FirewallRuleDeleteRequest{
 		Id:               ruleID,
-		ControlPlanePort: s.controlPlanePort,
+		ControlPlanePort: s.controlPlanePortFor(ctx, serverID),
 	})
 	if err != nil {
 		s.audit(actor, serverID, "firewall.rule.delete", ruleID, "failed", err)
@@ -246,7 +265,11 @@ func nodeError(err error) error {
 
 func statusFromProto(in *agentv1.FirewallStatusResponse) Status {
 	if in == nil {
-		return Status{Backend: BackendNone}
+		return Status{Backend: BackendNone, SSHPorts: []uint32{}}
+	}
+	ports := in.GetSshPorts()
+	if ports == nil {
+		ports = []uint32{}
 	}
 	return Status{
 		Backend:          backendSlug(in.GetBackend()),
@@ -254,7 +277,7 @@ func statusFromProto(in *agentv1.FirewallStatusResponse) Status {
 		Enabled:          in.GetEnabled(),
 		Manageable:       in.GetManageable(),
 		Detail:           in.GetDetail(),
-		SSHPort:          in.GetSshPort(),
+		SSHPorts:         ports,
 		AgentPort:        in.GetAgentPort(),
 		ControlPlanePort: in.GetControlPlanePort(),
 	}

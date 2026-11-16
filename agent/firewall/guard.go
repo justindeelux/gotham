@@ -25,7 +25,9 @@ func protectedPorts(status backendStatus, controlPlanePort uint32) []accessPort 
 		seen[port] = true
 		ports = append(ports, accessPort{port: port, label: label})
 	}
-	add(status.SSHPort, "SSH")
+	for _, port := range status.SSHPorts {
+		add(port, "SSH")
+	}
 	add(status.AgentPort, "the node agent")
 	add(controlPlanePort, "the control plane")
 	return ports
@@ -38,7 +40,7 @@ func protectedPorts(status backendStatus, controlPlanePort uint32) []accessPort 
 func denyBlocks(rules []rule, ports []accessPort) error {
 	for _, target := range ports {
 		for _, r := range rules {
-			if !r.Enabled || r.ReadOnly || r.Direction != agentv1.FirewallDirection_FIREWALL_DIRECTION_IN ||
+			if !r.Enabled || r.Direction != agentv1.FirewallDirection_FIREWALL_DIRECTION_IN ||
 				r.Action != agentv1.FirewallAction_FIREWALL_ACTION_DENY ||
 				!portCovers(r.Port, target.port) || !protocolCovers(r.Protocol) {
 				continue
@@ -72,7 +74,7 @@ func portAllowed(rules []rule, port uint32) bool {
 	for _, r := range rules {
 		if !r.Enabled || r.ReadOnly || r.Direction != agentv1.FirewallDirection_FIREWALL_DIRECTION_IN ||
 			r.Action != agentv1.FirewallAction_FIREWALL_ACTION_ALLOW ||
-			r.Source != "" || !portCovers(r.Port, port) || !protocolCovers(r.Protocol) {
+			!portCovers(r.Port, port) || !protocolCovers(r.Protocol) {
 			continue
 		}
 		return true

@@ -23,7 +23,12 @@ function isDetailTab(value: unknown): value is DetailTab {
   );
 }
 
-const OWNER_ONLY_TABS: readonly DetailTab[] = ["files", "terminal", "settings"];
+const OWNER_ONLY_TABS: readonly DetailTab[] = [
+  "firewall",
+  "files",
+  "terminal",
+  "settings",
+];
 
 function availableTab(tab: DetailTab, isOwner: boolean): DetailTab {
   return isOwner || !OWNER_ONLY_TABS.includes(tab) ? tab : "overview";

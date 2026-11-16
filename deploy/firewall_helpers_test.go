@@ -2,6 +2,7 @@ package deploy
 
 import (
 	"os"
+	"os/exec"
 	"path/filepath"
 	"strings"
 	"testing"
@@ -56,7 +57,7 @@ func TestHostctlFirewallStatus(t *testing.T) {
 	if err != nil {
 		t.Fatalf("firewall-status: %v\n%s", err, out)
 	}
-	for _, want := range []string{"backend=ufw", "enabled=true", "manageable=true", "ssh_port=22"} {
+	for _, want := range []string{"backend=ufw", "enabled=true", "manageable=true", "ssh_ports=22"} {
 		if !strings.Contains(out, want) {
 			t.Errorf("output %q does not contain %q", out, want)
 		}
@@ -89,6 +90,15 @@ func TestHostctlFirewallAddAndDelete(t *testing.T) {
 		t.Fatalf("add command = %q", out)
 	}
 
+	deny := "action=deny\ndirection=in\nprotocol=tcp\nport=3306\nsource=\ncomment=\n"
+	out, err = runHostctlEnv(t, root, deny, "firewall-add", nil)
+	if err != nil {
+		t.Fatalf("firewall-add deny: %v\n%s", err, out)
+	}
+	if !strings.Contains(out, "+ ufw insert 1 deny in proto tcp to any port 3306") {
+		t.Fatalf("deny must be inserted before allows: %q", out)
+	}
+
 	out, err = runHostctlEnv(t, root, input, "firewall-delete", nil)
 	if err != nil {
 		t.Fatalf("firewall-delete: %v\n%s", err, out)
@@ -102,10 +112,12 @@ func TestHostctlFirewallRejectsUnsafeValues(t *testing.T) {
 	root := t.TempDir()
 	firewallStubs(t, root)
 	for name, input := range map[string]string{
-		"port":    "action=allow\ndirection=in\nprotocol=tcp\nport=70000\nsource=\ncomment=\n",
-		"source":  "action=allow\ndirection=in\nprotocol=tcp\nport=22\nsource=example.com\ncomment=\n",
-		"comment": "action=allow\ndirection=in\nprotocol=tcp\nport=22\nsource=\ncomment=bad;comment\n",
-		"action":  "action=block\ndirection=in\nprotocol=tcp\nport=22\nsource=\ncomment=\n",
+		"port":     "action=allow\ndirection=in\nprotocol=tcp\nport=70000\nsource=\ncomment=\n",
+		"source":   "action=allow\ndirection=in\nprotocol=tcp\nport=22\nsource=example.com\ncomment=\n",
+		"comment":  "action=allow\ndirection=in\nprotocol=tcp\nport=22\nsource=\ncomment=bad;comment\n",
+		"dash":     "action=allow\ndirection=in\nprotocol=tcp\nport=22\nsource=\ncomment=-ssh\n",
+		"outbound": "action=allow\ndirection=out\nprotocol=tcp\nport=53\nsource=1.2.3.4\ncomment=\n",
+		"action":   "action=block\ndirection=in\nprotocol=tcp\nport=22\nsource=\ncomment=\n",
 	} {
 		out, err := runHostctlEnv(t, root, input, "firewall-add", nil)
 		if err == nil {
@@ -125,12 +137,23 @@ func TestHostctlFirewallNoBackend(t *testing.T) {
 	}
 }
 
+func runHostctlIsolated(t *testing.T, bin, root, stdin, verb string, extra []string) (string, error) {
+	t.Helper()
+	cmd := exec.Command("sh", "gotham-hostctl.sh", verb)
+	cmd.Env = append([]string{"PATH=" + bin, "GOTHAM_HOSTCTL_ROOT=" + root}, extra...)
+	cmd.Stdin = strings.NewReader(stdin)
+	out, err := cmd.CombinedOutput()
+	return string(out), err
+}
+
 func TestHostctlFirewalldUsesTheOfflineClientWhenStopped(t *testing.T) {
 	root := t.TempDir()
 	bin := filepath.Join(root, "bin")
 	if err := os.MkdirAll(bin, 0o755); err != nil {
 		t.Fatal(err)
 	}
+	// Isolate PATH: a CI runner ships a real ufw, which would otherwise win
+	// backend detection before the firewalld stubs.
 	writeStub(t, bin, "systemctl", "#!/bin/sh\nexit 1\n")
 	writeStub(t, bin, "firewall-cmd", "#!/bin/sh\nexit 1\n")
 	log := filepath.Join(root, "offline.log")
@@ -141,18 +164,27 @@ case "$*" in
 esac
 exit 0
 `)
-	t.Setenv("PATH", bin+":"+os.Getenv("PATH"))
+	for _, tool := range []string{"awk", "grep", "sort", "uniq", "tr", "sed"} {
+		path, err := exec.LookPath(tool)
+		if err != nil {
+			t.Fatalf("look up %s: %v", tool, err)
+		}
+		if err := os.Symlink(path, filepath.Join(bin, tool)); err != nil {
+			t.Fatal(err)
+		}
+	}
+	extra := []string{"OFFLINE_LOG=" + log}
 
-	out, err := runHostctlReal(t, root, "", "firewall-list", []string{"OFFLINE_LOG=" + log})
+	out, err := runHostctlIsolated(t, bin, root, "", "firewall-list", extra)
 	if err != nil {
 		t.Fatalf("firewall-list: %v\n%s", err, out)
 	}
-	if !strings.Contains(out, `port port="22"`) {
+	if !strings.Contains(out, `port port="22"`) || strings.Contains(out, "backend=ufw") {
 		t.Fatalf("offline listing = %q", out)
 	}
 
 	input := "action=allow\ndirection=in\nprotocol=tcp\nport=8080\nsource=\ncomment=\n"
-	out, err = runHostctlReal(t, root, input, "firewall-add", []string{"OFFLINE_LOG=" + log})
+	out, err = runHostctlIsolated(t, bin, root, input, "firewall-add", extra)
 	if err != nil {
 		t.Fatalf("firewall-add: %v\n%s", err, out)
 	}
@@ -160,7 +192,42 @@ exit 0
 	if err != nil {
 		t.Fatal(err)
 	}
-	if !strings.Contains(string(data), `--add-rich-rule=rule family="ipv4" port port="8080" protocol="tcp" accept`) {
+	if !strings.Contains(string(data), `--add-rich-rule=rule port port="8080" protocol="tcp" accept`) {
 		t.Fatalf("offline add = %q", data)
+	}
+	if strings.Contains(string(data), "family=") {
+		t.Fatalf("a rule without a source must not pin IPv4: %q", data)
+	}
+}
+
+func TestHostctlFirewallStatusReadsAllSSHPorts(t *testing.T) {
+	root := t.TempDir()
+	firewallStubs(t, root)
+	dropin := filepath.Join(root, "etc/ssh/sshd_config.d/05-gotham.conf")
+	if err := os.MkdirAll(filepath.Dir(dropin), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(dropin, []byte("Port 2222\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	out, err := runHostctlEnv(t, root, "", "firewall-status", nil)
+	if err != nil {
+		t.Fatalf("firewall-status: %v\n%s", err, out)
+	}
+	if !strings.Contains(out, "ssh_ports=22,2222") {
+		t.Fatalf("ssh ports = %q", out)
+	}
+}
+
+func TestHostctlFirewallStatusFallsBackTo22(t *testing.T) {
+	root := t.TempDir()
+	firewallStubs(t, root)
+	writeStub(t, filepath.Join(root, "bin"), "sshd", "#!/bin/sh\nexit 0\n")
+	out, err := runHostctlEnv(t, root, "", "firewall-status", nil)
+	if err != nil {
+		t.Fatalf("firewall-status: %v\n%s", err, out)
+	}
+	if !strings.Contains(out, "ssh_ports=22") {
+		t.Fatalf("fallback = %q", out)
 	}
 }

@@ -43,6 +43,8 @@ func TestNormalizeRuleRejectsBadInput(t *testing.T) {
 		"source":    {Action: ActionAllow, Direction: DirectionIn, Protocol: ProtocolTCP, Source: "example.com"},
 		"comment":   {Action: ActionAllow, Direction: DirectionIn, Protocol: ProtocolTCP, Comment: "bad;comment"},
 		"newline":   {Action: ActionAllow, Direction: DirectionIn, Protocol: ProtocolTCP, Comment: "a\nb"},
+		"dash":      {Action: ActionAllow, Direction: DirectionIn, Protocol: ProtocolTCP, Comment: "-ssh"},
+		"outbound":  {Action: ActionAllow, Direction: DirectionOut, Protocol: ProtocolTCP, Source: "192.0.2.10"},
 	}
 	for name, in := range cases {
 		if _, err := normalizeRule(in); err == nil {

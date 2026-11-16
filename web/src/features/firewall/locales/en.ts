@@ -86,6 +86,8 @@ const en = {
     source: "Use an IP address or a CIDR range.",
     comment:
       "Use letters, numbers and . _ ( ) , : / + @ - only, up to 200 characters.",
+    commentDash: "A comment cannot start with a dash.",
+    outboundSource: "Outbound rules cannot have a source address.",
   },
   toasts: {
     enabled: "Firewall turned on",

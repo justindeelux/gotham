@@ -18,7 +18,7 @@ export const firewallStatusSchema = z.object({
   enabled: z.boolean(),
   manageable: z.boolean(),
   detail: z.string().optional(),
-  ssh_port: z.number().int(),
+  ssh_ports: z.array(z.number().int()),
   agent_port: z.number().int(),
   control_plane_port: z.number().int(),
 });
@@ -108,27 +108,41 @@ export function isValidFirewallPort(value: string): boolean {
   return last >= first && last <= 65535;
 }
 
-export const firewallRuleFormSchema = z.object({
-  action: firewallActionSchema,
-  direction: firewallDirectionSchema,
-  protocol: firewallProtocolSchema,
-  port: z
-    .string()
-    .trim()
-    .refine(isValidFirewallPort, "firewall.validation.port"),
-  source: z
-    .string()
-    .trim()
-    .refine(isValidFirewallSource, "firewall.validation.source"),
-  comment: z
-    .string()
-    .trim()
-    .max(200, "firewall.validation.comment")
-    .refine(
-      (value) => /^[A-Za-z0-9 ._(),:/+@-]*$/.test(value),
-      "firewall.validation.comment",
-    ),
-  enabled: z.boolean(),
-});
+export const firewallRuleFormSchema = z
+  .object({
+    action: firewallActionSchema,
+    direction: firewallDirectionSchema,
+    protocol: firewallProtocolSchema,
+    port: z
+      .string()
+      .trim()
+      .refine(isValidFirewallPort, "firewall.validation.port"),
+    source: z
+      .string()
+      .trim()
+      .refine(isValidFirewallSource, "firewall.validation.source"),
+    comment: z
+      .string()
+      .trim()
+      .max(200, "firewall.validation.comment")
+      .refine(
+        (value) => !value.startsWith("-"),
+        "firewall.validation.commentDash",
+      )
+      .refine(
+        (value) => /^[A-Za-z0-9 ._(),:/+@-]*$/.test(value),
+        "firewall.validation.comment",
+      ),
+    enabled: z.boolean(),
+  })
+  .superRefine((value, ctx) => {
+    if (value.direction === "out" && value.source !== "") {
+      ctx.addIssue({
+        code: "custom",
+        path: ["source"],
+        message: "firewall.validation.outboundSource",
+      });
+    }
+  });
 
 export type FirewallRuleForm = z.infer<typeof firewallRuleFormSchema>;

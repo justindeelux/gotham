@@ -1,0 +1,13 @@
+Status: active
+
+     To                         Action      From
+     --                         ------      ----
+[ 1] OpenSSH                    ALLOW IN    Anywhere
+[ 2] OpenSSH (v6)               ALLOW IN    Anywhere (v6)
+[ 3] Nginx Full                 ALLOW IN    Anywhere
+[ 4] 443/tcp                    ALLOW IN    Anywhere on eth0
+[ 5] 443/tcp                    ALLOW IN    Anywhere
+[ 6] 22/tcp                     LIMIT IN    Anywhere
+[ 7] 22/tcp                     ALLOW IN    Anywhere
+[ 8] 3306/tcp                   REJECT IN   Anywhere
+[ 9] 3306/tcp (v6)              REJECT IN   Anywhere (v6)

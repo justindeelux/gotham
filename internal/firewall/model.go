@@ -2,14 +2,14 @@ package firewall
 
 // Status is one node's firewall state.
 type Status struct {
-	Backend          string `json:"backend"`
-	Available        bool   `json:"available"`
-	Enabled          bool   `json:"enabled"`
-	Manageable       bool   `json:"manageable"`
-	Detail           string `json:"detail,omitempty"`
-	SSHPort          uint32 `json:"ssh_port"`
-	AgentPort        uint32 `json:"agent_port"`
-	ControlPlanePort uint32 `json:"control_plane_port"`
+	Backend          string   `json:"backend"`
+	Available        bool     `json:"available"`
+	Enabled          bool     `json:"enabled"`
+	Manageable       bool     `json:"manageable"`
+	Detail           string   `json:"detail,omitempty"`
+	SSHPorts         []uint32 `json:"ssh_ports"`
+	AgentPort        uint32   `json:"agent_port"`
+	ControlPlanePort uint32   `json:"control_plane_port"`
 }
 
 // Rule is one firewall rule in the shared model. Enabled reports whether the

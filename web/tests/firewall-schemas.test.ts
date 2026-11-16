@@ -66,8 +66,28 @@ describe("firewall rule form", () => {
       firewallRuleFormSchema.safeParse({ ...valid, comment: "bad;comment" }).success,
     ).toBe(false);
     expect(
+      firewallRuleFormSchema.safeParse({ ...valid, comment: "-ssh" }).success,
+    ).toBe(false);
+    expect(
       firewallRuleFormSchema.safeParse({ ...valid, comment: "a".repeat(201) }).success,
     ).toBe(false);
+  });
+
+  it("rejects a source on an outbound rule", () => {
+    expect(
+      firewallRuleFormSchema.safeParse({
+        ...valid,
+        direction: "out",
+        source: "192.0.2.10",
+      }).success,
+    ).toBe(false);
+    expect(
+      firewallRuleFormSchema.safeParse({
+        ...valid,
+        direction: "out",
+        source: "",
+      }).success,
+    ).toBe(true);
   });
 });
 
@@ -80,7 +100,7 @@ describe("firewall API envelopes", () => {
         enabled: true,
         manageable: true,
         detail: "",
-        ssh_port: 22,
+        ssh_ports: [22, 2222],
         agent_port: 9443,
         control_plane_port: 8000,
       },

@@ -649,6 +649,7 @@ func TestHostctlReexecsWriteVerbsOnly(t *testing.T) {
 	for _, verb := range []string{
 		"apply-system", "apply-network", "revert-network", "cleanup-journal", "cleanup-package-cache",
 		"apply-ssh", "confirm-ssh", "revert-ssh", "apply-agent-root",
+		"firewall-add", "firewall-delete", "firewall-enable", "firewall-disable",
 	} {
 		if err := os.Remove(record); err != nil && !os.IsNotExist(err) {
 			t.Fatal(err)

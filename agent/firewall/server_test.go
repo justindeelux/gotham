@@ -2,6 +2,7 @@ package firewall
 
 import (
 	"context"
+	"errors"
 	"path/filepath"
 	"strings"
 	"sync"
@@ -19,10 +20,11 @@ type recordedCall struct {
 }
 
 type fakeRunner struct {
-	mu     sync.Mutex
-	status string
-	list   string
-	calls  []recordedCall
+	mu        sync.Mutex
+	status    string
+	statusErr error
+	list      string
+	calls     []recordedCall
 }
 
 func (f *fakeRunner) Run(_ context.Context, verb, stdin string) (string, error) {
@@ -31,7 +33,7 @@ func (f *fakeRunner) Run(_ context.Context, verb, stdin string) (string, error) 
 	f.calls = append(f.calls, recordedCall{verb: verb, stdin: stdin})
 	switch verb {
 	case "firewall-status":
-		return f.status, nil
+		return f.status, f.statusErr
 	case "firewall-list":
 		return f.list, nil
 	default:
@@ -61,7 +63,7 @@ func (f *fakeRunner) callsFor(verb string) []recordedCall {
 	return out
 }
 
-const ufwStatusFixture = "backend=ufw\nenabled=true\nmanageable=true\nssh_port=22\n"
+const ufwStatusFixture = "backend=ufw\nenabled=true\nmanageable=true\nssh_ports=22\n"
 
 const ufwSSHOnly = "backend=ufw\n--\n" +
 	"Status: active\n\n" +
@@ -92,13 +94,14 @@ func TestStatusReportsBackendAndProtectedPorts(t *testing.T) {
 	if response.GetBackend() != agentv1.FirewallBackend_FIREWALL_BACKEND_UFW || !response.GetManageable() {
 		t.Fatalf("status = %#v", response)
 	}
-	if response.GetSshPort() != 22 || response.GetAgentPort() != 9443 || response.GetControlPlanePort() != 8000 {
-		t.Fatalf("ports = %d %d %d", response.GetSshPort(), response.GetAgentPort(), response.GetControlPlanePort())
+	if len(response.GetSshPorts()) != 1 || response.GetSshPorts()[0] != 22 ||
+		response.GetAgentPort() != 9443 || response.GetControlPlanePort() != 8000 {
+		t.Fatalf("ports = %v %d %d", response.GetSshPorts(), response.GetAgentPort(), response.GetControlPlanePort())
 	}
 }
 
 func TestUnsupportedBackendIsReportedNotAnError(t *testing.T) {
-	runner := &fakeRunner{status: "backend=nftables\nenabled=true\nmanageable=false\nssh_port=22\n"}
+	runner := &fakeRunner{status: "backend=nftables\nenabled=true\nmanageable=false\nssh_ports=22\n"}
 	server := newTestServer(t, runner)
 	response, err := server.GetStatus(context.Background(), &agentv1.FirewallStatusRequest{})
 	if err != nil {
@@ -194,7 +197,7 @@ func TestDeletingTheSSHAllowRuleIsRefused(t *testing.T) {
 }
 
 func TestEnableAddsMissingAccessRulesBeforeTurningTheFirewallOn(t *testing.T) {
-	runner := &fakeRunner{status: "backend=ufw\nenabled=false\nmanageable=true\nssh_port=22\n", list: ufwSSHOnly}
+	runner := &fakeRunner{status: "backend=ufw\nenabled=false\nmanageable=true\nssh_ports=22\n", list: ufwSSHOnly}
 	server := newTestServer(t, runner)
 	_, err := server.SetEnabled(context.Background(), &agentv1.FirewallEnabledRequest{
 		Enabled:          true,
@@ -235,7 +238,7 @@ func TestEnableRefusesADenyRuleForAProtectedPort(t *testing.T) {
 		"[ 3] 8000/tcp                   ALLOW IN    Anywhere\n" +
 		"[ 4] 22/tcp                     DENY IN     Anywhere\n" +
 		"--\nAdded user rules (see 'ufw status' for running firewall):\n"
-	runner := &fakeRunner{status: "backend=ufw\nenabled=false\nmanageable=true\nssh_port=22\n", list: list}
+	runner := &fakeRunner{status: "backend=ufw\nenabled=false\nmanageable=true\nssh_ports=22\n", list: list}
 	server := newTestServer(t, runner)
 	_, err := server.SetEnabled(context.Background(), &agentv1.FirewallEnabledRequest{
 		Enabled:          true,
@@ -277,7 +280,7 @@ func TestDeleteReadOnlyRuleIsRefused(t *testing.T) {
 
 func TestPreparingRulesWhileTheFirewallIsOffDoesNotNeedAccessRules(t *testing.T) {
 	empty := "backend=ufw\n--\nStatus: inactive\n\n--\nAdded user rules (see 'ufw status' for running firewall):\n"
-	runner := &fakeRunner{status: "backend=ufw\nenabled=false\nmanageable=true\nssh_port=22\n", list: empty}
+	runner := &fakeRunner{status: "backend=ufw\nenabled=false\nmanageable=true\nssh_ports=22\n", list: empty}
 	server := newTestServer(t, runner)
 	_, err := server.AddRule(context.Background(), &agentv1.FirewallRuleCreateRequest{
 		ControlPlanePort: 8000,
@@ -299,7 +302,7 @@ func TestPreparingRulesWhileTheFirewallIsOffDoesNotNeedAccessRules(t *testing.T)
 
 func TestEnableStartsFirewalldBeforeAddingAccessRules(t *testing.T) {
 	list := "backend=firewalld\n--\n--\n"
-	runner := &fakeRunner{status: "backend=firewalld\nenabled=false\nmanageable=true\nssh_port=22\n", list: list}
+	runner := &fakeRunner{status: "backend=firewalld\nenabled=false\nmanageable=true\nssh_ports=22\n", list: list}
 	server := newTestServer(t, runner)
 	_, err := server.SetEnabled(context.Background(), &agentv1.FirewallEnabledRequest{
 		Enabled:          true,
@@ -333,7 +336,7 @@ func TestEnableDoesNotStopAnAlreadyRunningFirewalld(t *testing.T) {
 	list := "backend=firewalld\n--\n" +
 		"rule family=\"ipv4\" port port=\"22\" protocol=\"tcp\" reject\n" +
 		"--\n"
-	runner := &fakeRunner{status: "backend=firewalld\nenabled=true\nmanageable=true\nssh_port=22\n", list: list}
+	runner := &fakeRunner{status: "backend=firewalld\nenabled=true\nmanageable=true\nssh_ports=22\n", list: list}
 	server := newTestServer(t, runner)
 	_, err := server.SetEnabled(context.Background(), &agentv1.FirewallEnabledRequest{
 		Enabled:          true,
@@ -353,7 +356,7 @@ func TestFirewalldRuleCommentSurvivesTheStateFile(t *testing.T) {
 	list := "backend=firewalld\n--\n" +
 		"rule family=\"ipv4\" port port=\"8080\" protocol=\"tcp\" accept\n" +
 		"--\n"
-	runner := &fakeRunner{status: "backend=firewalld\nenabled=true\nmanageable=true\nssh_port=22\n", list: list}
+	runner := &fakeRunner{status: "backend=firewalld\nenabled=true\nmanageable=true\nssh_ports=22\n", list: list}
 	server := newTestServer(t, runner)
 	rules, err := server.ListRules(context.Background(), &agentv1.FirewallRulesRequest{ControlPlanePort: 8000})
 	if err != nil {
@@ -381,5 +384,30 @@ func TestFirewalldRuleCommentSurvivesTheStateFile(t *testing.T) {
 	}
 	if rules.GetRules()[0].GetComment() != "web" {
 		t.Fatalf("comment = %q", rules.GetRules()[0].GetComment())
+	}
+}
+
+func TestStatusReportsAllSSHPorts(t *testing.T) {
+	runner := &fakeRunner{status: "backend=ufw\nenabled=true\nmanageable=true\nssh_ports=22,2222,22,0,70000\n"}
+	server := newTestServer(t, runner)
+	response, err := server.GetStatus(context.Background(), &agentv1.FirewallStatusRequest{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	ports := response.GetSshPorts()
+	if len(ports) != 2 || ports[0] != 22 || ports[1] != 2222 {
+		t.Fatalf("ssh ports = %v, want [22 2222]", ports)
+	}
+}
+
+func TestStatusTellsTheOperatorToUpdateTheHelper(t *testing.T) {
+	runner := &fakeRunner{statusErr: errors.New("sudo: a password is required")}
+	server := newTestServer(t, runner)
+	response, err := server.GetStatus(context.Background(), &agentv1.FirewallStatusRequest{})
+	if err != nil {
+		t.Fatalf("status must report the state, not return an error: %v", err)
+	}
+	if response.GetManageable() || !strings.Contains(response.GetDetail(), "Update this node") {
+		t.Fatalf("detail = %q", response.GetDetail())
 	}
 }

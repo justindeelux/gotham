@@ -3,6 +3,7 @@ package firewall
 import (
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 
 	agentv1 "github.com/justindeelux/gotham/proto/agent/v1"
@@ -25,8 +26,8 @@ func TestParseBackendStatus(t *testing.T) {
 	if !st.Enabled || !st.Manageable {
 		t.Fatalf("enabled = %v, manageable = %v", st.Enabled, st.Manageable)
 	}
-	if st.SSHPort != 2222 {
-		t.Fatalf("ssh port = %d, want 2222", st.SSHPort)
+	if len(st.SSHPorts) != 1 || st.SSHPorts[0] != 2222 {
+		t.Fatalf("ssh ports = %v, want [2222]", st.SSHPorts)
 	}
 
 	none := parseBackendStatus(fixture(t, "hostctl_status_none.txt"))
@@ -141,4 +142,85 @@ func TestSplitQuoted(t *testing.T) {
 	if len(tokens) != 4 || tokens[3] != "SSH access" {
 		t.Fatalf("tokens = %#v", tokens)
 	}
+}
+
+func TestParseUFWKeepsReadOnlyRowsDistinct(t *testing.T) {
+	rules := parseUFWRules(fixture(t, "ufw_readonly.txt"), "")
+	if len(rules) != 7 {
+		t.Fatalf("rules = %d, want 7: %#v", len(rules), rules)
+	}
+	ids := make(map[string]bool, len(rules))
+	for _, r := range rules {
+		if ids[r.ID] {
+			t.Fatalf("duplicate rule id %q: %#v", r.ID, rules)
+		}
+		ids[r.ID] = true
+	}
+
+	profiles := make(map[string]bool)
+	for _, r := range rules {
+		if strings.HasPrefix(r.Comment, "ufw: OpenSSH") {
+			profiles["OpenSSH"] = true
+			if !r.ReadOnly {
+				t.Fatalf("an app profile must be read-only: %#v", r)
+			}
+		}
+		if strings.HasPrefix(r.Comment, "ufw: Nginx Full") {
+			profiles["Nginx Full"] = true
+			if !r.ReadOnly {
+				t.Fatalf("an app profile must be read-only: %#v", r)
+			}
+		}
+	}
+	if !profiles["OpenSSH"] || !profiles["Nginx Full"] {
+		t.Fatalf("app profiles collapsed: %#v", rules)
+	}
+
+	anywhere := false
+	interfaceRule := false
+	for _, r := range rules {
+		if r.Port == "443" && r.Source == "" {
+			if r.ReadOnly {
+				iface := strings.Contains(r.Comment, "Anywhere on eth0")
+				if !iface {
+					t.Fatalf("unexpected read-only 443 rule: %#v", r)
+				}
+				interfaceRule = true
+			} else {
+				anywhere = true
+			}
+		}
+	}
+	if !anywhere || !interfaceRule {
+		t.Fatalf("443 rows collapsed: %#v", rules)
+	}
+
+	limit := false
+	plain := false
+	for _, r := range rules {
+		if r.Port != "22" {
+			continue
+		}
+		if r.ReadOnly {
+			limit = true
+			if !strings.Contains(r.Comment, "LIMIT") && !strings.Contains(r.Comment, "22/tcp") {
+				t.Fatalf("limit rule = %#v", r)
+			}
+		} else {
+			plain = true
+		}
+	}
+	if !limit || !plain {
+		t.Fatalf("LIMIT and ALLOW rows collapsed: %#v", rules)
+	}
+
+	for _, r := range rules {
+		if r.Port == "3306" {
+			if !r.ReadOnly || r.Action != agentv1.FirewallAction_FIREWALL_ACTION_DENY {
+				t.Fatalf("REJECT must be a read-only deny: %#v", r)
+			}
+			return
+		}
+	}
+	t.Fatalf("REJECT row missing: %#v", rules)
 }

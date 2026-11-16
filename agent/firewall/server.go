@@ -4,6 +4,7 @@ import (
 	"context"
 	"log/slog"
 	"net"
+	"sort"
 	"strconv"
 	"strings"
 	"sync"
@@ -75,7 +76,7 @@ type backendStatus struct {
 	Backend    agentv1.FirewallBackend
 	Enabled    bool
 	Manageable bool
-	SSHPort    uint32
+	SSHPorts   []uint32
 	AgentPort  uint32
 	Detail     string
 }
@@ -88,9 +89,13 @@ func (s *Server) GetStatus(ctx context.Context, req *agentv1.FirewallStatusReque
 func (s *Server) probe(ctx context.Context) (backendStatus, error) {
 	out, err := s.runner.Run(ctx, "firewall-status", "")
 	if err != nil {
+		detail := "The node's host helper could not report the firewall. Update this node (run its Gotham update) and try again."
+		if reason := strings.TrimSpace(err.Error()); reason != "" {
+			detail += " Reason: " + truncate(reason, maxCommentLength)
+		}
 		return backendStatus{
 			Backend: agentv1.FirewallBackend_FIREWALL_BACKEND_NONE,
-			Detail:  "The node's host helper could not report the firewall: " + err.Error(),
+			Detail:  detail,
 		}, err
 	}
 	st := parseBackendStatus(out)
@@ -112,11 +117,12 @@ func parseBackendStatus(out string) backendStatus {
 			st.Enabled = value == "true"
 		case "manageable":
 			st.Manageable = value == "true"
+		case "ssh_ports":
+			st.SSHPorts = parsePortList(value)
 		case "ssh_port":
-			n, err := strconv.ParseUint(value, 10, 16)
-			if err == nil {
-				st.SSHPort = uint32(n)
-			}
+			// Older helpers reported one port; keep reading it so an agent
+			// update that lands before the helper update still works.
+			st.SSHPorts = appendUniquePort(st.SSHPorts, value)
 		}
 	}
 	switch st.Backend {
@@ -132,6 +138,29 @@ func parseBackendStatus(out string) backendStatus {
 		st.Detail = "No supported firewall is installed on this node."
 	}
 	return st
+}
+
+func parsePortList(value string) []uint32 {
+	ports := make([]uint32, 0, 2)
+	for _, part := range strings.Split(value, ",") {
+		ports = appendUniquePort(ports, strings.TrimSpace(part))
+	}
+	sort.Slice(ports, func(i, j int) bool { return ports[i] < ports[j] })
+	return ports
+}
+
+func appendUniquePort(ports []uint32, raw string) []uint32 {
+	n, err := strconv.ParseUint(strings.TrimSpace(raw), 10, 16)
+	if err != nil || n == 0 {
+		return ports
+	}
+	port := uint32(n)
+	for _, existing := range ports {
+		if existing == port {
+			return ports
+		}
+	}
+	return append(ports, port)
 }
 
 func backendValue(slug string) agentv1.FirewallBackend {
@@ -156,7 +185,7 @@ func (s *Server) statusProto(st backendStatus, controlPlanePort uint32) *agentv1
 		Enabled:          st.Enabled,
 		Manageable:       st.Manageable,
 		Detail:           st.Detail,
-		SshPort:          st.SSHPort,
+		SshPorts:         st.SSHPorts,
 		AgentPort:        st.AgentPort,
 		ControlPlanePort: controlPlanePort,
 	}

@@ -39,6 +39,15 @@ func (s *Server) firewallService() *firewall.Service {
 			return client, nil
 		},
 		ControlPlanePort: controlPlanePort,
-		Logger:           s.logger,
+		ProtectControlPlane: func(ctx context.Context, serverID uuid.UUID) bool {
+			row, err := s.servers.Get(ctx, serverID)
+			if err != nil || row == nil || row.NodeID == nil {
+				// Unknown is not proof that the control plane is elsewhere;
+				// keeping the extra allow rule is the harmless direction.
+				return true
+			}
+			return *row.NodeID == "localhost"
+		},
+		Logger: s.logger,
 	})
 }

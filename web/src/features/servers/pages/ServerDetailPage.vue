@@ -207,6 +207,7 @@ onMounted(() => {
           </NTabPane>
 
           <NTabPane
+            v-if="authStore.isOwner"
             name="firewall"
             :tab="$t('firewall.tab')"
             display-directive="if"

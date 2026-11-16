@@ -9,6 +9,10 @@ set -eu
 SCRIPT_DIR="$(CDPATH= cd -- "$(dirname -- "$0")" && pwd)"
 BOOTSTRAP="${SCRIPT_DIR}/gotham-hostbootstrap.sh"
 [ -f "${BOOTSTRAP}" ] || { echo "FAIL: ${BOOTSTRAP} is missing" >&2; exit 1; }
+# Derive the grant count from the helper's closed verb set, so adding a verb
+# cannot silently leave this test asserting an old number.
+HOSTCTL_VERB_COUNT="$(sed -n 's/^HOSTCTL_VERBS="\(.*\)"$/\1/p' "${BOOTSTRAP}" | wc -w | tr -d ' ')"
+[ "${HOSTCTL_VERB_COUNT}" -gt 0 ] || { echo "FAIL: cannot read HOSTCTL_VERBS" >&2; exit 1; }
 
 SCRATCH="$(mktemp -d "${TMPDIR:-/tmp}/test-host-bootstrap.XXXXXX")"
 trap 'rm -rf "${SCRATCH}"' EXIT
@@ -73,8 +77,8 @@ pass "a custom control-plane user is used instead of the default"
 ROOTA="$(root_for "${SCRATCH}/root-agent")"
 GOTHAM_HOST_BOOTSTRAP_ROOT="${ROOTA}" sh "${BOOTSTRAP}" create-agent gotham-agent v9.0.0 >/dev/null
 DROPIN_A="${ROOTA}/etc/sudoers.d/gotham-hostctl"
-[ "$(grep -c '^gotham-agent ALL=(root) NOPASSWD: /usr/libexec/gotham/gotham-hostctl ' "${DROPIN_A}")" = "12" ] \
-    || fail "the agent drop-in does not carry exactly the twelve host-control verbs"
+[ "$(grep -c '^gotham-agent ALL=(root) NOPASSWD: /usr/libexec/gotham/gotham-hostctl ' "${DROPIN_A}")" = "${HOSTCTL_VERB_COUNT}" ] \
+    || fail "the agent drop-in does not carry exactly ${HOSTCTL_VERB_COUNT} host-control verbs"
 grep -q '^gotham-agent ALL=(root) NOPASSWD: /usr/libexec/gotham/gotham-toolctl' "${DROPIN_A}" \
     && fail "the agent must not get the tool-installer repair verb"
 [ -f "${ROOTA}/usr/libexec/gotham/hostbootstrap/cp-user" ] \
@@ -89,7 +93,7 @@ GOTHAM_HOST_BOOTSTRAP_ROOT="${ROOTB}" sh "${BOOTSTRAP}" create alice v9.0.0 >/de
 GOTHAM_HOST_BOOTSTRAP_ROOT="${ROOTB}" sh "${BOOTSTRAP}" create-agent gotham-agent v9.0.0 >/dev/null
 DROPIN_B="${ROOTB}/etc/sudoers.d/gotham-hostctl"
 for user in alice gotham-agent; do
-    [ "$(grep -c "^${user} ALL=(root) NOPASSWD: /usr/libexec/gotham/gotham-hostctl " "${DROPIN_B}")" = "12" ] \
+    [ "$(grep -c "^${user} ALL=(root) NOPASSWD: /usr/libexec/gotham/gotham-hostctl " "${DROPIN_B}")" = "${HOSTCTL_VERB_COUNT}" ] \
         || fail "${user} lost a host-control verb when both users were installed"
 done
 [ "$(grep -c 'gotham-toolctl install-tool gotham-hostctl' "${DROPIN_B}")" = "1" ] \
@@ -119,11 +123,11 @@ mkdir -p "${LEGACY_PAYLOAD}"
 GOTHAM_HOST_BOOTSTRAP_ROOT="${ROOTC}" sh "${BOOTSTRAP}" create-agent gotham-agent v9.0.0 >/dev/null \
     || fail "create-agent failed on a payload that predates the cp-user record"
 DROPIN_C="${ROOTC}/etc/sudoers.d/gotham-hostctl"
-[ "$(grep -c '^legacycp ALL=(root) NOPASSWD: /usr/libexec/gotham/gotham-hostctl ' "${DROPIN_C}")" = "12" ] \
+[ "$(grep -c '^legacycp ALL=(root) NOPASSWD: /usr/libexec/gotham/gotham-hostctl ' "${DROPIN_C}")" = "${HOSTCTL_VERB_COUNT}" ] \
     || fail "create-agent dropped the pre-record control-plane grantee"
 grep -q '^legacycp ALL=(root) NOPASSWD: /usr/libexec/gotham/gotham-toolctl install-tool gotham-hostctl$' "${DROPIN_C}" \
     || fail "create-agent dropped the pre-record control-plane repair verb"
-[ "$(grep -c '^gotham-agent ALL=(root) NOPASSWD: /usr/libexec/gotham/gotham-hostctl ' "${DROPIN_C}")" = "12" ] \
+[ "$(grep -c '^gotham-agent ALL=(root) NOPASSWD: /usr/libexec/gotham/gotham-hostctl ' "${DROPIN_C}")" = "${HOSTCTL_VERB_COUNT}" ] \
     || fail "create-agent did not grant the agent on a pre-record payload"
 pass "create-agent keeps a pre-record control-plane grantee"
 

@@ -100,8 +100,9 @@ function ruleTarget(rule: FirewallRule): string {
     : t("firewall.rules.targetPort", { port: rule.port });
 }
 
-function accessPortText(port: number): string {
-  return port > 0 ? String(port) : "—";
+function accessPortText(ports: number | number[]): string {
+  const list = Array.isArray(ports) ? ports : [ports];
+  return list.filter((port) => port > 0).join(", ") || "—";
 }
 
 const accessHint = computed<string>(() => {
@@ -110,7 +111,7 @@ const accessHint = computed<string>(() => {
     return "";
   }
   return t("firewall.status.accessHint", {
-    ssh: accessPortText(status.ssh_port),
+    ssh: accessPortText(status.ssh_ports),
     agent: accessPortText(status.agent_port),
     controlPlane: accessPortText(status.control_plane_port),
   });

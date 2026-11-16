@@ -81,7 +81,13 @@ export interface StorageMapping {
   container_path: string;
 }
 
-export type BuildPack = "" | "dockerfile" | "railpack" | "buildpacks" | "static";
+export type BuildPack =
+  | ""
+  | "dockerfile"
+  | "railpack"
+  | "buildpacks"
+  | "static"
+  | "docker_compose";
 
 export interface CreateApplicationInput {
   name: string;

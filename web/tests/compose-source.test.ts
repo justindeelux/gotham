@@ -10,7 +10,6 @@ import { defineComponent, h, nextTick, ref } from "vue";
 import {
   composeContentSchema,
   composeFileSchema,
-  composeModeSchema,
   composeServiceSchema,
   sourceTypeImplemented,
 } from "@/features/applications/schemas/applications";
@@ -41,12 +40,6 @@ describe("compose schemas", () => {
     expect(sourceTypeImplemented("git_private")).toBe(true);
     expect(sourceTypeImplemented("dockerfile")).toBe(true);
     expect(sourceTypeImplemented("image")).toBe(true);
-  });
-
-  it("gates the compose mode", () => {
-    expect(composeModeSchema.safeParse("paste").success).toBe(true);
-    expect(composeModeSchema.safeParse("repo").success).toBe(true);
-    expect(composeModeSchema.safeParse("tarball").success).toBe(false);
   });
 
   it("gates pasted content on non-empty, size and services", () => {
@@ -149,7 +142,6 @@ const reset = {
   publicCloneUrl: "",
   repoFullName: "",
   cloneUrl: "",
-  composeMode: "paste",
   composeContent: "",
   composeFile: "docker-compose.yml",
   composeService: "",
@@ -164,68 +156,28 @@ const reset = {
 const pasted = "services:\n  web:\n    image: example.com/app:1.0\n";
 
 describe("wizard compose source", () => {
-  it("gates the Source step on mode, content and service", () => {
+  it("gates the Source step on content and service", () => {
     const { w, wrapper } = mountWizard();
     const cases: Array<{ name: string; patch: Record<string, unknown>; valid: boolean }> = [
-      { name: "empty-content", patch: { sourceType: "compose", composeMode: "paste", name: "abc" }, valid: false },
+      { name: "empty-content", patch: { sourceType: "compose", name: "abc" }, valid: false },
       {
         name: "paste-valid",
-        patch: { sourceType: "compose", composeMode: "paste", composeContent: pasted, composeService: "web", name: "abc" },
+        patch: { sourceType: "compose", composeContent: pasted, composeService: "web", name: "abc" },
         valid: true,
       },
       {
         name: "paste-no-service",
-        patch: { sourceType: "compose", composeMode: "paste", composeContent: pasted, name: "abc" },
+        patch: { sourceType: "compose", composeContent: pasted, name: "abc" },
         valid: false,
       },
       {
         name: "paste-no-services-key",
-        patch: { sourceType: "compose", composeMode: "paste", composeContent: "version: \"3\"\n", composeService: "web", name: "abc" },
+        patch: { sourceType: "compose", composeContent: "version: \"3\"\n", composeService: "web", name: "abc" },
         valid: false,
       },
       {
         name: "paste-oversize",
-        patch: { sourceType: "compose", composeMode: "paste", composeContent: `${pasted}${"x".repeat(256 * 1024)}`, composeService: "web", name: "abc" },
-        valid: false,
-      },
-      {
-        name: "repo-public-valid",
-        patch: {
-          sourceType: "compose", composeMode: "repo", publicCloneUrl: "https://github.com/o/r.git",
-          composeFile: "deploy/compose.yml", composeService: "web", branch: "main", name: "abc",
-        },
-        valid: true,
-      },
-      {
-        name: "repo-public-bad-url",
-        patch: {
-          sourceType: "compose", composeMode: "repo", publicCloneUrl: "git@h:o/r.git",
-          composeFile: "c.yml", composeService: "web", branch: "main", name: "abc",
-        },
-        valid: false,
-      },
-      {
-        name: "repo-provider-valid",
-        patch: {
-          sourceType: "compose", composeMode: "repo", providerId: "p1", repoFullName: "o/r",
-          cloneUrl: "git@h:o/r.git", composeFile: "c.yml", composeService: "web", branch: "main", name: "abc",
-        },
-        valid: true,
-      },
-      {
-        name: "repo-no-file",
-        patch: {
-          sourceType: "compose", composeMode: "repo", publicCloneUrl: "https://github.com/o/r.git",
-          composeFile: "", composeService: "web", branch: "main", name: "abc",
-        },
-        valid: false,
-      },
-      {
-        name: "repo-no-service",
-        patch: {
-          sourceType: "compose", composeMode: "repo", publicCloneUrl: "https://github.com/o/r.git",
-          composeFile: "c.yml", branch: "main", name: "abc",
-        },
+        patch: { sourceType: "compose", composeContent: `${pasted}${"x".repeat(256 * 1024)}`, composeService: "web", name: "abc" },
         valid: false,
       },
     ];
@@ -241,7 +193,6 @@ describe("wizard compose source", () => {
     Object.assign(w.form, {
       ...reset,
       sourceType: "compose",
-      composeMode: "paste",
       composeContent: pasted,
       composeService: "web",
       branch: "main",
@@ -263,42 +214,11 @@ describe("wizard compose source", () => {
     wrapper.unmount();
   });
 
-  it("builds the repo payload with file and branch", () => {
-    const { w, wrapper } = mountWizard();
-    Object.assign(w.form, {
-      ...reset,
-      sourceType: "compose",
-      composeMode: "repo",
-      publicCloneUrl: "https://github.com/o/r.git",
-      composeFile: "deploy/compose.yml",
-      composeService: "web",
-      branch: "main",
-      name: "compose-demo",
-    });
-    expect(w.sourceValid.value).toBe(true);
-    expect(w.buildPayload()).toMatchObject({
-      provider: "",
-      repo: "https://github.com/o/r.git",
-      clone_url: "https://github.com/o/r.git",
-      source_type: "compose",
-      compose_file: "deploy/compose.yml",
-      compose_service: "web",
-      branch: "main",
-      build_pack: "",
-    });
-    expect(w.reviewSource.value).toBe("Docker Compose · web · deploy/compose.yml");
-    expect("compose_content" in w.buildPayload()).toBe(false);
-    wrapper.unmount();
-  });
-
   it("suggests the web service from pasted text", () => {
     const { w, wrapper } = mountWizard();
     Object.assign(w.form, { ...reset, sourceType: "compose", composeContent: pasted });
     expect(w.composeServiceOptions.value).toEqual([{ label: "web", value: "web" }]);
     expect(w.isCompose.value).toBe(true);
-    expect(w.isComposePaste.value).toBe(true);
-    w.form.composeMode = "repo";
-    expect(w.isComposePaste.value).toBe(false);
     wrapper.unmount();
   });
 
@@ -570,9 +490,6 @@ describe("compose locales", () => {
       const t = i18n.global.t.bind(i18n.global);
       for (const key of [
         "applications.wizard.sourceCompose",
-        "applications.wizard.composeMode",
-        "applications.wizard.composeModePaste",
-        "applications.wizard.composeModeRepo",
         "applications.wizard.composeContent",
         "applications.wizard.composeFile",
         "applications.wizard.composeService",

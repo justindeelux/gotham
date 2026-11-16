@@ -485,10 +485,6 @@ export const MAX_COMPOSE_FILE_PATH = 256;
 
 export const COMPOSE_SERVICE_PATTERN = /^[a-zA-Z0-9][a-zA-Z0-9_.-]{0,62}$/;
 
-export const composeModeSchema = z.enum(["paste", "repo"]);
-
-export type ComposeMode = z.infer<typeof composeModeSchema>;
-
 export const composeContentSchema = z
   .string()
   .trim()

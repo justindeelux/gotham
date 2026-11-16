@@ -38,7 +38,6 @@ import {
   dockerfileContentSchema,
   composeContentSchema,
   composeFileSchema,
-  composeModeSchema,
   composeServiceSchema,
   imageRefSchema,
   isHttpsGitUrl,
@@ -49,7 +48,6 @@ import {
   serverSchema,
   sourceTypeImplemented,
   sourceTypeSchema,
-  type ComposeMode,
   type SourceType,
 } from "@/features/applications/schemas/applications";
 import type { BuildArgRow } from "@/features/applications/utils/buildArgs";
@@ -67,7 +65,6 @@ export interface WizardForm {
   cloneUrl: string;
   dockerfileContent: string;
   buildArgs: BuildArgRow[];
-  composeMode: ComposeMode;
   composeContent: string;
   composeFile: string;
   composeService: string;
@@ -104,34 +101,6 @@ export interface BuildPackChoice extends BuildPackOption {
   missing: string | null;
   installing: boolean;
 }
-
-export const BUILD_PACKS: BuildPackOption[] = [
-  {
-    value: "",
-    label: "Auto-detect (recommended)",
-    hint: "The control plane picks Dockerfile, Railpack, Buildpacks or static from the repo layout.",
-  },
-  {
-    value: "railpack",
-    label: "Railpack",
-    hint: "Language auto-detection without a Dockerfile.",
-  },
-  {
-    value: "dockerfile",
-    label: "Dockerfile",
-    hint: "Uses the Dockerfile in the repo. Full control over the build.",
-  },
-  {
-    value: "buildpacks",
-    label: "Buildpacks",
-    hint: "Heroku-style buildpacks for legacy apps.",
-  },
-  {
-    value: "static",
-    label: "Static",
-    hint: "Builds a static directory and serves it via Traefik. No process runs.",
-  },
-];
 
 export function buildArgsValid(rows: BuildArgRow[]): boolean {
   if (rows.length > 64) {
@@ -227,33 +196,43 @@ export function useCreateAppWizard(
     tr("applications.wizard.steps.deploy"),
   ]);
 
-  const buildPacks = computed<BuildPackOption[]>(() => [
-    {
-      value: "",
-      label: tr("applications.wizard.packAuto"),
-      hint: tr("applications.wizard.packAutoHint"),
-    },
-    {
-      value: "railpack",
-      label: tr("applications.wizard.packRailpack"),
-      hint: tr("applications.wizard.packRailpackHint"),
-    },
-    {
-      value: "dockerfile",
-      label: tr("applications.wizard.packDockerfile"),
-      hint: tr("applications.wizard.packDockerfileHint"),
-    },
-    {
-      value: "buildpacks",
-      label: tr("applications.wizard.packBuildpacks"),
-      hint: tr("applications.wizard.packBuildpacksHint"),
-    },
-    {
-      value: "static",
-      label: tr("applications.wizard.packStatic"),
-      hint: tr("applications.wizard.packStaticHint"),
-    },
-  ]);
+  const buildPacks = computed<BuildPackOption[]>(() => {
+    const packs: BuildPackOption[] = [
+      {
+        value: "",
+        label: tr("applications.wizard.packAuto"),
+        hint: tr("applications.wizard.packAutoHint"),
+      },
+      {
+        value: "railpack",
+        label: tr("applications.wizard.packRailpack"),
+        hint: tr("applications.wizard.packRailpackHint"),
+      },
+      {
+        value: "dockerfile",
+        label: tr("applications.wizard.packDockerfile"),
+        hint: tr("applications.wizard.packDockerfileHint"),
+      },
+      {
+        value: "buildpacks",
+        label: tr("applications.wizard.packBuildpacks"),
+        hint: tr("applications.wizard.packBuildpacksHint"),
+      },
+      {
+        value: "static",
+        label: tr("applications.wizard.packStatic"),
+        hint: tr("applications.wizard.packStaticHint"),
+      },
+    ];
+    if (isRepoSource.value) {
+      packs.push({
+        value: "docker_compose",
+        label: tr("applications.wizard.packDockerCompose"),
+        hint: tr("applications.wizard.packDockerComposeHint"),
+      });
+    }
+    return packs;
+  });
 
   const nodeTools = computed<Map<string, ToolchainTool>>(() => {
     const map = new Map<string, ToolchainTool>();
@@ -341,7 +320,16 @@ export function useCreateAppWizard(
       return true;
     }
     const choice = buildPackChoices.value.find((item) => item.value === form.buildPack);
-    return choice ? choice.selectable : true;
+    if (choice && !choice.selectable) {
+      return false;
+    }
+    if (isComposePack.value) {
+      return (
+        composeFileSchema.safeParse(form.composeFile).success &&
+        composeServiceSchema.safeParse(form.composeService).success
+      );
+    }
+    return true;
   });
 
   const preselectedSourceType = computed<string>(() => {
@@ -370,7 +358,6 @@ export function useCreateAppWizard(
     cloneUrl: "",
     dockerfileContent: "",
     buildArgs: [],
-    composeMode: "paste",
     composeContent: "",
     composeFile: "docker-compose.yml",
     composeService: "",
@@ -415,14 +402,22 @@ export function useCreateAppWizard(
 
   const isGitHubAppFlow = computed<boolean>(() => form.sourceType === "github_app");
 
+  const isRepoSource = computed<boolean>(
+    () =>
+      form.sourceType === "git_public" ||
+      form.sourceType === "git_private" ||
+      form.sourceType === "github_app" ||
+      form.sourceType === "gitlab_app",
+  );
+
   const isDockerfile = computed<boolean>(() => form.sourceType === "dockerfile");
 
   const isImage = computed<boolean>(() => form.sourceType === "image");
 
   const isCompose = computed<boolean>(() => form.sourceType === "compose");
 
-  const isComposePaste = computed<boolean>(
-    () => isCompose.value && form.composeMode === "paste",
+  const isComposePack = computed<boolean>(
+    () => isRepoSource.value && form.buildPack === "docker_compose",
   );
 
   const sourceTypeOptions = computed<Array<{ label: string; value: string; disabled?: boolean }>>(() => [
@@ -440,11 +435,6 @@ export function useCreateAppWizard(
       sourceTypeOptions.value.find((item) => item.value === form.sourceType)?.label ??
       form.sourceType,
   );
-
-  const composeModeOptions = computed<Array<{ label: string; value: string }>>(() => [
-    { label: tr("applications.wizard.composeModePaste"), value: "paste" },
-    { label: tr("applications.wizard.composeModeRepo"), value: "repo" },
-  ]);
 
   const composeServiceOptions = computed<Array<{ label: string; value: string }>>(() =>
     extractComposeServiceNames(form.composeContent).map((name) => ({
@@ -498,13 +488,6 @@ export function useCreateAppWizard(
     );
   });
 
-  function providerSlugOf(providerId: string): string {
-    return (
-      providersStore.providers.find((item) => item.id === providerId)
-        ?.provider ?? ""
-    );
-  }
-
   const sourceValid = computed<boolean>(() => {
     if (!sourceTypeSchema.safeParse(form.sourceType).success) {
       return false;
@@ -552,30 +535,8 @@ export function useCreateAppWizard(
         }
         break;
       case "compose":
-        if (!composeModeSchema.safeParse(form.composeMode).success) {
+        if (!composeContentSchema.safeParse(form.composeContent).success) {
           return false;
-        }
-        if (isComposePaste.value) {
-          if (!composeContentSchema.safeParse(form.composeContent).success) {
-            return false;
-          }
-        } else {
-          if (form.providerId !== "") {
-            if (!providerSchema.safeParse(form.providerId).success) {
-              return false;
-            }
-            if (!repoSchema.safeParse(form.repoFullName).success) {
-              return false;
-            }
-            if (!cloneUrlSchema.safeParse(form.cloneUrl).success) {
-              return false;
-            }
-          } else if (!publicCloneUrlSchema.safeParse(form.publicCloneUrl).success) {
-            return false;
-          }
-          if (!composeFileSchema.safeParse(form.composeFile).success) {
-            return false;
-          }
         }
         if (!composeServiceSchema.safeParse(form.composeService).success) {
           return false;
@@ -599,12 +560,11 @@ export function useCreateAppWizard(
     }
     const branchOk =
       form.sourceType === "dockerfile" ||
+      form.sourceType === "compose" ||
       ((form.sourceType === "git_public" || form.sourceType === "git_private") &&
         form.branch.trim() === "")
         ? true
-        : isComposePaste.value
-          ? true
-          : branchSchema.safeParse(form.branch).success;
+        : branchSchema.safeParse(form.branch).success;
     return branchOk && appNameSchema.safeParse(form.name).success;
   });
 
@@ -686,11 +646,7 @@ export function useCreateAppWizard(
       return form.imageRef.trim();
     }
     if (form.sourceType === "compose") {
-      const detail =
-        form.composeMode === "paste"
-          ? form.composeService.trim()
-          : `${form.composeService.trim()} · ${form.composeFile.trim()}`;
-      return `${tr("applications.wizard.sourceCompose")} · ${detail}`;
+      return `${tr("applications.wizard.sourceCompose")} · ${form.composeService.trim()}`;
     }
     const repo =
       form.sourceType === "git_public"
@@ -754,7 +710,6 @@ export function useCreateAppWizard(
       form.imageRef = "";
       form.registryUsername = "";
       form.registryPassword = "";
-      form.composeMode = "paste";
       form.composeContent = "";
       form.composeFile = "docker-compose.yml";
       form.composeService = "";
@@ -884,23 +839,16 @@ export function useCreateAppWizard(
       };
     }
     if (form.sourceType === "compose") {
-      const repoSource =
-        form.providerId !== ""
-          ? { provider: providerSlugOf(form.providerId), repo: form.repoFullName, cloneUrl: form.cloneUrl }
-          : { provider: "", repo: form.publicCloneUrl.trim(), cloneUrl: form.publicCloneUrl.trim() };
-      const pasted = form.composeMode === "paste";
       return {
         name: form.name.trim(),
         environment_id: form.environmentId,
-        provider: pasted ? "" : repoSource.provider,
-        repo: pasted ? "" : repoSource.repo,
-        clone_url: pasted ? "" : repoSource.cloneUrl,
+        provider: "",
+        repo: "",
+        clone_url: "",
         source_type: form.sourceType,
-        ...(pasted
-          ? { compose_content: form.composeContent }
-          : { compose_file: form.composeFile.trim() }),
+        compose_content: form.composeContent,
         compose_service: form.composeService.trim(),
-        branch: pasted ? "" : form.branch.trim(),
+        branch: "",
         build_pack: "",
         image_ref: "",
         server_id: form.serverId,
@@ -928,6 +876,12 @@ export function useCreateAppWizard(
       build_args: form.sourceType === "dockerfile" ? buildArgsPayload(form.buildArgs) : undefined,
       branch: form.branch.trim(),
       build_pack: form.sourceType === "dockerfile" ? "" : form.buildPack,
+      ...(isComposePack.value
+        ? {
+            compose_file: form.composeFile.trim(),
+            compose_service: form.composeService.trim(),
+          }
+        : {}),
       image_ref: "",
       server_id: form.serverId,
       env: form.env.filter((row) => row.key.trim() !== ""),
@@ -1128,7 +1082,6 @@ export function useCreateAppWizard(
     form.cloneUrl = "";
     form.dockerfileContent = "";
     form.buildArgs = [];
-    form.composeMode = "paste";
     form.composeContent = "";
     form.composeFile = "docker-compose.yml";
     form.composeService = "";
@@ -1181,16 +1134,16 @@ export function useCreateAppWizard(
     sourceTypeOptions,
     sourceTypeLocked,
     lockedSourceLabel,
-    composeModeOptions,
     composeServiceOptions,
     isPublicRepo,
     isPrivateRepo,
     isProviderFlow,
     isGitHubAppFlow,
+    isRepoSource,
     isDockerfile,
     isImage,
     isCompose,
-    isComposePaste,
+    isComposePack,
     repoOptions,
     branchOptions,
     reposTruncated,

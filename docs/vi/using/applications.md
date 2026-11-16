@@ -37,7 +37,7 @@ Lần triển khai đầu tiên bắt đầu mà không có tuyến. Thêm hostn
 | GitHub (đã kết nối) | Một tài khoản GitHub đã kết nối; wizard liệt kê các kho và nhánh của nó. |
 | GitLab (đã kết nối) | Một tài khoản GitLab đã kết nối, với cùng bộ chọn kho và nhánh. |
 | Dockerfile | Văn bản Dockerfile được dán vào. Không clone kho nào. |
-| Docker Compose | Một tài liệu compose được dán, hoặc đường dẫn tệp compose trong một kho. |
+| Docker Compose | Một tài liệu compose được dán. |
 | Container image | Một tham chiếu dựng sẵn từ registry bất kỳ, kèm thông tin đăng nhập tùy chọn. |
 
 **Git riêng.** Ứng dụng nhận khóa triển khai ed25519 riêng, hoặc một token HTTPS
@@ -57,11 +57,15 @@ một chỉ thị `FROM` và bị giới hạn ở 64 KiB. Build arg là tùy ch
 dạng rõ, kể cả trong lịch sử image — hãy để thông tin đăng nhập trong biến môi
 trường hoặc bí mật niêm phong thay vào đó.
 
-**Docker Compose.** Dán tài liệu (tối đa 256 KiB) hoặc trỏ tới một đường dẫn tệp
-trong kho. Chọn dịch vụ web mà tên miền và cổng sẽ định tuyến tới. Triển khai sẽ
-pull các image mà tài liệu khai báo và chạy dự án với `up -d`; tài liệu được lưu
-và áp dụng lại khi quay lui. Dùng biến môi trường cho các giá trị, đừng bao giờ dán
-bí mật vào tài liệu.
+**Docker Compose.** Dán tài liệu (tối đa 256 KiB). Chọn dịch vụ web mà tên miền
+và cổng sẽ định tuyến tới. Triển khai sẽ pull các image mà tài liệu khai báo và
+chạy dự án với `up -d`; tài liệu được lưu và áp dụng lại khi quay lui. Dùng biến
+môi trường cho các giá trị, đừng bao giờ dán bí mật vào tài liệu.
+
+Để triển khai tệp compose nằm trong một kho, chọn nguồn git (công khai, riêng tư,
+GitHub hoặc GitLab) và gói build **Docker Compose**. Ứng dụng clone kho bằng thông
+tin đăng nhập thông thường, đọc đường dẫn tệp compose bạn nhập (mặc định
+`docker-compose.yml`) và định tuyến service bạn chọn.
 
 Compose cũng xuất hiện ở tab **Dịch vụ** của bộ chọn thêm tài nguyên, nơi dự án
 compose được quản lý như một dịch vụ thay vì một ứng dụng. Xem
@@ -74,7 +78,7 @@ thì dùng digest đã ghi cho bản phát hành đó.
 
 ## Build
 
-Có bốn gói build được hỗ trợ; chọn một ở bước **Gói build** hoặc để chế độ tự phát
+Có năm gói build được hỗ trợ; chọn một ở bước **Gói build** hoặc để chế độ tự phát
 hiện:
 
 - **Dockerfile** build Dockerfile trong kho.
@@ -83,14 +87,16 @@ hiện:
 - **Buildpacks** build bằng Cloud Native Buildpacks; nó cần công cụ máy chủ `pack`.
 - **Static** build một thư mục tĩnh và phục vụ nó qua nginx; không tiến trình nào
   chạy.
+- **Docker Compose** triển khai tệp compose trong kho. Chọn đường dẫn tệp và
+  service mà tên miền và cổng sẽ định tuyến tới.
 
 Khi không chọn gói nào, việc phát hiện thử Dockerfile, rồi Railpack, rồi
 Buildpacks, rồi static. Công cụ máy chủ bắt buộc bị thiếu sẽ được báo lúc triển
 khai; cài các công cụ từ [Kho ứng dụng](/vi/operating/app-store).
 
-Nguồn Dockerfile được dán luôn build từ văn bản đã lưu. Nguồn compose và container
-image không có gói build: compose chạy các dịch vụ trong tài liệu, và nguồn image
-pull tham chiếu.
+Nguồn Dockerfile được dán luôn build từ văn bản đã lưu. Nguồn Docker Compose được
+dán không có gói build: nó chạy trực tiếp các dịch vụ trong tài liệu. Nguồn
+container image không có gói build: lần triển khai pull tham chiếu.
 
 ## Pipeline triển khai
 

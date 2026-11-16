@@ -1,6 +1,16 @@
 <script setup lang="ts">
 import { useEventListener } from "@vueuse/core";
-import { NAlert, NButton, NRadio, NRadioGroup, NSpace, NText, NTooltip } from "naive-ui";
+import {
+  NAlert,
+  NButton,
+  NFormItem,
+  NInput,
+  NRadio,
+  NRadioGroup,
+  NSpace,
+  NText,
+  NTooltip,
+} from "naive-ui";
 import { onMounted, watch } from "vue";
 import { useI18n } from "vue-i18n";
 
@@ -19,7 +29,7 @@ useEventListener(window, "focus", () => wizard.subscribeNodeTools());
 <template>
   <NSpace vertical :size="12">
     <NText strong>{{ t("applications.wizard.buildPackTitle") }}</NText>
-    <template v-if="wizard.isComposePaste.value">
+    <template v-if="wizard.isCompose.value">
       <NText depth="3">
         {{ t("applications.wizard.composeNoBuildPack") }}
       </NText>
@@ -90,6 +100,24 @@ useEventListener(window, "focus", () => wizard.subscribeNodeTools());
           </div>
         </NSpace>
       </NRadioGroup>
+      <div v-if="wizard.isComposePack.value" class="app-compose-pack-fields">
+        <NFormItem :label="t('applications.wizard.composeFile')">
+          <NInput
+            v-model:value="form.composeFile"
+            class="app-compose-pack-mono"
+            placeholder="docker-compose.yml"
+          />
+          <span class="app-compose-pack-hint">{{ t("applications.wizard.composeFileHint") }}</span>
+        </NFormItem>
+        <NFormItem :label="t('applications.wizard.composeService')">
+          <NInput
+            v-model:value="form.composeService"
+            class="app-compose-pack-mono"
+            :placeholder="t('applications.wizard.composeServiceInputPlaceholder')"
+          />
+          <span class="app-compose-pack-hint">{{ t("applications.wizard.composeServiceHint") }}</span>
+        </NFormItem>
+      </div>
     </template>
   </NSpace>
 </template>
@@ -107,5 +135,21 @@ useEventListener(window, "focus", () => wizard.subscribeNodeTools());
   color: var(--warn);
   border-bottom: 1px dotted var(--warn);
   cursor: help;
+}
+
+.app-compose-pack-fields {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-3);
+  padding-left: var(--space-4);
+}
+
+.app-compose-pack-mono {
+  font-family: var(--font-mono);
+}
+
+.app-compose-pack-hint {
+  font-size: var(--text-xs);
+  color: var(--meta);
 }
 </style>

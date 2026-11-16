@@ -108,7 +108,7 @@ describe("wizard gates match recorded outcomes", () => {
     const w = wiz!;
     const reset = {
       sourceType: "git_public", providerId: "", publicCloneUrl: "", privateCloneUrl: "", privateAuth: "ssh", httpsUsername: "", httpsToken: "", repoFullName: "", cloneUrl: "", branch: "main", name: "",
-      composeMode: "paste", composeContent: "", composeFile: "docker-compose.yml", composeService: "",
+      composeContent: "", composeFile: "docker-compose.yml", composeService: "",
       buildPack: "", serverId: "", env: [], storage: [],
     };
     const sourceCases: Array<{ name: string; patch: Record<string, unknown>; sourceValid: boolean }> = [

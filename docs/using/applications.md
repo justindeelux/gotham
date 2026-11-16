@@ -37,7 +37,7 @@ The first deploy starts with no route. Add hostnames afterwards on the
 | GitHub (connected) | A connected GitHub account; the wizard lists its repositories and branches. |
 | GitLab (connected) | A connected GitLab account, with the same repository and branch picker. |
 | Dockerfile | Pasted Dockerfile text. No repository is cloned. |
-| Docker Compose | A pasted compose document, or a compose file path inside a repository. |
+| Docker Compose | A pasted compose document. |
 | Container image | A prebuilt reference from any registry, with optional credentials. |
 
 **Private git.** The application gets its own ed25519 deploy key, or an HTTPS
@@ -57,11 +57,16 @@ instruction and is limited to 64 KiB. Build args are optional and stored in
 plaintext, including in image history — keep credentials in environment
 variables or sealed secrets instead.
 
-**Docker Compose.** Paste the document (up to 256 KiB) or point at a file path
-inside a repository. Choose the web service that domains and ports route to.
-Deploys pull the images the document declares and run the project with
-`up -d`; the document is stored and re-applied by a rollback. Use environment
-variables for values, never secrets pasted into the document.
+**Docker Compose.** Paste the document (up to 256 KiB). Choose the web service
+that domains and ports route to. Deploys pull the images the document declares
+and run the project with `up -d`; the document is stored and re-applied by a
+rollback. Use environment variables for values, never secrets pasted into the
+document.
+
+To deploy a compose file that lives in a repository, pick a git source (public,
+private, GitHub or GitLab) and the **Docker Compose** build pack. The app clones
+the repository with its usual credentials, reads the compose file path you give
+(default `docker-compose.yml`) and routes the service you name.
 
 Compose also appears on the **Service** tab of the add-resource picker, where
 the compose project is managed as a service instead of an application. See
@@ -74,7 +79,7 @@ uses the digest recorded for that release.
 
 ## Builds
 
-Four build packs are supported; pick one in the **Build pack** step or leave it
+Five build packs are supported; pick one in the **Build pack** step or leave it
 on auto-detect:
 
 - **Dockerfile** builds the Dockerfile in the repository.
@@ -84,14 +89,16 @@ on auto-detect:
   tool.
 - **Static** builds a static directory and serves it through nginx; no process
   runs.
+- **Docker Compose** deploys the compose file in the repository. Choose the file
+  path and the service that domains and ports route to.
 
 With no pack chosen, detection tries Dockerfile, then Railpack, then
 Buildpacks, then static. A missing required host tool is reported at deploy
 time; install the tools from [App store](/operating/app-store).
 
-A pasted Dockerfile source always builds from its saved text. Compose and
-container-image sources have no build pack: compose runs the document's
-services, and an image source pulls the reference.
+A pasted Dockerfile source always builds from its saved text. A pasted Docker
+Compose source has no build pack: it runs the document's services directly.
+Container-image sources have no build pack: the deploy pulls the reference.
 
 ## Deploy pipeline
 

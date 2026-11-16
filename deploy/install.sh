@@ -2055,11 +2055,11 @@ if [ -n "${DOMAIN}" ]; then
         fi
         _admin_xtrace_on
         if [ "${_domain_rc}" -eq 0 ]; then
-            # Re-arm the persisted trial timer in the long-running service.
+            # Restart so the running service picks up the committed panel URL.
             run systemctl restart "${BINARY_NAME}.service"
-            PANEL_URL="http://${DOMAIN}"
-            DOMAIN_CONFIRM_NOTE="  Confirm the domain in General settings within 2 minutes to start HTTPS."
-            log "Open ${PANEL_URL} and confirm the domain in General settings within 2 minutes to start HTTPS."
+            PANEL_URL="https://${DOMAIN}"
+            DOMAIN_CONFIRM_NOTE="  HTTPS starts once the certificate for the domain is issued."
+            log "Panel URL: ${PANEL_URL} (HTTPS starts once the certificate is issued)"
         else
             log "WARNING: domain setup failed; continuing on the host HTTP address. Set the domain in General settings later."
         fi
@@ -2075,7 +2075,13 @@ HOST_IP="$(hostname -I 2>/dev/null | awk '{print $1}')"
 [ -n "${HOST_IP}" ] || HOST_IP="127.0.0.1"
 
 _admin_xtrace_off
-PANEL_URL="${PANEL_URL:-http://${HOST_IP}:8000}"
+DIRECT_URL="http://${HOST_IP}:8000"
+PANEL_URL="${PANEL_URL:-${DIRECT_URL}}"
+PANEL_ALT_NOTE=""
+if [ "${PANEL_URL}" != "${DIRECT_URL}" ]; then
+    PANEL_ALT_NOTE="  Direct:   ${DIRECT_URL} (HTTP, no TLS)
+"
+fi
 ADMIN_LOGIN_LINE="Login:    ${PANEL_URL}"
 case "${ADMIN_STATUS}" in
     created)
@@ -2131,7 +2137,7 @@ cat <<EOF
 Gotham ${VERSION} is installed.
 
   Web UI:   ${PANEL_URL}
-${DOMAIN_CONFIRM_NOTE}
+${PANEL_ALT_NOTE}${DOMAIN_CONFIRM_NOTE}
   Status:   systemctl status gotham
   Logs:     journalctl -u gotham -f
   File manager on this node: ${LOCAL_AGENT_FILE_MANAGER_SUMMARY}

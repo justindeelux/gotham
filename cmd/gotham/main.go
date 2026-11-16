@@ -320,7 +320,7 @@ Usage:
                             Replace a password and revoke its sessions
   gotham migrate [verb]     Run database migrations (up, down, status; default up)
   gotham instance set-url <url>
-                            Try a panel URL through the instance service
+                            Set the panel URL and start its certificate
   gotham ca init            Create the gRPC mTLS certificate authority
   gotham update [command]   Check, apply or roll back a self-update
   gotham version            Print the version

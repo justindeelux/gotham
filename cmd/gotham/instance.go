@@ -89,8 +89,8 @@ func instanceSetURL(raw string) error {
 		return err
 	}
 	fmt.Printf("Panel URL: %s\n", state.General.ControlPlaneURL.Value)
-	if p := state.PendingControlPlaneURL; p != nil {
-		fmt.Printf("Open http://%s and confirm the domain in General settings before %s; HTTPS starts after confirmation.\n", mustPanelHost(raw), p.Deadline.Format(time.RFC3339))
+	if strings.HasPrefix(raw, "https://") {
+		fmt.Println("HTTPS starts once the certificate is issued.")
 	}
 	return nil
 }
@@ -124,11 +124,17 @@ func setInstanceURL(ctx context.Context, svc *instance.Service, raw string) (ins
 	if err != nil {
 		return instance.State{}, err
 	}
-	if p := state.PendingControlPlaneURL; p != nil && !p.Synced {
-		if _, err := svc.RevertControlPlaneURL(ctx, uuid.Nil); err != nil {
-			return instance.State{}, fmt.Errorf("proxy sync failed; rollback: %w", err)
+	if p := state.PendingControlPlaneURL; p != nil {
+		if !p.Synced {
+			if _, err := svc.RevertControlPlaneURL(ctx, uuid.Nil); err != nil {
+				return instance.State{}, fmt.Errorf("proxy sync failed; rollback: %w", err)
+			}
+			return instance.State{}, instance.ErrDomainNotSynced
 		}
-		return instance.State{}, instance.ErrDomainNotSynced
+		// This CLI runs as root on the host, so the operator is its own
+		// recovery path; an install has no browser session that could confirm
+		// the trial within its window.
+		return svc.ConfirmControlPlaneURL(ctx, uuid.Nil, mustPanelHost(raw))
 	}
 	return state, nil
 }
@@ -148,6 +154,9 @@ func checkPanelURL(ctx context.Context, raw string) error {
 	}
 	if len(ips) == 0 {
 		return fmt.Errorf("panel domain has no DNS addresses")
+	}
+	if proxied := cloudflareProxyAddrs(ips); len(proxied) > 0 {
+		return fmt.Errorf("panel domain %s resolves to Cloudflare proxy addresses (%s); set the DNS record to DNS-only (grey cloud) so ports 80/443 reach this host", u.Hostname(), strings.Join(proxied, ", "))
 	}
 	fmt.Fprintln(os.Stderr, "Ensure the domain's DNS addresses route to this host; public addresses behind NAT need not appear on a local interface.")
 	for _, port := range []string{"80", "443"} {

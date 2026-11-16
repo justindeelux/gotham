@@ -99,6 +99,9 @@ func normalizeSource(raw string) (string, error) {
 		return "", nil
 	}
 	if addr, err := netip.ParseAddr(raw); err == nil {
+		if addr.Zone() != "" {
+			return "", fmt.Errorf("source must be an IP address or CIDR")
+		}
 		return addr.String(), nil
 	}
 	if prefix, err := netip.ParsePrefix(raw); err == nil {

@@ -23,7 +23,7 @@ import { useI18n } from "vue-i18n";
 import type { FirewallRule } from "../api/firewall";
 import { useFirewall } from "../composables/useFirewall";
 import { firewallRuleFormSchema } from "../schemas/firewall";
-import { firewallDetailText, firewallErrorText } from "../utils/errors";
+import { firewallDetailText, firewallErrorDetail, firewallErrorText } from "../utils/errors";
 import { firstIssueMessage, ruleFrom } from "@/shared/validation/naiveAdapter";
 
 const props = defineProps<{ serverId: string }>();
@@ -58,8 +58,20 @@ const form = reactive<FormState>(blankForm());
 const formOpen = ref(false);
 const editingId = ref<string | null>(null);
 const formError = ref("");
+const formErrorDetail = ref("");
 const submitting = ref(false);
 const toggleError = ref("");
+const toggleErrorDetail = ref("");
+
+// Inline so the same tokens style the detail line inside a toast, which
+// renders outside this component's scoped styles.
+const detailStyle = {
+  display: "block",
+  marginTop: "var(--space-1)",
+  color: "var(--muted)",
+  fontSize: "var(--text-xs)",
+  overflowWrap: "anywhere",
+} as const;
 
 const formRules = {
   action: ruleFrom(firewallRuleFormSchema.shape.action, { required: true }),
@@ -263,6 +275,7 @@ function openCreate(): void {
   Object.assign(form, blankForm());
   editingId.value = null;
   formError.value = "";
+  formErrorDetail.value = "";
   formOpen.value = true;
 }
 
@@ -278,16 +291,19 @@ function openEdit(rule: FirewallRule): void {
   });
   editingId.value = rule.id;
   formError.value = "";
+  formErrorDetail.value = "";
   formOpen.value = true;
 }
 
 async function handleToggle(value: boolean): Promise<void> {
   toggleError.value = "";
+  toggleErrorDetail.value = "";
   try {
     await firewall.toggle(value);
     message.success(value ? t("firewall.toasts.enabled") : t("firewall.toasts.disabled"));
   } catch (error) {
     toggleError.value = firewallErrorText(error, t, t("firewall.errors.toggle"));
+    toggleErrorDetail.value = firewallErrorDetail(error, t);
   }
 }
 
@@ -295,9 +311,11 @@ async function handleSubmit(): Promise<void> {
   const parsed = firewallRuleFormSchema.safeParse(form);
   if (!parsed.success) {
     formError.value = firstIssueMessage(parsed.error);
+    formErrorDetail.value = "";
     return;
   }
   formError.value = "";
+  formErrorDetail.value = "";
   submitting.value = true;
   try {
     await firewall.save(parsed.data, editingId.value ?? undefined);
@@ -305,9 +323,22 @@ async function handleSubmit(): Promise<void> {
     formOpen.value = false;
   } catch (error) {
     formError.value = firewallErrorText(error, t, t("firewall.errors.save"));
+    formErrorDetail.value = firewallErrorDetail(error, t);
   } finally {
     submitting.value = false;
   }
+}
+
+function errorToast(
+  text: string,
+  detail: string,
+): string | (() => ReturnType<typeof h>) {
+  if (detail === "") {
+    return text;
+  }
+  const line = t("firewall.errors.details", { message: detail });
+  return () =>
+    h("div", [h("div", text), h("div", { style: detailStyle }, line)]);
 }
 
 async function removeRule(rule: FirewallRule): Promise<void> {
@@ -315,7 +346,12 @@ async function removeRule(rule: FirewallRule): Promise<void> {
     await firewall.remove(rule.id);
     message.success(t("firewall.toasts.deleted"));
   } catch (error) {
-    message.error(firewallErrorText(error, t, t("firewall.errors.delete")));
+    message.error(
+      errorToast(
+        firewallErrorText(error, t, t("firewall.errors.delete")),
+        firewallErrorDetail(error, t),
+      ),
+    );
   }
 }
 
@@ -328,7 +364,12 @@ onMounted(() => {
   <NSpin :show="firewall.loading.value">
     <NAlert v-if="firewall.loadError.value" type="error" :show-icon="true">
       <NSpace vertical :size="8">
-        <span>{{ firewall.loadError.value || t("firewall.errors.load") }}</span>
+        <div>
+          <span>{{ firewall.loadError.value || t("firewall.errors.load") }}</span>
+          <span v-if="firewall.loadErrorDetail.value" :style="detailStyle">
+            {{ t("firewall.errors.details", { message: firewall.loadErrorDetail.value }) }}
+          </span>
+        </div>
         <NButton size="small" @click="firewall.load">
           {{ t("firewall.status.reload") }}
         </NButton>
@@ -383,7 +424,10 @@ onMounted(() => {
             {{ t("firewall.status.turnOnHint") }}
           </NAlert>
           <NAlert v-if="toggleError" type="error" :show-icon="true">
-            {{ toggleError }}
+            <span>{{ toggleError }}</span>
+            <span v-if="toggleErrorDetail" :style="detailStyle">
+              {{ t("firewall.errors.details", { message: toggleErrorDetail }) }}
+            </span>
           </NAlert>
           <p class="firewall-description">{{ t("firewall.description") }}</p>
         </NSpace>
@@ -430,7 +474,10 @@ onMounted(() => {
     >
       <NSpace vertical :size="14">
         <NAlert v-if="formError" type="error" :show-icon="true">
-          {{ formError }}
+          <span>{{ formError }}</span>
+          <span v-if="formErrorDetail" :style="detailStyle">
+            {{ t("firewall.errors.details", { message: formErrorDetail }) }}
+          </span>
         </NAlert>
 
         <div class="firewall-form-grid">

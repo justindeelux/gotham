@@ -37,6 +37,20 @@ export function firewallErrorText(
   return errorText(error) || fallback;
 }
 
+// Codes whose translation is generic: the server message carries the real
+// reason and is shown next to the translated text.
+const detailCodes = ["helper_failed"];
+
+// firewallErrorDetail returns that reason, or "" when the translated text
+// already says everything (including an empty or identical message).
+export function firewallErrorDetail(error: unknown, t: Translate): string {
+  if (!detailCodes.includes(errorCode(error))) {
+    return "";
+  }
+  const detail = errorText(error).trim();
+  return detail === "" || detail === firewallErrorText(error, t, "") ? "" : detail;
+}
+
 // firewallDetailText translates why a node's firewall cannot be managed.
 export function firewallDetailText(
   status: FirewallStatus,

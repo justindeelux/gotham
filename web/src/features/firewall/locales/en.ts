@@ -103,6 +103,7 @@ const en = {
     control_plane: "the control plane",
   },
   errors: {
+    details: "Details: {message}",
     load: "Could not load the firewall.",
     toggle: "Could not change the firewall state.",
     save: "Could not save the rule.",

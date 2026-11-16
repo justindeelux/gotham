@@ -105,6 +105,7 @@ const vi: FirewallMessages = {
     control_plane: "control plane",
   },
   errors: {
+    details: "Chi tiết: {message}",
     load: "Không tải được tường lửa.",
     toggle: "Không thể đổi trạng thái tường lửa.",
     save: "Không thể lưu quy tắc.",

@@ -1,0 +1,14 @@
+Status: active
+
+     To                         Action      From
+     --                         ------      ----
+[ 1] 22/tcp                     ALLOW IN    Anywhere
+[ 2] 8000:8100/tcp              ALLOW IN    10.0.0.0/8
+[ 3] 5432/udp                   DENY IN     Anywhere
+[ 4] 53                         ALLOW OUT   Anywhere
+[ 5] OpenSSH                    ALLOW IN    Anywhere
+[ 6] 22/tcp (v6)                ALLOW IN    Anywhere (v6)
+[ 7] 8000:8100/tcp (v6)         ALLOW IN    10.0.0.0/8 (v6)
+[ 8] 53 (v6)                    ALLOW OUT   Anywhere (v6)
+[ 9] 22/tcp                     ALLOW IN    192.0.2.10
+[10] 443/tcp                    ALLOW IN    Anywhere on eth0

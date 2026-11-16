@@ -8,7 +8,9 @@
 #
 #   status | apply-network | confirm-network | revert-network | apply-system |
 #   cleanup-status | cleanup-journal | cleanup-package-cache |
-#   apply-ssh | confirm-ssh | revert-ssh | apply-agent-root
+#   apply-ssh | confirm-ssh | revert-ssh | apply-agent-root |
+#   firewall-status | firewall-list | firewall-add | firewall-delete |
+#   firewall-enable | firewall-disable
 #
 # Values arrive on stdin as key=value lines. Only whitelisted keys are accepted
 # and every value is re-validated here with strict anchored patterns before it
@@ -105,7 +107,8 @@ VERB="$1"
 # transient unit. stdin, stdout and the exit code pass through --pipe --wait.
 case "${VERB}" in
     apply-network | revert-network | apply-system | cleanup-journal | cleanup-package-cache | \
-    apply-ssh | confirm-ssh | revert-ssh | apply-agent-root) WRITE=1 ;;
+    apply-ssh | confirm-ssh | revert-ssh | apply-agent-root | \
+    firewall-add | firewall-delete | firewall-enable | firewall-disable) WRITE=1 ;;
     *) WRITE=0 ;;
 esac
 case "${SELF_RUN}" in /*) SELF_OK=1 ;; *) SELF_OK=0 ;; esac
@@ -596,6 +599,175 @@ firewall_close() {
     return 0
 }
 
+# ---- firewall --------------------------------------------------------------
+# The agent owns the rule model and parses the backend's output; this helper
+# only runs fixed commands. Every value is re-validated here before it reaches
+# an argv, and no value is ever passed to a shell for evaluation.
+fw_backend() {
+    if command -v ufw >/dev/null 2>&1 && ufw status 2>/dev/null | grep -q '^Status: active'; then
+        echo ufw; return
+    fi
+    if command -v firewall-cmd >/dev/null 2>&1 && active firewalld; then
+        echo firewalld; return
+    fi
+    if command -v ufw >/dev/null 2>&1; then echo ufw; return; fi
+    if command -v firewall-cmd >/dev/null 2>&1; then echo firewalld; return; fi
+    if command -v nft >/dev/null 2>&1; then echo nftables; return; fi
+    if command -v iptables >/dev/null 2>&1; then echo iptables; return; fi
+    echo none
+}
+
+fw_valid_port() {
+    [ -z "$1" ] && return 0
+    port_re='^[0-9]{1,5}$'
+    printf '%s\n' "$1" | grep -Eq "${port_re}" && { [ "$1" -ge 1 ] && [ "$1" -le 65535 ] && return 0; }
+    printf '%s\n' "$1" | grep -Eq '^[0-9]{1,5}-[0-9]{1,5}$' || return 1
+    from="${1%%-*}"; to="${1#*-}"
+    [ "${from}" -ge 1 ] && [ "${to}" -le 65535 ] && [ "${from}" -le "${to}" ]
+}
+
+fw_valid_source() {
+    [ -z "$1" ] && return 0
+    is_v4 "$1" || is_v4cidr "$1" || is_v6 "$1" || is_v6cidr "$1"
+}
+
+fw_valid_comment() {
+    [ -z "$1" ] && return 0
+    case "$1" in -*) return 1 ;; esac
+    [ "${#1}" -le 200 ] || return 1
+    printf '%s\n' "$1" | grep -Eq '^[A-Za-z0-9 ._(),:/+@-]*$'
+}
+
+fw_read_rule() {
+    K_action=""; K_direction=""; K_protocol=""; K_port=""; K_source=""; K_comment=""
+    read_kv "action direction protocol port source comment"
+    case "${K_action}" in allow | deny) ;; *) die "invalid action" 2 ;; esac
+    case "${K_direction}" in in | out) ;; *) die "invalid direction" 2 ;; esac
+    case "${K_protocol}" in tcp | udp | any) ;; *) die "invalid protocol" 2 ;; esac
+    fw_valid_port "${K_port}" || die "invalid port" 2
+    fw_valid_source "${K_source}" || die "invalid source" 2
+    fw_valid_comment "${K_comment}" || die "invalid comment" 2
+    [ "${K_direction}" = "out" ] && [ -n "${K_source}" ] \
+        && die "outbound rules cannot have a source address" 2
+}
+
+# fw_ufw runs one ufw rule command. The field order follows ufw(8):
+# allow|deny [in|out] [proto P] [from SRC] [to ADDRESS [port P]] [comment C].
+# A deny is inserted at position 1, because ufw is first-match and an allow
+# appended earlier would otherwise shadow it.
+fw_ufw() {
+    action="$1"; direction="$2"; protocol="$3"; port="$4"; source="$5"; comment="$6"
+    set -- "${action}" "${direction}"
+    [ "${action}" = "deny" ] && set -- insert 1 "$@"
+    [ "${protocol}" != "any" ] && set -- "$@" proto "${protocol}"
+    if [ "${direction}" = "in" ] && [ -n "${source}" ]; then
+        set -- "$@" from "${source}"
+    fi
+    if [ -n "${port}" ]; then
+        port="$(printf '%s' "${port}" | tr '-' ':')"
+        if [ "${direction}" = "out" ] && [ -n "${source}" ]; then
+            set -- "$@" to "${source}" port "${port}"
+        else
+            set -- "$@" to any port "${port}"
+        fi
+    elif [ "${direction}" = "out" ] && [ -n "${source}" ]; then
+        set -- "$@" to "${source}"
+    fi
+    [ -n "${comment}" ] && set -- "$@" comment "${comment}"
+    if [ "${action}" = "deny" ]; then
+        # ufw can refuse insert 1 on an empty rule set; a plain append still
+        # makes the deny effective.
+        if ! run ufw "$@"; then
+            shift 2
+            run ufw "$@" || return 1
+        fi
+        return 0
+    fi
+    run ufw "$@"
+}
+
+fw_ufw_delete() {
+    action="$1"; direction="$2"; protocol="$3"; port="$4"; source="$5"
+    set -- "${action}" "${direction}"
+    [ "${protocol}" != "any" ] && set -- "$@" proto "${protocol}"
+    if [ "${direction}" = "in" ] && [ -n "${source}" ]; then
+        set -- "$@" from "${source}"
+    fi
+    if [ -n "${port}" ]; then
+        port="$(printf '%s' "${port}" | tr '-' ':')"
+        if [ "${direction}" = "out" ] && [ -n "${source}" ]; then
+            set -- "$@" to "${source}" port "${port}"
+        else
+            set -- "$@" to any port "${port}"
+        fi
+    elif [ "${direction}" = "out" ] && [ -n "${source}" ]; then
+        set -- "$@" to "${source}"
+    fi
+    run ufw --force delete "$@"
+}
+
+fw_firewalld_rule() {
+    action="$1"; direction="$2"; protocol="$3"; port="$4"; source="$5"
+    [ "${direction}" = "in" ] || die "firewalld rules from Gotham are inbound only" 3
+    [ -n "${port}" ] || [ -n "${source}" ] || die "a firewalld rule needs a port or a source address" 2
+    FW_RULE="rule"
+    if [ -n "${source}" ]; then
+        family="ipv4"
+        case "${source}" in *:*) family="ipv6" ;; esac
+        FW_RULE="rule family=\"${family}\" source address=\"${source}\""
+    fi
+    if [ -n "${port}" ]; then
+        [ "${protocol}" = "any" ] && die "choose tcp or udp for a firewalld port rule" 2
+        FW_RULE="${FW_RULE} port port=\"${port}\" protocol=\"${protocol}\""
+    fi
+    case "${action}" in
+        allow) FW_RULE="${FW_RULE} accept" ;;
+        deny) FW_RULE="${FW_RULE} reject" ;;
+    esac
+}
+
+fw_ssh_ports() {
+    if ! ssh_available; then
+        echo 0
+        return
+    fi
+    ports="$(
+        {
+            [ -f "${SSHD_DROPIN}" ] && awk 'tolower($1) == "port" { print $2 }' "${SSHD_DROPIN}"
+            ssh_effective | awk 'tolower($1) == "port" { print $2 }'
+        } 2>/dev/null \
+            | awk '$1 ~ /^[0-9]+$/ && $1 >= 1 && $1 <= 65535 { print $1 }' \
+            | sort -n | uniq | tr '\n' ',' | sed 's/,$//'
+    )"
+    [ -n "${ports}" ] || ports=22
+    echo "${ports}"
+}
+
+fw_list_status() {
+    printf 'backend=%s\n--\n' "$1"
+    case "$1" in
+        ufw)
+            ufw status numbered 2>/dev/null || die "ufw could not report its rules"
+            printf -- '--\n'
+            ufw show added 2>/dev/null || true
+            ;;
+        firewalld)
+            if active firewalld; then
+                firewall-cmd --permanent --list-rich-rules 2>/dev/null \
+                    || die "firewall-cmd could not report its rules"
+            elif command -v firewall-offline-cmd >/dev/null 2>&1; then
+                # The daemon is stopped; read the same permanent config offline.
+                firewall-offline-cmd --list-rich-rules 2>/dev/null \
+                    || die "firewall-offline-cmd could not report its rules"
+            else
+                die "firewalld is stopped and firewall-offline-cmd is unavailable" 3
+            fi
+            printf -- '--\n'
+            ;;
+        *) printf -- '--\n' ;;
+    esac
+}
+
 ssh_snapshot() {
     rm -rf "${SSH_BACKUP}" || die "cannot reset the SSH backup"
     mkdir -p "${SSH_BACKUP}" || die "cannot prepare the SSH backup"
@@ -1027,6 +1199,112 @@ revert-ssh)
     firewall_close "${new_port}" "${fw}"
     ssh_stop_revert
     rm -f "${SSH_PENDING}"; rm -rf "${SSH_BACKUP}"
+    ;;
+
+
+firewall-status)
+    read_kv ""
+    backend="$(fw_backend)"
+    enabled=false; manageable=false
+    case "${backend}" in
+        ufw)
+            manageable=true
+            ufw status 2>/dev/null | grep -q '^Status: active' && enabled=true
+            ;;
+        firewalld)
+            manageable=true
+            active firewalld && enabled=true
+            ;;
+    esac
+    printf 'backend=%s\nenabled=%s\nmanageable=%s\nssh_ports=%s\n' \
+        "${backend}" "${enabled}" "${manageable}" "$(fw_ssh_ports)"
+    ;;
+
+firewall-list)
+    read_kv ""
+    fw_list_status "$(fw_backend)"
+    ;;
+
+firewall-add)
+    fw_read_rule
+    backend="$(fw_backend)"
+    case "${backend}" in
+        ufw)
+            fw_ufw "${K_action}" "${K_direction}" "${K_protocol}" "${K_port}" "${K_source}" "${K_comment}" \
+                || die "ufw could not add the rule"
+            ;;
+        firewalld)
+            FW_RULE=""
+            fw_firewalld_rule "${K_action}" "${K_direction}" "${K_protocol}" "${K_port}" "${K_source}"
+            if active firewalld; then
+                run firewall-cmd --permanent --add-rich-rule="${FW_RULE}" >/dev/null \
+                    || die "firewall-cmd could not add the rule"
+                run firewall-cmd --reload >/dev/null || die "firewall-cmd could not reload"
+            elif command -v firewall-offline-cmd >/dev/null 2>&1; then
+                run firewall-offline-cmd --add-rich-rule="${FW_RULE}" >/dev/null \
+                    || die "firewall-offline-cmd could not add the rule"
+            else
+                die "firewalld is stopped and firewall-offline-cmd is unavailable" 3
+            fi
+            ;;
+        *)
+            die "editing firewall rules is not supported on ${backend}" 3
+            ;;
+    esac
+    ;;
+
+firewall-delete)
+    K_raw=""
+    read_kv "action direction protocol port source comment raw"
+    backend="$(fw_backend)"
+    case "${backend}" in
+        ufw)
+            case "${K_action}" in allow | deny) ;; *) die "invalid action" 2 ;; esac
+            case "${K_direction}" in in | out) ;; *) die "invalid direction" 2 ;; esac
+            case "${K_protocol}" in tcp | udp | any) ;; *) die "invalid protocol" 2 ;; esac
+            fw_valid_port "${K_port}" || die "invalid port" 2
+            fw_valid_source "${K_source}" || die "invalid source" 2
+            fw_ufw_delete "${K_action}" "${K_direction}" "${K_protocol}" "${K_port}" "${K_source}" \
+                || die "ufw could not delete the rule"
+            ;;
+        firewalld)
+            case "${K_raw}" in "rule "*) ;; *) die "invalid rule" 2 ;; esac
+            printf '%s\n' "${K_raw}" | grep -Eq '^[A-Za-z0-9 ._:=",/-]+$' || die "invalid rule" 2
+            if active firewalld; then
+                run firewall-cmd --permanent --remove-rich-rule="${K_raw}" >/dev/null \
+                    || die "firewall-cmd could not delete the rule"
+                run firewall-cmd --reload >/dev/null || die "firewall-cmd could not reload"
+            elif command -v firewall-offline-cmd >/dev/null 2>&1; then
+                run firewall-offline-cmd --remove-rich-rule="${K_raw}" >/dev/null \
+                    || die "firewall-offline-cmd could not delete the rule"
+            else
+                die "firewalld is stopped and firewall-offline-cmd is unavailable" 3
+            fi
+            ;;
+        *)
+            die "editing firewall rules is not supported on ${backend}" 3
+            ;;
+    esac
+    ;;
+
+firewall-enable)
+    read_kv ""
+    backend="$(fw_backend)"
+    case "${backend}" in
+        ufw) run ufw --force enable || die "ufw could not be enabled" ;;
+        firewalld) run systemctl enable --now firewalld || die "firewalld could not be enabled" ;;
+        *) die "enabling the firewall is not supported on ${backend}" 3 ;;
+    esac
+    ;;
+
+firewall-disable)
+    read_kv ""
+    backend="$(fw_backend)"
+    case "${backend}" in
+        ufw) run ufw disable || die "ufw could not be disabled" ;;
+        firewalld) run systemctl disable --now firewalld || die "firewalld could not be disabled" ;;
+        *) die "disabling the firewall is not supported on ${backend}" 3 ;;
+    esac
     ;;
 
 apply-agent-root)

@@ -1,0 +1,4 @@
+backend=ufw
+enabled=true
+manageable=true
+ssh_ports=2222

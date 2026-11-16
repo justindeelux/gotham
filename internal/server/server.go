@@ -29,6 +29,7 @@ import (
 	"github.com/justindeelux/gotham/internal/deploy"
 	"github.com/justindeelux/gotham/internal/domainwatch"
 	"github.com/justindeelux/gotham/internal/files"
+	"github.com/justindeelux/gotham/internal/firewall"
 	"github.com/justindeelux/gotham/internal/githubapp"
 	"github.com/justindeelux/gotham/internal/incidents"
 	"github.com/justindeelux/gotham/internal/instance"
@@ -311,6 +312,9 @@ func (s *Server) routes() (http.Handler, error) {
 		if s.servers != nil {
 			s.mountServerRoutes(api)
 			s.mountResourceHistoryRoutes(api)
+			if svc := s.firewallService(); svc != nil {
+				firewall.Mount(api, s.platformOnlyAuth, UserIDFromContext, svc)
+			}
 		}
 
 		if s.toolchain == nil {

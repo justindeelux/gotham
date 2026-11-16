@@ -1,0 +1,5 @@
+Added user rules (see 'ufw status' for running firewall):
+ufw allow 22/tcp comment 'SSH access'
+ufw allow from 10.0.0.0/8 to any port 8000:8100 proto tcp
+ufw deny 5432/udp comment 'no database'
+ufw allow out 53

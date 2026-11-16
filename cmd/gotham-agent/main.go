@@ -13,6 +13,7 @@ import (
 	"time"
 
 	"github.com/justindeelux/gotham/agent"
+	agentfirewall "github.com/justindeelux/gotham/agent/firewall"
 	agenthost "github.com/justindeelux/gotham/agent/host"
 	agentv1 "github.com/justindeelux/gotham/proto/agent/v1"
 	"google.golang.org/grpc/credentials"
@@ -181,6 +182,11 @@ func runServe() int {
 				agent.WithProxyService(agent.NewProxyServer(agent.ProxyServerConfig{Logger: log})),
 				agent.WithToolService(agent.NewToolServer(agent.WithToolUse(toolUse))),
 				agent.WithHostService(agenthost.NewServer()),
+				agent.WithFirewallService(agentfirewall.NewServer(agentfirewall.Config{
+					StatePath:  filepath.Join(cfg.CertDir, "firewall-state.json"),
+					ListenAddr: cfg.ListenAddr,
+					Logger:     log,
+				})),
 				agent.WithComposeService(agent.NewComposeServer(agent.ComposeServerConfig{
 					Root:       cfg.ComposeRoot,
 					DockerHost: cfg.DockerSock,

@@ -121,7 +121,21 @@ Opening a node shows tabs:
 | **Terminal** | Owner only: a host shell tab for this node. |
 | **Metrics** | The node's time-series charts. |
 | **Proxy & Traefik** | The Traefik routers on the node. |
+| **Firewall** | Install a missing firewall and manage the node's ufw or firewalld rules. |
 | **Node settings** | A read-only summary of the node's identity. |
+
+## Firewall
+
+The **Firewall** tab reads the node's own backend. Gotham manages ufw and
+firewalld; a node that runs nftables or iptables is reported but not edited.
+
+A node with no supported firewall shows **Install firewall**. The button
+installs ufw on Debian/Ubuntu and firewalld on Fedora/RHEL, then turns it on
+after opening SSH and the ports Gotham itself uses — the agent's port and, on
+the local node, the control-plane port — so the install cannot lock you out. A
+distribution outside those families is refused with a translated error and
+nothing is changed. Installing again is safe: a node that already has a backend
+is left untouched.
 
 ## Metrics
 

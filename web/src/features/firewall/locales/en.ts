@@ -18,6 +18,12 @@ const en = {
     unsupportedTitle: "This node's firewall cannot be managed here",
     unsupportedBody:
       "Gotham manages ufw and firewalld. A node without either shows its state below.",
+    install: "Install firewall",
+    installing: "Installing the firewall…",
+    installTitle: "Install a firewall?",
+    installBody:
+      "Gotham installs ufw on Debian/Ubuntu or firewalld on Fedora/RHEL, keeps SSH and Gotham's own ports open, then turns it on.",
+    installConfirm: "Install",
     reload: "Reload",
   },
   rules: {
@@ -94,6 +100,7 @@ const en = {
   toasts: {
     enabled: "Firewall turned on",
     disabled: "Firewall turned off",
+    installed: "Firewall installed",
     saved: "Rule saved",
     deleted: "Rule deleted",
   },
@@ -106,9 +113,14 @@ const en = {
     details: "Details: {message}",
     load: "Could not load the firewall.",
     toggle: "Could not change the firewall state.",
+    install: "Could not install a firewall.",
     save: "Could not save the rule.",
     delete: "Could not delete the rule.",
     no_firewall: "No supported firewall is installed on this node.",
+    install_unsupported:
+      "This distribution is not supported. Install ufw or firewalld on the node yourself.",
+    install_failed:
+      "The firewall could not be installed on this node. Nothing was changed; try again.",
     unsupported_backend:
       "This node uses {backend}. Gotham can detect it but cannot edit its rules yet; manage them on the node.",
     helper_missing:

@@ -114,7 +114,20 @@ Mở một node sẽ thấy các tab:
 | **Terminal** | Chỉ chủ sở hữu: tab shell trên máy chủ cho node này. |
 | **Chỉ số** | Biểu đồ chuỗi thời gian của node. |
 | **Proxy và Traefik** | Các bộ định tuyến Traefik trên node. |
+| **Tường lửa** | Cài tường lửa còn thiếu và quản lý quy tắc ufw hoặc firewalld của nút. |
 | **Cài đặt nút** | Bản tóm tắt chỉ đọc về định danh của node. |
+
+## Tường lửa
+
+Tab **Tường lửa** đọc backend của chính nút. Gotham quản lý ufw và firewalld;
+một nút chạy nftables hoặc iptables được báo cáo nhưng không sửa được.
+
+Một nút không có tường lửa được hỗ trợ sẽ hiện **Cài tường lửa**. Nút này cài ufw
+trên Debian/Ubuntu và firewalld trên Fedora/RHEL, rồi bật nó sau khi mở SSH và
+các cổng Gotham dùng — cổng agent và, trên nút cục bộ, cổng control plane — nên
+việc cài không thể khóa bạn ra ngoài. Một bản phân phối ngoài hai họ đó bị từ
+chối bằng lỗi đã dịch và không có gì bị thay đổi. Cài lại vẫn an toàn: nút đã có
+backend sẽ được giữ nguyên.
 
 ## Chỉ số
 

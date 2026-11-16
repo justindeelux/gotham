@@ -39,7 +39,7 @@ export function firewallErrorText(
 
 // Codes whose translation is generic: the server message carries the real
 // reason and is shown next to the translated text.
-const detailCodes = ["helper_failed"];
+const detailCodes = ["helper_failed", "install_failed"];
 
 // firewallErrorDetail returns that reason, or "" when the translated text
 // already says everything (including an empty or identical message).

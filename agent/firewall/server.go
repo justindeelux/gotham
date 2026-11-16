@@ -2,6 +2,7 @@ package firewall
 
 import (
 	"context"
+	"errors"
 	"log/slog"
 	"net"
 	"sort"
@@ -329,6 +330,77 @@ func (s *Server) SetEnabled(ctx context.Context, req *agentv1.FirewallEnabledReq
 	rules = markProtected(rules, ports)
 	s.log.Info("firewall: enabled state changed", "enabled", req.GetEnabled(), "backend", st.Backend.String())
 	return &agentv1.FirewallState{Status: s.statusProto(st, req.GetControlPlanePort()), Rules: protoRules(rules)}, nil
+}
+
+// Install installs the distribution's firewall when the node has none,
+// keeps the operator's access rules and turns it on. A node that already has a
+// backend is left unchanged.
+func (s *Server) Install(ctx context.Context, req *agentv1.FirewallInstallRequest) (*agentv1.FirewallState, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	st, err := s.probe(ctx)
+	if err != nil {
+		return nil, refuse(st)
+	}
+	if st.Backend != agentv1.FirewallBackend_FIREWALL_BACKEND_NONE {
+		return s.installState(ctx, st, req.GetControlPlanePort())
+	}
+	if err := s.run(ctx, "firewall-install", ""); err != nil {
+		return nil, installError(err)
+	}
+	st, err = s.probe(ctx)
+	if err != nil {
+		return nil, refuse(st)
+	}
+	if st.Backend == agentv1.FirewallBackend_FIREWALL_BACKEND_NONE || !st.Manageable {
+		return nil, fail(codes.FailedPrecondition, detail{code: codeInstallFailed},
+			"the firewall could not be installed on this node")
+	}
+	if err := s.enable(ctx, st, protectedPorts(st, req.GetControlPlanePort())); err != nil {
+		return nil, err
+	}
+	st, err = s.probe(ctx)
+	if err != nil {
+		return nil, refuse(st)
+	}
+	s.log.Info("firewall: installed", "backend", st.Backend.String())
+	return s.installState(ctx, st, req.GetControlPlanePort())
+}
+
+// installState reports a node after an install without changing its rules.
+func (s *Server) installState(ctx context.Context, st backendStatus, controlPlanePort uint32) (*agentv1.FirewallState, error) {
+	rules := []rule{}
+	if st.Manageable {
+		var err error
+		rules, err = s.list(ctx, st)
+		if err != nil {
+			return nil, err
+		}
+		rules = markProtected(rules, protectedPorts(st, controlPlanePort))
+	}
+	return &agentv1.FirewallState{
+		Status: s.statusProto(st, controlPlanePort),
+		Rules:  protoRules(rules),
+	}, nil
+}
+
+// installError maps the helper's refusals: exit 3 is a distribution with no
+// supported package, every other failure is an install that did not complete.
+func installError(err error) error {
+	if helperExitCode(err) == 3 {
+		return fail(codes.FailedPrecondition, detail{code: codeInstallUnsupported},
+			"no supported firewall can be installed on this node")
+	}
+	return fail(codes.FailedPrecondition, detail{code: codeInstallFailed}, "%s", err)
+}
+
+func helperExitCode(err error) int {
+	var helper *helperError
+	if errors.As(err, &helper) {
+		return helper.code
+	}
+	return 0
 }
 
 // enable keeps the operator's access rules before turning the backend on.

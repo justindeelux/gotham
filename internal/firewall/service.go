@@ -18,6 +18,8 @@ import (
 const (
 	readTimeout  = 30 * time.Second
 	writeTimeout = 90 * time.Second
+	// installTimeout covers the node's package manager and the rule setup.
+	installTimeout = 5 * time.Minute
 )
 
 type AgentClient interface {
@@ -107,6 +109,28 @@ func (s *Service) SetEnabled(ctx context.Context, actor, serverID uuid.UUID, ena
 	}
 	state := stateFromProto(response)
 	s.audit(actor, serverID, action, "", "ok", nil, "enabled", state.Status.Enabled)
+	return state, nil
+}
+
+// Install installs the node's firewall when it has none and turns it on with
+// the access rules in place. A node that already has a backend is unchanged.
+func (s *Service) Install(ctx context.Context, actor, serverID uuid.UUID) (State, error) {
+	client, closeConn, err := s.client(ctx, serverID)
+	if err != nil {
+		return State{}, err
+	}
+	defer closeConn()
+	ctx, cancel := context.WithTimeout(ctx, installTimeout)
+	defer cancel()
+	response, err := client.Install(ctx, &agentv1.FirewallInstallRequest{
+		ControlPlanePort: s.controlPlanePortFor(ctx, serverID),
+	})
+	if err != nil {
+		s.audit(actor, serverID, "firewall.install", "", "failed", err)
+		return State{}, nodeError(err)
+	}
+	state := stateFromProto(response)
+	s.audit(actor, serverID, "firewall.install", "", "ok", nil, "backend", state.Status.Backend)
 	return state, nil
 }
 

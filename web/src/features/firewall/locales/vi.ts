@@ -20,6 +20,12 @@ const vi: FirewallMessages = {
     unsupportedTitle: "Không thể quản lý tường lửa của nút này tại đây",
     unsupportedBody:
       "Gotham quản lý ufw và firewalld. Nút không có cả hai sẽ hiện trạng thái bên dưới.",
+    install: "Cài tường lửa",
+    installing: "Đang cài tường lửa…",
+    installTitle: "Cài một tường lửa?",
+    installBody:
+      "Gotham cài ufw trên Debian/Ubuntu hoặc firewalld trên Fedora/RHEL, giữ các cổng SSH và cổng của Gotham luôn mở, rồi bật nó.",
+    installConfirm: "Cài",
     reload: "Tải lại",
   },
   rules: {
@@ -96,6 +102,7 @@ const vi: FirewallMessages = {
   toasts: {
     enabled: "Đã bật tường lửa",
     disabled: "Đã tắt tường lửa",
+    installed: "Đã cài tường lửa",
     saved: "Đã lưu quy tắc",
     deleted: "Đã xóa quy tắc",
   },
@@ -108,9 +115,14 @@ const vi: FirewallMessages = {
     details: "Chi tiết: {message}",
     load: "Không tải được tường lửa.",
     toggle: "Không thể đổi trạng thái tường lửa.",
+    install: "Không thể cài tường lửa.",
     save: "Không thể lưu quy tắc.",
     delete: "Không thể xóa quy tắc.",
     no_firewall: "Nút này không cài tường lửa nào được hỗ trợ.",
+    install_unsupported:
+      "Bản phân phối này không được hỗ trợ. Hãy tự cài ufw hoặc firewalld trên nút.",
+    install_failed:
+      "Không thể cài tường lửa trên nút này. Không có gì bị thay đổi; hãy thử lại.",
     unsupported_backend:
       "Nút này dùng {backend}. Gotham nhận biết được nhưng chưa sửa được quy tắc; hãy quản lý chúng trên nút.",
     helper_missing:

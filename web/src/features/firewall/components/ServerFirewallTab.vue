@@ -62,6 +62,13 @@ const formErrorDetail = ref("");
 const submitting = ref(false);
 const toggleError = ref("");
 const toggleErrorDetail = ref("");
+const installOpen = ref(false);
+const installError = ref("");
+const installErrorDetail = ref("");
+
+const canInstall = computed(
+  () => firewall.status.value?.detail_code === "no_firewall",
+);
 
 // Inline so the same tokens style the detail line inside a toast, which
 // renders outside this component's scoped styles.
@@ -307,6 +314,19 @@ async function handleToggle(value: boolean): Promise<void> {
   }
 }
 
+async function handleInstall(): Promise<void> {
+  installError.value = "";
+  installErrorDetail.value = "";
+  try {
+    await firewall.install();
+    message.success(t("firewall.toasts.installed"));
+    installOpen.value = false;
+  } catch (error) {
+    installError.value = firewallErrorText(error, t, t("firewall.errors.install"));
+    installErrorDetail.value = firewallErrorDetail(error, t);
+  }
+}
+
 async function handleSubmit(): Promise<void> {
   const parsed = firewallRuleFormSchema.safeParse(form);
   if (!parsed.success) {
@@ -382,9 +402,27 @@ onMounted(() => {
     >
       <NEmpty :description="firewallDetailText(firewall.status.value, t)">
         <template #extra>
-          <NButton size="small" @click="firewall.load">
-            {{ t("firewall.status.reload") }}
-          </NButton>
+          <NSpace vertical align="center" :size="8">
+            <NButton
+              v-if="canInstall"
+              size="small"
+              type="primary"
+              :loading="firewall.installing.value"
+              @click="installOpen = true"
+            >
+              {{ t("firewall.status.install") }}
+            </NButton>
+            <NButton
+              size="small"
+              :disabled="firewall.installing.value"
+              @click="firewall.load"
+            >
+              {{ t("firewall.status.reload") }}
+            </NButton>
+            <span v-if="firewall.installing.value" class="muted">
+              {{ t("firewall.status.installing") }}
+            </span>
+          </NSpace>
         </template>
       </NEmpty>
     </NCard>
@@ -572,6 +610,44 @@ onMounted(() => {
           </NButton>
           <NButton type="primary" :loading="submitting" @click="handleSubmit">
             {{ t("firewall.form.save") }}
+          </NButton>
+        </NSpace>
+      </template>
+    </NModal>
+
+    <NModal
+      :show="installOpen"
+      preset="card"
+      class="app-modal standard-width"
+      :title="t('firewall.status.installTitle')"
+      :mask-closable="false"
+      :close-on-esc="!firewall.installing.value"
+      @update:show="(value: boolean) => { if (!firewall.installing.value) installOpen = value; }"
+    >
+      <NSpace vertical :size="14">
+        <p class="firewall-description">{{ t("firewall.status.installBody") }}</p>
+        <NAlert v-if="installError" type="error" :show-icon="true">
+          <span>{{ installError }}</span>
+          <span v-if="installErrorDetail" :style="detailStyle">
+            {{ t("firewall.errors.details", { message: installErrorDetail }) }}
+          </span>
+        </NAlert>
+      </NSpace>
+
+      <template #footer>
+        <NSpace justify="end" :size="8">
+          <NButton
+            :disabled="firewall.installing.value"
+            @click="installOpen = false"
+          >
+            {{ t("firewall.form.cancel") }}
+          </NButton>
+          <NButton
+            type="primary"
+            :loading="firewall.installing.value"
+            @click="handleInstall"
+          >
+            {{ t("firewall.status.installConfirm") }}
           </NButton>
         </NSpace>
       </template>

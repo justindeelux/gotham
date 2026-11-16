@@ -649,7 +649,7 @@ func TestHostctlReexecsWriteVerbsOnly(t *testing.T) {
 	for _, verb := range []string{
 		"apply-system", "apply-network", "revert-network", "cleanup-journal", "cleanup-package-cache",
 		"apply-ssh", "confirm-ssh", "revert-ssh", "apply-agent-root",
-		"firewall-add", "firewall-delete", "firewall-enable", "firewall-disable",
+		"firewall-add", "firewall-delete", "firewall-enable", "firewall-disable", "firewall-install",
 	} {
 		if err := os.Remove(record); err != nil && !os.IsNotExist(err) {
 			t.Fatal(err)
@@ -664,9 +664,13 @@ func TestHostctlReexecsWriteVerbsOnly(t *testing.T) {
 		if err != nil {
 			t.Fatalf("%s did not use systemd-run: %v", verb, err)
 		}
+		runtimeMax := "120"
+		if verb == "firewall-install" {
+			runtimeMax = "300"
+		}
 		for _, want := range []string{
 			"--unit=gotham-hostctl-" + verb + "-",
-			"--property=RuntimeMaxSec=120",
+			"--property=RuntimeMaxSec=" + runtimeMax,
 			"--setenv=GOTHAM_HOSTCTL_INNER=1",
 			self,
 		} {

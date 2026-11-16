@@ -17,7 +17,9 @@
 # Configuration (root-owned, mode 0644): /etc/gotham/updater.conf
 #   GOTHAM_BINARY=/var/lib/gotham/bin/gotham
 #   GOTHAM_SERVICE=gotham
-#   GOTHAM_HEALTH=http://127.0.0.1:8000/healthz
+#   GOTHAM_HEALTH=http://127.0.0.1:9074/healthz
+#     Used only when the service environment file does not set
+#     GOTHAM_SERVER_PORT; that port wins so the check follows the configured one.
 #   GOTHAM_TIMEOUT=30
 #   GOTHAM_STATUS=/var/lib/gotham-updater/update.status   (root-owned dir)
 #   GOTHAM_PENDING=/var/lib/gotham/update.pending
@@ -39,7 +41,8 @@ set -u
 if [ -n "${SUDO_USER:-}" ] || [ -n "${SUDO_UID:-}" ]; then
     for variable in GOTHAM_UPDATER_CONF GOTHAM_BINARY GOTHAM_SERVICE GOTHAM_HEALTH \
         GOTHAM_TIMEOUT GOTHAM_STATUS GOTHAM_PENDING GOTHAM_LOCK GOTHAM_GRACE \
-        GOTHAM_HOST_BOOTSTRAP_ROOT GOTHAM_RELEASE_BASE GOTHAM_STAGING; do
+        GOTHAM_HOST_BOOTSTRAP_ROOT GOTHAM_RELEASE_BASE GOTHAM_STAGING \
+        GOTHAM_SERVICE_ENV; do
         unset "${variable}" 2>/dev/null || true
     done
 fi
@@ -80,7 +83,6 @@ fi
 BINARY="${GOTHAM_BINARY:-/var/lib/gotham/bin/gotham}"
 BACKUP="${BINARY}.old"
 SERVICE="${GOTHAM_SERVICE:-gotham}"
-HEALTH="${GOTHAM_HEALTH:-http://127.0.0.1:8000/healthz}"
 TIMEOUT="${GOTHAM_TIMEOUT:-30}"
 STATUS="${GOTHAM_STATUS:-/var/lib/gotham-updater/update.status}"
 STATUS_DIR=$(dirname "${STATUS}")
@@ -110,6 +112,44 @@ STAGING_ROOT="${GOTHAM_STAGING:-${STATUS_DIR}}"
 # directory for the duration of a run (acquire_lock); the trap removes it, and
 # stale pins from hard-killed runs are swept when the next run starts.
 LOCK_PIN=""
+
+# The control plane port decides the health URL, so the check follows the port
+# the install actually serves on (the default moved from 8000 to 9074). The
+# service environment file is its source of truth; GOTHAM_HEALTH stays the
+# fallback for a host configured only through gotham.yaml.
+SERVICE_ENV="${GOTHAM_SERVICE_ENV:-${ROOT}/etc/gotham/gotham.env}"
+PANEL_PORT=""
+if [ "${IS_AGENT}" -eq 0 ] && [ -r "${SERVICE_ENV}" ]; then
+    PANEL_PORT=$(sed -n 's/^[[:space:]]*GOTHAM_SERVER_PORT=//p' "${SERVICE_ENV}" 2>/dev/null | head -n1 | tr -d "\"'[:space:]")
+    case "${PANEL_PORT}" in
+        '' | *[!0-9]*) PANEL_PORT="" ;;
+    esac
+fi
+HEALTH="${GOTHAM_HEALTH:-http://127.0.0.1:9074/healthz}"
+if [ -n "${PANEL_PORT}" ]; then
+    HEALTH="http://127.0.0.1:${PANEL_PORT}/healthz"
+fi
+
+# pin_legacy_port keeps an install from before the 9074 default on the port it
+# already serves on. The old installer never wrote GOTHAM_SERVER_PORT, so those
+# hosts listen on 8000; without the pin the new binary would move to 9074 and
+# every URL registered against 8000 (OAuth callbacks, webhooks, bookmarks)
+# would stop working. A gotham.yaml may set server.port itself: leave it alone.
+pin_legacy_port() {
+    [ "${IS_AGENT}" -eq 0 ] || return 0
+    [ -z "${PANEL_PORT}" ] || return 0
+    [ -f "${SERVICE_ENV}" ] || return 0
+    if [ -e "${ROOT}/var/lib/gotham/gotham.yaml" ]; then
+        return 0
+    fi
+    if ! printf '\n# Pinned by gotham-update: this host was installed before the default\n# panel port moved to 9074, so it keeps the port its URLs point at.\nGOTHAM_SERVER_PORT=8000\n' >>"${SERVICE_ENV}"; then
+        log "could not pin the existing port in ${SERVICE_ENV}; the health check uses ${HEALTH}"
+        return 0
+    fi
+    PANEL_PORT=8000
+    HEALTH="http://127.0.0.1:8000/healthz"
+    log "pinned the existing panel port 8000 in ${SERVICE_ENV}"
+}
 
 log() {
     echo "gotham-update: $*" >&2
@@ -525,6 +565,7 @@ if [ ! -f "${BINARY}" ]; then
 fi
 
 log "waiting ${GRACE}s before restarting ${SERVICE}"
+pin_legacy_port
 refresh_host_helpers
 sleep "${GRACE}"
 

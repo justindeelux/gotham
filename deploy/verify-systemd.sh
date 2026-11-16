@@ -83,6 +83,7 @@ skip() { echo "SKIP: $*"; }
 run_wrapper() {
     env -u SUDO_USER -u SUDO_UID -u SUDO_GID \
         GOTHAM_UPDATER_CONF="${CONF}" \
+        GOTHAM_SERVICE_ENV="${SCRATCH}/service.env" \
         sh "${SCRIPT_DIR}/gotham-update.sh"
 }
 
@@ -329,7 +330,8 @@ else
         # A wrapper copy whose default conf is the scratch chain conf. The sudo
         # guard ignores GOTHAM_* overrides, so the default path must be scratch;
         # no host file is touched.
-        sed "s#/etc/gotham/updater.conf#${SCRATCH}/chain.conf#g" \
+        sed -e "s#/etc/gotham/updater.conf#${SCRATCH}/chain.conf#g" \
+            -e "s#/etc/gotham/gotham.env#${SCRATCH}/chain.env#g" \
             "${SCRIPT_DIR}/gotham-update.sh" >"${SCRATCH}/gotham-update"
         chmod 0755 "${SCRATCH}/gotham-update"
         chown root:root "${SCRATCH}/gotham-update"

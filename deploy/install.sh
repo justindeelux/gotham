@@ -483,6 +483,26 @@ fi
 env_prev() {
     printf '%s\n' "${ENV_PREV}" | sed -n "s/^$1=//p" | head -n1
 }
+# The panel port this install serves on. A host installed before the default
+# moved to 9074 has no GOTHAM_SERVER_PORT and listens on 8000, so that port is
+# pinned instead: its bookmarks, webhooks and OAuth callback URLs point there.
+# A fresh install uses the current default.
+DEFAULT_SERVER_PORT=9074
+LEGACY_SERVER_PORT=8000
+SERVER_PORT="$(env_prev GOTHAM_SERVER_PORT)"
+if [ -z "${SERVER_PORT}" ]; then
+    if [ -n "${ENV_PREV}" ]; then
+        SERVER_PORT="${LEGACY_SERVER_PORT}"
+    else
+        SERVER_PORT="${DEFAULT_SERVER_PORT}"
+    fi
+fi
+case "${SERVER_PORT}" in
+    '' | *[!0-9]*) die "GOTHAM_SERVER_PORT in ${ENV_FILE} must be a port number, got '${SERVER_PORT}'" ;;
+esac
+if [ "${SERVER_PORT}" -lt 1 ] || [ "${SERVER_PORT}" -gt 65535 ]; then
+    die "GOTHAM_SERVER_PORT in ${ENV_FILE} must be between 1 and 65535, got ${SERVER_PORT}"
+fi
 # LOCAL_DSN means the local PostgreSQL/Redis services are this installer's to
 # install and keep running. FRESH_LOCAL_DB means no DSN exists yet, so the
 # role and database are created with a new random password. A stored DSN is
@@ -1363,6 +1383,7 @@ if [ "${DRY_RUN}" -eq 0 ]; then
             echo "# Gotham control-plane environment. Read by gotham.service (EnvironmentFile)."
             echo "GOTHAM_DATABASE_DSN=${DSN}"
             echo "GOTHAM_REDIS_ADDR=${REDIS_ADDR}"
+            echo "GOTHAM_SERVER_PORT=${SERVER_PORT}"
             echo "GOTHAM_CA_DIR=${CA_DIR}"
             echo "GOTHAM_SECRET_KEY=${SECRET_KEY}"
             echo "GOTHAM_AUTH_JWT_PRIVATE_KEY_PATH=${JWT_KEY}"
@@ -1380,7 +1401,7 @@ if [ "${DRY_RUN}" -eq 0 ]; then
             filter_status=0
             preserved=$(printf '%s\n' "${ENV_PREV}" \
                 | grep -v -E \
-                    -e '^[[:space:]]*(GOTHAM_DATABASE_DSN|GOTHAM_REDIS_ADDR|GOTHAM_CA_DIR|GOTHAM_SECRET_KEY|GOTHAM_AUTH_JWT_PRIVATE_KEY_PATH|GOTHAM_AUTH_JWT_PUBLIC_KEY_PATH)=' \
+                    -e '^[[:space:]]*(GOTHAM_DATABASE_DSN|GOTHAM_REDIS_ADDR|GOTHAM_SERVER_PORT|GOTHAM_CA_DIR|GOTHAM_SECRET_KEY|GOTHAM_AUTH_JWT_PRIVATE_KEY_PATH|GOTHAM_AUTH_JWT_PUBLIC_KEY_PATH)=' \
                     -e '^# Gotham control-plane environment\. Read by gotham\.service') \
                 || filter_status=$?
             case "${filter_status}" in
@@ -2046,8 +2067,10 @@ if [ -n "${DOMAIN}" ]; then
         # these calls; keep xtrace off so `sh -x` never logs it.
         _admin_xtrace_off
         if GOTHAM_DATABASE_DSN="${DSN}" GOTHAM_REDIS_ADDR="${REDIS_ADDR}" \
+            GOTHAM_SERVER_PORT="${SERVER_PORT}" \
             "${DOMAIN_BIN}" instance wait-localhost && \
             GOTHAM_DATABASE_DSN="${DSN}" GOTHAM_REDIS_ADDR="${REDIS_ADDR}" \
+            GOTHAM_SERVER_PORT="${SERVER_PORT}" \
             "${DOMAIN_BIN}" instance set-url "https://${DOMAIN}"; then
             _domain_rc=0
         else
@@ -2075,7 +2098,7 @@ HOST_IP="$(hostname -I 2>/dev/null | awk '{print $1}')"
 [ -n "${HOST_IP}" ] || HOST_IP="127.0.0.1"
 
 _admin_xtrace_off
-DIRECT_URL="http://${HOST_IP}:8000"
+DIRECT_URL="http://${HOST_IP}:${SERVER_PORT}"
 PANEL_URL="${PANEL_URL:-${DIRECT_URL}}"
 PANEL_ALT_NOTE=""
 if [ "${PANEL_URL}" != "${DIRECT_URL}" ]; then

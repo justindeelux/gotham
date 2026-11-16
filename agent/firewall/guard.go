@@ -72,12 +72,20 @@ func lostAccess(before, after []rule, ports []accessPort) error {
 
 func portAllowed(rules []rule, port uint32) bool {
 	for _, r := range rules {
-		if !r.Enabled || r.ReadOnly || r.Direction != agentv1.FirewallDirection_FIREWALL_DIRECTION_IN ||
+		if !r.Enabled || r.Direction != agentv1.FirewallDirection_FIREWALL_DIRECTION_IN ||
 			r.Action != agentv1.FirewallAction_FIREWALL_ACTION_ALLOW ||
-			!portCovers(r.Port, port) || !protocolCovers(r.Protocol) {
+			!protocolCovers(r.Protocol) {
 			continue
 		}
-		return true
+		// A read-only row with no parsed port (an app profile or a
+		// multiple-port rule) does not prove this port is open. One with a
+		// known port (an interface or LIMIT row) does.
+		if r.ReadOnly && r.Port == "" {
+			continue
+		}
+		if portCovers(r.Port, port) {
+			return true
+		}
 	}
 	return false
 }

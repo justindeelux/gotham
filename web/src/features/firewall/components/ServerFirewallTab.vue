@@ -110,11 +110,14 @@ const accessHint = computed<string>(() => {
   if (!status) {
     return "";
   }
-  return t("firewall.status.accessHint", {
+  const ports = {
     ssh: accessPortText(status.ssh_ports),
     agent: accessPortText(status.agent_port),
     controlPlane: accessPortText(status.control_plane_port),
-  });
+  };
+  return status.control_plane_port > 0
+    ? t("firewall.status.accessHint", ports)
+    : t("firewall.status.accessHintRemote", ports);
 });
 
 const columns = computed<DataTableColumns<FirewallRule>>(() => [

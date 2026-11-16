@@ -11,6 +11,8 @@ const en = {
     disabled: "Firewall is off",
     accessHint:
       "SSH ({ssh}), the node agent ({agent}) and the control plane ({controlPlane}) stay allowed.",
+    accessHintRemote:
+      "SSH ({ssh}) and the node agent ({agent}) stay allowed. The control plane runs on another node.",
     turnOnHint:
       "Turning the firewall on keeps the access rules Gotham needs, so you cannot lock yourself out.",
     unsupportedTitle: "This node's firewall cannot be managed here",

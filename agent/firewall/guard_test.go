@@ -161,3 +161,11 @@ func TestDenyBlocksIncludesAReadOnlyDeny(t *testing.T) {
 		t.Fatalf("denyBlocks = %v", err)
 	}
 }
+
+func TestPortAllowedCountsAReadOnlyRowWithAKnownPort(t *testing.T) {
+	interfaceAllow := allowRule("22", "")
+	interfaceAllow.ReadOnly = true
+	if !portAllowed([]rule{interfaceAllow}, 22) {
+		t.Fatal("a read-only interface row for port 22 still covers port 22")
+	}
+}

@@ -11,6 +11,7 @@ import { useAuthStore } from "@/features/auth";
 import NotificationBell from "@/features/notifications/components/NotificationBell.vue";
 import ServerRail from "@/features/servers/components/ServerRail.vue";
 import AccountMenu from "./AccountMenu.vue";
+import { useAppVersion } from "./useAppVersion";
 import { useMobileNav } from "./useMobileNav";
 
 const { t } = useI18n();
@@ -32,7 +33,7 @@ watch(
   },
 );
 
-const cpPort = 9074;
+const { controlPlanePort } = useAppVersion();
 
 const envLabel = computed<string>(() => {
   const host = window.location.hostname;
@@ -76,7 +77,12 @@ const envLabel = computed<string>(() => {
       <GothamIcon name="shield" class="status-icon" />
       {{ envLabel }}
     </span>
-    <span class="channel-chip" :title="t('shell.cpPortTitle')">CP :{{ cpPort }}</span>
+    <span
+      v-if="controlPlanePort !== null"
+      class="channel-chip"
+      :title="t('shell.cpPortTitle')"
+      >CP :{{ controlPlanePort }}</span
+    >
     <div class="topbar-right">
       <NotificationBell v-if="authStore.isAuthenticated" />
       <LanguageSelect />

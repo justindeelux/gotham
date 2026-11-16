@@ -24,7 +24,8 @@ function mountStep(options: StepOptions = {}) {
   const form = reactive({ buildPack: "", serverId: "srv-1" });
   const state = {
     form,
-    isComposePaste: computed(() => false),
+    isCompose: computed(() => false),
+    isComposePack: computed(() => false),
     isDockerfile: computed(() => false),
     nodeToolsLoading: computed(() => options.loading ?? false),
     nodeToolsError: computed(() => options.error ?? false),

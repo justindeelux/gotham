@@ -60,6 +60,7 @@ web/src/features/__i18n_probe__/
 /opencode.json
 /opencode.jsonc
 /.mcp.env
+/.serena/
 
 /internal/server/webdist/*
 !/internal/server/webdist/index.html

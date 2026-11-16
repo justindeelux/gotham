@@ -14,4 +14,3 @@ You MUST read `.workflow/t3-workflows.md` first if it exists.
    - ask the worker to stop its related containers (if any)
    - close the sessions (worker, reviewer)
    - remove the worktree and the branch (local and GitHub)
-   - re-index: `node .gitnexus/run.cjs analyze --index-only`

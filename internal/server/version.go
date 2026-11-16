@@ -8,6 +8,9 @@ import (
 
 type versionResponse struct {
 	Version string `json:"version"`
+	// Port is the configured control-plane HTTP port; the SPA shows it in the
+	// topbar chip, so it must follow server.port instead of a constant.
+	Port int `json:"port,omitempty"`
 }
 
 func (s *Server) mountVersionRoutes(api chi.Router) {
@@ -28,5 +31,8 @@ func (s *Server) currentVersion() string {
 
 func (s *Server) handleGetVersion(w http.ResponseWriter, _ *http.Request) {
 	w.Header().Set("Cache-Control", "no-store")
-	writeJSON(w, http.StatusOK, versionResponse{Version: s.currentVersion()})
+	writeJSON(w, http.StatusOK, versionResponse{
+		Version: s.currentVersion(),
+		Port:    s.cfg.Snapshot().Server.Port,
+	})
 }

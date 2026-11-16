@@ -1,12 +1,26 @@
 import { http } from "@/shared/api/http";
 
-interface VersionResponse {
+export interface InstanceInfo {
   version: string;
+  port?: number;
+}
+
+let instanceInfo: Promise<InstanceInfo> | null = null;
+
+// The sidebar and the topbar both read this endpoint; one request is enough.
+export function getInstanceInfo(): Promise<InstanceInfo> {
+  instanceInfo ??= http.get<InstanceInfo>("/version").then(
+    (response) => response.data,
+    (error: unknown) => {
+      instanceInfo = null;
+      throw error;
+    },
+  );
+  return instanceInfo;
 }
 
 export async function getVersion(): Promise<string> {
-  const response = await http.get<VersionResponse>("/version");
-  return response.data.version;
+  return (await getInstanceInfo()).version;
 }
 
 export function formatVersionTag(version: string | null | undefined): string | null {

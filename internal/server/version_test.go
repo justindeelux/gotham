@@ -22,6 +22,13 @@ func newVersionTestServer(t *testing.T, version string) *Server {
 	})
 }
 
+func newVersionTestServerOnPort(t *testing.T, port int) *Server {
+	t.Helper()
+	s := newVersionTestServer(t, "1.2.3")
+	s.cfg.Server.Port = port
+	return s
+}
+
 func decodeVersion(t *testing.T, rec *httptest.ResponseRecorder) versionResponse {
 	t.Helper()
 	var body versionResponse
@@ -43,6 +50,20 @@ func TestGetVersionRoute(t *testing.T) {
 	}
 	if cc := rec.Header().Get("Cache-Control"); cc != "no-store" {
 		t.Errorf("Cache-Control = %q, want %q", cc, "no-store")
+	}
+}
+
+func TestGetVersionRouteReportsConfiguredPort(t *testing.T) {
+	for _, port := range []int{9074, 8000, 9100} {
+		s := newVersionTestServerOnPort(t, port)
+
+		rec := doRequest(t, s, http.MethodGet, "/api/v1/version", "", authHeader)
+		if rec.Code != http.StatusOK {
+			t.Fatalf("port %d: status = %d, want %d (body %s)", port, rec.Code, http.StatusOK, rec.Body.String())
+		}
+		if body := decodeVersion(t, rec); body.Port != port {
+			t.Errorf("port = %d, want %d", body.Port, port)
+		}
 	}
 }
 

@@ -28,7 +28,7 @@ func panelFixture(t *testing.T) *syncFixture {
 	f := newSyncFixture(t, nil, id)
 	f.service.nodes = panelNodes{[]NamedNode{{ID: id, Name: "localhost"}}}
 	f.service.controlPlaneURL = func(context.Context) (string, error) { return "https://Panel.Example.com:8443/", nil }
-	f.service.serverPort = 8000
+	f.service.serverPort = 9074
 	return f
 }
 
@@ -65,7 +65,7 @@ func TestControlPlaneConfig(t *testing.T) {
 			providers := []DNSProvider{access[providerID].provider}
 			cfg := BuildConfig(routes, redirects, providers, "", "")
 			web := cfg.Routers["panel-web"]
-			if web.Rule != "Host(`panel.example.com`)" || web.Service != "panel" || cfg.Services["panel"].LoadBalancer.Servers[0].URL != "http://172.17.0.1:8000" {
+			if web.Rule != "Host(`panel.example.com`)" || web.Service != "panel" || cfg.Services["panel"].LoadBalancer.Servers[0].URL != "http://172.17.0.1:9074" {
 				t.Fatalf("config: %+v", cfg)
 			}
 			secure, ok := cfg.Routers["panel-websecure"]

@@ -490,6 +490,8 @@ grep -qx 'GOTHAM_DATABASE_DSN=postgres://gotham:gotham@localhost:5432/gotham?ssl
     || { echo "FAIL: re-install duplicated or dropped the gotham.env header" >&2; exit 1; }
 [ "$(grep -c '^GOTHAM_DATABASE_DSN=' "${B1_ENV}")" -eq 1 ] \
     || { echo "FAIL: re-install duplicated a managed key" >&2; exit 1; }
+[ "$(grep -c '^GOTHAM_SERVER_PORT=9074$' "${B1_ENV}")" -eq 1 ] \
+    || { echo "FAIL: a fresh install does not serve on the 9074 default port" >&2; exit 1; }
 echo "PASS: re-install with no operator additions succeeded (B1)"
 
 # ---- I1: an indented managed key must not override the managed value --------
@@ -2276,7 +2278,7 @@ ADMIN_EMAIL=domain@example.com ADMIN_TTY="" ADMIN_PWFILE="" \
 [ "$(cat "${DOMAIN_TEST_LOG}")" = "$(printf 'instance\nset-url\nhttps://panel.example.com')" ] \
     || { echo "FAIL: standalone domain command arguments differ" >&2; exit 1; }
 grep -q 'Web UI:   https://panel.example.com' "${SCRATCH}/domain-out.log"
-grep -q 'Direct:   http://.*:8000 (HTTP, no TLS)' "${SCRATCH}/domain-out.log"
+grep -q 'Direct:   http://.*:9074 (HTTP, no TLS)' "${SCRATCH}/domain-out.log"
 grep -q 'HTTPS starts once the certificate for the domain is issued' "${SCRATCH}/domain-out.log"
 grep -q 'DNS-only' "${SCRATCH}/domain-out.log"
 export DOMAIN_TEST_RC=1
@@ -2286,7 +2288,7 @@ ADMIN_EMAIL=domain@example.com ADMIN_TTY="" ADMIN_PWFILE="" \
     run_admin_install "${SCRATCH}/bad-domain-root" "${SCRATCH}/bad-domain-admin" \
     "${SCRATCH}/bad-domain-out.log" "${SCRATCH}/bad-domain-err.log"
 grep -q 'WARNING: domain setup failed' "${SCRATCH}/bad-domain-out.log"
-grep -q 'Web UI:   http://.*:8000' "${SCRATCH}/bad-domain-out.log"
+grep -q 'Web UI:   http://.*:9074' "${SCRATCH}/bad-domain-out.log"
 if grep -q 'Direct:' "${SCRATCH}/bad-domain-out.log"; then
     echo "FAIL: a failed domain printed a second panel address" >&2; exit 1
 fi
@@ -2300,7 +2302,7 @@ ADMIN_EMAIL=domain@example.com ADMIN_TTY="" ADMIN_PWFILE="" \
     "${SCRATCH}/not-ready-out.log" "${SCRATCH}/not-ready-err.log"
 [ ! -e "${DOMAIN_TEST_LOG}" ] || { echo "FAIL: set-url ran before agent readiness" >&2; exit 1; }
 grep -q 'WARNING: domain setup failed' "${SCRATCH}/not-ready-out.log"
-grep -q 'Web UI:   http://.*:8000' "${SCRATCH}/not-ready-out.log"
+grep -q 'Web UI:   http://.*:9074' "${SCRATCH}/not-ready-out.log"
 unset DOMAIN_WAIT_RC
 echo "PASS: agent readiness failure skips domain setup and preserves HTTP"
 unset DOMAIN_TEST_LOG DOMAIN_TEST_RC GOTHAM_DOMAIN
@@ -2786,7 +2788,6 @@ printf '16+257build1.1\n' >"${DEPS_STATE}/pg_candidate"
 printf '5:7.0.15-1ubuntu0.24.04.5\n' >"${DEPS_STATE}/redis_candidate"
 D5_ROOT="${SCRATCH}/deps-legacy-warning"
 deps_legacy_state "${D5_ROOT}"
-cp "${D5_ROOT}/etc/gotham/gotham.env" "${DEPS_DIR}/d5-env-before"
 deps_run "${D5_ROOT}" >"${DEPS_DIR}/d5.log" 2>&1 \
     || { echo "FAIL: a stored legacy DSN made the installer fail (D5)" >&2; cat "${DEPS_DIR}/d5.log" >&2; exit 1; }
 grep -q 'uses the old default database password' "${DEPS_DIR}/d5.log" \
@@ -2801,11 +2802,31 @@ grep -qx "ALTER ROLE gotham WITH LOGIN PASSWORD '<new-strong-password>';" "${DEP
     || { echo "FAIL: the legacy password was rotated automatically (D5)" >&2; exit 1; }
 [ "$(cat "${DEPS_STATE}/role_pw")" = "gotham" ] \
     || { echo "FAIL: the legacy role password changed (D5)" >&2; exit 1; }
-cmp -s "${DEPS_DIR}/d5-env-before" "${D5_ROOT}/etc/gotham/gotham.env" \
+[ "$(deps_env_dsn "${D5_ROOT}")" = 'postgres://gotham:gotham@localhost:5432/gotham?sslmode=disable' ] \
     || { echo "FAIL: the legacy DSN was rewritten (D5)" >&2; exit 1; }
+grep -qx 'GOTHAM_SERVER_PORT=8000' "${D5_ROOT}/etc/gotham/gotham.env" \
+    || { echo "FAIL: an install from before the 9074 default did not keep its panel port (D5)" >&2; exit 1; }
 grep -q 'LEGACY_DB_PASSWORD_NOTE' "${INSTALL_SH}" \
     || { echo "FAIL: the legacy warning is missing from the final summary (D5)" >&2; exit 1; }
 echo "PASS: legacy default password warns with the manual command, untouched (D5)"
+
+# D5b: a gotham.yaml that sets server.port owns the port. Pinning one in
+# gotham.env would override the yaml, so the installer must write nothing.
+deps_reset
+deps_fixture ubuntu noble
+printf '16+257build1.1\n' >"${DEPS_STATE}/pg_candidate"
+printf '5:7.0.15-1ubuntu0.24.04.5\n' >"${DEPS_STATE}/redis_candidate"
+D5B_ROOT="${SCRATCH}/deps-yaml-port"
+deps_legacy_state "${D5B_ROOT}"
+mkdir -p "${D5B_ROOT}/var/lib/gotham"
+printf 'server:\n  port: 9000\n' >"${D5B_ROOT}/var/lib/gotham/gotham.yaml"
+deps_run "${D5B_ROOT}" >"${DEPS_DIR}/d5b.log" 2>&1 \
+    || { echo "FAIL: an install with a gotham.yaml port failed (D5b)" >&2; cat "${DEPS_DIR}/d5b.log" >&2; exit 1; }
+if grep -q '^GOTHAM_SERVER_PORT=' "${D5B_ROOT}/etc/gotham/gotham.env"; then
+    echo "FAIL: a GOTHAM_SERVER_PORT pin overrides the gotham.yaml server.port (D5b)" >&2
+    exit 1
+fi
+echo "PASS: a gotham.yaml server.port is not overridden by a pin (D5b)"
 
 # D6: an operator-set password or a custom database name in a stored DSN is
 # kept exactly as stored.

@@ -32,7 +32,7 @@ Once an account exists, self-registration is closed; additional people join
 through single-use invite links created on **Users**
 (see [First login](/guide/first-login)).
 
-Open the URL the installer printed (the panel listens on port 8000 by default)
+Open the URL the installer printed (the panel listens on port 9074 by default)
 and sign in with email and password. Two more sign-in paths exist:
 
 - **GitHub OAuth.** Available when the instance has GitHub OAuth configured with

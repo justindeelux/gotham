@@ -125,7 +125,8 @@ Chạy lại trình cài đặt trên một máy đã cài để nâng cấp t�
 `agent.env` từ xa (một node được cài từ control plane khác): hãy di chuyển agent
 từ xa đó, hoặc trỏ lại nó một cách tường minh, trước khi thử lại. Nó giữ
 `/etc/gotham/gotham.env`: các khóa được quản lý (`GOTHAM_DATABASE_DSN`,
-`GOTHAM_REDIS_ADDR`, `GOTHAM_CA_DIR`, `GOTHAM_SECRET_KEY`, các đường dẫn khóa JWT)
+`GOTHAM_REDIS_ADDR`, `GOTHAM_SERVER_PORT`, `GOTHAM_CA_DIR`, `GOTHAM_SECRET_KEY`,
+các đường dẫn khóa JWT)
 được làm mới — DSN đưa trên dòng lệnh thắng, nếu không thì giữ giá trị hiện có — và
 mọi khóa người vận hành thêm (`AUTO_UPDATE`, `AUTO_UPDATE_INTERVAL`, ...) được để
 nguyên. Một DSN được quản lý không bao giờ bị thay bằng mặc định cục bộ, và
@@ -133,6 +134,18 @@ PostgreSQL/Redis cục bộ chỉ được cấp phát khi DSN phân giải đư
 dựng sẵn. Trình cài đặt khởi động lại `gotham.service` sau khi cài lại, nên tệp
 nhị phân vừa cài chính là tệp đang chạy (không khởi động lại thì một máy đã nâng
 cấp vẫn phục vụ phiên bản trước).
+
+## Ghi chú phát hành: cổng mặc định của bảng điều khiển
+
+Một bản cài mới phục vụ bảng điều khiển trên cổng `9074` thay vì `8000`. Một bản
+cài đã có giữ cổng nó đang dùng: trình cài đặt và trình cập nhật ghi cổng đó vào
+`GOTHAM_SERVER_PORT` trong `/etc/gotham/gotham.env` trước khi tệp nhị phân mới
+chạy, nên bookmark, webhook và URL callback OAuth đã đăng ký với cổng cũ vẫn hoạt
+động. Một bản cài cấu hình qua `gotham.yaml` giữ `server.port` của nó: không có
+cổng nào bị ghi đè lên. Bước kiểm tra sức khỏe của trình cập nhật đi theo cổng
+đang được cấu hình. Muốn đổi cổng,
+sửa `GOTHAM_SERVER_PORT` trong `gotham.env` rồi khởi động lại; trình cập nhật sẽ
+dò cổng mới.
 
 Một máy được cài trước thay đổi mTLS giờ sẽ nhận một CA, nên gateway gRPC chuyển
 từ plaintext sang TLS. Các agent đã cài trước đó kết nối bằng plaintext và không

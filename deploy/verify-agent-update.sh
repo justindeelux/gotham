@@ -70,7 +70,7 @@ if [ -z "${SCRATCH}" ] || [ "${SCRATCH}" = "/" ]; then
 fi
 chmod 0755 "${SCRATCH}"
 
-# Ports: a high scratch range, far from the real CP/agent ports (8000/9442/9443)
+# Ports: a high scratch range, far from the real CP/agent ports (9074/9442/9443)
 # and the compose ports (5433/6380/8099/9444).
 BASE_PORT=$(( 30000 + (RUN_ID % 20000) ))
 HTTP_PORT="${VERIFY_HTTP_PORT:-$((BASE_PORT + 0))}"

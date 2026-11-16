@@ -123,8 +123,8 @@ place. Before it changes any file it refuses an unsupported platform and a host
 that already has a remote `agent.env` (a node installed from another control
 plane): move that remote agent, or repoint it explicitly, before retrying. It
 keeps `/etc/gotham/gotham.env`: the managed keys
-(`GOTHAM_DATABASE_DSN`, `GOTHAM_REDIS_ADDR`, `GOTHAM_CA_DIR`,
-`GOTHAM_SECRET_KEY`, the JWT key paths) are refreshed — a DSN given on the
+(`GOTHAM_DATABASE_DSN`, `GOTHAM_REDIS_ADDR`, `GOTHAM_SERVER_PORT`,
+`GOTHAM_CA_DIR`, `GOTHAM_SECRET_KEY`, the JWT key paths) are refreshed — a DSN given on the
 command line wins, otherwise the existing value is kept — and any operator-added
 keys (`AUTO_UPDATE`, `AUTO_UPDATE_INTERVAL`, ...) are left untouched. A managed DSN
 is never replaced by the local default, and local PostgreSQL/Redis are only
@@ -132,6 +132,18 @@ provisioned when the resolved DSN is the built-in local default. The installer
 restarts `gotham.service` after a reinstall, so the just-installed binary is the
 one that runs (without the restart an upgraded host would keep serving the
 previous version).
+
+## Release note: the panel port default
+
+A fresh install serves the panel on port `9074` instead of `8000`. An existing
+installation keeps the port it already uses: the installer and the update
+wrapper write it to `GOTHAM_SERVER_PORT` in `/etc/gotham/gotham.env` before the
+new binary starts, so bookmarks, webhooks and OAuth callback URLs registered
+against the old port keep working. An install configured through `gotham.yaml`
+keeps its `server.port`: nothing is pinned over it. The updater health check
+follows whichever port is configured.
+To move the panel, change `GOTHAM_SERVER_PORT` in `gotham.env` and restart; the
+updater probes the new port.
 
 A host installed before the mTLS change now gets a CA, so the gRPC gateway
 switches from plaintext to TLS. Previously installed agents connect in

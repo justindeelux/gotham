@@ -11,7 +11,7 @@ không được tạo.
 ## Bạn cần gì
 
 - URL bảng điều khiển mà trình cài đặt in ra, thường là
-  `http://<server-ip>:8000`.
+  `http://<server-ip>:9074`.
 - Email chủ sở hữu và mật khẩu trong phần tóm tắt đó. Nếu bạn để trình cài đặt tạo
   mật khẩu, nó đã được in một lần ở cuối.
 - Một terminal trên máy chủ control plane cho các lệnh `admin` bên dưới.

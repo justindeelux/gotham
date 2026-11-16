@@ -25,7 +25,7 @@ effect.
 | Key | Environment variable | Default | Required |
 |---|---|---|---|
 | `server.addr` | `GOTHAM_SERVER_ADDR` | `0.0.0.0` | no |
-| `server.port` | `GOTHAM_SERVER_PORT` | `8000` | no |
+| `server.port` | `GOTHAM_SERVER_PORT` | `9074` | no |
 | `server.trusted_proxies` | `GOTHAM_TRUSTED_PROXIES` | empty — no peer trusted | no |
 
 - `server.port` must be between 1 and 65535.

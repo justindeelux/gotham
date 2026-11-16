@@ -60,7 +60,7 @@ func TestControlPlaneFallbackRoutes(t *testing.T) {
 		t.Fatalf("list=%+v err=%v", rows, err)
 	}
 	for _, row := range rows.Routers {
-		if row.Kind != RouterKindControlPlane || row.Target != "http://172.17.0.1:8000" {
+		if row.Kind != RouterKindControlPlane || row.Target != "http://172.17.0.1:9074" {
 			t.Fatalf("fallback row=%+v", row)
 		}
 	}

@@ -29,10 +29,12 @@ The service exits with the reason in the journal. The usual causes:
 - **Configuration error.** `gotham serve` prints `config: ...` before doing
   anything. Check `/etc/gotham/gotham.env` for a malformed value (quotes and
   trailing backslashes are rejected), then restart.
-- **Port already in use.** The panel listens on `0.0.0.0:8000` by default
-  (`GOTHAM_SERVER_ADDR`, `GOTHAM_SERVER_PORT`). A second `gotham` process, an old
-  unit or an unrelated service on the same port makes the listener fail. Find
-  the owner with `ss -ltnp` and stop it, or move the panel to another port.
+- **Port already in use.** The panel listens on `0.0.0.0:9074` by default
+  (`GOTHAM_SERVER_ADDR`, `GOTHAM_SERVER_PORT`); an install updated from a version
+  that predates this port keeps the one it already used, usually `8000`. A second
+  `gotham` process, an old unit or an unrelated service on the same port makes the
+  listener fail. Find the owner with `ss -ltnp` and stop it, or move the panel to
+  another port.
 - **PostgreSQL unreachable.** The database is required: the process exits when
   it cannot connect. Check `pg_isready`, the `postgresql` service and
   `GOTHAM_DATABASE_DSN`. The bundled install uses a local database; a managed one

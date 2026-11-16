@@ -69,7 +69,7 @@ Các dòng cuối trông như sau:
 ```text
 Gotham v1.2.3 is installed.
 
-  Web UI:   http://203.0.113.10:8000
+  Web UI:   http://203.0.113.10:9074
   Status:   systemctl status gotham
   Logs:     journalctl -u gotham -f
   File manager on this node: on (--no-file-manager turns it off)
@@ -77,7 +77,7 @@ Gotham v1.2.3 is installed.
 First login:
   Account:  ops@example.com
   Password: <in một lần nếu bạn để trống mật khẩu>
-  Login:    http://203.0.113.10:8000
+  Login:    http://203.0.113.10:9074
 ```
 
 Mở URL đó và đăng nhập. Máy chủ cục bộ đã được liệt kê trong **Máy chủ** với
@@ -96,7 +96,7 @@ Thêm `-s -- --domain panel.example.com` sau `sh` trong lệnh trên. Tên miề
 đã trỏ về máy chủ này và tắt proxy Cloudflare. Trình cài đặt chờ tối đa 60 giây
 để agent cục bộ sẵn sàng, đặt URL bảng điều khiển thành
 `https://panel.example.com`, và in cả địa chỉ đó lẫn địa chỉ trực tiếp
-`http://<ip-máy-chủ>:8000`. HTTPS bắt đầu ngay khi chứng chỉ được cấp. Nếu tên
+`http://<ip-máy-chủ>:9074`. HTTPS bắt đầu ngay khi chứng chỉ được cấp. Nếu tên
 miền chưa phân giải được, hoặc vẫn phân giải vào dải proxy của Cloudflare, quá
 trình cài tiếp tục trên địa chỉ máy chủ và bạn có thể đặt tên miền sau trong bảng
 điều khiển. Xem [Tên miền và HTTPS](/vi/guide/domain-and-https).

@@ -31,7 +31,7 @@ func TestInstanceSetURL(t *testing.T) {
 		syncErr   error
 		wantErr   bool
 	}{
-		{name: "trial", url: "https://panel.example.com"},
+		{name: "committed", url: "https://panel.example.com"},
 		{name: "invalid", url: "javascript:alert(1)", wantErr: true},
 		{name: "sync failure", url: "https://panel.example.com", syncErr: errors.New("agent unavailable"), wantErr: true},
 	} {
@@ -55,8 +55,8 @@ func TestInstanceSetURL(t *testing.T) {
 				}
 				return
 			}
-			if syncs != 1 || repo.rec.PendingControlPlaneURL == nil || !repo.rec.PendingControlPlaneURL.Synced {
-				t.Fatal("service trial/proxy flow was bypassed")
+			if syncs != 2 || repo.rec.PendingControlPlaneURL != nil {
+				t.Fatal("the CLI did not commit the domain instead of leaving a trial")
 			}
 			if *repo.rec.ControlPlaneURL != tc.url {
 				t.Fatal("URL not saved")

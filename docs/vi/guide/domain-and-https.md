@@ -33,12 +33,12 @@ Sau đó nó:
 
 1. đặt `control_plane_url` của instance thành `https://panel.example.com`;
 2. khởi động lại dịch vụ để bảng điều khiển trả lời ở địa chỉ mới;
-3. in địa chỉ HTTP để mở.
+3. in địa chỉ đó cùng địa chỉ trực tiếp `http://<server-ip>:8000`.
 
-Mở `http://panel.example.com` và xác nhận tên miền trong **Hệ thống → Cài đặt
-→ Chung** trong vòng **2 phút** để bắt đầu cấp chứng chỉ HTTPS. Một phiên thử không được xác nhận
-sẽ tự khôi phục. Tên miền không hợp lệ và lỗi DNS sẽ in cảnh báo và để địa chỉ
-HTTP của máy chủ khả dụng; bạn có thể đặt tên miền sau trong bảng điều khiển.
+Tên miền đặt trong lúc cài được ghi nhận ngay: việc cấp chứng chỉ tự bắt đầu và
+HTTPS tiếp quản khi sẵn sàng, không có bước xác nhận. Tên miền chưa phân giải
+được, hoặc vẫn phân giải vào dải proxy của Cloudflare, sẽ in cảnh báo và để địa
+chỉ HTTP của máy chủ khả dụng; bạn có thể đặt tên miền sau trong bảng điều khiển.
 
 ## Đặt tên miền sau
 

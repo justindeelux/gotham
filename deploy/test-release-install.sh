@@ -2178,7 +2178,7 @@ if grep -q 'Owner password' "${SCRATCH}/m-out.clean"; then
 fi
 [ "$(cat "${DOMAIN_TEST_LOG}")" = "$(printf 'instance\nset-url\nhttps://panel.example.com')" ] \
     || { echo "FAIL: prompted domain was not normalized" >&2; exit 1; }
-grep -q 'within 2 minutes' "${SCRATCH}/m-out.log"
+grep -q 'HTTPS starts once the certificate for the domain is issued' "${SCRATCH}/m-out.log"
 unset DOMAIN_TEST_LOG
 echo "PASS: env values are prompt defaults on a terminal (JUS-22/m)"
 
@@ -2275,7 +2275,9 @@ ADMIN_EMAIL=domain@example.com ADMIN_TTY="" ADMIN_PWFILE="" \
     "${SCRATCH}/domain-out.log" "${SCRATCH}/domain-err.log"
 [ "$(cat "${DOMAIN_TEST_LOG}")" = "$(printf 'instance\nset-url\nhttps://panel.example.com')" ] \
     || { echo "FAIL: standalone domain command arguments differ" >&2; exit 1; }
-grep -q 'Web UI:   http://panel.example.com' "${SCRATCH}/domain-out.log"
+grep -q 'Web UI:   https://panel.example.com' "${SCRATCH}/domain-out.log"
+grep -q 'Direct:   http://.*:8000 (HTTP, no TLS)' "${SCRATCH}/domain-out.log"
+grep -q 'HTTPS starts once the certificate for the domain is issued' "${SCRATCH}/domain-out.log"
 grep -q 'DNS-only' "${SCRATCH}/domain-out.log"
 export DOMAIN_TEST_RC=1
 export GOTHAM_DOMAIN=invalid-domain
@@ -2285,6 +2287,9 @@ ADMIN_EMAIL=domain@example.com ADMIN_TTY="" ADMIN_PWFILE="" \
     "${SCRATCH}/bad-domain-out.log" "${SCRATCH}/bad-domain-err.log"
 grep -q 'WARNING: domain setup failed' "${SCRATCH}/bad-domain-out.log"
 grep -q 'Web UI:   http://.*:8000' "${SCRATCH}/bad-domain-out.log"
+if grep -q 'Direct:' "${SCRATCH}/bad-domain-out.log"; then
+    echo "FAIL: a failed domain printed a second panel address" >&2; exit 1
+fi
 [ -f "${SCRATCH}/bad-domain-root/etc/gotham/gotham.env" ] \
     || { echo "FAIL: failed domain rolled back the installation" >&2; exit 1; }
 rm -f "${DOMAIN_TEST_LOG}"

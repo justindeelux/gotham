@@ -93,12 +93,13 @@ nguyên nhân thường gặp.
 ### Đặt tên miền trong cùng lần chạy
 
 Thêm `-s -- --domain panel.example.com` sau `sh` trong lệnh trên. Tên miền phải
-đã trỏ về máy chủ này. Trình cài đặt chờ tối đa 60 giây để agent cục bộ sẵn sàng,
-đặt URL bảng điều khiển thành `https://panel.example.com`, và in địa chỉ HTTP để
-mở xác nhận. HTTPS được cấp sau khi bạn xác nhận trong **Hệ thống → Cài đặt →
-Chung** trong vòng 2 phút. Nếu tên miền chưa phân giải được, quá trình cài tiếp tục trên địa
-chỉ máy chủ và bạn có thể đặt tên miền sau trong bảng điều khiển. Xem
-[Tên miền và HTTPS](/vi/guide/domain-and-https).
+đã trỏ về máy chủ này và tắt proxy Cloudflare. Trình cài đặt chờ tối đa 60 giây
+để agent cục bộ sẵn sàng, đặt URL bảng điều khiển thành
+`https://panel.example.com`, và in cả địa chỉ đó lẫn địa chỉ trực tiếp
+`http://<ip-máy-chủ>:8000`. HTTPS bắt đầu ngay khi chứng chỉ được cấp. Nếu tên
+miền chưa phân giải được, hoặc vẫn phân giải vào dải proxy của Cloudflare, quá
+trình cài tiếp tục trên địa chỉ máy chủ và bạn có thể đặt tên miền sau trong bảng
+điều khiển. Xem [Tên miền và HTTPS](/vi/guide/domain-and-https).
 
 ### Cài theo script (cloud-init, CI)
 

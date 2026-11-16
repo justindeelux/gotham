@@ -33,12 +33,13 @@ available. It then:
 
 1. sets the instance `control_plane_url` to `https://panel.example.com`;
 2. restarts the service so the panel answers on the new address;
-3. prints the HTTP address to open.
+3. prints that address and the direct `http://<server-ip>:8000` one.
 
-Open `http://panel.example.com` and confirm the domain in **System → Settings
-→ General** within **2 minutes** to start HTTPS issuance. An unconfirmed trial reverts
-automatically. Invalid domains and DNS failures print a warning and leave the
-host HTTP address available; you can set the domain later in the panel.
+The install-time domain is committed at once: certificate issuance starts on its
+own and HTTPS takes over as soon as it is ready, with no confirmation step. A
+domain that does not resolve, or that still resolves into Cloudflare's proxy
+ranges, prints a warning and leaves the host HTTP address available; you can set
+the domain later in the panel.
 
 ## Set the domain later
 

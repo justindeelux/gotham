@@ -95,11 +95,12 @@ common causes.
 ### Set the domain in the same run
 
 Add `-s -- --domain panel.example.com` after `sh` in the command above. The
-domain must already point at this server. The installer waits up to 60
-seconds for the local agent, sets the panel URL to `https://panel.example.com`,
-and prints the HTTP address to open for confirmation. HTTPS is issued after you
-confirm it in **System → Settings → General** within 2 minutes. If the domain does not
-resolve yet, the install continues on the server address and you can set it
+domain must already point at this server, with the Cloudflare proxy off. The
+installer waits up to 60 seconds for the local agent, sets the panel URL to
+`https://panel.example.com`, and prints both that address and the direct
+`http://<server-ip>:8000` one. HTTPS starts once the certificate is issued. If
+the domain does not resolve yet, or still resolves to Cloudflare's proxy
+ranges, the install continues on the server address and you can set the domain
 later in the panel. See [Domain and HTTPS](/guide/domain-and-https).
 
 ### Scripted install (cloud-init, CI)

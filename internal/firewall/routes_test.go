@@ -266,6 +266,36 @@ func TestRoutesNodeRefusalIsAConflict(t *testing.T) {
 	}
 }
 
+func TestRoutesReportAMissingServerAsSuch(t *testing.T) {
+	serverID := uuid.New()
+	dialer := &fakeDialer{agents: map[uuid.UUID]*fakeAgent{}}
+	router := newTestService(t, dialer)
+	rec := do(t, router, http.MethodGet, "/v1/servers/"+serverID.String()+"/firewall", "")
+	if rec.Code != http.StatusNotFound {
+		t.Fatalf("code = %d %s", rec.Code, rec.Body.String())
+	}
+	if body := decodeBody[errorBody](t, rec); body.Code != "server_not_found" {
+		t.Fatalf("body = %#v", body)
+	}
+}
+
+func TestRoutesKeepRuleNotFoundForANodeRefusal(t *testing.T) {
+	serverID := uuid.New()
+	dialer := &fakeDialer{agents: map[uuid.UUID]*fakeAgent{
+		// An older agent answers a missing rule with a bare NotFound status.
+		serverID: {status: testStatus(), addErr: status.Error(codes.NotFound, "firewall rule not found")},
+	}}
+	router := newTestService(t, dialer)
+	rec := do(t, router, http.MethodPost, "/v1/servers/"+serverID.String()+"/firewall/rules",
+		`{"rule":{"action":"allow","direction":"in","protocol":"tcp","port":"8080","enabled":true}}`)
+	if rec.Code != http.StatusNotFound {
+		t.Fatalf("code = %d %s", rec.Code, rec.Body.String())
+	}
+	if body := decodeBody[errorBody](t, rec); body.Code != "rule_not_found" {
+		t.Fatalf("body = %#v", body)
+	}
+}
+
 func TestRoutesAgentUnavailable(t *testing.T) {
 	serverID := uuid.New()
 	dialer := &fakeDialer{agents: map[uuid.UUID]*fakeAgent{}}

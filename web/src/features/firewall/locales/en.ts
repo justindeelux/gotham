@@ -122,6 +122,8 @@ const en = {
       "The change was applied, but the node could not save the rule state.",
     rule_not_found:
       "This rule no longer exists on the node. Reload the page.",
+    server_not_found:
+      "This server was not found. It may have been deleted.",
     read_only_rule:
       "This rule is managed on the node and cannot be changed from Gotham.",
     would_lock_out:

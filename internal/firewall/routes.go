@@ -173,7 +173,13 @@ func (h *handler) replyError(w http.ResponseWriter, err error) {
 	d := detailOf(err)
 	switch {
 	case errors.Is(err, ErrNotFound):
-		d = d.withDefault(codeRuleNotFound)
+		// The bare sentinel comes from the dialer: the server itself is gone.
+		// A node's own "rule not found" always arrives wrapped or coded.
+		code := codeRuleNotFound
+		if err == ErrNotFound {
+			code = codeServerNotFound
+		}
+		d = d.withDefault(code)
 		writeJSON(w, http.StatusNotFound, errorBody{Message: "not found", Code: d.code, Params: d.params})
 	case errors.Is(err, ErrValidation):
 		writeJSON(w, http.StatusBadRequest, errorBody{Message: trimSentinel(err, ErrValidation), Code: d.code, Params: d.params})

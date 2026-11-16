@@ -52,6 +52,7 @@ describe("firewall error codes", () => {
       "state_read_failed",
       "state_write_failed",
       "rule_not_found",
+      "server_not_found",
       "read_only_rule",
       "invalid_action",
       "invalid_direction",

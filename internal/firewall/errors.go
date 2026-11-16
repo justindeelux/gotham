@@ -43,6 +43,7 @@ const (
 // refusals; these are the control plane's own. The English message stays the
 // fallback for an unknown code.
 const (
+	codeServerNotFound        = "server_not_found"
 	codeAgentOutdated         = "agent_outdated"
 	codeAgentUnavailable      = "agent_unavailable"
 	codeRuleNotFound          = "rule_not_found"

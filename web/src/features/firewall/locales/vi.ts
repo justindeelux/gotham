@@ -122,6 +122,7 @@ const vi: FirewallMessages = {
     state_write_failed:
       "Thay đổi đã được áp dụng nhưng nút không lưu được trạng thái quy tắc.",
     rule_not_found: "Quy tắc này không còn trên nút. Hãy tải lại trang.",
+    server_not_found: "Không tìm thấy máy chủ này. Có thể nó đã bị xóa.",
     read_only_rule:
       "Quy tắc này được quản lý trên nút và không thể sửa từ Gotham.",
     would_lock_out:

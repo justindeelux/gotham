@@ -94,6 +94,14 @@ func WithHostService(host agentv1.HostServiceServer) ServerOption {
 	}
 }
 
+func WithFirewallService(firewall agentv1.FirewallServiceServer) ServerOption {
+	return func(c *serverConfig) {
+		c.registers = append(c.registers, func(server *grpc.Server) {
+			agentv1.RegisterFirewallServiceServer(server, firewall)
+		})
+	}
+}
+
 func WithoutControlPlanePeer() ServerOption {
 	return func(c *serverConfig) {
 		c.allowAnyPeer = true

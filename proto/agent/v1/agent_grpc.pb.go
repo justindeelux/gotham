@@ -3733,3 +3733,325 @@ var TerminalService_ServiceDesc = grpc.ServiceDesc{
 	},
 	Metadata: "agent/v1/agent.proto",
 }
+
+const (
+	FirewallService_GetStatus_FullMethodName  = "/agent.v1.FirewallService/GetStatus"
+	FirewallService_SetEnabled_FullMethodName = "/agent.v1.FirewallService/SetEnabled"
+	FirewallService_ListRules_FullMethodName  = "/agent.v1.FirewallService/ListRules"
+	FirewallService_AddRule_FullMethodName    = "/agent.v1.FirewallService/AddRule"
+	FirewallService_UpdateRule_FullMethodName = "/agent.v1.FirewallService/UpdateRule"
+	FirewallService_DeleteRule_FullMethodName = "/agent.v1.FirewallService/DeleteRule"
+)
+
+// FirewallServiceClient is the client API for FirewallService service.
+//
+// For semantics around ctx use and closing/ending streaming RPCs, please refer to https://pkg.go.dev/google.golang.org/grpc/?tab=doc#ClientConn.NewStream.
+//
+// FirewallService runs on the node agent. The control plane dials it to read
+// and change the firewall of the node it runs on. The agent detects the host
+// backend itself (ufw first, then firewalld, then nftables/iptables) and never
+// reaches another node.
+type FirewallServiceClient interface {
+	// GetStatus reports the detected backend, whether the firewall is active and
+	// whether Gotham can manage its rules.
+	GetStatus(ctx context.Context, in *FirewallStatusRequest, opts ...grpc.CallOption) (*FirewallStatusResponse, error)
+	// SetEnabled turns the node firewall on or off. Enabling first makes sure
+	// SSH, the agent port and the control-plane port stay allowed; it fails
+	// rather than apply a change that could lock the operator out.
+	SetEnabled(ctx context.Context, in *FirewallEnabledRequest, opts ...grpc.CallOption) (*FirewallState, error)
+	// ListRules returns the backend's current rules plus disabled rules saved on
+	// this node.
+	ListRules(ctx context.Context, in *FirewallRulesRequest, opts ...grpc.CallOption) (*FirewallRules, error)
+	// AddRule creates one rule and returns the resulting rule list.
+	AddRule(ctx context.Context, in *FirewallRuleCreateRequest, opts ...grpc.CallOption) (*FirewallRules, error)
+	// UpdateRule replaces one rule and returns the resulting rule list.
+	UpdateRule(ctx context.Context, in *FirewallRuleUpdateRequest, opts ...grpc.CallOption) (*FirewallRules, error)
+	// DeleteRule removes one rule and returns the resulting rule list.
+	DeleteRule(ctx context.Context, in *FirewallRuleDeleteRequest, opts ...grpc.CallOption) (*FirewallRules, error)
+}
+
+type firewallServiceClient struct {
+	cc grpc.ClientConnInterface
+}
+
+func NewFirewallServiceClient(cc grpc.ClientConnInterface) FirewallServiceClient {
+	return &firewallServiceClient{cc}
+}
+
+func (c *firewallServiceClient) GetStatus(ctx context.Context, in *FirewallStatusRequest, opts ...grpc.CallOption) (*FirewallStatusResponse, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	out := new(FirewallStatusResponse)
+	err := c.cc.Invoke(ctx, FirewallService_GetStatus_FullMethodName, in, out, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
+func (c *firewallServiceClient) SetEnabled(ctx context.Context, in *FirewallEnabledRequest, opts ...grpc.CallOption) (*FirewallState, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	out := new(FirewallState)
+	err := c.cc.Invoke(ctx, FirewallService_SetEnabled_FullMethodName, in, out, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
+func (c *firewallServiceClient) ListRules(ctx context.Context, in *FirewallRulesRequest, opts ...grpc.CallOption) (*FirewallRules, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	out := new(FirewallRules)
+	err := c.cc.Invoke(ctx, FirewallService_ListRules_FullMethodName, in, out, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
+func (c *firewallServiceClient) AddRule(ctx context.Context, in *FirewallRuleCreateRequest, opts ...grpc.CallOption) (*FirewallRules, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	out := new(FirewallRules)
+	err := c.cc.Invoke(ctx, FirewallService_AddRule_FullMethodName, in, out, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
+func (c *firewallServiceClient) UpdateRule(ctx context.Context, in *FirewallRuleUpdateRequest, opts ...grpc.CallOption) (*FirewallRules, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	out := new(FirewallRules)
+	err := c.cc.Invoke(ctx, FirewallService_UpdateRule_FullMethodName, in, out, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
+func (c *firewallServiceClient) DeleteRule(ctx context.Context, in *FirewallRuleDeleteRequest, opts ...grpc.CallOption) (*FirewallRules, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	out := new(FirewallRules)
+	err := c.cc.Invoke(ctx, FirewallService_DeleteRule_FullMethodName, in, out, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
+// FirewallServiceServer is the server API for FirewallService service.
+// All implementations must embed UnimplementedFirewallServiceServer
+// for forward compatibility.
+//
+// FirewallService runs on the node agent. The control plane dials it to read
+// and change the firewall of the node it runs on. The agent detects the host
+// backend itself (ufw first, then firewalld, then nftables/iptables) and never
+// reaches another node.
+type FirewallServiceServer interface {
+	// GetStatus reports the detected backend, whether the firewall is active and
+	// whether Gotham can manage its rules.
+	GetStatus(context.Context, *FirewallStatusRequest) (*FirewallStatusResponse, error)
+	// SetEnabled turns the node firewall on or off. Enabling first makes sure
+	// SSH, the agent port and the control-plane port stay allowed; it fails
+	// rather than apply a change that could lock the operator out.
+	SetEnabled(context.Context, *FirewallEnabledRequest) (*FirewallState, error)
+	// ListRules returns the backend's current rules plus disabled rules saved on
+	// this node.
+	ListRules(context.Context, *FirewallRulesRequest) (*FirewallRules, error)
+	// AddRule creates one rule and returns the resulting rule list.
+	AddRule(context.Context, *FirewallRuleCreateRequest) (*FirewallRules, error)
+	// UpdateRule replaces one rule and returns the resulting rule list.
+	UpdateRule(context.Context, *FirewallRuleUpdateRequest) (*FirewallRules, error)
+	// DeleteRule removes one rule and returns the resulting rule list.
+	DeleteRule(context.Context, *FirewallRuleDeleteRequest) (*FirewallRules, error)
+	mustEmbedUnimplementedFirewallServiceServer()
+}
+
+// UnimplementedFirewallServiceServer must be embedded to have
+// forward compatible implementations.
+//
+// NOTE: this should be embedded by value instead of pointer to avoid a nil
+// pointer dereference when methods are called.
+type UnimplementedFirewallServiceServer struct{}
+
+func (UnimplementedFirewallServiceServer) GetStatus(context.Context, *FirewallStatusRequest) (*FirewallStatusResponse, error) {
+	return nil, status.Error(codes.Unimplemented, "method GetStatus not implemented")
+}
+func (UnimplementedFirewallServiceServer) SetEnabled(context.Context, *FirewallEnabledRequest) (*FirewallState, error) {
+	return nil, status.Error(codes.Unimplemented, "method SetEnabled not implemented")
+}
+func (UnimplementedFirewallServiceServer) ListRules(context.Context, *FirewallRulesRequest) (*FirewallRules, error) {
+	return nil, status.Error(codes.Unimplemented, "method ListRules not implemented")
+}
+func (UnimplementedFirewallServiceServer) AddRule(context.Context, *FirewallRuleCreateRequest) (*FirewallRules, error) {
+	return nil, status.Error(codes.Unimplemented, "method AddRule not implemented")
+}
+func (UnimplementedFirewallServiceServer) UpdateRule(context.Context, *FirewallRuleUpdateRequest) (*FirewallRules, error) {
+	return nil, status.Error(codes.Unimplemented, "method UpdateRule not implemented")
+}
+func (UnimplementedFirewallServiceServer) DeleteRule(context.Context, *FirewallRuleDeleteRequest) (*FirewallRules, error) {
+	return nil, status.Error(codes.Unimplemented, "method DeleteRule not implemented")
+}
+func (UnimplementedFirewallServiceServer) mustEmbedUnimplementedFirewallServiceServer() {}
+func (UnimplementedFirewallServiceServer) testEmbeddedByValue()                         {}
+
+// UnsafeFirewallServiceServer may be embedded to opt out of forward compatibility for this service.
+// Use of this interface is not recommended, as added methods to FirewallServiceServer will
+// result in compilation errors.
+type UnsafeFirewallServiceServer interface {
+	mustEmbedUnimplementedFirewallServiceServer()
+}
+
+func RegisterFirewallServiceServer(s grpc.ServiceRegistrar, srv FirewallServiceServer) {
+	// If the following call panics, it indicates UnimplementedFirewallServiceServer was
+	// embedded by pointer and is nil.  This will cause panics if an
+	// unimplemented method is ever invoked, so we test this at initialization
+	// time to prevent it from happening at runtime later due to I/O.
+	if t, ok := srv.(interface{ testEmbeddedByValue() }); ok {
+		t.testEmbeddedByValue()
+	}
+	s.RegisterService(&FirewallService_ServiceDesc, srv)
+}
+
+func _FirewallService_GetStatus_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(FirewallStatusRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(FirewallServiceServer).GetStatus(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: FirewallService_GetStatus_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(FirewallServiceServer).GetStatus(ctx, req.(*FirewallStatusRequest))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
+func _FirewallService_SetEnabled_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(FirewallEnabledRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(FirewallServiceServer).SetEnabled(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: FirewallService_SetEnabled_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(FirewallServiceServer).SetEnabled(ctx, req.(*FirewallEnabledRequest))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
+func _FirewallService_ListRules_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(FirewallRulesRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(FirewallServiceServer).ListRules(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: FirewallService_ListRules_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(FirewallServiceServer).ListRules(ctx, req.(*FirewallRulesRequest))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
+func _FirewallService_AddRule_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(FirewallRuleCreateRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(FirewallServiceServer).AddRule(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: FirewallService_AddRule_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(FirewallServiceServer).AddRule(ctx, req.(*FirewallRuleCreateRequest))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
+func _FirewallService_UpdateRule_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(FirewallRuleUpdateRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(FirewallServiceServer).UpdateRule(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: FirewallService_UpdateRule_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(FirewallServiceServer).UpdateRule(ctx, req.(*FirewallRuleUpdateRequest))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
+func _FirewallService_DeleteRule_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(FirewallRuleDeleteRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(FirewallServiceServer).DeleteRule(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: FirewallService_DeleteRule_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(FirewallServiceServer).DeleteRule(ctx, req.(*FirewallRuleDeleteRequest))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
+// FirewallService_ServiceDesc is the grpc.ServiceDesc for FirewallService service.
+// It's only intended for direct use with grpc.RegisterService,
+// and not to be introspected or modified (even as a copy)
+var FirewallService_ServiceDesc = grpc.ServiceDesc{
+	ServiceName: "agent.v1.FirewallService",
+	HandlerType: (*FirewallServiceServer)(nil),
+	Methods: []grpc.MethodDesc{
+		{
+			MethodName: "GetStatus",
+			Handler:    _FirewallService_GetStatus_Handler,
+		},
+		{
+			MethodName: "SetEnabled",
+			Handler:    _FirewallService_SetEnabled_Handler,
+		},
+		{
+			MethodName: "ListRules",
+			Handler:    _FirewallService_ListRules_Handler,
+		},
+		{
+			MethodName: "AddRule",
+			Handler:    _FirewallService_AddRule_Handler,
+		},
+		{
+			MethodName: "UpdateRule",
+			Handler:    _FirewallService_UpdateRule_Handler,
+		},
+		{
+			MethodName: "DeleteRule",
+			Handler:    _FirewallService_DeleteRule_Handler,
+		},
+	},
+	Streams:  []grpc.StreamDesc{},
+	Metadata: "agent/v1/agent.proto",
+}

@@ -1,0 +1,12 @@
+backend=ufw
+--
+Status: active
+
+     To                         Action      From
+     --                         ------      ----
+[ 1] 22/tcp                     ALLOW IN    Anywhere
+[ 2] 8000:8100/tcp              ALLOW IN    10.0.0.0/8
+[ 3] 22/tcp (v6)                ALLOW IN    Anywhere (v6)
+--
+Added user rules (see 'ufw status' for running firewall):
+ufw allow 22/tcp comment 'SSH access'

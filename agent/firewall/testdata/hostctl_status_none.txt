@@ -1,0 +1,4 @@
+backend=none
+enabled=false
+manageable=false
+ssh_port=0

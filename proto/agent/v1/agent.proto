@@ -898,8 +898,8 @@ message RegisterRequest {
   string os = 2;
   string docker_version = 3;
   string arch = 4;
-  int64 total_mem = 5;   // bytes
-  int64 total_disk = 6;  // bytes
+  int64 total_mem = 5; // bytes
+  int64 total_disk = 6; // bytes
   // csr is a PEM-encoded PKCS#10 certificate signing request generated from
   // the agent's private key. When present, the CP signs it and returns the
   // resulting certificate in RegisterResponse.cert.
@@ -909,15 +909,15 @@ message RegisterRequest {
 // RegisterResponse returns the cert the agent must present to the CP when its
 // DockerService is dialed, plus the CP version for compatibility logging.
 message RegisterResponse {
-  bytes cert = 1;        // PEM-encoded agent certificate
+  bytes cert = 1; // PEM-encoded agent certificate
   string cp_version = 2;
 }
 
 // HeartbeatRequest reports live resource usage.
 message HeartbeatRequest {
-  double cpu_usage = 1;    // fraction 0..1
-  double mem_usage = 2;    // fraction 0..1
-  double disk_usage = 3;   // fraction 0..1
+  double cpu_usage = 1; // fraction 0..1
+  double mem_usage = 2; // fraction 0..1
+  double disk_usage = 3; // fraction 0..1
   int64 container_count = 4;
   google.protobuf.Timestamp sent_at = 5;
   // net_rx_bps, net_tx_bps, disk_read_bps and disk_write_bps are host I/O
@@ -966,15 +966,15 @@ message Metric {
 
 // HostObservation is the host-level evidence in one report.
 message HostObservation {
-  Metric cpu_usage = 1;       // fraction 0..1
-  Metric mem_usage = 2;       // fraction 0..1
-  Metric disk_usage = 3;      // fraction 0..1
-  Metric net_rx_bps = 4;      // bytes/second
-  Metric net_tx_bps = 5;      // bytes/second
-  Metric disk_read_bps = 6;   // bytes/second
-  Metric disk_write_bps = 7;  // bytes/second
-  uint64 total_mem = 8;       // bytes, 0 when unknown
-  uint64 total_disk = 9;      // bytes, 0 when unknown
+  Metric cpu_usage = 1; // fraction 0..1
+  Metric mem_usage = 2; // fraction 0..1
+  Metric disk_usage = 3; // fraction 0..1
+  Metric net_rx_bps = 4; // bytes/second
+  Metric net_tx_bps = 5; // bytes/second
+  Metric disk_read_bps = 6; // bytes/second
+  Metric disk_write_bps = 7; // bytes/second
+  uint64 total_mem = 8; // bytes, 0 when unknown
+  uint64 total_disk = 9; // bytes, 0 when unknown
 }
 
 // FilesystemObservation is one local filesystem's capacity evidence. Paths on
@@ -1683,12 +1683,12 @@ message PullImageResponse {
 message CreateContainerRequest {
   string image = 1;
   string name = 2;
-  repeated string env = 3;       // KEY=VALUE
+  repeated string env = 3; // KEY=VALUE
   repeated string command = 4;
   repeated string entrypoint = 5;
   map<string, string> labels = 6;
-  repeated string ports = 7;     // [host-ip:]host:container (bare container port allowed)
-  repeated string volumes = 8;   // host:container[:ro]
+  repeated string ports = 7; // [host-ip:]host:container (bare container port allowed)
+  repeated string volumes = 8; // host:container[:ro]
   repeated string networks = 9;
   // restart_policy is the native Docker restart policy name ("always",
   // "unless-stopped", "on-failure"); empty leaves Docker's default.
@@ -2123,3 +2123,142 @@ message HostApplyAgentRootRequest {
 }
 
 message HostApplyAgentRootResponse {}
+
+// FirewallService runs on the node agent. The control plane dials it to read
+// and change the firewall of the node it runs on. The agent detects the host
+// backend itself (ufw first, then firewalld, then nftables/iptables) and never
+// reaches another node.
+service FirewallService {
+  // GetStatus reports the detected backend, whether the firewall is active and
+  // whether Gotham can manage its rules.
+  rpc GetStatus(FirewallStatusRequest) returns (FirewallStatusResponse);
+  // SetEnabled turns the node firewall on or off. Enabling first makes sure
+  // SSH, the agent port and the control-plane port stay allowed; it fails
+  // rather than apply a change that could lock the operator out.
+  rpc SetEnabled(FirewallEnabledRequest) returns (FirewallState);
+  // ListRules returns the backend's current rules plus disabled rules saved on
+  // this node.
+  rpc ListRules(FirewallRulesRequest) returns (FirewallRules);
+  // AddRule creates one rule and returns the resulting rule list.
+  rpc AddRule(FirewallRuleCreateRequest) returns (FirewallRules);
+  // UpdateRule replaces one rule and returns the resulting rule list.
+  rpc UpdateRule(FirewallRuleUpdateRequest) returns (FirewallRules);
+  // DeleteRule removes one rule and returns the resulting rule list.
+  rpc DeleteRule(FirewallRuleDeleteRequest) returns (FirewallRules);
+}
+
+// FirewallBackend is the host firewall the agent found. NONE means no
+// supported firewall is installed.
+enum FirewallBackend {
+  FIREWALL_BACKEND_UNSPECIFIED = 0;
+  FIREWALL_BACKEND_NONE = 1;
+  FIREWALL_BACKEND_UFW = 2;
+  FIREWALL_BACKEND_FIREWALLD = 3;
+  FIREWALL_BACKEND_NFTABLES = 4;
+  FIREWALL_BACKEND_IPTABLES = 5;
+}
+
+// FirewallAction is what the rule does with matching traffic.
+enum FirewallAction {
+  FIREWALL_ACTION_UNSPECIFIED = 0;
+  FIREWALL_ACTION_ALLOW = 1;
+  FIREWALL_ACTION_DENY = 2;
+}
+
+// FirewallDirection is the traffic direction a rule matches.
+enum FirewallDirection {
+  FIREWALL_DIRECTION_UNSPECIFIED = 0;
+  FIREWALL_DIRECTION_IN = 1;
+  FIREWALL_DIRECTION_OUT = 2;
+}
+
+// FirewallProtocol is the transport protocol a rule matches.
+enum FirewallProtocol {
+  FIREWALL_PROTOCOL_UNSPECIFIED = 0;
+  FIREWALL_PROTOCOL_TCP = 1;
+  FIREWALL_PROTOCOL_UDP = 2;
+  FIREWALL_PROTOCOL_ANY = 3;
+}
+
+// FirewallRule is one node firewall rule in the model shared by every backend.
+message FirewallRule {
+  // id is the rule handle the control plane passes to UpdateRule/DeleteRule.
+  // An applied rule gets an id derived from its backing fields; a disabled rule
+  // gets an id when it is saved.
+  string id = 1;
+  FirewallAction action = 2;
+  FirewallDirection direction = 3;
+  FirewallProtocol protocol = 4;
+  // port is a single port ("22"), a range ("8000-8100") or empty for any port.
+  string port = 5;
+  // source is a plain address or CIDR ("10.0.0.0/8"), or empty for any source.
+  string source = 6;
+  string comment = 7;
+  bool enabled = 8;
+  // protected is true for an applied rule that keeps the operator's SSH, agent
+  // or control-plane access open. Deleting or editing it is still checked
+  // against the resulting rule set, but the UI can warn before the attempt.
+  bool protected = 9;
+  // read_only is true for a rule the agent cannot round-trip through the shared
+  // model (an app profile or a rich rule with unsupported fields). It is
+  // listed for visibility and cannot be edited from Gotham.
+  bool read_only = 10;
+}
+
+message FirewallStatusRequest {
+  // control_plane_port is the port the operator uses to reach the control
+  // plane. It is part of the protected set; 0 skips it.
+  uint32 control_plane_port = 1;
+}
+
+message FirewallStatusResponse {
+  FirewallBackend backend = 1;
+  // available is false when no supported firewall is installed.
+  bool available = 2;
+  // enabled reports whether the backend is active.
+  bool enabled = 3;
+  // manageable is false when the backend is detected but Gotham cannot edit
+  // its rules; detail explains why.
+  bool manageable = 4;
+  string detail = 5;
+  // ssh_port is the live SSH port (0 when sshd is not installed).
+  uint32 ssh_port = 6;
+  // agent_port is the agent's own TLS port.
+  uint32 agent_port = 7;
+  // control_plane_port is the port this request supplied.
+  uint32 control_plane_port = 8;
+}
+
+message FirewallEnabledRequest {
+  bool enabled = 1;
+  uint32 control_plane_port = 2;
+}
+
+message FirewallState {
+  FirewallStatusResponse status = 1;
+  repeated FirewallRule rules = 2;
+}
+
+message FirewallRulesRequest {
+  uint32 control_plane_port = 1;
+}
+
+message FirewallRules {
+  repeated FirewallRule rules = 1;
+}
+
+message FirewallRuleCreateRequest {
+  FirewallRule rule = 1;
+  uint32 control_plane_port = 2;
+}
+
+message FirewallRuleUpdateRequest {
+  string id = 1;
+  FirewallRule rule = 2;
+  uint32 control_plane_port = 3;
+}
+
+message FirewallRuleDeleteRequest {
+  string id = 1;
+  uint32 control_plane_port = 2;
+}

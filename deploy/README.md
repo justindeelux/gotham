@@ -192,7 +192,9 @@ The signed version, not the caller's `version`, decides what is applied.
 Installed root-owned and reached only through its sudoers drop-in. Verbs:
 `status`, `apply-network`, `confirm-network`, `revert-network`, `apply-system`,
 `cleanup-status`, `cleanup-journal`, `cleanup-package-cache`, `apply-ssh`,
-`confirm-ssh`, `revert-ssh`, `apply-agent-root`.
+`confirm-ssh`, `revert-ssh`, `apply-agent-root`, `firewall-status`,
+`firewall-list`, `firewall-add`, `firewall-delete`, `firewall-enable`,
+`firewall-disable`.
 Values arrive on stdin as `key=value` and are re-validated. Only
 systemd-networkd, systemd-resolved and systemd-timesyncd are supported, and it
 owns only its `05-gotham.*` drop-ins. A network change is tentative: a systemd

@@ -88,7 +88,7 @@ const en = {
     lead: "Installing {tools} changes how this node configures its network and DNS.",
     warning:
       "If NetworkManager or netplan manages this node's network, Gotham refuses the install so the node cannot lose its connection to Gotham. Gotham only enables the systemd units; it never restarts networking.",
-    confirm: "Install anyway",
+    confirm: "Install",
   },
 };
 

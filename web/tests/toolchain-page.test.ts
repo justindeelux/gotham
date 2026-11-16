@@ -262,10 +262,9 @@ describe("category tabs (JUS-189)", () => {
     await action?.trigger("click");
     await flushPromises();
     // curl is a network tool, so the batch passes the network confirmation first.
-    const confirm = Array.from(globalThis.document.body.querySelectorAll("button")).find(
-      (button) => button.textContent?.trim() === "Install anyway",
-    );
-    (confirm as { click: () => void } | undefined)?.click();
+    (globalThis.document.body.querySelector(".network-confirm-button") as
+      | { click: () => void }
+      | null)?.click();
     await flushPromises();
     expect(enqueueJobsMock).toHaveBeenCalledWith("srv-1", ["git", "curl"], "install");
   });
@@ -439,6 +438,16 @@ describe("network stack install confirmation", () => {
     (button as { click: () => void } | undefined)?.click();
   }
 
+  // The row's own Install button carries the same label, so the dialog's
+  // confirmation is addressed by its class.
+  function confirmButton() {
+    return globalThis.document.body.querySelector(".network-confirm-button");
+  }
+
+  function clickConfirm(): void {
+    (confirmButton() as { click: () => void } | null)?.click();
+  }
+
   function modalText(): string {
     return globalThis.document.body.querySelector(".n-modal")?.textContent ?? "";
   }
@@ -471,6 +480,7 @@ describe("network stack install confirmation", () => {
     expect(dialog.props("tools")).toEqual(["systemd-resolved"]);
     expect(modalText()).toContain("Change this node's network stack?");
     expect(modalText()).toContain("NetworkManager");
+    expect(confirmButton()?.textContent?.trim()).toBe("Install");
 
     clickButton("Cancel");
     await flushPromises();
@@ -478,7 +488,7 @@ describe("network stack install confirmation", () => {
     expect(wrapper.findComponent(NetworkInstallDialog).props("show")).toBe(false);
 
     await openConfirm(wrapper);
-    clickButton("Install anyway");
+    clickConfirm();
     await flushPromises();
     expect(enqueueJobsMock).toHaveBeenCalledWith("srv-1", ["systemd-resolved"], "install");
   });
@@ -505,7 +515,7 @@ describe("network stack install confirmation", () => {
     expect(enqueueJobsMock).not.toHaveBeenCalled();
     expect(modalText()).toContain("resolvectl");
 
-    clickButton("Install anyway");
+    clickConfirm();
     await flushPromises();
     expect(enqueueJobsMock).toHaveBeenCalledWith("srv-1", ["git", "resolvectl"], "install");
   });
@@ -520,10 +530,10 @@ describe("network stack install confirmation", () => {
     const wrapper = await mountPage();
     await openConfirm(wrapper);
     expect(modalText()).toContain("Thay đổi mạng của nút này?");
-    expect(modalText()).toContain("Vẫn cài đặt");
     expect(modalText()).not.toContain("networkConfirm");
+    expect(confirmButton()?.textContent?.trim()).toBe("Cài đặt");
 
-    clickButton("Vẫn cài đặt");
+    clickConfirm();
     await flushPromises();
     expect(enqueueJobsMock).toHaveBeenCalledWith("srv-1", ["systemd-networkd"], "install");
   });

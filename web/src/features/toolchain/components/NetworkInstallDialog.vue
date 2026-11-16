@@ -41,7 +41,7 @@ const toolList = computed<string>(() => props.tools.join(", "));
         <NButton @click="emit('update:show', false)">
           {{ t("toolchain.actions.cancel") }}
         </NButton>
-        <NButton type="primary" @click="emit('confirm')">
+        <NButton class="network-confirm-button" type="primary" @click="emit('confirm')">
           {{ t("toolchain.networkConfirm.confirm") }}
         </NButton>
       </NSpace>

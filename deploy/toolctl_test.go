@@ -29,6 +29,22 @@ func runToolctl(t *testing.T, root string, extra []string, args ...string) (stri
 	return string(out), err
 }
 
+// aptCacheStub points the helper's package query at an apt-cache that reports
+// whether the distribution carries the standalone systemd network packages. The
+// helper pins its PATH for hardening, so this goes through its test seam.
+func aptCacheStub(t *testing.T, known bool) string {
+	t.Helper()
+	status := "1"
+	if known {
+		status = "0"
+	}
+	path := filepath.Join(t.TempDir(), "apt-cache")
+	if err := os.WriteFile(path, []byte("#!/bin/sh\nexit "+status+"\n"), 0o755); err != nil {
+		t.Fatalf("write fake apt-cache: %v", err)
+	}
+	return "GOTHAM_TOOLCTL_APT_CACHE=" + path
+}
+
 func TestToolctlRefusesUnlistedTools(t *testing.T) {
 	root := t.TempDir()
 	for _, args := range [][]string{
@@ -133,38 +149,48 @@ func TestToolctlGitPackageUpgradeCommands(t *testing.T) {
 }
 
 func TestToolctlInstallsSystemdNetworkStack(t *testing.T) {
-	t.Run("debian", func(t *testing.T) {
+	t.Run("units inside systemd", func(t *testing.T) {
+		// Ubuntu 22.04 and older Debian ship no systemd-networkd or
+		// systemd-resolved package: apt has neither, and the units belong to
+		// `systemd`, so the install must not name a package.
 		root := t.TempDir()
-		// networkd ships inside the systemd package, so there is no package step.
-		out, err := runToolctl(t, root, nil, "install-tool", "systemd-networkd")
-		if err != nil {
-			t.Fatalf("install-tool systemd-networkd: %v: %s", err, out)
+		noPackages := aptCacheStub(t, false)
+		for id, unit := range map[string]string{
+			"systemd-networkd": "systemd-networkd",
+			"systemd-resolved": "systemd-resolved",
+			"resolvectl":       "systemd-resolved",
+		} {
+			out, err := runToolctl(t, root, []string{noPackages}, "install-tool", id)
+			if err != nil {
+				t.Fatalf("install-tool %s: %v: %s", id, err, out)
+			}
+			if strings.Contains(out, "apt-get") {
+				t.Errorf("%s installs a package apt does not offer: %q", id, out)
+			}
+			if !strings.Contains(out, "systemctl enable --now "+unit) {
+				t.Errorf("%s does not enable %s: %q", id, unit, out)
+			}
 		}
-		if strings.Contains(out, "apt-get install") {
-			t.Errorf("Debian networkd is installed as a package: %q", out)
-		}
-		if !strings.Contains(out, "systemctl enable --now systemd-networkd") {
-			t.Errorf("networkd unit is not enabled: %q", out)
-		}
+	})
 
-		out, err = runToolctl(t, root, nil, "install-tool", "systemd-resolved")
-		if err != nil {
-			t.Fatalf("install-tool systemd-resolved: %v: %s", err, out)
-		}
-		if !strings.Contains(out, "DEBIAN_FRONTEND=noninteractive apt-get install -y systemd-resolved") {
-			t.Errorf("resolved package is not installed non-interactively: %q", out)
-		}
-		if !strings.Contains(out, "systemctl enable --now systemd-resolved") {
-			t.Errorf("resolved unit is not enabled: %q", out)
-		}
-
-		// resolvectl comes with the same package.
-		out, err = runToolctl(t, root, nil, "install-tool", "resolvectl")
-		if err != nil {
-			t.Fatalf("install-tool resolvectl: %v: %s", err, out)
-		}
-		if !strings.Contains(out, "apt-get install -y systemd-resolved") {
-			t.Errorf("resolvectl does not come from the resolved package: %q", out)
+	t.Run("standalone packages", func(t *testing.T) {
+		root := t.TempDir()
+		knownPackages := aptCacheStub(t, true)
+		for id, pkg := range map[string]string{
+			"systemd-networkd": "systemd-networkd",
+			"systemd-resolved": "systemd-resolved",
+			"resolvectl":       "systemd-resolved",
+		} {
+			out, err := runToolctl(t, root, []string{knownPackages}, "install-tool", id)
+			if err != nil {
+				t.Fatalf("install-tool %s: %v: %s", id, err, out)
+			}
+			if !strings.Contains(out, "DEBIAN_FRONTEND=noninteractive apt-get install -y "+pkg) {
+				t.Errorf("%s does not install %s: %q", id, pkg, out)
+			}
+			if !strings.Contains(out, "systemctl enable --now ") {
+				t.Errorf("%s does not enable its unit: %q", id, out)
+			}
 		}
 	})
 

@@ -262,10 +262,12 @@ all.
 
 The three systemd network tools are installed from the distribution packages,
 because `gotham-hostctl` needs the units and `resolvectl` to write its network
-and DNS drop-ins: `systemd-resolved` (which also ships `resolvectl`) on
-Debian/Ubuntu and Fedora/RHEL, and `systemd-networkd` where it is a package of
-its own (Fedora/RHEL; on Debian/Ubuntu it is part of `systemd`). The units are
-enabled and started, never restarted, and they are never removed. On a node
+and DNS drop-ins. On Debian/Ubuntu the helper installs the standalone
+`systemd-resolved`/`systemd-networkd` package only when apt offers one: Ubuntu
+22.04 and older Debian ship those units and `resolvectl` inside `systemd`
+itself, so nothing is installed there. On Fedora/RHEL it installs
+`systemd-networkd` and `systemd-resolved` with dnf. Either way the units are
+then enabled and started, never restarted, and they are never removed. On a node
 whose networking is managed by NetworkManager (or by netplan rendering to it)
 the install is refused with an explanation, as Gotham only configures
 systemd-networkd hosts. A node without `apt-get` or `dnf` reports these tools as

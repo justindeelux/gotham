@@ -61,6 +61,7 @@ NETWORK_MANAGER_OVERRIDE=""
 # where the helper looks for systemd-run or its lock, but never grant privilege
 # — under sudo they are ignored, and the helper is only ever reached via sudo.
 SYSTEMD_RUN="systemd-run"
+APT_CACHE="apt-cache"
 LOCK_OVERRIDE=""
 if [ -z "${SUDO_USER:-}${SUDO_UID:-}" ]; then
     ROOT="${GOTHAM_TOOLCTL_ROOT:-}"
@@ -69,6 +70,9 @@ if [ -z "${SUDO_USER:-}${SUDO_UID:-}" ]; then
     DISTRO_OVERRIDE="${GOTHAM_TOOLCTL_DISTRO:-}"
     NETWORK_MANAGER_OVERRIDE="${GOTHAM_TOOLCTL_NETWORK_MANAGER:-}"
     SYSTEMD_RUN="${GOTHAM_TOOLCTL_SYSTEMD_RUN:-systemd-run}"
+    # The fixed PATH below is a hardening rule, so a test cannot stub apt-cache
+    # through it; this seam points the package query at a stub instead.
+    APT_CACHE="${GOTHAM_TOOLCTL_APT_CACHE:-apt-cache}"
     LOCK_OVERRIDE="${GOTHAM_TOOLCTL_LOCK:-}"
 fi
 
@@ -326,10 +330,11 @@ install_git() {
 
 # ---- systemd network stack -------------------------------------------------
 # gotham-hostctl writes networkd and resolved drop-ins, so a node without these
-# units cannot be configured from the UI. Packages differ per family: Debian and
-# Ubuntu carry systemd-networkd inside `systemd` and resolved in its own package,
-# while Fedora and RHEL package systemd-networkd separately. resolvectl ships in
-# the systemd-resolved package on both.
+# units cannot be configured from the UI. Packages differ per family: on Debian
+# and Ubuntu the units can ship inside `systemd` itself (22.04) or in standalone
+# packages (newer releases), so a package is installed only when apt knows it;
+# Fedora and RHEL package systemd-networkd and systemd-resolved separately.
+# resolvectl ships with whichever package provides resolved.
 #
 # The units are enabled and started, never restarted, so a running link stack
 # keeps its configuration and the control-plane connection is not cut.
@@ -352,10 +357,21 @@ require_networkd_host() {
     return 0
 }
 
+# apt_install_if_known installs a distribution package only when apt offers one.
+# Ubuntu 22.04 and older Debian have no systemd-networkd or systemd-resolved
+# package: the units belong to `systemd`, so naming the package would fail the
+# install. The query runs first so a skipped install costs no package-list
+# download and an unreachable mirror cannot block enabling existing units.
+apt_install_if_known() {
+    "${APT_CACHE}" show "$1" >/dev/null 2>&1 || return 0
+    run env DEBIAN_FRONTEND=noninteractive apt-get update || return $?
+    run env DEBIAN_FRONTEND=noninteractive apt-get install -y "$1"
+}
+
 install_systemd_networkd() {
     require_networkd_host
     case "${DISTRO}" in
-        apt) : ;;
+        apt) apt_install_if_known systemd-networkd || return $? ;;
         dnf) run dnf install -y systemd-networkd ;;
         *) die "systemd-networkd: unsupported distribution" 5 ;;
     esac
@@ -365,10 +381,7 @@ install_systemd_networkd() {
 install_systemd_resolved() {
     require_networkd_host
     case "${DISTRO}" in
-        apt)
-            run env DEBIAN_FRONTEND=noninteractive apt-get update || return $?
-            run env DEBIAN_FRONTEND=noninteractive apt-get install -y systemd-resolved
-            ;;
+        apt) apt_install_if_known systemd-resolved || return $? ;;
         dnf) run dnf install -y systemd-resolved ;;
         *) die "systemd-resolved: unsupported distribution" 5 ;;
     esac
@@ -376,7 +389,7 @@ install_systemd_resolved() {
 }
 
 install_resolvectl() {
-    # resolvectl comes with the systemd-resolved package.
+    # resolvectl ships with whichever package provides resolved.
     install_systemd_resolved
 }
 

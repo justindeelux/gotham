@@ -71,4 +71,4 @@ Ask yourself: "Would a senior engineer say this is overcomplicated?" If yes, sim
 
 ## Language
 
-Use one consistent language across the project (code, comments, commit messages, docs, UI copy and i18n files).
+Use one consistent language across the project (code, comments, commit messages, docs).

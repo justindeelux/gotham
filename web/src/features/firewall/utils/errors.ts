@@ -8,7 +8,9 @@ import en from "../locales/en";
 const knownCodes: Record<string, string> = en.errors;
 const accessLabels: Record<string, string> = en.access;
 
-export type Translate = (key: string, params?: Record<string, string>) => string;
+export interface Translate {
+  (_key: string, _params?: Record<string, string>): string;
+}
 
 function localizedParams(
   params: Record<string, string>,

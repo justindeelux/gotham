@@ -10,7 +10,7 @@ import {
   updateFirewallRule,
 } from "../api/firewall";
 import type { FirewallRule, FirewallRuleInput, FirewallStatus } from "../api/firewall";
-import { firewallErrorText } from "../utils/errors";
+import { firewallErrorDetail, firewallErrorText } from "../utils/errors";
 
 export function useFirewall(serverId: () => string) {
   const { t } = useI18n();
@@ -19,6 +19,7 @@ export function useFirewall(serverId: () => string) {
   const loading = ref(false);
   const saving = ref(false);
   const loadError = ref("");
+  const loadErrorDetail = ref("");
   let requestSeq = 0;
 
   async function load(): Promise<void> {
@@ -29,6 +30,7 @@ export function useFirewall(serverId: () => string) {
     const seq = ++requestSeq;
     loading.value = true;
     loadError.value = "";
+    loadErrorDetail.value = "";
     try {
       const next = await getFirewallStatus(id);
       if (seq !== requestSeq || serverId() !== id) {
@@ -43,6 +45,7 @@ export function useFirewall(serverId: () => string) {
       status.value = null;
       rules.value = [];
       loadError.value = firewallErrorText(error, t, t("firewall.errors.load"));
+      loadErrorDetail.value = firewallErrorDetail(error, t);
     } finally {
       if (seq === requestSeq) {
         loading.value = false;
@@ -89,5 +92,5 @@ export function useFirewall(serverId: () => string) {
     void load();
   });
 
-  return { status, rules, loading, saving, loadError, load, toggle, save, remove };
+  return { status, rules, loading, saving, loadError, loadErrorDetail, load, toggle, save, remove };
 }

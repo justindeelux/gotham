@@ -4,7 +4,11 @@ import { createI18n } from "vue-i18n";
 import type { FirewallStatus } from "@/features/firewall/api/firewall";
 import en from "@/features/firewall/locales/en";
 import vi from "@/features/firewall/locales/vi";
-import { firewallDetailText, firewallErrorText } from "@/features/firewall/utils/errors";
+import {
+  firewallDetailText,
+  firewallErrorDetail,
+  firewallErrorText,
+} from "@/features/firewall/utils/errors";
 import type { Translate } from "@/features/firewall/utils/errors";
 
 function translator(locale: "en" | "vi"): Translate {
@@ -145,5 +149,48 @@ describe("firewall error codes", () => {
         tVi,
       ),
     ).toBe("A future backend says hello.");
+  });
+});
+
+describe("firewall error details", () => {
+  it("keeps the helper's reason for helper_failed", () => {
+    expect(firewallErrorDetail(apiError("helper_failed"), tVi)).toBe(
+      "the node refused the change",
+    );
+    expect(firewallErrorDetail(apiError("helper_failed"), tEn)).toBe(
+      "the node refused the change",
+    );
+  });
+
+  it("hides the detail for a fully translated code", () => {
+    expect(firewallErrorDetail(apiError("read_only_rule"), tVi)).toBe("");
+    expect(
+      firewallErrorDetail(apiError("would_lock_out", { port: "22", access: "ssh" }), tVi),
+    ).toBe("");
+    expect(firewallErrorDetail(apiError(), tVi)).toBe("");
+  });
+
+  it("hides an empty or identical detail", () => {
+    const empty = {
+      status: 409,
+      message: "   ",
+      cause: { response: { data: { code: "helper_failed" } } },
+    };
+    expect(firewallErrorDetail(empty, tVi)).toBe("");
+    const identical = {
+      status: 409,
+      message: vi.errors.helper_failed,
+      cause: { response: { data: { code: "helper_failed" } } },
+    };
+    expect(firewallErrorDetail(identical, tVi)).toBe("");
+  });
+
+  it("labels the detail in both catalogs", () => {
+    expect(String(tEn("firewall.errors.details", { message: "boom" }))).toBe(
+      "Details: boom",
+    );
+    expect(String(tVi("firewall.errors.details", { message: "boom" }))).toBe(
+      "Chi tiết: boom",
+    );
   });
 });

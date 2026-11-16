@@ -20,7 +20,7 @@ SUDOERS_FILE="/etc/sudoers.d/gotham-toolctl"
 # The exact verb/id pairs the agent may invoke. Keep in sync with
 # agent/tools/server.go (helperInstallVerb/helperUninstallVerb) and the
 # allow-lists in deploy/gotham-toolctl.sh.
-INSTALL_IDS="railpack buildkit pack docker git"
+INSTALL_IDS="railpack buildkit pack docker git systemd-networkd systemd-resolved resolvectl"
 UNINSTALL_IDS="railpack buildkit pack git"
 
 if [ "$(id -u)" -ne 0 ]; then

@@ -106,22 +106,20 @@ var Catalog = []Tool{
 	{
 		ID:          IDSystemdNetworkd,
 		Name:        "systemd-networkd",
-		Description: "Host network configuration; Gotham writes a drop-in and reloads it. Detect-only: never installed or removed.",
+		Description: "Host network configuration; Gotham writes a drop-in and reloads it. Installed from the distribution package on Debian/Ubuntu and Fedora/RHEL, never removed.",
 		Category:    CategoryNetwork,
 		Detect:      Detect{Probe: []string{"systemctl", "is-active", "--quiet", "systemd-networkd"}},
-		Deps:        []string{IDSystemctl},
 		NeedsRoot:   true,
-		Installable: false, Uninstallable: false,
+		Installable: true, Uninstallable: false,
 	},
 	{
 		ID:          IDSystemdResolved,
 		Name:        "systemd-resolved",
-		Description: "Host DNS resolution; Gotham writes a drop-in and reloads it. Detect-only: never installed or removed.",
+		Description: "Host DNS resolution; Gotham writes a drop-in and reloads it. Installed from the distribution package on Debian/Ubuntu and Fedora/RHEL, never removed.",
 		Category:    CategoryNetwork,
 		Detect:      Detect{Probe: []string{"systemctl", "is-active", "--quiet", "systemd-resolved"}},
-		Deps:        []string{IDSystemctl},
 		NeedsRoot:   true,
-		Installable: false, Uninstallable: false,
+		Installable: true, Uninstallable: false,
 	},
 	{
 		ID:          IDNetworkctl,
@@ -172,12 +170,12 @@ var Catalog = []Tool{
 	{
 		ID:          IDResolvectl,
 		Name:        "resolvectl",
-		Description: "Reads and sets per-link DNS through systemd-resolved.",
+		Description: "Reads and sets per-link DNS through systemd-resolved. Shipped by the systemd-resolved package on Debian/Ubuntu and Fedora/RHEL, never removed.",
 		Category:    CategoryNetwork,
 		Detect:      Detect{Binaries: []string{"resolvectl"}, Version: []string{"--version"}},
 		Deps:        []string{IDSystemdResolved},
 		NeedsRoot:   true,
-		Installable: false, Uninstallable: false,
+		Installable: true, Uninstallable: false,
 	},
 	{
 		ID:          IDIP,
@@ -223,6 +221,46 @@ func Installed(id string) bool {
 	}
 	_, ok = resolve(tool)
 	return ok
+}
+
+// distroPackaged lists the tools the host helper installs from the node's
+// distribution packages, with the package-manager families it has an install
+// step for. Keep in sync with deploy/gotham-toolctl.sh.
+var distroPackaged = map[string][]string{
+	IDSystemdNetworkd: {"apt", "dnf"},
+	IDSystemdResolved: {"apt", "dnf"},
+	IDResolvectl:      {"apt", "dnf"},
+}
+
+// InstallAvailable reports whether the host helper can install a catalog tool on
+// this node. A distro-packaged tool needs one of the package managers the helper
+// supports; every other tool ships a release asset and is always available.
+func InstallAvailable(id string) bool {
+	families, packaged := distroPackaged[id]
+	if !packaged {
+		return true
+	}
+	manager := packageManager()
+	for _, family := range families {
+		if family == manager {
+			return true
+		}
+	}
+	return false
+}
+
+// packageManager reports the node's package-manager family, mirroring the
+// fallback detection in deploy/gotham-toolctl.sh.
+func packageManager() string {
+	for _, candidate := range []struct{ binary, family string }{
+		{"apt-get", "apt"},
+		{"dnf", "dnf"},
+	} {
+		if _, err := exec.LookPath(candidate.binary); err == nil {
+			return candidate.family
+		}
+	}
+	return ""
 }
 
 func DetectAll() []Detection {

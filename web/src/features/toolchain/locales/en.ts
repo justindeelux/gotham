@@ -83,6 +83,13 @@ const en = {
     conflict: "That job already left the queue, so it cannot be canceled.",
     agentUnavailable: "The node agent is unreachable. Check that it is online and retry.",
   },
+  networkConfirm: {
+    title: "Change this node's network stack?",
+    lead: "Installing {tools} changes how this node configures its network and DNS.",
+    warning:
+      "If NetworkManager or netplan manages this node's network, Gotham refuses the install so the node cannot lose its connection to Gotham. Gotham only enables the systemd units; it never restarts networking.",
+    confirm: "Install anyway",
+  },
 };
 
 export default en;

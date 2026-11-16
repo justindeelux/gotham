@@ -85,6 +85,13 @@ const vi: typeof en = {
     conflict: "Tác vụ đã rời hàng đợi nên không thể hủy.",
     agentUnavailable: "Không kết nối được agent trên nút. Kiểm tra nút đang trực tuyến rồi thử lại.",
   },
+  networkConfirm: {
+    title: "Thay đổi mạng của nút này?",
+    lead: "Cài {tools} sẽ thay đổi cách nút này cấu hình mạng và DNS.",
+    warning:
+      "Nếu NetworkManager hoặc netplan đang quản lý mạng của nút, Gotham sẽ từ chối cài đặt để nút không mất kết nối với Gotham. Gotham chỉ bật các unit systemd, không bao giờ khởi động lại mạng.",
+    confirm: "Vẫn cài đặt",
+  },
 };
 
 export default vi;

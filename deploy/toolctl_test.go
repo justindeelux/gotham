@@ -20,6 +20,9 @@ func runToolctl(t *testing.T, root string, extra []string, args ...string) (stri
 		"GOTHAM_TOOLCTL_DRYRUN=1",
 		"GOTHAM_TOOLCTL_ARCH=amd64",
 		"GOTHAM_TOOLCTL_DISTRO=apt",
+		// Pin the host's network manager so the test does not depend on the
+		// machine running it.
+		"GOTHAM_TOOLCTL_NETWORK_MANAGER=none",
 	)
 	cmd.Env = append(cmd.Env, extra...)
 	out, err := cmd.CombinedOutput()
@@ -29,7 +32,7 @@ func runToolctl(t *testing.T, root string, extra []string, args ...string) (stri
 func TestToolctlRefusesUnlistedTools(t *testing.T) {
 	root := t.TempDir()
 	for _, args := range [][]string{
-		{"install-tool", "systemd-networkd"},
+		{"install-tool", "networkctl"},
 		{"install-tool", "nope"},
 		{"uninstall-tool", "docker"},
 		{"uninstall-tool", "systemctl"},
@@ -126,6 +129,124 @@ func TestToolctlGitPackageUpgradeCommands(t *testing.T) {
 		if err != nil || !strings.Contains(out, command) {
 			t.Errorf("git install/update on %s = %q, %v; want %q", distro, out, err, command)
 		}
+	}
+}
+
+func TestToolctlInstallsSystemdNetworkStack(t *testing.T) {
+	t.Run("debian", func(t *testing.T) {
+		root := t.TempDir()
+		// networkd ships inside the systemd package, so there is no package step.
+		out, err := runToolctl(t, root, nil, "install-tool", "systemd-networkd")
+		if err != nil {
+			t.Fatalf("install-tool systemd-networkd: %v: %s", err, out)
+		}
+		if strings.Contains(out, "apt-get install") {
+			t.Errorf("Debian networkd is installed as a package: %q", out)
+		}
+		if !strings.Contains(out, "systemctl enable --now systemd-networkd") {
+			t.Errorf("networkd unit is not enabled: %q", out)
+		}
+
+		out, err = runToolctl(t, root, nil, "install-tool", "systemd-resolved")
+		if err != nil {
+			t.Fatalf("install-tool systemd-resolved: %v: %s", err, out)
+		}
+		if !strings.Contains(out, "DEBIAN_FRONTEND=noninteractive apt-get install -y systemd-resolved") {
+			t.Errorf("resolved package is not installed non-interactively: %q", out)
+		}
+		if !strings.Contains(out, "systemctl enable --now systemd-resolved") {
+			t.Errorf("resolved unit is not enabled: %q", out)
+		}
+
+		// resolvectl comes with the same package.
+		out, err = runToolctl(t, root, nil, "install-tool", "resolvectl")
+		if err != nil {
+			t.Fatalf("install-tool resolvectl: %v: %s", err, out)
+		}
+		if !strings.Contains(out, "apt-get install -y systemd-resolved") {
+			t.Errorf("resolvectl does not come from the resolved package: %q", out)
+		}
+	})
+
+	t.Run("fedora", func(t *testing.T) {
+		root := t.TempDir()
+		for id, want := range map[string]string{
+			"systemd-networkd": "dnf install -y systemd-networkd",
+			"systemd-resolved": "dnf install -y systemd-resolved",
+			"resolvectl":       "dnf install -y systemd-resolved",
+		} {
+			out, err := runToolctl(t, root, []string{"GOTHAM_TOOLCTL_DISTRO=dnf"}, "install-tool", id)
+			if err != nil {
+				t.Fatalf("install-tool %s: %v: %s", id, err, out)
+			}
+			if !strings.Contains(out, want) {
+				t.Errorf("%s install on dnf = %q; want %q", id, out, want)
+			}
+		}
+	})
+
+	t.Run("never restarts networking", func(t *testing.T) {
+		root := t.TempDir()
+		for _, id := range []string{"systemd-networkd", "systemd-resolved", "resolvectl"} {
+			out, err := runToolctl(t, root, nil, "install-tool", id)
+			if err != nil {
+				t.Fatalf("install-tool %s: %v: %s", id, err, out)
+			}
+			if strings.Contains(out, "systemctl restart") {
+				t.Errorf("%s install restarts a unit: %q", id, out)
+			}
+		}
+	})
+
+	t.Run("unsupported distribution", func(t *testing.T) {
+		out, err := runToolctl(t, t.TempDir(), []string{"GOTHAM_TOOLCTL_DISTRO=apk"}, "install-tool", "systemd-resolved")
+		if err == nil || !strings.Contains(out, "unsupported distribution") {
+			t.Fatalf("install on apk = %q, %v; want an unsupported-distribution refusal", out, err)
+		}
+		if strings.Contains(out, "+ ") {
+			t.Errorf("an unsupported distribution still planned a command: %q", out)
+		}
+	})
+}
+
+func TestToolctlRefusesNetworkManagerHosts(t *testing.T) {
+	for _, id := range []string{"systemd-networkd", "systemd-resolved", "resolvectl"} {
+		out, err := runToolctl(t, t.TempDir(), []string{"GOTHAM_TOOLCTL_NETWORK_MANAGER=networkmanager"}, "install-tool", id)
+		if err == nil || !strings.Contains(out, "NetworkManager") || !strings.Contains(out, "Nothing was changed") {
+			t.Errorf("install %s on a NetworkManager host = %q, %v; want a refusal", id, out, err)
+		}
+		if strings.Contains(out, "+ ") {
+			t.Errorf("a refused network install still planned a command: %q", out)
+		}
+	}
+}
+
+func TestToolctlRefusesNetplanNetworkManagerRenderer(t *testing.T) {
+	root := t.TempDir()
+	netplan := filepath.Join(root, "etc/netplan")
+	if err := os.MkdirAll(netplan, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(netplan, "50-cloud-init.yaml"),
+		[]byte("network:\n  version: 2\n  renderer: NetworkManager\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	cmd := exec.Command("sh", "-c", `
+systemctl() { return 3; }
+. ./gotham-toolctl.sh
+`, "toolctl", "install-tool", "systemd-resolved")
+	cmd.Env = append(os.Environ(),
+		"GOTHAM_TOOLCTL_ROOT="+root,
+		"GOTHAM_TOOLCTL_DRYRUN=1",
+		"GOTHAM_TOOLCTL_ARCH=amd64",
+		"GOTHAM_TOOLCTL_DISTRO=apt",
+	)
+	out, err := cmd.CombinedOutput()
+	if err == nil || !strings.Contains(string(out), "NetworkManager") {
+		t.Fatalf("netplan NetworkManager renderer = %q, %v; want a refusal", out, err)
+	}
+	if strings.Contains(string(out), "+ ") {
+		t.Errorf("a refused network install still planned a command: %s", out)
 	}
 }
 

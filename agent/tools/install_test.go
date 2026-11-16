@@ -224,6 +224,31 @@ func TestToolServerInstallRunsDependenciesFirst(t *testing.T) {
 	}
 }
 
+func TestToolServerInstallsSystemdNetworkStack(t *testing.T) {
+	runner := &fakeToolRunner{}
+	server := NewToolServer(
+		withToolRunner(runner),
+		withToolHelper("/opt/gotham/gotham-toolctl"),
+		withToolInstalled(installedNone),
+	)
+
+	stream := newFakeToolStream(context.Background())
+	if err := server.InstallTool(&agentv1.InstallToolRequest{Id: toolcatalog.IDResolvectl}, stream); err != nil {
+		t.Fatalf("InstallTool(resolvectl): %v", err)
+	}
+
+	want := []string{toolcatalog.IDSystemdResolved, toolcatalog.IDResolvectl}
+	if got := runner.invoked(helperInstallVerb); !equalStrings(got, want) {
+		t.Fatalf("install order = %v; want %v", got, want)
+	}
+	if !runner.allRoot() {
+		t.Fatal("a helper step ran without root; the helper is the privileged path")
+	}
+	if result := stream.result(); result == nil || result.GetStatus() != toolStatusSucceeded {
+		t.Fatalf("final result = %v; want succeeded", result)
+	}
+}
+
 func TestToolServerInstallIdempotent(t *testing.T) {
 	runner := &fakeToolRunner{}
 	server := NewToolServer(

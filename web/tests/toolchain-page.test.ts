@@ -34,6 +34,8 @@ import type { Server } from "@/features/servers";
 import { listJobs, listTools, enqueueJobs } from "@/features/toolchain/api/toolchain";
 import type { ToolchainTool } from "@/features/toolchain/api/toolchain";
 import toolchainEn from "@/features/toolchain/locales/en";
+import toolchainVi from "@/features/toolchain/locales/vi";
+import NetworkInstallDialog from "@/features/toolchain/components/NetworkInstallDialog.vue";
 import ToolchainPage from "@/features/toolchain/pages/ToolchainPage.vue";
 import { useToolchainStore } from "@/features/toolchain/stores/toolchain";
 import { i18n, resetLocaleState, syncComposerLocale } from "@/shared/i18n";
@@ -259,6 +261,12 @@ describe("category tabs (JUS-189)", () => {
       .find((button) => button.text().includes("Install selected"));
     await action?.trigger("click");
     await flushPromises();
+    // curl is a network tool, so the batch passes the network confirmation first.
+    const confirm = Array.from(globalThis.document.body.querySelectorAll("button")).find(
+      (button) => button.textContent?.trim() === "Install anyway",
+    );
+    (confirm as { click: () => void } | undefined)?.click();
+    await flushPromises();
     expect(enqueueJobsMock).toHaveBeenCalledWith("srv-1", ["git", "curl"], "install");
   });
 
@@ -418,5 +426,105 @@ describe("platform tools", () => {
     await update?.trigger("click");
     await flushPromises();
     expect(enqueueJobsMock).toHaveBeenCalledWith("srv-1", ["git"], "install");
+  });
+});
+
+describe("network stack install confirmation", () => {
+  function bodyButtons() {
+    return Array.from(globalThis.document.body.querySelectorAll("button"));
+  }
+
+  function clickButton(text: string): void {
+    const button = bodyButtons().find((item) => item.textContent?.trim() === text);
+    (button as { click: () => void } | undefined)?.click();
+  }
+
+  function modalText(): string {
+    return globalThis.document.body.querySelector(".n-modal")?.textContent ?? "";
+  }
+
+  async function openConfirm(wrapper: Awaited<ReturnType<typeof mountPage>>) {
+    const install = wrapper.findAll("tbody tr")[0]?.findAll("button")[0];
+    await install?.trigger("click");
+    await flushPromises();
+    return wrapper;
+  }
+
+  it("asks before installing a network tool and stops on cancel", async () => {
+    useServersStore().servers = [server()];
+    listToolsMock.mockResolvedValue([
+      tool({
+        id: "systemd-resolved",
+        name: "systemd-resolved",
+        category: "network",
+        description: "Host DNS resolution",
+      }),
+    ]);
+    const wrapper = await mountPage();
+    const checkbox = wrapper.findAll('.n-checkbox[role="checkbox"]')[1];
+    expect(checkbox.attributes("disabled")).toBeUndefined();
+
+    await openConfirm(wrapper);
+    expect(enqueueJobsMock).not.toHaveBeenCalled();
+    const dialog = wrapper.findComponent(NetworkInstallDialog);
+    expect(dialog.props("show")).toBe(true);
+    expect(dialog.props("tools")).toEqual(["systemd-resolved"]);
+    expect(modalText()).toContain("Change this node's network stack?");
+    expect(modalText()).toContain("NetworkManager");
+
+    clickButton("Cancel");
+    await flushPromises();
+    expect(enqueueJobsMock).not.toHaveBeenCalled();
+    expect(wrapper.findComponent(NetworkInstallDialog).props("show")).toBe(false);
+
+    await openConfirm(wrapper);
+    clickButton("Install anyway");
+    await flushPromises();
+    expect(enqueueJobsMock).toHaveBeenCalledWith("srv-1", ["systemd-resolved"], "install");
+  });
+
+  it("asks once for a batch that includes a network tool", async () => {
+    useServersStore().servers = [server()];
+    listToolsMock.mockResolvedValue([
+      tool({ id: "git", name: "Git", category: "build" }),
+      tool({ id: "resolvectl", name: "resolvectl", category: "network" }),
+    ]);
+    const wrapper = await mountPage();
+    await wrapper.findAll('.n-checkbox[role="checkbox"]')[1].trigger("click");
+    await flushPromises();
+    await wrapper.findAll('[role="tab"]')[1].trigger("click");
+    await flushPromises();
+    await wrapper.findAll('.n-checkbox[role="checkbox"]')[1].trigger("click");
+    await flushPromises();
+
+    const action = wrapper
+      .findAll("button")
+      .find((button) => button.text().includes("Install selected"));
+    await action?.trigger("click");
+    await flushPromises();
+    expect(enqueueJobsMock).not.toHaveBeenCalled();
+    expect(modalText()).toContain("resolvectl");
+
+    clickButton("Install anyway");
+    await flushPromises();
+    expect(enqueueJobsMock).toHaveBeenCalledWith("srv-1", ["git", "resolvectl"], "install");
+  });
+
+  it("shows the confirmation in Vietnamese without raw keys", async () => {
+    i18n.global.mergeLocaleMessage("vi", { toolchain: toolchainVi });
+    syncComposerLocale("vi");
+    useServersStore().servers = [server()];
+    listToolsMock.mockResolvedValue([
+      tool({ id: "systemd-networkd", name: "systemd-networkd", category: "network" }),
+    ]);
+    const wrapper = await mountPage();
+    await openConfirm(wrapper);
+    expect(modalText()).toContain("Thay đổi mạng của nút này?");
+    expect(modalText()).toContain("Vẫn cài đặt");
+    expect(modalText()).not.toContain("networkConfirm");
+
+    clickButton("Vẫn cài đặt");
+    await flushPromises();
+    expect(enqueueJobsMock).toHaveBeenCalledWith("srv-1", ["systemd-networkd"], "install");
   });
 });

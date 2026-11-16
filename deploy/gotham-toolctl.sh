@@ -34,8 +34,8 @@
 # request.
 #
 # Exit codes: 0 = success, 1 = a command failed, 2 = usage, 3 = tool not
-# allowed, 4 = checksum mismatch, 5 = unsupported platform or distribution,
-# 6 = another job is already running.
+# allowed or the node's network stack refuses the change, 4 = checksum mismatch,
+# 5 = unsupported platform or distribution, 6 = another job is already running.
 set -u
 umask 022
 
@@ -56,6 +56,7 @@ DRYRUN="0"
 INNER="${GOTHAM_TOOLCTL_INNER:-0}"
 ARCH_OVERRIDE=""
 DISTRO_OVERRIDE=""
+NETWORK_MANAGER_OVERRIDE=""
 # Test-only seams (like gotham-hostctl's GOTHAM_HOSTCTL_*): they can redirect
 # where the helper looks for systemd-run or its lock, but never grant privilege
 # — under sudo they are ignored, and the helper is only ever reached via sudo.
@@ -66,6 +67,7 @@ if [ -z "${SUDO_USER:-}${SUDO_UID:-}" ]; then
     DRYRUN="${GOTHAM_TOOLCTL_DRYRUN:-0}"
     ARCH_OVERRIDE="${GOTHAM_TOOLCTL_ARCH:-}"
     DISTRO_OVERRIDE="${GOTHAM_TOOLCTL_DISTRO:-}"
+    NETWORK_MANAGER_OVERRIDE="${GOTHAM_TOOLCTL_NETWORK_MANAGER:-}"
     SYSTEMD_RUN="${GOTHAM_TOOLCTL_SYSTEMD_RUN:-systemd-run}"
     LOCK_OVERRIDE="${GOTHAM_TOOLCTL_LOCK:-}"
 fi
@@ -94,6 +96,7 @@ TOOL="$2"
 allow_install() {
     case "$1" in
         railpack | buildkit | pack | docker | git | gotham-hostctl) return 0 ;;
+        systemd-networkd | systemd-resolved | resolvectl) return 0 ;;
         *) die "tool is not installable: $1" 3 ;;
     esac
 }
@@ -321,6 +324,62 @@ install_git() {
     esac
 }
 
+# ---- systemd network stack -------------------------------------------------
+# gotham-hostctl writes networkd and resolved drop-ins, so a node without these
+# units cannot be configured from the UI. Packages differ per family: Debian and
+# Ubuntu carry systemd-networkd inside `systemd` and resolved in its own package,
+# while Fedora and RHEL package systemd-networkd separately. resolvectl ships in
+# the systemd-resolved package on both.
+#
+# The units are enabled and started, never restarted, so a running link stack
+# keeps its configuration and the control-plane connection is not cut.
+network_manager_active() {
+    case "${NETWORK_MANAGER_OVERRIDE}" in
+        networkmanager) return 0 ;;
+        none) return 1 ;;
+    esac
+    # NetworkManager owns the interfaces (or netplan renders to it), so networkd
+    # drop-ins would not apply and enabling it could fight the running manager.
+    if command -v systemctl >/dev/null 2>&1 \
+        && systemctl is-active --quiet NetworkManager 2>/dev/null; then
+        return 0
+    fi
+    grep -rqsE '^[[:space:]]*renderer:[[:space:]]*NetworkManager' "${ROOT}/etc/netplan" 2>/dev/null
+}
+
+require_networkd_host() {
+    network_manager_active && die "networking is managed by NetworkManager (or netplan rendering to it); Gotham only configures systemd-networkd hosts. Nothing was changed: stop NetworkManager or switch netplan to the networkd renderer, then install again" 3
+    return 0
+}
+
+install_systemd_networkd() {
+    require_networkd_host
+    case "${DISTRO}" in
+        apt) : ;;
+        dnf) run dnf install -y systemd-networkd ;;
+        *) die "systemd-networkd: unsupported distribution" 5 ;;
+    esac
+    run systemctl enable --now systemd-networkd
+}
+
+install_systemd_resolved() {
+    require_networkd_host
+    case "${DISTRO}" in
+        apt)
+            run env DEBIAN_FRONTEND=noninteractive apt-get update || return $?
+            run env DEBIAN_FRONTEND=noninteractive apt-get install -y systemd-resolved
+            ;;
+        dnf) run dnf install -y systemd-resolved ;;
+        *) die "systemd-resolved: unsupported distribution" 5 ;;
+    esac
+    run systemctl enable --now systemd-resolved
+}
+
+install_resolvectl() {
+    # resolvectl comes with the systemd-resolved package.
+    install_systemd_resolved
+}
+
 # ---- host helper (gotham-hostctl) ------------------------------------------
 # Installs the fixed, root-owned host helper the CONTROL PLANE (not the agent)
 # uses for instance settings, plus its verb-pinned sudoers drop-in. Content is
@@ -367,6 +426,9 @@ case "${VERB}:${TOOL}" in
     install-tool:pack) install_pack ;;
     install-tool:docker) install_docker ;;
     install-tool:git) install_git ;;
+    install-tool:systemd-networkd) install_systemd_networkd ;;
+    install-tool:systemd-resolved) install_systemd_resolved ;;
+    install-tool:resolvectl) install_resolvectl ;;
     install-tool:gotham-hostctl) install_hostctl ;;
     uninstall-tool:railpack) uninstall_railpack ;;
     uninstall-tool:buildkit) uninstall_buildkit ;;

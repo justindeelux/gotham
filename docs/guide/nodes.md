@@ -249,15 +249,29 @@ sudo deploy/install-toolctl-sudoers.sh gotham-agent
 The sudoers drop-in (`/etc/sudoers.d/gotham-toolctl`) grants exactly one rule
 per verb **and** tool id:
 
-- `install-tool <id>` — `railpack`, `buildkit`, `pack`, `docker`, `git`;
+- `install-tool <id>` — `railpack`, `buildkit`, `pack`, `docker`, `git`,
+  `systemd-networkd`, `systemd-resolved`, `resolvectl`;
 - `uninstall-tool <id>` — `railpack`, `buildkit`, `pack`, `git` (`docker` is
   never removed: it would destroy every workload on the node).
 
 The agent passes only a catalog id; the helper owns every executable argv and
 re-validates the id against the same allow-list, so a compromised agent cannot
-name a package, a URL or an extra flag. Detect-only host units
-(`systemd-networkd`, `systemd-resolved`, `networkctl`, `systemctl`, …) are
-refused with `FAILED_PRECONDITION` and have no installer at all.
+name a package, a URL or an extra flag. Detect-only host units (`networkctl`,
+`systemctl`, …) are refused with `FAILED_PRECONDITION` and have no installer at
+all.
+
+The three systemd network tools are installed from the distribution packages,
+because `gotham-hostctl` needs the units and `resolvectl` to write its network
+and DNS drop-ins: `systemd-resolved` (which also ships `resolvectl`) on
+Debian/Ubuntu and Fedora/RHEL, and `systemd-networkd` where it is a package of
+its own (Fedora/RHEL; on Debian/Ubuntu it is part of `systemd`). The units are
+enabled and started, never restarted, and they are never removed. On a node
+whose networking is managed by NetworkManager (or by netplan rendering to it)
+the install is refused with an explanation, as Gotham only configures
+systemd-networkd hosts. A node without `apt-get` or `dnf` reports these tools as
+not installable, and the helper refuses them with an unsupported-distribution
+error. The App Store asks for confirmation before it queues any network tool.
+
 
 Behaviour:
 

@@ -22,6 +22,8 @@ const (
 	codeRuleNotFound          = "rule_not_found"
 	codeReadOnlyRule          = "read_only_rule"
 	codeWouldLockOut          = "would_lock_out"
+	codeInstallUnsupported    = "install_unsupported"
+	codeInstallFailed         = "install_failed"
 	codeInvalidAction         = "invalid_action"
 	codeInvalidDirection      = "invalid_direction"
 	codeInvalidProtocol       = "invalid_protocol"

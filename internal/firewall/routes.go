@@ -63,6 +63,7 @@ func Mount(r chi.Router, admin func(http.Handler) http.Handler, userID UserIDFun
 		g.Use(admin)
 		g.Get("/v1/servers/{id}/firewall", h.getStatus)
 		g.Put("/v1/servers/{id}/firewall", h.putEnabled)
+		g.Post("/v1/servers/{id}/firewall/install", h.install)
 		g.Get("/v1/servers/{id}/firewall/rules", h.listRules)
 		g.Post("/v1/servers/{id}/firewall/rules", h.addRule)
 		g.Put("/v1/servers/{id}/firewall/rules/{ruleID}", h.updateRule)
@@ -101,6 +102,19 @@ func (h *handler) putEnabled(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	state, err := h.svc.SetEnabled(r.Context(), h.actor(r), serverID, req.Enabled)
+	if err != nil {
+		h.replyError(w, err)
+		return
+	}
+	writeJSON(w, http.StatusOK, stateEnvelope(state))
+}
+
+func (h *handler) install(w http.ResponseWriter, r *http.Request) {
+	serverID, ok := serverIDParam(w, r)
+	if !ok {
+		return
+	}
+	state, err := h.svc.Install(r.Context(), h.actor(r), serverID)
 	if err != nil {
 		h.replyError(w, err)
 		return

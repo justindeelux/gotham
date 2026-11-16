@@ -194,7 +194,7 @@ Installed root-owned and reached only through its sudoers drop-in. Verbs:
 `cleanup-status`, `cleanup-journal`, `cleanup-package-cache`, `apply-ssh`,
 `confirm-ssh`, `revert-ssh`, `apply-agent-root`, `firewall-status`,
 `firewall-list`, `firewall-add`, `firewall-delete`, `firewall-enable`,
-`firewall-disable`.
+`firewall-disable`, `firewall-install`.
 Values arrive on stdin as `key=value` and are re-validated. Only
 systemd-networkd, systemd-resolved and systemd-timesyncd are supported, and it
 owns only its `05-gotham.*` drop-ins. A network change is tentative: a systemd
@@ -210,7 +210,10 @@ control plane can spot a helper that predates them. `apply-ssh` changes the
 `Port` and `PasswordAuthentication` drop-in, opening the new port in ufw or
 firewalld; the old port stays live until `confirm-ssh`, and a revert timer
 restores it if nothing confirms in 15 minutes. Disabling password login is
-refused (exit 5) unless an authorized key exists. `apply-agent-root` writes or
+refused (exit 5) unless an authorized key exists. `firewall-install` installs
+`ufw` on Debian/Ubuntu and `firewalld` on the RHEL family, and leaves a host
+that already has a backend untouched; an unknown distribution exits 3.
+`apply-agent-root` writes or
 removes the same `file-manager.conf` drop-in `install-agent.sh` uses and
 restarts the agent once, so the file manager and terminal follow the agent's
 user. Enabling root turns the file manager on and remembers the previous

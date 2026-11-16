@@ -3737,6 +3737,7 @@ var TerminalService_ServiceDesc = grpc.ServiceDesc{
 const (
 	FirewallService_GetStatus_FullMethodName  = "/agent.v1.FirewallService/GetStatus"
 	FirewallService_SetEnabled_FullMethodName = "/agent.v1.FirewallService/SetEnabled"
+	FirewallService_Install_FullMethodName    = "/agent.v1.FirewallService/Install"
 	FirewallService_ListRules_FullMethodName  = "/agent.v1.FirewallService/ListRules"
 	FirewallService_AddRule_FullMethodName    = "/agent.v1.FirewallService/AddRule"
 	FirewallService_UpdateRule_FullMethodName = "/agent.v1.FirewallService/UpdateRule"
@@ -3759,6 +3760,10 @@ type FirewallServiceClient interface {
 	// SSH, the agent port and the control-plane port stay allowed; it fails
 	// rather than apply a change that could lock the operator out.
 	SetEnabled(ctx context.Context, in *FirewallEnabledRequest, opts ...grpc.CallOption) (*FirewallState, error)
+	// Install installs the distribution's supported firewall when the node has
+	// none, keeps the operator's access rules, then turns it on. It is
+	// idempotent: a node that already has a backend is left unchanged.
+	Install(ctx context.Context, in *FirewallInstallRequest, opts ...grpc.CallOption) (*FirewallState, error)
 	// ListRules returns the backend's current rules plus disabled rules saved on
 	// this node.
 	ListRules(ctx context.Context, in *FirewallRulesRequest, opts ...grpc.CallOption) (*FirewallRules, error)
@@ -3792,6 +3797,16 @@ func (c *firewallServiceClient) SetEnabled(ctx context.Context, in *FirewallEnab
 	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
 	out := new(FirewallState)
 	err := c.cc.Invoke(ctx, FirewallService_SetEnabled_FullMethodName, in, out, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
+func (c *firewallServiceClient) Install(ctx context.Context, in *FirewallInstallRequest, opts ...grpc.CallOption) (*FirewallState, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	out := new(FirewallState)
+	err := c.cc.Invoke(ctx, FirewallService_Install_FullMethodName, in, out, cOpts...)
 	if err != nil {
 		return nil, err
 	}
@@ -3854,6 +3869,10 @@ type FirewallServiceServer interface {
 	// SSH, the agent port and the control-plane port stay allowed; it fails
 	// rather than apply a change that could lock the operator out.
 	SetEnabled(context.Context, *FirewallEnabledRequest) (*FirewallState, error)
+	// Install installs the distribution's supported firewall when the node has
+	// none, keeps the operator's access rules, then turns it on. It is
+	// idempotent: a node that already has a backend is left unchanged.
+	Install(context.Context, *FirewallInstallRequest) (*FirewallState, error)
 	// ListRules returns the backend's current rules plus disabled rules saved on
 	// this node.
 	ListRules(context.Context, *FirewallRulesRequest) (*FirewallRules, error)
@@ -3878,6 +3897,9 @@ func (UnimplementedFirewallServiceServer) GetStatus(context.Context, *FirewallSt
 }
 func (UnimplementedFirewallServiceServer) SetEnabled(context.Context, *FirewallEnabledRequest) (*FirewallState, error) {
 	return nil, status.Error(codes.Unimplemented, "method SetEnabled not implemented")
+}
+func (UnimplementedFirewallServiceServer) Install(context.Context, *FirewallInstallRequest) (*FirewallState, error) {
+	return nil, status.Error(codes.Unimplemented, "method Install not implemented")
 }
 func (UnimplementedFirewallServiceServer) ListRules(context.Context, *FirewallRulesRequest) (*FirewallRules, error) {
 	return nil, status.Error(codes.Unimplemented, "method ListRules not implemented")
@@ -3944,6 +3966,24 @@ func _FirewallService_SetEnabled_Handler(srv interface{}, ctx context.Context, d
 	}
 	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
 		return srv.(FirewallServiceServer).SetEnabled(ctx, req.(*FirewallEnabledRequest))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
+func _FirewallService_Install_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(FirewallInstallRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(FirewallServiceServer).Install(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: FirewallService_Install_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(FirewallServiceServer).Install(ctx, req.(*FirewallInstallRequest))
 	}
 	return interceptor(ctx, in, info, handler)
 }
@@ -4034,6 +4074,10 @@ var FirewallService_ServiceDesc = grpc.ServiceDesc{
 		{
 			MethodName: "SetEnabled",
 			Handler:    _FirewallService_SetEnabled_Handler,
+		},
+		{
+			MethodName: "Install",
+			Handler:    _FirewallService_Install_Handler,
 		},
 		{
 			MethodName: "ListRules",

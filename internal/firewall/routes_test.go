@@ -29,9 +29,11 @@ type fakeAgent struct {
 	status      *agentv1.FirewallStatusResponse
 	rules       []*agentv1.FirewallRule
 	addErr      error
+	installErr  error
 	lastAdd     *agentv1.FirewallRuleCreateRequest
 	lastStatus  *agentv1.FirewallStatusRequest
 	lastEnabled *agentv1.FirewallEnabledRequest
+	lastInstall *agentv1.FirewallInstallRequest
 	lastRules   *agentv1.FirewallRulesRequest
 }
 
@@ -50,6 +52,28 @@ func (f *fakeAgent) SetEnabled(_ context.Context, in *agentv1.FirewallEnabledReq
 		Backend:          f.status.GetBackend(),
 		Available:        f.status.GetAvailable(),
 		Enabled:          in.GetEnabled(),
+		Manageable:       f.status.GetManageable(),
+		Detail:           f.status.GetDetail(),
+		DetailCode:       f.status.GetDetailCode(),
+		DetailParams:     f.status.GetDetailParams(),
+		SshPorts:         f.status.GetSshPorts(),
+		AgentPort:        f.status.GetAgentPort(),
+		ControlPlanePort: f.status.GetControlPlanePort(),
+	}
+	return &agentv1.FirewallState{Status: next, Rules: f.rules}, nil
+}
+
+func (f *fakeAgent) Install(_ context.Context, in *agentv1.FirewallInstallRequest, _ ...grpc.CallOption) (*agentv1.FirewallState, error) {
+	f.mu.Lock()
+	f.lastInstall = in
+	f.mu.Unlock()
+	if f.installErr != nil {
+		return nil, f.installErr
+	}
+	next := &agentv1.FirewallStatusResponse{
+		Backend:          f.status.GetBackend(),
+		Available:        f.status.GetAvailable(),
+		Enabled:          true,
 		Manageable:       f.status.GetManageable(),
 		Detail:           f.status.GetDetail(),
 		DetailCode:       f.status.GetDetailCode(),
@@ -217,6 +241,45 @@ func TestRoutesToggleAddUpdateDelete(t *testing.T) {
 	rec = do(t, router, http.MethodDelete, "/v1/servers/"+serverID.String()+"/firewall/rules/r-1", "")
 	if rec.Code != http.StatusOK {
 		t.Fatalf("delete = %d %s", rec.Code, rec.Body.String())
+	}
+}
+
+func TestRoutesInstall(t *testing.T) {
+	serverID := uuid.New()
+	agent := &fakeAgent{status: testStatus(), rules: []*agentv1.FirewallRule{testRule()}}
+	dialer := &fakeDialer{agents: map[uuid.UUID]*fakeAgent{serverID: agent}}
+	router := newTestService(t, dialer)
+
+	rec := do(t, router, http.MethodPost, "/v1/servers/"+serverID.String()+"/firewall/install", "")
+	if rec.Code != http.StatusOK {
+		t.Fatalf("install = %d %s", rec.Code, rec.Body.String())
+	}
+	state := decodeBody[stateEnvelope](t, rec)
+	if !state.Status.Enabled || len(state.Rules) != 1 {
+		t.Fatalf("state = %#v", state)
+	}
+	if agent.lastInstall.GetControlPlanePort() != 8000 {
+		t.Fatalf("control plane port = %d", agent.lastInstall.GetControlPlanePort())
+	}
+}
+
+func TestRoutesInstallForwardsTheNodeErrorCode(t *testing.T) {
+	serverID := uuid.New()
+	refusal, err := status.New(codes.FailedPrecondition, "no supported firewall can be installed on this node").
+		WithDetails(&agentv1.FirewallError{Code: "install_unsupported"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	agent := &fakeAgent{status: testStatus(), installErr: refusal.Err()}
+	dialer := &fakeDialer{agents: map[uuid.UUID]*fakeAgent{serverID: agent}}
+	router := newTestService(t, dialer)
+
+	rec := do(t, router, http.MethodPost, "/v1/servers/"+serverID.String()+"/firewall/install", "")
+	if rec.Code != http.StatusConflict {
+		t.Fatalf("code = %d %s", rec.Code, rec.Body.String())
+	}
+	if body := decodeBody[errorBody](t, rec); body.Code != "install_unsupported" {
+		t.Fatalf("body = %#v", body)
 	}
 }
 

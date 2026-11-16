@@ -5,6 +5,7 @@ import {
   addFirewallRule,
   deleteFirewallRule,
   getFirewallStatus,
+  installFirewall,
   listFirewallRules,
   setFirewallEnabled,
   updateFirewallRule,
@@ -18,6 +19,7 @@ export function useFirewall(serverId: () => string) {
   const rules = ref<FirewallRule[]>([]);
   const loading = ref(false);
   const saving = ref(false);
+  const installing = ref(false);
   const loadError = ref("");
   const loadErrorDetail = ref("");
   let requestSeq = 0;
@@ -66,6 +68,17 @@ export function useFirewall(serverId: () => string) {
     }
   }
 
+  async function install(): Promise<void> {
+    installing.value = true;
+    try {
+      const state = await installFirewall(serverId());
+      status.value = state.status;
+      rules.value = state.rules;
+    } finally {
+      installing.value = false;
+    }
+  }
+
   async function save(input: FirewallRuleInput, ruleId?: string): Promise<void> {
     saving.value = true;
     try {
@@ -92,5 +105,18 @@ export function useFirewall(serverId: () => string) {
     void load();
   });
 
-  return { status, rules, loading, saving, loadError, loadErrorDetail, load, toggle, save, remove };
+  return {
+    status,
+    rules,
+    loading,
+    saving,
+    installing,
+    loadError,
+    loadErrorDetail,
+    load,
+    install,
+    toggle,
+    save,
+    remove,
+  };
 }

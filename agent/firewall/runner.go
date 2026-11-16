@@ -16,6 +16,9 @@ const HelperPath = "/usr/libexec/gotham/gotham-hostctl"
 
 const helperTimeout = 60 * time.Second
 
+// installTimeout covers a package manager run, which outlasts a rule edit.
+const installTimeout = 4 * time.Minute
+
 // Runner runs one host-helper verb with its key=value input.
 type Runner interface {
 	Run(ctx context.Context, verb, stdin string) (string, error)
@@ -42,7 +45,11 @@ type sudoRunner struct {
 }
 
 func (r sudoRunner) Run(ctx context.Context, verb, stdin string) (string, error) {
-	ctx, cancel := context.WithTimeout(ctx, helperTimeout)
+	timeout := helperTimeout
+	if verb == "firewall-install" {
+		timeout = installTimeout
+	}
+	ctx, cancel := context.WithTimeout(ctx, timeout)
 	defer cancel()
 	cmd := exec.CommandContext(ctx, "sudo", "-n", r.helper, verb) //nolint:gosec // fixed helper and verb
 	cmd.Stdin = strings.NewReader(stdin)

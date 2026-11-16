@@ -25,6 +25,11 @@ type fakeRunner struct {
 	statusErr error
 	list      string
 	calls     []recordedCall
+	// installErr fails the install verb; afterInstall and afterEnable swap the
+	// status fixture so a test can model what the helper changes.
+	installErr   error
+	afterInstall string
+	afterEnable  string
 }
 
 func (f *fakeRunner) Run(_ context.Context, verb, stdin string) (string, error) {
@@ -36,6 +41,19 @@ func (f *fakeRunner) Run(_ context.Context, verb, stdin string) (string, error) 
 		return f.status, f.statusErr
 	case "firewall-list":
 		return f.list, nil
+	case "firewall-install":
+		if f.installErr != nil {
+			return "", f.installErr
+		}
+		if f.afterInstall != "" {
+			f.status = f.afterInstall
+		}
+		return "", nil
+	case "firewall-enable":
+		if f.afterEnable != "" {
+			f.status = f.afterEnable
+		}
+		return "", nil
 	default:
 		return "", nil
 	}
@@ -73,6 +91,11 @@ const ufwSSHOnly = "backend=ufw\n--\n" +
 	"--\n" +
 	"Added user rules (see 'ufw status' for running firewall):\n" +
 	"ufw allow 22/tcp comment 'SSH access'\n"
+
+const emptyUFWList = "backend=ufw\n--\n" +
+	"Status: inactive\n\n" +
+	"--\n" +
+	"Added user rules (see 'ufw status' for running firewall):\n"
 
 func newTestServer(t *testing.T, runner *fakeRunner) *Server {
 	t.Helper()
@@ -226,6 +249,110 @@ func TestEnableAddsMissingAccessRulesBeforeTurningTheFirewallOn(t *testing.T) {
 	for i, verb := range verbs {
 		if verb == "firewall-add" && i > enabledAt {
 			t.Fatalf("verbs = %#v, access rules must be added before enabling", verbs)
+		}
+	}
+}
+
+func TestInstallAddsAccessRulesBeforeTurningTheFirewallOn(t *testing.T) {
+	runner := &fakeRunner{
+		status:       "backend=none\nenabled=false\nmanageable=false\nssh_ports=22\n",
+		afterInstall: "backend=ufw\nenabled=false\nmanageable=true\nssh_ports=2222\n",
+		afterEnable:  "backend=ufw\nenabled=true\nmanageable=true\nssh_ports=2222\n",
+		list:         emptyUFWList,
+	}
+	server := newTestServer(t, runner)
+	state, err := server.InstallFirewall(context.Background(), &agentv1.FirewallInstallRequest{
+		ControlPlanePort: 8000,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if state.GetStatus().GetBackend() != agentv1.FirewallBackend_FIREWALL_BACKEND_UFW ||
+		!state.GetStatus().GetEnabled() {
+		t.Fatalf("status = %#v", state.GetStatus())
+	}
+	adds := runner.callsFor("firewall-add")
+	if len(adds) != 3 {
+		t.Fatalf("adds = %#v, want SSH, the agent and the control plane", adds)
+	}
+	for i, port := range []string{"port=2222", "port=9443", "port=8000"} {
+		if !strings.Contains(adds[i].stdin, port) {
+			t.Fatalf("add %d = %q, want %s", i, adds[i].stdin, port)
+		}
+	}
+	verbs := runner.verbs()
+	installAt, enabledAt := -1, -1
+	for i, verb := range verbs {
+		switch verb {
+		case "firewall-install":
+			installAt = i
+		case "firewall-enable":
+			enabledAt = i
+		}
+	}
+	if installAt < 0 || enabledAt < 0 || installAt > enabledAt {
+		t.Fatalf("verbs = %#v, want the install before the enable", verbs)
+	}
+	for i, verb := range verbs {
+		if verb == "firewall-add" && i > enabledAt {
+			t.Fatalf("verbs = %#v, access rules must be added before enabling", verbs)
+		}
+	}
+}
+
+func TestInstallLeavesANodeWithABackendUnchanged(t *testing.T) {
+	runner := &fakeRunner{status: ufwStatusFixture, list: ufwSSHOnly}
+	server := newTestServer(t, runner)
+	state, err := server.InstallFirewall(context.Background(), &agentv1.FirewallInstallRequest{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if state.GetStatus().GetBackend() != agentv1.FirewallBackend_FIREWALL_BACKEND_UFW {
+		t.Fatalf("status = %#v", state.GetStatus())
+	}
+	for _, verb := range runner.verbs() {
+		switch verb {
+		case "firewall-install", "firewall-enable", "firewall-add":
+			t.Fatalf("verbs = %#v, an existing backend must stay untouched", runner.verbs())
+		}
+	}
+}
+
+func TestInstallReportsAnUnsupportedDistribution(t *testing.T) {
+	runner := &fakeRunner{
+		status: "backend=none\nenabled=false\nmanageable=false\nssh_ports=22\n",
+		installErr: &helperError{
+			verb:   "firewall-install",
+			code:   3,
+			reason: "gotham-hostctl: installing a firewall is not supported on this distribution",
+		},
+	}
+	server := newTestServer(t, runner)
+	_, err := server.InstallFirewall(context.Background(), &agentv1.FirewallInstallRequest{})
+	code, _ := firewallCode(t, err)
+	if code != codeInstallUnsupported {
+		t.Fatalf("code = %q", code)
+	}
+}
+
+func TestInstallReportsAFailedInstall(t *testing.T) {
+	cases := map[string]*fakeRunner{
+		"helper": {
+			status: "backend=none\nenabled=false\nmanageable=false\n",
+			installErr: &helperError{
+				verb:   "firewall-install",
+				code:   5,
+				reason: "gotham-hostctl: ufw could not be installed",
+			},
+		},
+		"no backend": {status: "backend=none\nenabled=false\nmanageable=false\n"},
+	}
+	for name, runner := range cases {
+		server := newTestServer(t, runner)
+		_, err := server.InstallFirewall(context.Background(), &agentv1.FirewallInstallRequest{})
+		code, _ := firewallCode(t, err)
+		if code != codeInstallFailed {
+			t.Errorf("%s: code = %q", name, code)
 		}
 	}
 }

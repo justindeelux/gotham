@@ -35,6 +35,9 @@ function rulesFrom(data: unknown): FirewallRule[] {
   return parsed.rules ?? [];
 }
 
+// A node installs a package, so it outlasts the client's normal request budget.
+const installRequestTimeout = 5 * 60_000;
+
 export async function getFirewallStatus(serverId: string): Promise<FirewallStatus> {
   const response = await http.get(`/servers/${serverId}/firewall`);
   const parsed = parseWith(firewallStatusEnvelopeSchema, response.data, {
@@ -48,6 +51,18 @@ export async function setFirewallEnabled(
   enabled: boolean,
 ): Promise<FirewallState> {
   const response = await http.put(`/servers/${serverId}/firewall`, { enabled });
+  const parsed = parseWith(firewallStateEnvelopeSchema, response.data, {
+    context: "FirewallStateEnvelope",
+  });
+  return { status: parsed.status, rules: parsed.rules ?? [] };
+}
+
+export async function installFirewall(serverId: string): Promise<FirewallState> {
+  const response = await http.post(
+    `/servers/${serverId}/firewall/install`,
+    undefined,
+    { timeout: installRequestTimeout },
+  );
   const parsed = parseWith(firewallStateEnvelopeSchema, response.data, {
     context: "FirewallStateEnvelope",
   });

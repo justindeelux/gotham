@@ -10,7 +10,7 @@
 #   cleanup-status | cleanup-journal | cleanup-package-cache |
 #   apply-ssh | confirm-ssh | revert-ssh | apply-agent-root |
 #   firewall-status | firewall-list | firewall-add | firewall-delete |
-#   firewall-enable | firewall-disable
+#   firewall-enable | firewall-disable | firewall-install
 #
 # Values arrive on stdin as key=value lines. Only whitelisted keys are accepted
 # and every value is re-validated here with strict anchored patterns before it
@@ -99,6 +99,8 @@ run() {
 
 [ "$#" -eq 1 ] || die "exactly one verb is required" 2
 VERB="$1"
+# A package install outlasts a rule edit; give its transient unit more room.
+[ "${VERB}" = "firewall-install" ] && RUNTIME_MAX_SEC="300"
 
 # ---- re-exec outside the service's systemd sandbox -------------------------
 # Root's systemd-run creates a transient unit with a clean namespace (no
@@ -108,7 +110,7 @@ VERB="$1"
 case "${VERB}" in
     apply-network | revert-network | apply-system | cleanup-journal | cleanup-package-cache | \
     apply-ssh | confirm-ssh | revert-ssh | apply-agent-root | \
-    firewall-add | firewall-delete | firewall-enable | firewall-disable) WRITE=1 ;;
+    firewall-add | firewall-delete | firewall-enable | firewall-disable | firewall-install) WRITE=1 ;;
     *) WRITE=0 ;;
 esac
 case "${SELF_RUN}" in /*) SELF_OK=1 ;; *) SELF_OK=0 ;; esac
@@ -615,6 +617,47 @@ fw_backend() {
     if command -v nft >/dev/null 2>&1; then echo nftables; return; fi
     if command -v iptables >/dev/null 2>&1; then echo iptables; return; fi
     echo none
+}
+
+# fw_family: the package family /etc/os-release declares, or "" when unknown.
+fw_family() {
+    [ -f "${ROOT}/etc/os-release" ] || return 0
+    ids="$(sed -n -e 's/^ID=//p' -e 's/^ID_LIKE=//p' "${ROOT}/etc/os-release" 2>/dev/null | tr -d '"' | tr 'A-Z' 'a-z')"
+    for id in ${ids}; do
+        case "${id}" in
+            debian | ubuntu) printf 'debian'; return 0 ;;
+            rhel | centos | fedora | rocky | almalinux) printf 'rhel'; return 0 ;;
+        esac
+    done
+}
+
+# fw_install installs the family's firewall. It is idempotent: a host that
+# already has ufw or firewalld is left untouched. Exit 3 means the distribution
+# has no package Gotham supports.
+fw_install() {
+    case "$(fw_backend)" in
+        ufw | firewalld) return 0 ;;
+    esac
+    case "$(fw_family)" in
+        debian)
+            # shortcut: relies on the host's package lists being current; add
+            # apt-get update here if a fresh image ships without them.
+            export DEBIAN_FRONTEND=noninteractive
+            run apt-get install -y --no-install-recommends ufw >/dev/null 2>&1 \
+                || die "ufw could not be installed" 5
+            ;;
+        rhel)
+            run dnf install -y firewalld >/dev/null 2>&1 || die "firewalld could not be installed" 5
+            run systemctl enable firewalld >/dev/null 2>&1 || die "firewalld could not be enabled" 5
+            ;;
+        *)
+            die "installing a firewall is not supported on this distribution" 3
+            ;;
+    esac
+    case "$(fw_backend)" in
+        ufw | firewalld) ;;
+        *) die "the firewall package was installed but no supported backend was found" 5 ;;
+    esac
 }
 
 fw_valid_port() {
@@ -1305,6 +1348,11 @@ firewall-disable)
         firewalld) run systemctl disable --now firewalld || die "firewalld could not be disabled" ;;
         *) die "disabling the firewall is not supported on ${backend}" 3 ;;
     esac
+    ;;
+
+firewall-install)
+    read_kv ""
+    fw_install
     ;;
 
 apply-agent-root)

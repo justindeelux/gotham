@@ -2136,6 +2136,10 @@ service FirewallService {
   // SSH, the agent port and the control-plane port stay allowed; it fails
   // rather than apply a change that could lock the operator out.
   rpc SetEnabled(FirewallEnabledRequest) returns (FirewallState);
+  // Install installs the distribution's supported firewall when the node has
+  // none, keeps the operator's access rules, then turns it on. It is
+  // idempotent: a node that already has a backend is left unchanged.
+  rpc Install(FirewallInstallRequest) returns (FirewallState);
   // ListRules returns the backend's current rules plus disabled rules saved on
   // this node.
   rpc ListRules(FirewallRulesRequest) returns (FirewallRules);
@@ -2246,6 +2250,12 @@ message FirewallStatusResponse {
 message FirewallEnabledRequest {
   bool enabled = 1;
   uint32 control_plane_port = 2;
+}
+
+message FirewallInstallRequest {
+  // control_plane_port is the port the operator uses to reach the control
+  // plane. It is part of the protected set; 0 skips it.
+  uint32 control_plane_port = 1;
 }
 
 message FirewallState {

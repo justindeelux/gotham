@@ -50,6 +50,8 @@ describe("firewall error codes", () => {
   it("translates every known code in Vietnamese", () => {
     const codes = [
       "no_firewall",
+      "install_unsupported",
+      "install_failed",
       "helper_missing",
       "helper_failed",
       "backend_changed",

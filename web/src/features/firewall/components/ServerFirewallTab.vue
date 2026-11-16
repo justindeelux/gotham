@@ -328,7 +328,7 @@ onMounted(() => {
   <NSpin :show="firewall.loading.value">
     <NAlert v-if="firewall.loadError.value" type="error" :show-icon="true">
       <NSpace vertical :size="8">
-        <span>{{ firewall.loadError.value }}</span>
+        <span>{{ firewall.loadError.value || t("firewall.errors.load") }}</span>
         <NButton size="small" @click="firewall.load">
           {{ t("firewall.status.reload") }}
         </NButton>

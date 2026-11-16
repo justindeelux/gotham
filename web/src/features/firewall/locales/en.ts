@@ -87,7 +87,7 @@ const en = {
     port: "Use a port from 1 to 65535, or a range like 8000-8100.",
     source: "Use an IP address or a CIDR range.",
     comment:
-      "Use letters, numbers and . _ ( ) , : / + @ - only, up to 200 characters.",
+      "Use letters, numbers and . _ ( ) , : / + {'@'} - only, up to 200 characters.",
     commentDash: "A comment cannot start with a dash.",
     outboundSource: "Outbound rules cannot have a source address.",
   },
@@ -106,3 +106,5 @@ const en = {
 };
 
 export default en;
+
+export type FirewallMessages = typeof en;

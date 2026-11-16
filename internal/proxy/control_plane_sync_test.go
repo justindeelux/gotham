@@ -66,7 +66,7 @@ func TestControlPlaneTrialSyncIgnoresOtherApplications(t *testing.T) {
 					t.Fatalf("confirm failed panel=%v", err)
 				}
 				f.agent.respond = nil
-				f.service.serverPort = 8000
+				f.service.serverPort = 9074
 				state, err = svc.Get(ctx)
 				if err != nil || !state.PendingControlPlaneURL.Synced {
 					t.Fatalf("retry=%+v err=%v", state, err)

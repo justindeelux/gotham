@@ -57,7 +57,7 @@ const (
 
 const (
 	defaultServerAddr  = "0.0.0.0"
-	defaultServerPort  = 8000
+	defaultServerPort  = 9074
 	defaultDatabaseDSN = "postgres://gotham:gotham@localhost:5432/gotham?sslmode=disable"
 	defaultRedisAddr   = "localhost:6379"
 	defaultLogLevel    = "info"

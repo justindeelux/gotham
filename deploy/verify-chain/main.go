@@ -11,7 +11,7 @@ import (
 )
 
 func main() {
-	addr := flag.String("addr", "127.0.0.1:8000", "health listen address")
+	addr := flag.String("addr", "127.0.0.1:9074", "health listen address")
 	flag.Parse()
 
 	logger := slog.New(slog.NewTextHandler(os.Stderr, nil))

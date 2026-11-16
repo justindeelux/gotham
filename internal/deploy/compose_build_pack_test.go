@@ -3,6 +3,8 @@ package deploy
 import (
 	"context"
 	"errors"
+	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 
@@ -163,11 +165,14 @@ func TestOrchestratorComposeBuildPackSources(t *testing.T) {
 		provider   string
 		repo       string
 		cloneURL   string
+		wantToken  bool
+		wantKey    bool
+		wantCred   bool
 	}{
-		{"public git", SourceGitPublic, "", "acme/demo", "https://github.com/acme/demo.git"},
-		{"private git", SourceGitPrivate, "", "acme/demo", "ssh://git@git.internal/acme/demo.git"},
-		{"github app", SourceGitHubApp, "github", "acme/demo", "https://github.com/acme/demo.git"},
-		{"gitlab app", SourceGitLabApp, "gitlab", "acme/demo", "https://gitlab.com/acme/demo.git"},
+		{"public git", SourceGitPublic, "", "acme/demo", "https://github.com/acme/demo.git", false, false, false},
+		{"private git", SourceGitPrivate, "", "acme/demo", "https://git.internal/acme/demo.git", false, false, true},
+		{"github app", SourceGitHubApp, "github", "acme/demo", "https://github.com/acme/demo.git", true, false, false},
+		{"gitlab app", SourceGitLabApp, "gitlab", "acme/demo", "https://gitlab.com/acme/demo.git", false, true, false},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
@@ -195,9 +200,27 @@ func TestOrchestratorComposeBuildPackSources(t *testing.T) {
 			}
 			repo := &fakeRepository{app: app}
 			dep := seedDeployment(t, repo, app, Deployment{Kind: KindDeploy})
-			src := &writeFileSource{files: map[string]string{
-				composeBuildPackFile: "services:\n  web:\n    image: example.com/app:1.0\n",
-			}}
+
+			keys := &staticKeyResolver{}
+			if tc.wantKey {
+				keys.pem = "test-deploy-key"
+			}
+			tokens := &staticTokenResolver{tokenURL: "https://x-access-token:fresh-install-token@github.com/acme/demo.git"}
+			creds := &staticCredResolver{username: "git"}
+			if tc.wantCred {
+				creds.token = "private-token"
+			}
+			var gotArgv, gotEnv []string
+			run := func(_ context.Context, argv, env []string) ([]byte, error) {
+				gotArgv, gotEnv = argv, env
+				dest := argv[len(argv)-1]
+				if err := os.MkdirAll(filepath.Join(dest, "deploy"), 0o755); err != nil {
+					return nil, err
+				}
+				return nil, os.WriteFile(filepath.Join(dest, composeBuildPackFile),
+					[]byte("services:\n  web:\n    image: example.com/app:1.0\n"), 0o644)
+			}
+			src := gitSource{keys: keys, appTokens: tokens, creds: creds, run: run}
 			node := newMockNode()
 			node.composeContainers = []ComposeContainer{{ID: "web-id", Service: "web", State: "running", Status: "Up 1 second"}}
 			node.listed = []*agentv1.ContainerInfo{{Id: "web-id", State: "running", Status: "Up 1 second"}}
@@ -217,9 +240,6 @@ func TestOrchestratorComposeBuildPackSources(t *testing.T) {
 			if stored.State != StateRunning {
 				t.Fatalf("state = %s (%q), want running", stored.State, stored.Error)
 			}
-			if src.calls != 1 {
-				t.Errorf("clone calls = %d, want 1 through the normal source", src.calls)
-			}
 			if node.composeUpCalls != 1 {
 				t.Errorf("compose up calls = %d, want 1", node.composeUpCalls)
 			}
@@ -228,6 +248,38 @@ func TestOrchestratorComposeBuildPackSources(t *testing.T) {
 			}
 			if !strings.Contains(stored.ComposeDocument, "example.com/app:1.0") {
 				t.Errorf("stored compose document = %q, want the repository file", stored.ComposeDocument)
+			}
+
+			joined := strings.Join(gotArgv, " ")
+			switch {
+			case tc.wantToken:
+				if tokens.calls != 1 {
+					t.Errorf("token resolver calls = %d, want 1", tokens.calls)
+				}
+				if !strings.Contains(joined, "fresh-install-token@github.com") {
+					t.Errorf("clone argv = %v, want the GitHub App token URL", gotArgv)
+				}
+			case tc.wantKey:
+				if keys.calls != 1 {
+					t.Errorf("deploy key lookups = %d, want 1", keys.calls)
+				}
+				if !strings.Contains(joined, "ssh://git@gitlab.com/acme/demo.git") {
+					t.Errorf("clone argv = %v, want the GitLab App keyed SSH URL", gotArgv)
+				}
+				if !hasEntry(gotEnv, "GIT_SSH_COMMAND") {
+					t.Errorf("clone env lacks the deploy key SSH command")
+				}
+			case tc.wantCred:
+				if creds.calls != 1 {
+					t.Errorf("git credential lookups = %d, want 1", creds.calls)
+				}
+				if !hasEntry(gotEnv, "GIT_ASKPASS") {
+					t.Errorf("clone env lacks the stored HTTPS credential")
+				}
+			default:
+				if hasEntry(gotEnv, "GIT_ASKPASS") || hasEntry(gotEnv, "GIT_SSH_COMMAND") {
+					t.Errorf("public clone carried credentials")
+				}
 			}
 		})
 	}

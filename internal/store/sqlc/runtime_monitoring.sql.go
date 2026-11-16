@@ -253,6 +253,7 @@ SELECT a.id,
        a.server_id,
        COALESCE(e.project_id, '00000000-0000-0000-0000-000000000000'::uuid) AS project_id,
        a.source_type,
+       a.build_pack,
        a.provider,
        COALESCE(s.enabled, true) AS enabled,
        COALESCE(s.grace_seconds, 120) AS grace_seconds,
@@ -281,6 +282,7 @@ type ListRuntimeMonitorApplicationsRow struct {
 	ServerID             pgtype.UUID        `json:"server_id"`
 	ProjectID            pgtype.UUID        `json:"project_id"`
 	SourceType           string             `json:"source_type"`
+	BuildPack            string             `json:"build_pack"`
 	Provider             string             `json:"provider"`
 	Enabled              bool               `json:"enabled"`
 	GraceSeconds         int32              `json:"grace_seconds"`
@@ -308,6 +310,7 @@ func (q *Queries) ListRuntimeMonitorApplications(ctx context.Context, serverID p
 			&i.ServerID,
 			&i.ProjectID,
 			&i.SourceType,
+			&i.BuildPack,
 			&i.Provider,
 			&i.Enabled,
 			&i.GraceSeconds,

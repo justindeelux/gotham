@@ -129,6 +129,23 @@ func TestRuntimeMonitorDetectsComposeReplicaFailureAndRecovery(t *testing.T) {
 		t.Fatalf("CreateApplication: %v", err)
 	}
 	appID := uuid.UUID(appRow.ID.Bytes)
+	packRow, err := st.CreateApplication(ctx, sqlc.CreateApplicationParams{
+		ID:             pgtype.UUID{Bytes: uuid.New(), Valid: true},
+		UserID:         pgtype.UUID{Bytes: userID, Valid: true},
+		ServerID:       pgtype.UUID{Bytes: serverID, Valid: true},
+		EnvironmentID:  environment.ID,
+		Name:           "runtime-watch-compose-pack",
+		SourceType:     "git_public",
+		CloneUrl:       "https://example.com/acme/demo.git",
+		Branch:         "main",
+		BuildPack:      "docker_compose",
+		ComposeFile:    "docker-compose.yml",
+		ComposeService: "web",
+	})
+	if err != nil {
+		t.Fatalf("CreateApplication (compose build pack): %v", err)
+	}
+	packID := uuid.UUID(packRow.ID.Bytes)
 	databaseRow, err := st.CreateDatabase(ctx, sqlc.CreateDatabaseParams{
 		ID:            pgtype.UUID{Bytes: uuid.New(), Valid: true},
 		UserID:        pgtype.UUID{Bytes: userID, Valid: true},
@@ -149,6 +166,33 @@ func TestRuntimeMonitorDetectsComposeReplicaFailureAndRecovery(t *testing.T) {
 	svc := NewService(Config{Store: st, Incidents: reporter, Now: time.Now})
 	projectName := services.ProjectName(appID)
 	now := time.Now().UTC()
+
+	targets, err := svc.targets(ctx, serverID)
+	if err != nil {
+		t.Fatalf("targets: %v", err)
+	}
+	var packTarget Target
+	found := false
+	for _, target := range targets {
+		if target.ResourceID == packID {
+			packTarget, found = target, true
+			break
+		}
+	}
+	if !found {
+		t.Fatal("compose build pack app missing from the runtime targets")
+	}
+	if !packTarget.Compose {
+		t.Fatal("compose build pack app is not treated as compose")
+	}
+	packContainer := ContainerEvidence{
+		ID:             "packcontainer1",
+		ComposeProject: services.ProjectName(packID),
+		ComposeService: "web",
+	}
+	if !ownedContainer(packTarget, packContainer) {
+		t.Fatal("compose build pack app did not claim its container through ComposeProject")
+	}
 
 	replica := func(number, state, health string) servers.ContainerObservation {
 		c := servers.ContainerObservation{

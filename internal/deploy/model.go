@@ -7,6 +7,7 @@ import (
 
 	"github.com/google/uuid"
 
+	"github.com/justindeelux/gotham/internal/builds"
 	"github.com/justindeelux/gotham/internal/runtimewatch"
 )
 
@@ -51,6 +52,17 @@ func SourceTypeImplemented(s string) bool {
 	default:
 		return false
 	}
+}
+
+// DefaultComposeFile is stored when a repository-backed compose app names none.
+const DefaultComposeFile = "docker-compose.yml"
+
+// IsComposeBuildPack reports the build pack that runs a repository's compose
+// file through the app's normal git source. Pasted content stays on
+// SourceCompose.
+func IsComposeBuildPack(buildPack string) bool {
+	kind, err := builds.ParseEngineKind(buildPack)
+	return err == nil && kind == builds.EngineCompose
 }
 
 func BranchDefaultsToRemote(sourceType, provider string) bool {

@@ -49,14 +49,14 @@ func CanTransition(from, to State) bool {
 }
 
 func stepsFor(kind Kind) []State {
-	return stepsForApp(kind, "", "")
+	return stepsForApp(kind, Application{})
 }
 
-func stepsForApp(kind Kind, sourceType, provider string) []State {
-	if NormalizeSourceType(sourceType, provider) == SourceCompose {
+func stepsForApp(kind Kind, app Application) []State {
+	if isComposeApp(app) {
 		return []State{StateCloning, StateBuilding, StatePushing, StateStarting}
 	}
-	if kind == KindRollback || NormalizeSourceType(sourceType, provider) == SourceImage {
+	if kind == KindRollback || NormalizeSourceType(app.SourceType, app.Provider) == SourceImage {
 		return []State{StatePushing, StateStarting}
 	}
 	return []State{StateCloning, StateBuilding, StatePushing, StateStarting}

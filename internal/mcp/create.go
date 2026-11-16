@@ -172,6 +172,7 @@ func applicationCreateSchema() map[string]any {
 	text := func() map[string]any { return map[string]any{"type": "string", "minLength": 1} }
 	common := map[string]any{"request_id": map[string]any{"type": "string", "pattern": "^[A-Za-z0-9._:-]{1,128}$"}, "name": text(), "environment_id": text(), "server_id": text()}
 	git := []string{"provider", "repo", "clone_url", "branch", "build_pack"}
+	gitCompose := append(append([]string{}, git...), "compose_file", "compose_service")
 	variants := []any{}
 	add := func(source string, allowed, required []string, provider string) {
 		props := map[string]any{}
@@ -203,10 +204,10 @@ func applicationCreateSchema() map[string]any {
 		}
 		variants = append(variants, variant)
 	}
-	add("git_public", git, []string{"clone_url"}, "*")
-	add("git_private", git, []string{"clone_url"}, "")
-	add("github_app", append(append([]string{}, git...), "github_app_id"), []string{"provider", "repo", "clone_url"}, "github")
-	add("gitlab_app", git, []string{"provider", "repo", "clone_url"}, "gitlab")
+	add("git_public", gitCompose, []string{"clone_url"}, "*")
+	add("git_private", gitCompose, []string{"clone_url"}, "")
+	add("github_app", append(append([]string{}, gitCompose...), "github_app_id"), []string{"provider", "repo", "clone_url"}, "github")
+	add("gitlab_app", gitCompose, []string{"provider", "repo", "clone_url"}, "gitlab")
 	add("dockerfile", []string{"dockerfile_content", "build_args", "build_pack"}, []string{"dockerfile_content"}, "")
 	add("image", []string{"image_ref", "registry_username", "registry_password"}, []string{"image_ref"}, "")
 	add("compose", []string{"compose_content", "compose_service"}, []string{"compose_content", "compose_service"}, "")

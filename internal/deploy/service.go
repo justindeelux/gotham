@@ -356,7 +356,7 @@ func (s *Service) Rollback(ctx context.Context, userID, appID, deploymentID uuid
 	if err != nil {
 		return Deployment{}, err
 	}
-	if NormalizeSourceType(app.SourceType, app.Provider) == SourceCompose {
+	if isComposeApp(app) {
 		if target.State != StateRunning {
 			return Deployment{}, fmt.Errorf("%w: deployment %s is not a released compose deployment",
 				ErrValidation, target.ID)
@@ -507,8 +507,14 @@ func validateDeployTarget(app Application) error {
 		}
 		return ValidateBuildArgs(app.BuildArgs)
 	}
-	if NormalizeSourceType(app.SourceType, app.Provider) == SourceCompose {
-		return validateComposeTarget(app)
+	if isComposeApp(app) {
+		if err := validateComposeTarget(app); err != nil {
+			return err
+		}
+		if IsComposeBuildPack(app.BuildPack) {
+			return validateComposeBuildPack(app)
+		}
+		return nil
 	}
 	if NormalizeSourceType(app.SourceType, app.Provider) == SourceImage {
 		return ValidateImageReference(app.ImageRef)

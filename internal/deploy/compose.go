@@ -39,7 +39,8 @@ func ValidateComposeContent(content string, appID uuid.UUID) error {
 }
 
 func isComposeApp(app Application) bool {
-	return NormalizeSourceType(app.SourceType, app.Provider) == SourceCompose
+	return NormalizeSourceType(app.SourceType, app.Provider) == SourceCompose ||
+		IsComposeBuildPack(app.BuildPack)
 }
 
 func (o *Orchestrator) cloneCompose(ctx context.Context, st *runState) error {

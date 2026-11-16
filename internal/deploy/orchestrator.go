@@ -304,7 +304,7 @@ func (o *Orchestrator) syncProxyServer(ctx context.Context, serverID uuid.UUID) 
 }
 
 func (o *Orchestrator) execute(ctx context.Context, st *runState) error {
-	steps := stepsForApp(st.dep.Kind, st.app.SourceType, st.app.Provider)
+	steps := stepsForApp(st.dep.Kind, st.app)
 	for i, step := range steps {
 		o.publishTask(ctx, st.app, st.dep, taskevents.StatusRunning, step, i*100/len(steps), "")
 		if err := o.transition(ctx, st, step); err != nil {

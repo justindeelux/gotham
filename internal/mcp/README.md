@@ -174,14 +174,17 @@ fields; content, URL, build-pack and ownership validation stay in the native API
 
 | Source | Required source fields | Optional source fields |
 | --- | --- | --- |
-| `git_public` | `clone_url` | `repo`, `provider`, `branch`, `build_pack` |
-| `git_private` | `clone_url` | `repo`, `branch`, `build_pack` |
-| `github_app` | `provider: github`, `repo`, `clone_url` | `github_app_id`, `branch`, `build_pack` |
-| `gitlab_app` | `provider: gitlab`, `repo`, `clone_url` | `branch`, `build_pack` |
+| `git_public` | `clone_url` | `repo`, `provider`, `branch`, `build_pack`, `compose_file`, `compose_service` |
+| `git_private` | `clone_url` | `repo`, `branch`, `build_pack`, `compose_file`, `compose_service` |
+| `github_app` | `provider: github`, `repo`, `clone_url` | `github_app_id`, `branch`, `build_pack`, `compose_file`, `compose_service` |
+| `gitlab_app` | `provider: gitlab`, `repo`, `clone_url` | `branch`, `build_pack`, `compose_file`, `compose_service` |
 | `dockerfile` | `dockerfile_content` | `build_args`, `build_pack` |
 | `image` | `image_ref` | paired `registry_username`, `registry_password` |
 | `compose` (pasted) | `compose_content`, `compose_service` | none |
 | `compose` (repository) | `clone_url`, `compose_file`, `compose_service` | `provider`, `repo`, `branch` |
+
+A git source with `build_pack: docker_compose` takes `compose_file` and
+`compose_service` instead of pasted content; the repository supplies the file.
 
 Public Git leaves an empty branch to the remote default; public images require
 no provider. Private provider connections must already exist. A `github_app_id`

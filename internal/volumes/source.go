@@ -538,7 +538,8 @@ func emptyResourceError(kind backups.ResourceType) error {
 }
 
 func isComposeApplication(app deploy.Application) bool {
-	return deploy.NormalizeSourceType(app.SourceType, app.Provider) == deploy.SourceCompose
+	return deploy.NormalizeSourceType(app.SourceType, app.Provider) == deploy.SourceCompose ||
+		deploy.IsComposeBuildPack(app.BuildPack)
 }
 
 func deniedMount(source string) bool {

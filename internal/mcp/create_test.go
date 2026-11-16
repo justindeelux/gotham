@@ -99,6 +99,13 @@ func TestCreateSourcesAndSafeProjection(t *testing.T) {
 	if result := callDiscovery(t, cs, "application_create", args); result.IsError {
 		t.Fatalf("repo compose %+v", result)
 	}
+	pack := createArgs("git_public")
+	pack["build_pack"] = "docker_compose"
+	pack["compose_file"] = "docker-compose.yml"
+	pack["compose_service"] = "web"
+	if result := callDiscovery(t, cs, "application_create", pack); result.IsError {
+		t.Fatalf("compose build pack %+v", result)
+	}
 }
 func TestCreateSourceSchemasRejectConflicts(t *testing.T) {
 	calls := 0

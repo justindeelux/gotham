@@ -151,7 +151,7 @@ func (s *Service) terminalTargets(ctx context.Context, userID, appID uuid.UUID) 
 		OwnerID:         app.UserID,
 		SourceType:      NormalizeSourceType(app.SourceType, app.Provider),
 	}
-	if set.SourceType == SourceCompose {
+	if isComposeApp(app) {
 		project := services.ProjectName(app.ID)
 		containers, err := node.ComposePs(callCtx, project)
 		if err != nil {

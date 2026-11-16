@@ -253,6 +253,22 @@ func TestEnableAddsMissingAccessRulesBeforeTurningTheFirewallOn(t *testing.T) {
 	}
 }
 
+func TestInstallIsDispatchedByTheFirewallServiceInterface(t *testing.T) {
+	runner := &fakeRunner{status: ufwStatusFixture, list: ufwSSHOnly}
+	server := newTestServer(t, runner)
+	var service agentv1.FirewallServiceServer = server
+	state, err := service.Install(context.Background(), &agentv1.FirewallInstallRequest{})
+	if status.Code(err) == codes.Unimplemented {
+		t.Fatalf("the generated interface does not dispatch Install to the server: %v", err)
+	}
+	if err != nil {
+		t.Fatal(err)
+	}
+	if state.GetStatus().GetBackend() != agentv1.FirewallBackend_FIREWALL_BACKEND_UFW {
+		t.Fatalf("status = %#v", state.GetStatus())
+	}
+}
+
 func TestInstallAddsAccessRulesBeforeTurningTheFirewallOn(t *testing.T) {
 	runner := &fakeRunner{
 		status:       "backend=none\nenabled=false\nmanageable=false\nssh_ports=22\n",
@@ -261,7 +277,7 @@ func TestInstallAddsAccessRulesBeforeTurningTheFirewallOn(t *testing.T) {
 		list:         emptyUFWList,
 	}
 	server := newTestServer(t, runner)
-	state, err := server.InstallFirewall(context.Background(), &agentv1.FirewallInstallRequest{
+	state, err := server.Install(context.Background(), &agentv1.FirewallInstallRequest{
 		ControlPlanePort: 8000,
 	})
 	if err != nil {
@@ -303,7 +319,7 @@ func TestInstallAddsAccessRulesBeforeTurningTheFirewallOn(t *testing.T) {
 func TestInstallLeavesANodeWithABackendUnchanged(t *testing.T) {
 	runner := &fakeRunner{status: ufwStatusFixture, list: ufwSSHOnly}
 	server := newTestServer(t, runner)
-	state, err := server.InstallFirewall(context.Background(), &agentv1.FirewallInstallRequest{})
+	state, err := server.Install(context.Background(), &agentv1.FirewallInstallRequest{})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -328,7 +344,7 @@ func TestInstallReportsAnUnsupportedDistribution(t *testing.T) {
 		},
 	}
 	server := newTestServer(t, runner)
-	_, err := server.InstallFirewall(context.Background(), &agentv1.FirewallInstallRequest{})
+	_, err := server.Install(context.Background(), &agentv1.FirewallInstallRequest{})
 	code, _ := firewallCode(t, err)
 	if code != codeInstallUnsupported {
 		t.Fatalf("code = %q", code)
@@ -349,7 +365,7 @@ func TestInstallReportsAFailedInstall(t *testing.T) {
 	}
 	for name, runner := range cases {
 		server := newTestServer(t, runner)
-		_, err := server.InstallFirewall(context.Background(), &agentv1.FirewallInstallRequest{})
+		_, err := server.Install(context.Background(), &agentv1.FirewallInstallRequest{})
 		code, _ := firewallCode(t, err)
 		if code != codeInstallFailed {
 			t.Errorf("%s: code = %q", name, code)

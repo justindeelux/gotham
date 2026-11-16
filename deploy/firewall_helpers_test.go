@@ -179,8 +179,9 @@ func TestHostctlFirewallInstallOnDebianInstallsUfw(t *testing.T) {
 	log := filepath.Join(root, "install.log")
 	writeStub(t, bin, "apt-get", `#!/bin/sh
 printf '%s\n' "$*" >>"$INSTALL_LOG"
-printf '#!/bin/sh\nexit 0\n' >"$BIN/ufw"
-chmod +x "$BIN/ufw"
+case "$*" in
+  *" install "*) printf '#!/bin/sh\nexit 0\n' >"$BIN/ufw"; chmod +x "$BIN/ufw" ;;
+esac
 `)
 	symlinkTools(t, bin, "sed", "tr", "grep", "chmod")
 
@@ -193,8 +194,87 @@ chmod +x "$BIN/ufw"
 	if err != nil {
 		t.Fatal(err)
 	}
-	if !strings.Contains(string(data), "install -y --no-install-recommends ufw") {
-		t.Fatalf("apt-get calls = %q", data)
+	for _, want := range []string{
+		"-o DPkg::Lock::Timeout=60 update -qq",
+		"-o DPkg::Lock::Timeout=60 install -y --no-install-recommends ufw",
+	} {
+		if !strings.Contains(string(data), want) {
+			t.Errorf("apt-get calls = %q, want %q", data, want)
+		}
+	}
+}
+
+func TestHostctlFirewallInstallUpdatesEmptyAptListsFirst(t *testing.T) {
+	root := t.TempDir()
+	osRelease(t, root, "ID=debian\n")
+	bin := filepath.Join(root, "bin")
+	if err := os.MkdirAll(bin, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	log := filepath.Join(root, "install.log")
+	empty := filepath.Join(root, "lists-missing")
+	if err := os.WriteFile(empty, nil, 0o644); err != nil {
+		t.Fatal(err)
+	}
+	// The install fails until an update ran, like a fresh image with no lists.
+	writeStub(t, bin, "apt-get", `#!/bin/sh
+printf '%s\n' "$*" >>"$INSTALL_LOG"
+case "$*" in
+  *" update "*) rm -f "$LISTS_MISSING"; exit 0 ;;
+esac
+if [ -f "$LISTS_MISSING" ]; then
+    echo "E: Unable to locate package ufw" >&2
+    exit 100
+fi
+printf '#!/bin/sh\nexit 0\n' >"$BIN/ufw"
+chmod +x "$BIN/ufw"
+`)
+	symlinkTools(t, bin, "sed", "tr", "grep", "chmod", "rm", "tail")
+
+	out, err := runHostctlIsolated(t, bin, root, "", "firewall-install",
+		[]string{"INSTALL_LOG=" + log, "BIN=" + bin, "LISTS_MISSING=" + empty})
+	if err != nil {
+		t.Fatalf("firewall-install must update the lists first: %v\n%s", err, out)
+	}
+	data, err := os.ReadFile(log)
+	if err != nil {
+		t.Fatal(err)
+	}
+	updateAt := strings.Index(string(data), " update ")
+	installAt := strings.Index(string(data), " install ")
+	if updateAt < 0 || installAt < 0 || updateAt > installAt {
+		t.Fatalf("apt-get calls = %q, want the update before the install", data)
+	}
+}
+
+func TestHostctlFirewallInstallSurfacesAptFailure(t *testing.T) {
+	root := t.TempDir()
+	osRelease(t, root, "ID=debian\n")
+	bin := filepath.Join(root, "bin")
+	if err := os.MkdirAll(bin, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	writeStub(t, bin, "apt-get", `#!/bin/sh
+case "$*" in
+  *" update "*) exit 0 ;;
+esac
+echo "E: Unable to locate package ufw" >&2
+exit 100
+`)
+	symlinkTools(t, bin, "sed", "tr", "grep", "tail")
+
+	out, err := runHostctlIsolated(t, bin, root, "", "firewall-install", nil)
+	if err == nil {
+		t.Fatalf("expected a failure, got %q", out)
+	}
+	exit, ok := err.(*exec.ExitError)
+	if !ok || exit.ExitCode() != 5 {
+		t.Fatalf("exit = %v, want 5", err)
+	}
+	for _, want := range []string{"gotham-hostctl: ", "Unable to locate package ufw"} {
+		if !strings.Contains(out, want) {
+			t.Fatalf("output = %q, want %q", out, want)
+		}
 	}
 }
 

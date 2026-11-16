@@ -631,6 +631,14 @@ fw_family() {
     done
 }
 
+# fw_run runs one package or service command. Its last stderr line goes into
+# the refusal, because the agent only shows `gotham-hostctl: ` diagnostics.
+fw_run() {
+    _fw_err="$(run "$@" 2>&1 >/dev/null)" || {
+        die "$* failed: $(printf '%s\n' "${_fw_err}" | tail -n 1)" 5
+    }
+}
+
 # fw_install installs the family's firewall. It is idempotent: a host that
 # already has ufw or firewalld is left untouched. Exit 3 means the distribution
 # has no package Gotham supports.
@@ -640,15 +648,15 @@ fw_install() {
     esac
     case "$(fw_family)" in
         debian)
-            # shortcut: relies on the host's package lists being current; add
-            # apt-get update here if a fresh image ships without them.
             export DEBIAN_FRONTEND=noninteractive
-            run apt-get install -y --no-install-recommends ufw >/dev/null 2>&1 \
-                || die "ufw could not be installed" 5
+            # Fresh minimal images ship empty package lists, so update first. A
+            # failed update is not fatal; the install then reports the reason.
+            run apt-get -o DPkg::Lock::Timeout=60 update -qq >/dev/null 2>&1 || true
+            fw_run apt-get -o DPkg::Lock::Timeout=60 install -y --no-install-recommends ufw
             ;;
         rhel)
-            run dnf install -y firewalld >/dev/null 2>&1 || die "firewalld could not be installed" 5
-            run systemctl enable firewalld >/dev/null 2>&1 || die "firewalld could not be enabled" 5
+            fw_run dnf install -y firewalld
+            fw_run systemctl enable firewalld
             ;;
         *)
             die "installing a firewall is not supported on this distribution" 3

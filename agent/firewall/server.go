@@ -332,10 +332,10 @@ func (s *Server) SetEnabled(ctx context.Context, req *agentv1.FirewallEnabledReq
 	return &agentv1.FirewallState{Status: s.statusProto(st, req.GetControlPlanePort()), Rules: protoRules(rules)}, nil
 }
 
-// InstallFirewall installs the distribution's firewall when the node has none,
+// Install installs the distribution's firewall when the node has none,
 // keeps the operator's access rules and turns it on. A node that already has a
 // backend is left unchanged.
-func (s *Server) InstallFirewall(ctx context.Context, req *agentv1.FirewallInstallRequest) (*agentv1.FirewallState, error) {
+func (s *Server) Install(ctx context.Context, req *agentv1.FirewallInstallRequest) (*agentv1.FirewallState, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 

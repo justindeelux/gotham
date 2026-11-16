@@ -674,6 +674,15 @@ fw_ufw() {
         set -- "$@" to "${source}"
     fi
     [ -n "${comment}" ] && set -- "$@" comment "${comment}"
+    if [ "${action}" = "deny" ]; then
+        # ufw can refuse insert 1 on an empty rule set; a plain append still
+        # makes the deny effective.
+        if ! run ufw "$@"; then
+            shift 2
+            run ufw "$@" || return 1
+        fi
+        return 0
+    fi
     run ufw "$@"
 }
 

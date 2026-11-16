@@ -169,3 +169,21 @@ func TestPortAllowedCountsAReadOnlyRowWithAKnownPort(t *testing.T) {
 		t.Fatal("a read-only interface row for port 22 still covers port 22")
 	}
 }
+
+func TestReadOnlyDeniesWithUnknownPortsDoNotBlockAccess(t *testing.T) {
+	rules := parseUFWRules(fixture(t, "ufw_readonly.txt"), "")
+	ports := []accessPort{{port: 22, label: "SSH"}, {port: 9443, label: "the node agent"}}
+
+	// Samba AND 8080/tcp on docker0 are read-only denies with no parsed port.
+	// They must not be read as deny-all for every protected port.
+	if err := denyBlocks(rules, ports); err != nil {
+		t.Fatalf("an unparsed read-only deny blocked access: %v", err)
+	}
+
+	// A read-only row with a known port still counts: the fixture's
+	// 3306/tcp REJECT must block a protected port on 3306.
+	err := denyBlocks(rules, []accessPort{{port: 3306, label: "the database"}})
+	if err == nil || !strings.Contains(err.Error(), "denies port 3306") {
+		t.Fatalf("a known-port REJECT was ignored: %v", err)
+	}
+}

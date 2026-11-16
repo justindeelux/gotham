@@ -231,3 +231,48 @@ func TestHostctlFirewallStatusFallsBackTo22(t *testing.T) {
 		t.Fatalf("fallback = %q", out)
 	}
 }
+
+func TestHostctlFirewallDenyFallsBackWhenInsertFails(t *testing.T) {
+	root := t.TempDir()
+	bin := filepath.Join(root, "bin")
+	if err := os.MkdirAll(bin, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	log := filepath.Join(root, "ufw.log")
+	writeStub(t, bin, "ufw", `#!/bin/sh
+case "$1" in
+  status) echo "Status: active"; exit 0 ;;
+esac
+printf '%s\n' "$*" >>"$UFW_LOG"
+[ "$1" = "insert" ] && exit 1
+exit 0
+`)
+	for _, tool := range []string{"grep", "tr"} {
+		path, err := exec.LookPath(tool)
+		if err != nil {
+			t.Fatalf("look up %s: %v", tool, err)
+		}
+		if err := os.Symlink(path, filepath.Join(bin, tool)); err != nil {
+			t.Fatal(err)
+		}
+	}
+	input := "action=deny\ndirection=in\nprotocol=tcp\nport=22\nsource=\ncomment=\n"
+	out, err := runHostctlIsolated(t, bin, root, input, "firewall-add", []string{"UFW_LOG=" + log})
+	if err != nil {
+		t.Fatalf("firewall-add: %v\n%s", err, out)
+	}
+	data, err := os.ReadFile(log)
+	if err != nil {
+		t.Fatal(err)
+	}
+	lines := strings.Split(strings.TrimSpace(string(data)), "\n")
+	if len(lines) != 2 {
+		t.Fatalf("ufw calls = %q, want the insert and the plain retry", data)
+	}
+	if !strings.HasPrefix(lines[0], "insert 1 deny in ") {
+		t.Fatalf("first call = %q", lines[0])
+	}
+	if !strings.HasPrefix(lines[1], "deny in ") {
+		t.Fatalf("retry call = %q", lines[1])
+	}
+}

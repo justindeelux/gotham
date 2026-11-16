@@ -146,8 +146,8 @@ func TestSplitQuoted(t *testing.T) {
 
 func TestParseUFWKeepsReadOnlyRowsDistinct(t *testing.T) {
 	rules := parseUFWRules(fixture(t, "ufw_readonly.txt"), "")
-	if len(rules) != 7 {
-		t.Fatalf("rules = %d, want 7: %#v", len(rules), rules)
+	if len(rules) != 9 {
+		t.Fatalf("rules = %d, want 9: %#v", len(rules), rules)
 	}
 	ids := make(map[string]bool, len(rules))
 	for _, r := range rules {

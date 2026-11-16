@@ -11,3 +11,5 @@ Status: active
 [ 7] 22/tcp                     ALLOW IN    Anywhere
 [ 8] 3306/tcp                   REJECT IN   Anywhere
 [ 9] 3306/tcp (v6)              REJECT IN   Anywhere (v6)
+[10] Samba                      DENY IN     Anywhere
+[11] 8080/tcp on docker0       DENY IN     Anywhere

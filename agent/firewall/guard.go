@@ -41,8 +41,16 @@ func denyBlocks(rules []rule, ports []accessPort) error {
 	for _, target := range ports {
 		for _, r := range rules {
 			if !r.Enabled || r.Direction != agentv1.FirewallDirection_FIREWALL_DIRECTION_IN ||
-				r.Action != agentv1.FirewallAction_FIREWALL_ACTION_DENY ||
-				!portCovers(r.Port, target.port) || !protocolCovers(r.Protocol) {
+				r.Action != agentv1.FirewallAction_FIREWALL_ACTION_DENY || !protocolCovers(r.Protocol) {
+				continue
+			}
+			// A read-only row whose port could not be parsed (an app profile
+			// or an interface row) says nothing about this port; treating its
+			// empty model port as "all ports" would freeze every change.
+			if r.ReadOnly && r.Port == "" {
+				continue
+			}
+			if !portCovers(r.Port, target.port) {
 				continue
 			}
 			return fmt.Errorf(

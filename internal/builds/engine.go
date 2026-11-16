@@ -20,6 +20,9 @@ const (
 	EngineRailpack   EngineKind = "railpack"
 	EngineBuildpacks EngineKind = "buildpacks"
 	EngineStatic     EngineKind = "static"
+	// EngineCompose has no image builder: the deploy orchestrator reads a
+	// compose file from the repository and runs the project directly.
+	EngineCompose EngineKind = "docker_compose"
 )
 
 var EngineKinds = []EngineKind{EngineDockerfile, EngineRailpack, EngineBuildpacks, EngineStatic}
@@ -59,6 +62,8 @@ func ParseEngineKind(s string) (EngineKind, error) {
 		return EngineBuildpacks, nil
 	case string(EngineStatic):
 		return EngineStatic, nil
+	case string(EngineCompose):
+		return EngineCompose, nil
 	default:
 		return EngineAuto, fmt.Errorf("%w: unknown build pack %q", ErrValidation, s)
 	}

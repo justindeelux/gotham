@@ -21,6 +21,7 @@ func TestEngineTool(t *testing.T) {
 		{EngineBuildpacks, "pack"},
 		{EngineDockerfile, ""},
 		{EngineStatic, ""},
+		{EngineCompose, ""},
 		{EngineAuto, ""},
 	}
 	for _, tc := range cases {
@@ -39,6 +40,7 @@ func TestEngineTools(t *testing.T) {
 		{EngineBuildpacks, []string{"pack"}},
 		{EngineDockerfile, nil},
 		{EngineStatic, nil},
+		{EngineCompose, nil},
 		{EngineAuto, nil},
 	}
 	for _, tc := range cases {

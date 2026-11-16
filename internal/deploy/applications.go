@@ -134,6 +134,9 @@ func (s *Service) CreateApplication(ctx context.Context, userID uuid.UUID, in Cr
 			app.ComposeFile = ""
 		}
 	}
+	if IsComposeBuildPack(app.BuildPack) && app.ComposeFile == "" {
+		app.ComposeFile = DefaultComposeFile
+	}
 	if app.Branch == "" && !BranchDefaultsToRemote(app.SourceType, app.Provider) &&
 		NormalizeSourceType(app.SourceType, app.Provider) != SourceImage {
 		app.Branch = defaultBranch
@@ -402,6 +405,9 @@ func (s *Service) UpdateApplication(ctx context.Context, userID, appID uuid.UUID
 	if in.BuildPack != nil {
 		app.BuildPack = strings.TrimSpace(*in.BuildPack)
 	}
+	if IsComposeBuildPack(app.BuildPack) && strings.TrimSpace(app.ComposeFile) == "" && in.ComposeFile == nil {
+		app.ComposeFile = DefaultComposeFile
+	}
 	if in.DockerfileContent != nil {
 		if app.SourceType != SourceDockerfile {
 			return Application{}, fmt.Errorf("%w: dockerfile content is only valid for source type %q",
@@ -474,6 +480,11 @@ func (s *Service) UpdateApplication(ctx context.Context, userID, appID uuid.UUID
 	if isComposeApp(app) {
 		if err := validateComposeTarget(app); err != nil {
 			return Application{}, err
+		}
+		if IsComposeBuildPack(app.BuildPack) {
+			if err := validateComposeBuildPack(app); err != nil {
+				return Application{}, err
+			}
 		}
 	}
 	if err := validateApplication(app, false); err != nil {
@@ -624,7 +635,7 @@ func (s *Service) ReplaceStorages(ctx context.Context, userID, appID uuid.UUID, 
 	if err != nil {
 		return nil, err
 	}
-	if NormalizeSourceType(app.SourceType, app.Provider) == SourceCompose {
+	if isComposeApp(app) {
 		return nil, fmt.Errorf(
 			"%w: compose applications declare volumes in the compose source (mounted under %s/%s/<name>); update services[].volumes instead of storage mappings",
 			ErrValidation, managedVolumeRoot(), appID,
@@ -791,7 +802,7 @@ const containerCleanupTimeout = 15 * time.Second
 const composeCleanupTimeout = 2 * time.Minute
 
 func (s *Service) composeDownApp(ctx context.Context, serverID uuid.UUID, app Application, removeVolumes bool) []string {
-	if NormalizeSourceType(app.SourceType, app.Provider) != SourceCompose {
+	if !isComposeApp(app) {
 		return nil
 	}
 	if serverID == uuid.Nil || s.dial == nil {
@@ -945,11 +956,16 @@ func (s *Service) validateServer(ctx context.Context, _ uuid.UUID, serverID uuid
 }
 
 func applyComposeUpdate(app Application, in UpdateApplicationInput) (Application, error) {
-	if app.SourceType != SourceCompose {
-		return Application{}, fmt.Errorf("%w: compose fields are only valid for source type %q",
-			ErrValidation, SourceCompose)
+	if !isComposeApp(app) {
+		return Application{}, fmt.Errorf("%w: compose fields need source type %q or build pack %q",
+			ErrValidation, SourceCompose, builds.EngineCompose)
 	}
-	if in.ComposeContent != nil {
+	if IsComposeBuildPack(app.BuildPack) {
+		if in.ComposeContent != nil && strings.TrimSpace(*in.ComposeContent) != "" {
+			return Application{}, fmt.Errorf("%w: build pack %q reads the compose file from the repository",
+				ErrValidation, app.BuildPack)
+		}
+	} else if in.ComposeContent != nil {
 		app.ComposeContent = *in.ComposeContent
 		if strings.TrimSpace(app.ComposeContent) != "" {
 			app.Repo = ""
@@ -963,6 +979,12 @@ func applyComposeUpdate(app Application, in UpdateApplicationInput) (Application
 	}
 	if in.ComposeService != nil {
 		app.ComposeService = strings.TrimSpace(*in.ComposeService)
+	}
+	if IsComposeBuildPack(app.BuildPack) {
+		if err := validateComposeBuildPack(app); err != nil {
+			return Application{}, err
+		}
+		return app, nil
 	}
 	if err := validateComposeSource(app); err != nil {
 		return Application{}, err
@@ -1015,6 +1037,39 @@ func requireCompleteRegistryCredential(username string, hasPassword bool) error 
 }
 
 func validateSource(app Application) error {
+	if err := validateSourceFields(app); err != nil {
+		return err
+	}
+	if IsComposeBuildPack(app.BuildPack) {
+		return validateComposeBuildPack(app)
+	}
+	return nil
+}
+
+// validateComposeBuildPack checks the repository-backed compose path: the
+// app's normal git source supplies the compose file, so pasted content is not
+// accepted.
+func validateComposeBuildPack(app Application) error {
+	switch app.SourceType {
+	case SourceGitPublic, SourceGitPrivate, SourceGitHubApp, SourceGitLabApp:
+	default:
+		return fmt.Errorf("%w: build pack %q needs a git or app source, not %q",
+			ErrValidation, app.BuildPack, app.SourceType)
+	}
+	if strings.TrimSpace(app.ComposeContent) != "" {
+		return fmt.Errorf("%w: build pack %q reads the compose file from the repository, not pasted content",
+			ErrValidation, app.BuildPack)
+	}
+	if err := validateCloneURL(strings.TrimSpace(app.CloneURL)); err != nil {
+		return err
+	}
+	if err := ValidateComposeFilePath(app.ComposeFile); err != nil {
+		return err
+	}
+	return ValidateComposeService("", app.ComposeService)
+}
+
+func validateSourceFields(app Application) error {
 	if app.GitHubAppID != uuid.Nil && app.SourceType != SourceGitHubApp {
 		return fmt.Errorf("%w: github_app_id needs source type %q",
 			ErrValidation, SourceGitHubApp)

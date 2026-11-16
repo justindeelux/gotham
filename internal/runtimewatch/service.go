@@ -12,6 +12,7 @@ import (
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgtype"
 
+	"github.com/justindeelux/gotham/internal/builds"
 	"github.com/justindeelux/gotham/internal/incidents"
 	"github.com/justindeelux/gotham/internal/servers"
 	"github.com/justindeelux/gotham/internal/store"
@@ -689,6 +690,16 @@ func (s *Service) settings(ctx context.Context, resourceType string, resourceID 
 	return settings, nil
 }
 
+// isComposeApplication covers the legacy compose source and the
+// docker_compose build pack, which runs a repository's compose project.
+func isComposeApplication(sourceType, buildPack string) bool {
+	if sourceType == "compose" {
+		return true
+	}
+	kind, err := builds.ParseEngineKind(buildPack)
+	return err == nil && kind == builds.EngineCompose
+}
+
 func (s *Service) targets(ctx context.Context, serverID uuid.UUID) ([]Target, error) {
 	applications, err := s.st.ListRuntimeMonitorApplications(ctx, pgUUID(serverID))
 	if err != nil {
@@ -714,7 +725,7 @@ func (s *Service) targets(ctx context.Context, serverID uuid.UUID) ([]Target, er
 			Name:               row.Name,
 			NodeID:             serverID,
 			ProjectID:          row.ProjectID.Bytes,
-			Compose:            row.SourceType == "compose",
+			Compose:            isComposeApplication(row.SourceType, row.BuildPack),
 			Settings:           settings,
 			DeploymentState:    row.DeploymentState,
 			DeploymentStarted:  timePtr(row.DeploymentStartedAt),

@@ -96,6 +96,8 @@ func TestParseEngineKind(t *testing.T) {
 		{in: "buildpacks", want: EngineBuildpacks},
 		{in: "herokuish", want: EngineBuildpacks},
 		{in: "static", want: EngineStatic},
+		{in: "docker_compose", want: EngineCompose},
+		{in: " Docker_COMPOSE ", want: EngineCompose},
 		{in: "wasm", wantErr: true},
 	}
 	for _, tt := range tests {

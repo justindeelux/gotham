@@ -357,14 +357,30 @@ require_networkd_host() {
     return 0
 }
 
+# apt_lists_updated keeps one package-list refresh per run: a fresh minimal
+# image has empty lists, where the query below would wrongly report a split
+# package as absent.
+APT_LISTS_UPDATED="0"
+apt_refresh_lists() {
+    [ "${APT_LISTS_UPDATED}" = "1" ] && return 0
+    APT_LISTS_UPDATED="1"
+    # A stale or unreachable mirror must not block enabling units that are
+    # already installed, so a failed refresh is reported, not fatal.
+    run env DEBIAN_FRONTEND=noninteractive apt-get update -qq -o DPkg::Lock::Timeout=60 \
+        || echo "gotham-toolctl: apt-get update failed; the package lists may be stale" >&2
+    return 0
+}
+
 # apt_install_if_known installs a distribution package only when apt offers one.
 # Ubuntu 22.04 and older Debian have no systemd-networkd or systemd-resolved
 # package: the units belong to `systemd`, so naming the package would fail the
-# install. The query runs first so a skipped install costs no package-list
-# download and an unreachable mirror cannot block enabling existing units.
+# install.
 apt_install_if_known() {
+    apt_refresh_lists
+    if [ "${DRYRUN}" = "1" ]; then
+        echo "+ ${APT_CACHE} show $1"
+    fi
     "${APT_CACHE}" show "$1" >/dev/null 2>&1 || return 0
-    run env DEBIAN_FRONTEND=noninteractive apt-get update || return $?
     run env DEBIAN_FRONTEND=noninteractive apt-get install -y "$1"
 }
 

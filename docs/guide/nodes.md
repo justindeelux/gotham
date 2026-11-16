@@ -262,7 +262,8 @@ all.
 
 The three systemd network tools are installed from the distribution packages,
 because `gotham-hostctl` needs the units and `resolvectl` to write its network
-and DNS drop-ins. On Debian/Ubuntu the helper installs the standalone
+and DNS drop-ins. On Debian/Ubuntu the helper refreshes the package lists first
+(a fresh minimal image has none) and then installs the standalone
 `systemd-resolved`/`systemd-networkd` package only when apt offers one: Ubuntu
 22.04 and older Debian ship those units and `resolvectl` inside `systemd`
 itself, so nothing is installed there. On Fedora/RHEL it installs

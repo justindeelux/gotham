@@ -29,20 +29,37 @@ func runToolctl(t *testing.T, root string, extra []string, args ...string) (stri
 	return string(out), err
 }
 
-// aptCacheStub points the helper's package query at an apt-cache that reports
-// whether the distribution carries the standalone systemd network packages. The
-// helper pins its PATH for hardening, so this goes through its test seam.
-func aptCacheStub(t *testing.T, known bool) string {
+// aptCacheStub gives the helper an apt-cache with a fixed answer about the
+// standalone systemd network packages. The helper pins its PATH for hardening,
+// so this goes through its test seam.
+func aptCacheStub(t *testing.T, found bool) []string {
 	t.Helper()
 	status := "1"
-	if known {
+	if found {
 		status = "0"
 	}
 	path := filepath.Join(t.TempDir(), "apt-cache")
 	if err := os.WriteFile(path, []byte("#!/bin/sh\nexit "+status+"\n"), 0o755); err != nil {
 		t.Fatalf("write fake apt-cache: %v", err)
 	}
-	return "GOTHAM_TOOLCTL_APT_CACHE=" + path
+	return []string{"GOTHAM_TOOLCTL_APT_CACHE=" + path}
+}
+
+// aptCacheListsStub gives the helper an apt-cache that finds the packages only
+// once the returned lists file exists. It stands for the package lists a minimal
+// image does not have until `apt-get update` refreshes them.
+func aptCacheListsStub(t *testing.T) ([]string, string) {
+	t.Helper()
+	lists := filepath.Join(t.TempDir(), "lists")
+	path := filepath.Join(t.TempDir(), "apt-cache")
+	body := "#!/bin/sh\n[ -f \"$GOTHAM_TEST_APT_LISTS\" ] || exit 1\nexit 0\n"
+	if err := os.WriteFile(path, []byte(body), 0o755); err != nil {
+		t.Fatalf("write fake apt-cache: %v", err)
+	}
+	return []string{
+		"GOTHAM_TOOLCTL_APT_CACHE=" + path,
+		"GOTHAM_TEST_APT_LISTS=" + lists,
+	}, lists
 }
 
 func TestToolctlRefusesUnlistedTools(t *testing.T) {
@@ -160,11 +177,14 @@ func TestToolctlInstallsSystemdNetworkStack(t *testing.T) {
 			"systemd-resolved": "systemd-resolved",
 			"resolvectl":       "systemd-resolved",
 		} {
-			out, err := runToolctl(t, root, []string{noPackages}, "install-tool", id)
+			out, err := runToolctl(t, root, noPackages, "install-tool", id)
 			if err != nil {
 				t.Fatalf("install-tool %s: %v: %s", id, err, out)
 			}
-			if strings.Contains(out, "apt-get") {
+			if !strings.Contains(out, "apt-get update -qq") {
+				t.Errorf("%s does not refresh the package lists: %q", id, out)
+			}
+			if strings.Contains(out, "apt-get install") {
 				t.Errorf("%s installs a package apt does not offer: %q", id, out)
 			}
 			if !strings.Contains(out, "systemctl enable --now "+unit) {
@@ -181,7 +201,7 @@ func TestToolctlInstallsSystemdNetworkStack(t *testing.T) {
 			"systemd-resolved": "systemd-resolved",
 			"resolvectl":       "systemd-resolved",
 		} {
-			out, err := runToolctl(t, root, []string{knownPackages}, "install-tool", id)
+			out, err := runToolctl(t, root, knownPackages, "install-tool", id)
 			if err != nil {
 				t.Fatalf("install-tool %s: %v: %s", id, err, out)
 			}
@@ -191,6 +211,42 @@ func TestToolctlInstallsSystemdNetworkStack(t *testing.T) {
 			if !strings.Contains(out, "systemctl enable --now ") {
 				t.Errorf("%s does not enable its unit: %q", id, out)
 			}
+		}
+	})
+
+	t.Run("refreshes empty lists before the query", func(t *testing.T) {
+		// A fresh minimal image (Debian 12 cloud) has no package lists, so the
+		// query would miss a split package the node really needs. The refresh
+		// must run first and the install follow it.
+		extra, lists := aptCacheListsStub(t)
+		root := t.TempDir()
+
+		empty, err := runToolctl(t, root, extra, "install-tool", "systemd-resolved")
+		if err != nil {
+			t.Fatalf("install-tool systemd-resolved: %v: %s", err, empty)
+		}
+		if strings.Contains(empty, "apt-get install") {
+			t.Errorf("empty lists install a package apt cannot see yet: %q", empty)
+		}
+		if !strings.Contains(empty, "systemctl enable --now systemd-resolved") {
+			t.Errorf("empty lists skip the unit: %q", empty)
+		}
+
+		if err := os.WriteFile(lists, nil, 0o644); err != nil {
+			t.Fatalf("create lists: %v", err)
+		}
+		out, err := runToolctl(t, root, extra, "install-tool", "systemd-resolved")
+		if err != nil {
+			t.Fatalf("install-tool systemd-resolved: %v: %s", err, out)
+		}
+		update := strings.Index(out, "apt-get update -qq")
+		query := strings.Index(out, "apt-cache show systemd-resolved")
+		install := strings.Index(out, "apt-get install -y systemd-resolved")
+		if update < 0 || query < 0 || install < 0 {
+			t.Fatalf("refresh, query or install step missing: %q", out)
+		}
+		if update > query || query > install {
+			t.Errorf("want update before query before install, got %q", out)
 		}
 	})
 
@@ -233,6 +289,32 @@ func TestToolctlInstallsSystemdNetworkStack(t *testing.T) {
 			t.Errorf("an unsupported distribution still planned a command: %q", out)
 		}
 	})
+}
+
+func TestToolctlAptUpdateFailureIsReported(t *testing.T) {
+	if _, err := exec.LookPath("flock"); err != nil {
+		t.Skip("flock is not available on this host")
+	}
+	// An unreachable mirror: the refresh fails, the helper says why it continues,
+	// and the step after it still runs.
+	cmd := exec.Command("sh", "-c", `
+env() { return 100; }
+. ./gotham-toolctl.sh
+`, "toolctl", "install-tool", "systemd-resolved")
+	cmd.Env = append(os.Environ(),
+		"GOTHAM_TOOLCTL_INNER=1",
+		"GOTHAM_TOOLCTL_DRYRUN=0",
+		"GOTHAM_TOOLCTL_ROOT="+t.TempDir(),
+		"GOTHAM_TOOLCTL_LOCK="+filepath.Join(t.TempDir(), "lock"),
+		"GOTHAM_TOOLCTL_ARCH=amd64",
+		"GOTHAM_TOOLCTL_DISTRO=apt",
+		"GOTHAM_TOOLCTL_NETWORK_MANAGER=none",
+	)
+	cmd.Env = append(cmd.Env, aptCacheStub(t, false)...)
+	out, _ := cmd.CombinedOutput()
+	if !strings.Contains(string(out), "gotham-toolctl: apt-get update failed") {
+		t.Fatalf("a failed refresh is silent: %s", out)
+	}
 }
 
 func TestToolctlRefusesNetworkManagerHosts(t *testing.T) {

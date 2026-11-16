@@ -512,6 +512,84 @@ EOF
     fi
 fi
 
+echo "== 7. a legacy install keeps its panel port =="
+# A host installed before the default moved to 9074 has no GOTHAM_SERVER_PORT
+# and serves on 8000. The wrapper must pin that port before the restart (its
+# URLs point there) and probe it. A gotham.yaml that sets server.port is the
+# exception: the binary reads it, so nothing is pinned.
+PIN_ROOT="${SCRATCH}/pin-root"
+PIN_ENV="${PIN_ROOT}/etc/gotham/gotham.env"
+PIN_YAML="${PIN_ROOT}/var/lib/gotham/gotham.yaml"
+PIN_CONF="${SCRATCH}/pin.conf"
+mkdir -p "${PIN_ROOT}/etc/gotham" "${PIN_ROOT}/var/lib/gotham" "${SCRATCH}/pin-status"
+chmod 0755 "${PIN_ROOT}" "${PIN_ROOT}/etc" "${PIN_ROOT}/etc/gotham" \
+    "${PIN_ROOT}/var" "${PIN_ROOT}/var/lib" "${PIN_ROOT}/var/lib/gotham" \
+    "${SCRATCH}/pin-status"
+printf 'GOTHAM_DATABASE_DSN=postgres://gotham:x@localhost:5432/gotham?sslmode=disable\n' >"${PIN_ENV}"
+chmod 0640 "${PIN_ENV}"
+cat >"${PIN_CONF}" <<EOF
+GOTHAM_BINARY=${SCRATCH}/bin/gotham
+GOTHAM_SERVICE=${UNIT}
+GOTHAM_TIMEOUT=2
+GOTHAM_STATUS=${SCRATCH}/pin-status/update.status
+GOTHAM_PENDING=${SCRATCH}/pin.pending
+GOTHAM_LOCK=${SCRATCH}/pin.lock
+GOTHAM_GRACE=0
+EOF
+chmod 0644 "${PIN_CONF}"
+: >"${SCRATCH}/pin.lock"
+
+run_pin_wrapper() {
+    env -u SUDO_USER -u SUDO_UID -u SUDO_GID \
+        GOTHAM_UPDATER_CONF="${PIN_CONF}" \
+        GOTHAM_HOST_BOOTSTRAP_ROOT="${PIN_ROOT}" \
+        sh "${SCRIPT_DIR}/gotham-update.sh"
+}
+
+# The scratch unit serves its own port, so the 8000 probe fails; this case
+# checks the pin line, not the outcome.
+rm -f "${SCRATCH}/bin/gotham.old" "${SCRATCH}/pin.pending"
+printf 'result=staged\nversion=v1.2.0-pin\n' >"${SCRATCH}/pin.pending"
+run_pin_wrapper >"${SCRATCH}/pin-out.log" 2>&1 || true
+if grep -qx 'GOTHAM_SERVER_PORT=8000' "${PIN_ENV}"; then
+    pass "a legacy install is pinned to its port 8000"
+else
+    fail "a legacy install was not pinned to 8000: $(cat "${PIN_ENV}")"
+fi
+if grep -q 'pinned the existing panel port 8000' "${SCRATCH}/pin-out.log"; then
+    pass "the wrapper probes the pinned port"
+else
+    fail "the pinned port is not reported in the wrapper log"
+fi
+rm -f "${SCRATCH}/pin.pending"
+printf 'result=staged\nversion=v1.2.0-pin2\n' >"${SCRATCH}/pin.pending"
+run_pin_wrapper >/dev/null 2>&1 || true
+rm -f "${SCRATCH}/pin.pending"
+if [ "$(grep -c '^GOTHAM_SERVER_PORT=' "${PIN_ENV}")" -eq 1 ]; then
+    pass "the pin is written once"
+else
+    fail "the pin was written more than once"
+fi
+
+# A yaml with server.port is probed on that port and left unpinned.
+printf 'server:\n  port: %s\n' "${PORT}" >"${PIN_YAML}"
+printf 'result=staged\nversion=v1.2.0-yaml\n' >"${SCRATCH}/pin.pending"
+if run_pin_wrapper >"${SCRATCH}/pin-yaml.log" 2>&1; then
+    pass "the yaml server.port is the probed port"
+else
+    fail "the yaml-configured run did not stay healthy: $(cat "${SCRATCH}/pin-yaml.log")"
+fi
+if [ ! -e "${SCRATCH}/pin.pending" ]; then
+    pass "the yaml-configured run released the pending marker"
+else
+    fail "the yaml-configured run kept the pending marker"
+fi
+if grep -q '^GOTHAM_SERVER_PORT=' "${PIN_ENV}"; then
+    fail "a gotham.yaml port was overridden by a pin: $(cat "${PIN_ENV}")"
+else
+    pass "a gotham.yaml port is not pinned"
+fi
+
 # When a Go toolchain is present, the run must actually exercise the Go Resume
 # ordering; otherwise exit 0 would hide a Go-side regression.
 if [ "${GO_AVAILABLE}" -eq 1 ] && [ "${GO_EXERCISED}" -ne 1 ]; then

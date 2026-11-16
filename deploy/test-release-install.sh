@@ -2810,6 +2810,24 @@ grep -q 'LEGACY_DB_PASSWORD_NOTE' "${INSTALL_SH}" \
     || { echo "FAIL: the legacy warning is missing from the final summary (D5)" >&2; exit 1; }
 echo "PASS: legacy default password warns with the manual command, untouched (D5)"
 
+# D5b: a gotham.yaml that sets server.port owns the port. Pinning one in
+# gotham.env would override the yaml, so the installer must write nothing.
+deps_reset
+deps_fixture ubuntu noble
+printf '16+257build1.1\n' >"${DEPS_STATE}/pg_candidate"
+printf '5:7.0.15-1ubuntu0.24.04.5\n' >"${DEPS_STATE}/redis_candidate"
+D5B_ROOT="${SCRATCH}/deps-yaml-port"
+deps_legacy_state "${D5B_ROOT}"
+mkdir -p "${D5B_ROOT}/var/lib/gotham"
+printf 'server:\n  port: 9000\n' >"${D5B_ROOT}/var/lib/gotham/gotham.yaml"
+deps_run "${D5B_ROOT}" >"${DEPS_DIR}/d5b.log" 2>&1 \
+    || { echo "FAIL: an install with a gotham.yaml port failed (D5b)" >&2; cat "${DEPS_DIR}/d5b.log" >&2; exit 1; }
+if grep -q '^GOTHAM_SERVER_PORT=' "${D5B_ROOT}/etc/gotham/gotham.env"; then
+    echo "FAIL: a GOTHAM_SERVER_PORT pin overrides the gotham.yaml server.port (D5b)" >&2
+    exit 1
+fi
+echo "PASS: a gotham.yaml server.port is not overridden by a pin (D5b)"
+
 # D6: an operator-set password or a custom database name in a stored DSN is
 # kept exactly as stored.
 deps_reset

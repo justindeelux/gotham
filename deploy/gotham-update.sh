@@ -113,17 +113,39 @@ STAGING_ROOT="${GOTHAM_STAGING:-${STATUS_DIR}}"
 # stale pins from hard-killed runs are swept when the next run starts.
 LOCK_PIN=""
 
+# yaml_port prints the server.port a gotham.yaml defines, or nothing when it
+# sets none: a yaml with only other keys (oauth:, log:) still leaves the panel
+# on the default port, so it must not be mistaken for an explicit port.
+yaml_port() {
+    [ -r "$1" ] || return 0
+    awk '
+        /^server:[[:space:]]*$/ { server = 1; next }
+        /^[^[:space:]#]/ { server = 0 }
+        server && /^[[:space:]]+port:/ {
+            value = $0
+            sub(/^[[:space:]]+port:[[:space:]]*/, "", value)
+            sub(/[[:space:]]*#.*$/, "", value)
+            if (value ~ /^[0-9]+$/) print value
+            exit
+        }
+    ' "$1" 2>/dev/null
+}
+
 # The control plane port decides the health URL, so the check follows the port
 # the install actually serves on (the default moved from 8000 to 9074). The
-# service environment file is its source of truth; GOTHAM_HEALTH stays the
-# fallback for a host configured only through gotham.yaml.
+# service environment file wins (systemd passes it to the binary), then
+# gotham.yaml; GOTHAM_HEALTH stays the fallback for neither.
 SERVICE_ENV="${GOTHAM_SERVICE_ENV:-${ROOT}/etc/gotham/gotham.env}"
+CONFIG_FILE="${ROOT}/var/lib/gotham/gotham.yaml"
 PANEL_PORT=""
 if [ "${IS_AGENT}" -eq 0 ] && [ -r "${SERVICE_ENV}" ]; then
     PANEL_PORT=$(sed -n 's/^[[:space:]]*GOTHAM_SERVER_PORT=//p' "${SERVICE_ENV}" 2>/dev/null | head -n1 | tr -d "\"'[:space:]")
     case "${PANEL_PORT}" in
         '' | *[!0-9]*) PANEL_PORT="" ;;
     esac
+fi
+if [ "${IS_AGENT}" -eq 0 ] && [ -z "${PANEL_PORT}" ] && [ -r "${CONFIG_FILE}" ]; then
+    PANEL_PORT=$(yaml_port "${CONFIG_FILE}")
 fi
 HEALTH="${GOTHAM_HEALTH:-http://127.0.0.1:9074/healthz}"
 if [ -n "${PANEL_PORT}" ]; then
@@ -134,14 +156,12 @@ fi
 # already serves on. The old installer never wrote GOTHAM_SERVER_PORT, so those
 # hosts listen on 8000; without the pin the new binary would move to 9074 and
 # every URL registered against 8000 (OAuth callbacks, webhooks, bookmarks)
-# would stop working. A gotham.yaml may set server.port itself: leave it alone.
+# would stop working. A port from gotham.yaml already set PANEL_PORT above, so
+# that install is left alone.
 pin_legacy_port() {
     [ "${IS_AGENT}" -eq 0 ] || return 0
     [ -z "${PANEL_PORT}" ] || return 0
     [ -f "${SERVICE_ENV}" ] || return 0
-    if [ -e "${ROOT}/var/lib/gotham/gotham.yaml" ]; then
-        return 0
-    fi
     if ! printf '\n# Pinned by gotham-update: this host was installed before the default\n# panel port moved to 9074, so it keeps the port its URLs point at.\nGOTHAM_SERVER_PORT=8000\n' >>"${SERVICE_ENV}"; then
         log "could not pin the existing port in ${SERVICE_ENV}; the health check uses ${HEALTH}"
         return 0

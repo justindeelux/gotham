@@ -483,25 +483,49 @@ fi
 env_prev() {
     printf '%s\n' "${ENV_PREV}" | sed -n "s/^$1=//p" | head -n1
 }
+# yaml_port prints the server.port a gotham.yaml defines, or nothing when it
+# sets none: a yaml with only other keys (oauth:, log:) still leaves the panel
+# on the default port, so it must not be mistaken for an explicit port.
+yaml_port() {
+    [ -r "$1" ] || return 0
+    awk '
+        /^server:[[:space:]]*$/ { server = 1; next }
+        /^[^[:space:]#]/ { server = 0 }
+        server && /^[[:space:]]+port:/ {
+            value = $0
+            sub(/^[[:space:]]+port:[[:space:]]*/, "", value)
+            sub(/[[:space:]]*#.*$/, "", value)
+            if (value ~ /^[0-9]+$/) print value
+            exit
+        }
+    ' "$1" 2>/dev/null
+}
 # The panel port this install serves on. A host installed before the default
 # moved to 9074 has no GOTHAM_SERVER_PORT and listens on 8000, so that port is
 # pinned instead: its bookmarks, webhooks and OAuth callback URLs point there.
-# A fresh install uses the current default.
+# A fresh install uses the current default. A gotham.yaml that sets server.port
+# decides instead, and is left in charge: pinning it in gotham.env would
+# override the yaml.
 DEFAULT_SERVER_PORT=9074
 LEGACY_SERVER_PORT=8000
 SERVER_PORT="$(env_prev GOTHAM_SERVER_PORT)"
+SERVER_PORT_PIN=1
 if [ -z "${SERVER_PORT}" ]; then
-    if [ -n "${ENV_PREV}" ]; then
+    YAML_PORT="$(yaml_port "${STATE_DIR}/gotham.yaml")"
+    if [ -n "${YAML_PORT}" ]; then
+        SERVER_PORT="${YAML_PORT}"
+        SERVER_PORT_PIN=0
+    elif [ -n "${ENV_PREV}" ]; then
         SERVER_PORT="${LEGACY_SERVER_PORT}"
     else
         SERVER_PORT="${DEFAULT_SERVER_PORT}"
     fi
 fi
 case "${SERVER_PORT}" in
-    '' | *[!0-9]*) die "GOTHAM_SERVER_PORT in ${ENV_FILE} must be a port number, got '${SERVER_PORT}'" ;;
+    '' | *[!0-9]*) die "the panel port (GOTHAM_SERVER_PORT or server.port) must be a number, got '${SERVER_PORT}'" ;;
 esac
 if [ "${SERVER_PORT}" -lt 1 ] || [ "${SERVER_PORT}" -gt 65535 ]; then
-    die "GOTHAM_SERVER_PORT in ${ENV_FILE} must be between 1 and 65535, got ${SERVER_PORT}"
+    die "the panel port (GOTHAM_SERVER_PORT or server.port) must be between 1 and 65535, got ${SERVER_PORT}"
 fi
 # LOCAL_DSN means the local PostgreSQL/Redis services are this installer's to
 # install and keep running. FRESH_LOCAL_DB means no DSN exists yet, so the
@@ -1383,7 +1407,9 @@ if [ "${DRY_RUN}" -eq 0 ]; then
             echo "# Gotham control-plane environment. Read by gotham.service (EnvironmentFile)."
             echo "GOTHAM_DATABASE_DSN=${DSN}"
             echo "GOTHAM_REDIS_ADDR=${REDIS_ADDR}"
-            echo "GOTHAM_SERVER_PORT=${SERVER_PORT}"
+            if [ "${SERVER_PORT_PIN}" -eq 1 ]; then
+                echo "GOTHAM_SERVER_PORT=${SERVER_PORT}"
+            fi
             echo "GOTHAM_CA_DIR=${CA_DIR}"
             echo "GOTHAM_SECRET_KEY=${SECRET_KEY}"
             echo "GOTHAM_AUTH_JWT_PRIVATE_KEY_PATH=${JWT_KEY}"

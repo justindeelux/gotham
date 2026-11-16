@@ -139,7 +139,9 @@ A fresh install serves the panel on port `9074` instead of `8000`. An existing
 installation keeps the port it already uses: the installer and the update
 wrapper write it to `GOTHAM_SERVER_PORT` in `/etc/gotham/gotham.env` before the
 new binary starts, so bookmarks, webhooks and OAuth callback URLs registered
-against the old port keep working. The updater health check follows that port.
+against the old port keep working. An install configured through `gotham.yaml`
+keeps its `server.port`: nothing is pinned over it. The updater health check
+follows whichever port is configured.
 To move the panel, change `GOTHAM_SERVER_PORT` in `gotham.env` and restart; the
 updater probes the new port.
 

@@ -141,7 +141,9 @@ Một bản cài mới phục vụ bảng điều khiển trên cổng `9074` th
 cài đã có giữ cổng nó đang dùng: trình cài đặt và trình cập nhật ghi cổng đó vào
 `GOTHAM_SERVER_PORT` trong `/etc/gotham/gotham.env` trước khi tệp nhị phân mới
 chạy, nên bookmark, webhook và URL callback OAuth đã đăng ký với cổng cũ vẫn hoạt
-động. Bước kiểm tra sức khỏe của trình cập nhật đi theo cổng đó. Muốn đổi cổng,
+động. Một bản cài cấu hình qua `gotham.yaml` giữ `server.port` của nó: không có
+cổng nào bị ghi đè lên. Bước kiểm tra sức khỏe của trình cập nhật đi theo cổng
+đang được cấu hình. Muốn đổi cổng,
 sửa `GOTHAM_SERVER_PORT` trong `gotham.env` rồi khởi động lại; trình cập nhật sẽ
 dò cổng mới.
 

@@ -4,6 +4,7 @@ import (
 	"context"
 	"os"
 	"path/filepath"
+	"slices"
 	"testing"
 
 	agentv1 "github.com/justindeelux/gotham/proto/agent/v1"
@@ -39,8 +40,49 @@ func TestToolServerListTools(t *testing.T) {
 			t.Errorf("tool %q reported installed on an empty PATH", id)
 		}
 	}
-	if managed[toolcatalog.IDSystemdNetworkd] {
-		t.Error("systemd-networkd is offered for install/uninstall; want detect-only")
+	if managed[toolcatalog.IDNetworkctl] {
+		t.Error("networkctl is offered for install/uninstall; want detect-only")
+	}
+}
+
+func TestToolServerListToolsOffersNetworkStackPerPackageManager(t *testing.T) {
+	network := []string{toolcatalog.IDSystemdNetworkd, toolcatalog.IDSystemdResolved, toolcatalog.IDResolvectl}
+	for _, tt := range []struct {
+		binary string
+		want   bool
+	}{
+		{"apt-get", true},
+		{"dnf", true},
+		{"apk", false},
+	} {
+		t.Run(tt.binary, func(t *testing.T) {
+			dir := t.TempDir()
+			if err := os.WriteFile(filepath.Join(dir, tt.binary), []byte("#!/bin/sh\nexit 0\n"), 0o755); err != nil {
+				t.Fatalf("write fake %s: %v", tt.binary, err)
+			}
+			t.Setenv("PATH", dir)
+
+			response, err := NewToolServer().ListTools(context.Background(), &agentv1.ListToolsRequest{})
+			if err != nil {
+				t.Fatalf("ListTools: %v", err)
+			}
+			seen := 0
+			for _, tool := range response.GetTools() {
+				if !slices.Contains(network, tool.GetId()) {
+					continue
+				}
+				seen++
+				if tool.GetInstallable() != tt.want {
+					t.Errorf("%s installable = %v with %s on PATH; want %v", tool.GetId(), tool.GetInstallable(), tt.binary, tt.want)
+				}
+				if tool.GetUninstallable() {
+					t.Errorf("%s is uninstallable; Gotham never removes the host network stack", tool.GetId())
+				}
+			}
+			if seen != len(network) {
+				t.Fatalf("ListTools reported %d of %d network tools", seen, len(network))
+			}
+		})
 	}
 }
 
@@ -95,11 +137,11 @@ func TestToolServerListToolsReportsMinVersion(t *testing.T) {
 
 func TestToolServerInstallDetectOnly(t *testing.T) {
 	server := NewToolServer(withToolRunner(&fakeToolRunner{}))
-	request := &agentv1.InstallToolRequest{Id: toolcatalog.IDSystemdNetworkd}
+	request := &agentv1.InstallToolRequest{Id: toolcatalog.IDNetworkctl}
 	if err := server.InstallTool(request, newFakeToolStream(context.Background())); status.Code(err) != codes.FailedPrecondition {
-		t.Errorf("InstallTool(systemd-networkd) = %v; want FailedPrecondition", err)
+		t.Errorf("InstallTool(networkctl) = %v; want FailedPrecondition", err)
 	}
 	if err := server.UninstallTool(request, newFakeToolStream(context.Background())); status.Code(err) != codes.FailedPrecondition {
-		t.Errorf("UninstallTool(systemd-networkd) = %v; want FailedPrecondition", err)
+		t.Errorf("UninstallTool(networkctl) = %v; want FailedPrecondition", err)
 	}
 }

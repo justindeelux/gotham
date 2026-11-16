@@ -32,6 +32,7 @@ import type {
 } from "@/features/toolchain/api/toolchain";
 import ToolStatusBadge from "@/features/toolchain/components/ToolStatusBadge.vue";
 import InstallQueueModal from "@/features/toolchain/components/InstallQueueModal.vue";
+import NetworkInstallDialog from "@/features/toolchain/components/NetworkInstallDialog.vue";
 import { useToolchainStore } from "@/features/toolchain/stores/toolchain";
 
 const { t } = useI18n();
@@ -44,6 +45,11 @@ const checkedKeys = ref<string[]>([]);
 const pendingTools = ref<Record<string, boolean>>({});
 const busyBulk = ref(false);
 const activeCategory = ref("");
+const networkConfirm = ref<{
+  ids: string[];
+  names: string[];
+  fromRow: boolean;
+} | null>(null);
 
 const nodeOptions = computed<SelectOption[]>(() =>
   serversStore.servers.map((server) => ({
@@ -200,6 +206,10 @@ function queueType(status: ToolchainJob["status"]): "default" | "info" | "succes
 }
 
 async function runToolAction(tool: ToolchainTool, action: ToolchainAction): Promise<void> {
+  if (action === "install") {
+    requestInstall([tool.id], true);
+    return;
+  }
   pendingTools.value = { ...pendingTools.value, [tool.id]: true };
   try {
     const skipped = await store.enqueue([tool.id], action);
@@ -218,15 +228,41 @@ async function runToolAction(tool: ToolchainTool, action: ToolchainAction): Prom
   }
 }
 
-async function handleInstallSelected(): Promise<void> {
-  const ids = selectableIds.value;
+// Installing a network tool rewrites how the node reaches its network and DNS, so
+// it always passes a confirmation that names the tools first.
+function networkToolsFor(ids: string[]): ToolchainTool[] {
+  return ids
+    .map((id) => store.tools.find((tool) => tool.id === id))
+    .filter((tool): tool is ToolchainTool => tool?.category === "network");
+}
+
+function requestInstall(ids: string[], fromRow: boolean): void {
   if (ids.length === 0) {
     return;
   }
-  busyBulk.value = true;
+  const network = networkToolsFor(ids);
+  if (network.length > 0) {
+    networkConfirm.value = {
+      ids,
+      names: network.map((tool) => tool.name),
+      fromRow,
+    };
+    return;
+  }
+  void enqueueInstall(ids, fromRow);
+}
+
+async function enqueueInstall(ids: string[], fromRow: boolean): Promise<void> {
+  if (fromRow) {
+    pendingTools.value = { ...pendingTools.value, [ids[0]]: true };
+  } else {
+    busyBulk.value = true;
+  }
   try {
     const skipped = await store.enqueue(ids, "install");
-    checkedKeys.value = [];
+    if (!fromRow) {
+      checkedKeys.value = [];
+    }
     if (skipped.length > 0) {
       message.warning(t("toolchain.page.skipped", { tools: skipped.join(", ") }));
     }
@@ -238,8 +274,31 @@ async function handleInstallSelected(): Promise<void> {
   } catch (err) {
     message.error(describeToolchainError(err));
   } finally {
-    busyBulk.value = false;
+    if (fromRow) {
+      const next = { ...pendingTools.value };
+      delete next[ids[0]];
+      pendingTools.value = next;
+    } else {
+      busyBulk.value = false;
+    }
   }
+}
+
+function confirmNetworkInstall(): void {
+  const pending = networkConfirm.value;
+  if (pending === null) {
+    return;
+  }
+  networkConfirm.value = null;
+  void enqueueInstall(pending.ids, pending.fromRow);
+}
+
+function closeNetworkConfirm(): void {
+  networkConfirm.value = null;
+}
+
+function handleInstallSelected(): void {
+  requestInstall(selectableIds.value, false);
 }
 
 async function handleCancel(job: ToolchainJob): Promise<void> {
@@ -536,6 +595,12 @@ watch(
     </NCard>
 
     <InstallQueueModal />
+    <NetworkInstallDialog
+      :show="networkConfirm !== null"
+      :tools="networkConfirm?.names ?? []"
+      @update:show="(value: boolean) => { if (!value) closeNetworkConfirm(); }"
+      @confirm="confirmNetworkInstall"
+    />
   </div>
 </template>
 

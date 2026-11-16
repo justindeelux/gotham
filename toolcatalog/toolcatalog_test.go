@@ -1,8 +1,10 @@
 package toolcatalog
 
 import (
+	"errors"
 	"os"
 	"path/filepath"
+	"slices"
 	"testing"
 )
 
@@ -154,12 +156,84 @@ func TestCatalogIntegrity(t *testing.T) {
 }
 
 func TestDetectOnlyToolsAreNeverManaged(t *testing.T) {
-	for _, id := range []string{IDSystemdNetworkd, IDSystemdResolved, IDNetworkctl, IDSystemctl} {
+	for _, id := range []string{IDNetworkctl, IDSystemctl} {
 		tool := mustLookup(t, id)
 		if tool.Installable || tool.Uninstallable {
 			t.Errorf("%s is installable/uninstallable (%v/%v); want detect-only", id, tool.Installable, tool.Uninstallable)
 		}
 	}
+}
+
+func TestNetworkStackToolsAreInstallableButNeverRemoved(t *testing.T) {
+	for _, id := range []string{IDSystemdNetworkd, IDSystemdResolved, IDResolvectl} {
+		tool := mustLookup(t, id)
+		if !tool.Installable {
+			t.Errorf("%s is not installable; the host helper has an install step for it", id)
+		}
+		if tool.Uninstallable {
+			t.Errorf("%s is uninstallable; Gotham never removes the host network stack", id)
+		}
+		if _, err := UninstallOrder(id); !errors.Is(err, ErrNotUninstallable) {
+			t.Errorf("UninstallOrder(%q) = %v; want ErrNotUninstallable", id, err)
+		}
+	}
+}
+
+func TestInstallOrderForNetworkStack(t *testing.T) {
+	tests := []struct {
+		id   string
+		want []string
+	}{
+		{IDSystemdNetworkd, []string{IDSystemdNetworkd}},
+		{IDSystemdResolved, []string{IDSystemdResolved}},
+		{IDResolvectl, []string{IDSystemdResolved, IDResolvectl}},
+	}
+	for _, tt := range tests {
+		t.Run(tt.id, func(t *testing.T) {
+			order, err := InstallOrder(tt.id)
+			if err != nil {
+				t.Fatalf("InstallOrder(%q): %v", tt.id, err)
+			}
+			if !slices.Equal(order, tt.want) {
+				t.Errorf("InstallOrder(%q) = %v; want %v", tt.id, order, tt.want)
+			}
+		})
+	}
+}
+
+func TestInstallAvailableFollowsThePackageManager(t *testing.T) {
+	networkTools := []string{IDSystemdNetworkd, IDSystemdResolved, IDResolvectl}
+	for _, family := range []struct{ binary, manager string }{
+		{"apt-get", "apt"},
+		{"dnf", "dnf"},
+	} {
+		t.Run(family.manager, func(t *testing.T) {
+			emptyPath(t)
+			fakeBinary(t, family.binary, "exit 0")
+			for _, id := range networkTools {
+				if !InstallAvailable(id) {
+					t.Errorf("InstallAvailable(%q) = false with %s on PATH", id, family.binary)
+				}
+			}
+		})
+	}
+	t.Run("unsupported", func(t *testing.T) {
+		emptyPath(t)
+		fakeBinary(t, "apk", "exit 0")
+		for _, id := range networkTools {
+			if InstallAvailable(id) {
+				t.Errorf("InstallAvailable(%q) = true; want false without apt-get or dnf", id)
+			}
+		}
+	})
+	t.Run("release assets", func(t *testing.T) {
+		emptyPath(t)
+		for _, id := range []string{IDRailpack, IDPack, IDDocker, IDGit} {
+			if !InstallAvailable(id) {
+				t.Errorf("InstallAvailable(%q) = false; want true for a release asset", id)
+			}
+		}
+	})
 }
 
 func TestDetectAllReturnsCatalogOrder(t *testing.T) {

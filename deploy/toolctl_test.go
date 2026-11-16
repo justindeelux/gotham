@@ -20,16 +20,52 @@ func runToolctl(t *testing.T, root string, extra []string, args ...string) (stri
 		"GOTHAM_TOOLCTL_DRYRUN=1",
 		"GOTHAM_TOOLCTL_ARCH=amd64",
 		"GOTHAM_TOOLCTL_DISTRO=apt",
+		// Pin the host's network manager so the test does not depend on the
+		// machine running it.
+		"GOTHAM_TOOLCTL_NETWORK_MANAGER=none",
 	)
 	cmd.Env = append(cmd.Env, extra...)
 	out, err := cmd.CombinedOutput()
 	return string(out), err
 }
 
+// aptCacheStub gives the helper an apt-cache with a fixed answer about the
+// standalone systemd network packages. The helper pins its PATH for hardening,
+// so this goes through its test seam.
+func aptCacheStub(t *testing.T, found bool) []string {
+	t.Helper()
+	status := "1"
+	if found {
+		status = "0"
+	}
+	path := filepath.Join(t.TempDir(), "apt-cache")
+	if err := os.WriteFile(path, []byte("#!/bin/sh\nexit "+status+"\n"), 0o755); err != nil {
+		t.Fatalf("write fake apt-cache: %v", err)
+	}
+	return []string{"GOTHAM_TOOLCTL_APT_CACHE=" + path}
+}
+
+// aptCacheListsStub gives the helper an apt-cache that finds the packages only
+// once the returned lists file exists. It stands for the package lists a minimal
+// image does not have until `apt-get update` refreshes them.
+func aptCacheListsStub(t *testing.T) ([]string, string) {
+	t.Helper()
+	lists := filepath.Join(t.TempDir(), "lists")
+	path := filepath.Join(t.TempDir(), "apt-cache")
+	body := "#!/bin/sh\n[ -f \"$GOTHAM_TEST_APT_LISTS\" ] || exit 1\nexit 0\n"
+	if err := os.WriteFile(path, []byte(body), 0o755); err != nil {
+		t.Fatalf("write fake apt-cache: %v", err)
+	}
+	return []string{
+		"GOTHAM_TOOLCTL_APT_CACHE=" + path,
+		"GOTHAM_TEST_APT_LISTS=" + lists,
+	}, lists
+}
+
 func TestToolctlRefusesUnlistedTools(t *testing.T) {
 	root := t.TempDir()
 	for _, args := range [][]string{
-		{"install-tool", "systemd-networkd"},
+		{"install-tool", "networkctl"},
 		{"install-tool", "nope"},
 		{"uninstall-tool", "docker"},
 		{"uninstall-tool", "systemctl"},
@@ -126,6 +162,199 @@ func TestToolctlGitPackageUpgradeCommands(t *testing.T) {
 		if err != nil || !strings.Contains(out, command) {
 			t.Errorf("git install/update on %s = %q, %v; want %q", distro, out, err, command)
 		}
+	}
+}
+
+func TestToolctlInstallsSystemdNetworkStack(t *testing.T) {
+	t.Run("units inside systemd", func(t *testing.T) {
+		// Ubuntu 22.04 and older Debian ship no systemd-networkd or
+		// systemd-resolved package: apt has neither, and the units belong to
+		// `systemd`, so the install must not name a package.
+		root := t.TempDir()
+		noPackages := aptCacheStub(t, false)
+		for id, unit := range map[string]string{
+			"systemd-networkd": "systemd-networkd",
+			"systemd-resolved": "systemd-resolved",
+			"resolvectl":       "systemd-resolved",
+		} {
+			out, err := runToolctl(t, root, noPackages, "install-tool", id)
+			if err != nil {
+				t.Fatalf("install-tool %s: %v: %s", id, err, out)
+			}
+			if !strings.Contains(out, "apt-get update -qq") {
+				t.Errorf("%s does not refresh the package lists: %q", id, out)
+			}
+			if strings.Contains(out, "apt-get install") {
+				t.Errorf("%s installs a package apt does not offer: %q", id, out)
+			}
+			if !strings.Contains(out, "systemctl enable --now "+unit) {
+				t.Errorf("%s does not enable %s: %q", id, unit, out)
+			}
+		}
+	})
+
+	t.Run("standalone packages", func(t *testing.T) {
+		root := t.TempDir()
+		knownPackages := aptCacheStub(t, true)
+		for id, pkg := range map[string]string{
+			"systemd-networkd": "systemd-networkd",
+			"systemd-resolved": "systemd-resolved",
+			"resolvectl":       "systemd-resolved",
+		} {
+			out, err := runToolctl(t, root, knownPackages, "install-tool", id)
+			if err != nil {
+				t.Fatalf("install-tool %s: %v: %s", id, err, out)
+			}
+			if !strings.Contains(out, "DEBIAN_FRONTEND=noninteractive apt-get install -y "+pkg) {
+				t.Errorf("%s does not install %s: %q", id, pkg, out)
+			}
+			if !strings.Contains(out, "systemctl enable --now ") {
+				t.Errorf("%s does not enable its unit: %q", id, out)
+			}
+		}
+	})
+
+	t.Run("refreshes empty lists before the query", func(t *testing.T) {
+		// A fresh minimal image (Debian 12 cloud) has no package lists, so the
+		// query would miss a split package the node really needs. The refresh
+		// must run first and the install follow it.
+		extra, lists := aptCacheListsStub(t)
+		root := t.TempDir()
+
+		empty, err := runToolctl(t, root, extra, "install-tool", "systemd-resolved")
+		if err != nil {
+			t.Fatalf("install-tool systemd-resolved: %v: %s", err, empty)
+		}
+		if strings.Contains(empty, "apt-get install") {
+			t.Errorf("empty lists install a package apt cannot see yet: %q", empty)
+		}
+		if !strings.Contains(empty, "systemctl enable --now systemd-resolved") {
+			t.Errorf("empty lists skip the unit: %q", empty)
+		}
+
+		if err := os.WriteFile(lists, nil, 0o644); err != nil {
+			t.Fatalf("create lists: %v", err)
+		}
+		out, err := runToolctl(t, root, extra, "install-tool", "systemd-resolved")
+		if err != nil {
+			t.Fatalf("install-tool systemd-resolved: %v: %s", err, out)
+		}
+		update := strings.Index(out, "apt-get update -qq")
+		query := strings.Index(out, "apt-cache show systemd-resolved")
+		install := strings.Index(out, "apt-get install -y systemd-resolved")
+		if update < 0 || query < 0 || install < 0 {
+			t.Fatalf("refresh, query or install step missing: %q", out)
+		}
+		if update > query || query > install {
+			t.Errorf("want update before query before install, got %q", out)
+		}
+	})
+
+	t.Run("fedora", func(t *testing.T) {
+		root := t.TempDir()
+		for id, want := range map[string]string{
+			"systemd-networkd": "dnf install -y systemd-networkd",
+			"systemd-resolved": "dnf install -y systemd-resolved",
+			"resolvectl":       "dnf install -y systemd-resolved",
+		} {
+			out, err := runToolctl(t, root, []string{"GOTHAM_TOOLCTL_DISTRO=dnf"}, "install-tool", id)
+			if err != nil {
+				t.Fatalf("install-tool %s: %v: %s", id, err, out)
+			}
+			if !strings.Contains(out, want) {
+				t.Errorf("%s install on dnf = %q; want %q", id, out, want)
+			}
+		}
+	})
+
+	t.Run("never restarts networking", func(t *testing.T) {
+		root := t.TempDir()
+		for _, id := range []string{"systemd-networkd", "systemd-resolved", "resolvectl"} {
+			out, err := runToolctl(t, root, nil, "install-tool", id)
+			if err != nil {
+				t.Fatalf("install-tool %s: %v: %s", id, err, out)
+			}
+			if strings.Contains(out, "systemctl restart") {
+				t.Errorf("%s install restarts a unit: %q", id, out)
+			}
+		}
+	})
+
+	t.Run("unsupported distribution", func(t *testing.T) {
+		out, err := runToolctl(t, t.TempDir(), []string{"GOTHAM_TOOLCTL_DISTRO=apk"}, "install-tool", "systemd-resolved")
+		if err == nil || !strings.Contains(out, "unsupported distribution") {
+			t.Fatalf("install on apk = %q, %v; want an unsupported-distribution refusal", out, err)
+		}
+		if strings.Contains(out, "+ ") {
+			t.Errorf("an unsupported distribution still planned a command: %q", out)
+		}
+	})
+}
+
+func TestToolctlAptUpdateFailureIsReported(t *testing.T) {
+	if _, err := exec.LookPath("flock"); err != nil {
+		t.Skip("flock is not available on this host")
+	}
+	// An unreachable mirror: the refresh fails, the helper says why it continues,
+	// and the step after it still runs.
+	cmd := exec.Command("sh", "-c", `
+env() { return 100; }
+. ./gotham-toolctl.sh
+`, "toolctl", "install-tool", "systemd-resolved")
+	cmd.Env = append(os.Environ(),
+		"GOTHAM_TOOLCTL_INNER=1",
+		"GOTHAM_TOOLCTL_DRYRUN=0",
+		"GOTHAM_TOOLCTL_ROOT="+t.TempDir(),
+		"GOTHAM_TOOLCTL_LOCK="+filepath.Join(t.TempDir(), "lock"),
+		"GOTHAM_TOOLCTL_ARCH=amd64",
+		"GOTHAM_TOOLCTL_DISTRO=apt",
+		"GOTHAM_TOOLCTL_NETWORK_MANAGER=none",
+	)
+	cmd.Env = append(cmd.Env, aptCacheStub(t, false)...)
+	out, _ := cmd.CombinedOutput()
+	if !strings.Contains(string(out), "gotham-toolctl: apt-get update failed") {
+		t.Fatalf("a failed refresh is silent: %s", out)
+	}
+}
+
+func TestToolctlRefusesNetworkManagerHosts(t *testing.T) {
+	for _, id := range []string{"systemd-networkd", "systemd-resolved", "resolvectl"} {
+		out, err := runToolctl(t, t.TempDir(), []string{"GOTHAM_TOOLCTL_NETWORK_MANAGER=networkmanager"}, "install-tool", id)
+		if err == nil || !strings.Contains(out, "NetworkManager") || !strings.Contains(out, "Nothing was changed") {
+			t.Errorf("install %s on a NetworkManager host = %q, %v; want a refusal", id, out, err)
+		}
+		if strings.Contains(out, "+ ") {
+			t.Errorf("a refused network install still planned a command: %q", out)
+		}
+	}
+}
+
+func TestToolctlRefusesNetplanNetworkManagerRenderer(t *testing.T) {
+	root := t.TempDir()
+	netplan := filepath.Join(root, "etc/netplan")
+	if err := os.MkdirAll(netplan, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(netplan, "50-cloud-init.yaml"),
+		[]byte("network:\n  version: 2\n  renderer: NetworkManager\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	cmd := exec.Command("sh", "-c", `
+systemctl() { return 3; }
+. ./gotham-toolctl.sh
+`, "toolctl", "install-tool", "systemd-resolved")
+	cmd.Env = append(os.Environ(),
+		"GOTHAM_TOOLCTL_ROOT="+root,
+		"GOTHAM_TOOLCTL_DRYRUN=1",
+		"GOTHAM_TOOLCTL_ARCH=amd64",
+		"GOTHAM_TOOLCTL_DISTRO=apt",
+	)
+	out, err := cmd.CombinedOutput()
+	if err == nil || !strings.Contains(string(out), "NetworkManager") {
+		t.Fatalf("netplan NetworkManager renderer = %q, %v; want a refusal", out, err)
+	}
+	if strings.Contains(string(out), "+ ") {
+		t.Errorf("a refused network install still planned a command: %s", out)
 	}
 }
 

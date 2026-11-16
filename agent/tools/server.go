@@ -108,7 +108,7 @@ func (s *ToolServer) ListTools(_ context.Context, _ *agentv1.ListToolsRequest) (
 			Installed:     detection.Installed,
 			Version:       detection.Version,
 			Path:          detection.Path,
-			Installable:   tool.Installable,
+			Installable:   tool.Installable && toolcatalog.InstallAvailable(tool.ID),
 			Uninstallable: tool.Uninstallable,
 			NeedsRoot:     tool.NeedsRoot,
 			Deps:          tool.Deps,

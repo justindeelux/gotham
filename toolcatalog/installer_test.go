@@ -40,7 +40,7 @@ func TestInstallOrderOrdersDependencies(t *testing.T) {
 }
 
 func TestInstallOrderRefusesDetectOnly(t *testing.T) {
-	for _, id := range []string{IDSystemdNetworkd, IDSystemdResolved, IDNetworkctl, IDSystemctl} {
+	for _, id := range []string{IDNetworkctl, IDSystemctl} {
 		if _, err := InstallOrder(id); !errors.Is(err, ErrNotInstallable) {
 			t.Errorf("InstallOrder(%s) = %v; want ErrNotInstallable", id, err)
 		}

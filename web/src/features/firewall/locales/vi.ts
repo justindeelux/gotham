@@ -27,7 +27,7 @@ const vi: FirewallMessages = {
     add: "Thêm quy tắc",
     empty: "Chưa có quy tắc tường lửa nào",
     emptyHint: "Thêm quy tắc để mở hoặc đóng một cổng.",
-    any: "Mọi",
+    any: "Tất cả",
     enabled: "Đang bật",
     disabled: "Đã tắt",
     required: "Bắt buộc",
@@ -62,7 +62,7 @@ const vi: FirewallMessages = {
     protocol: {
       tcp: "TCP",
       udp: "UDP",
-      any: "Mọi",
+      any: "Tất cả",
     },
   },
   form: {

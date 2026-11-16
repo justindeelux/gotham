@@ -32,7 +32,7 @@ watch(
   },
 );
 
-const cpPort = 8000;
+const cpPort = 9074;
 
 const envLabel = computed<string>(() => {
   const host = window.location.hostname;

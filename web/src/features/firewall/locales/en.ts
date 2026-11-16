@@ -97,11 +97,53 @@ const en = {
     saved: "Rule saved",
     deleted: "Rule deleted",
   },
+  access: {
+    ssh: "SSH",
+    agent: "the node agent",
+    control_plane: "the control plane",
+  },
   errors: {
     load: "Could not load the firewall.",
     toggle: "Could not change the firewall state.",
     save: "Could not save the rule.",
     delete: "Could not delete the rule.",
+    no_firewall: "No supported firewall is installed on this node.",
+    unsupported_backend:
+      "This node uses {backend}. Gotham can detect it but cannot edit its rules yet; manage them on the node.",
+    helper_missing:
+      "The node's firewall helper did not answer. Update this node (run its Gotham update) and try again.",
+    helper_failed:
+      "The node's firewall helper failed; the change was not applied.",
+    backend_changed:
+      "The node's firewall backend changed. Reload the page.",
+    state_read_failed:
+      "The node could not read its saved firewall rules.",
+    state_write_failed:
+      "The change was applied, but the node could not save the rule state.",
+    rule_not_found:
+      "This rule no longer exists on the node. Reload the page.",
+    server_not_found:
+      "This server was not found. It may have been deleted.",
+    read_only_rule:
+      "This rule is managed on the node and cannot be changed from Gotham.",
+    would_lock_out:
+      "This change would block port {port}, which is needed for {access} access; keep an allow rule for that port.",
+    invalid_action: "The action must be allow or deny.",
+    invalid_direction: "The direction must be in or out.",
+    invalid_protocol: "The protocol must be TCP, UDP or any.",
+    invalid_port:
+      "The port must be between 1 and 65535, or a range like 8000-8100.",
+    invalid_source: "The address must be an IP address or a CIDR range.",
+    invalid_outbound_source: "Outbound rules cannot have a source address.",
+    invalid_comment:
+      "The comment may only use letters, numbers and . _ ( ) , : / + {'@'} - , up to 200 characters.",
+    invalid_rule:
+      "The rule could not be read. Reload the page and try again.",
+    invalid_request: "The request was not valid.",
+    agent_unavailable:
+      "The node agent did not answer. Check that the node is online and try again.",
+    agent_outdated:
+      "This node's agent is too old for firewall management. Update the agent and try again.",
   },
 };
 

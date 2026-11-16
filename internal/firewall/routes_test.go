@@ -9,6 +9,7 @@ import (
 	"log/slog"
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"sync"
 	"testing"
 
@@ -51,6 +52,8 @@ func (f *fakeAgent) SetEnabled(_ context.Context, in *agentv1.FirewallEnabledReq
 		Enabled:          in.GetEnabled(),
 		Manageable:       f.status.GetManageable(),
 		Detail:           f.status.GetDetail(),
+		DetailCode:       f.status.GetDetailCode(),
+		DetailParams:     f.status.GetDetailParams(),
 		SshPorts:         f.status.GetSshPorts(),
 		AgentPort:        f.status.GetAgentPort(),
 		ControlPlanePort: f.status.GetControlPlanePort(),
@@ -263,6 +266,36 @@ func TestRoutesNodeRefusalIsAConflict(t *testing.T) {
 	}
 }
 
+func TestRoutesReportAMissingServerAsSuch(t *testing.T) {
+	serverID := uuid.New()
+	dialer := &fakeDialer{agents: map[uuid.UUID]*fakeAgent{}}
+	router := newTestService(t, dialer)
+	rec := do(t, router, http.MethodGet, "/v1/servers/"+serverID.String()+"/firewall", "")
+	if rec.Code != http.StatusNotFound {
+		t.Fatalf("code = %d %s", rec.Code, rec.Body.String())
+	}
+	if body := decodeBody[errorBody](t, rec); body.Code != "server_not_found" {
+		t.Fatalf("body = %#v", body)
+	}
+}
+
+func TestRoutesKeepRuleNotFoundForANodeRefusal(t *testing.T) {
+	serverID := uuid.New()
+	dialer := &fakeDialer{agents: map[uuid.UUID]*fakeAgent{
+		// An older agent answers a missing rule with a bare NotFound status.
+		serverID: {status: testStatus(), addErr: status.Error(codes.NotFound, "firewall rule not found")},
+	}}
+	router := newTestService(t, dialer)
+	rec := do(t, router, http.MethodPost, "/v1/servers/"+serverID.String()+"/firewall/rules",
+		`{"rule":{"action":"allow","direction":"in","protocol":"tcp","port":"8080","enabled":true}}`)
+	if rec.Code != http.StatusNotFound {
+		t.Fatalf("code = %d %s", rec.Code, rec.Body.String())
+	}
+	if body := decodeBody[errorBody](t, rec); body.Code != "rule_not_found" {
+		t.Fatalf("body = %#v", body)
+	}
+}
+
 func TestRoutesAgentUnavailable(t *testing.T) {
 	serverID := uuid.New()
 	dialer := &fakeDialer{agents: map[uuid.UUID]*fakeAgent{}}
@@ -357,5 +390,120 @@ func TestControlPlanePortIsProtectedOnTheLocalNodeOnly(t *testing.T) {
 	}
 	if remote.lastEnabled.GetControlPlanePort() != 0 {
 		t.Fatalf("remote toggle port = %d, want 0", remote.lastEnabled.GetControlPlanePort())
+	}
+}
+
+func TestRoutesForwardTheNodeErrorCode(t *testing.T) {
+	serverID := uuid.New()
+	refusal, err := status.New(codes.FailedPrecondition,
+		"this rule set denies port 22, which would block SSH access").
+		WithDetails(&agentv1.FirewallError{
+			Code:   "would_lock_out",
+			Params: map[string]string{"port": "22", "access": "ssh"},
+		})
+	if err != nil {
+		t.Fatal(err)
+	}
+	agent := &fakeAgent{status: testStatus(), addErr: refusal.Err()}
+	dialer := &fakeDialer{agents: map[uuid.UUID]*fakeAgent{serverID: agent}}
+	router := newTestService(t, dialer)
+
+	rec := do(t, router, http.MethodPost, "/v1/servers/"+serverID.String()+"/firewall/rules",
+		`{"rule":{"action":"deny","direction":"in","protocol":"tcp","port":"22","enabled":true}}`)
+	if rec.Code != http.StatusConflict {
+		t.Fatalf("code = %d %s", rec.Code, rec.Body.String())
+	}
+	body := decodeBody[errorBody](t, rec)
+	if body.Code != "would_lock_out" || body.Params["port"] != "22" || body.Params["access"] != "ssh" {
+		t.Fatalf("body = %#v", body)
+	}
+	if body.Message == "" {
+		t.Fatal("a code never replaces the fallback message")
+	}
+}
+
+func TestRoutesKeepWorkingWithAnAgentWithoutCodes(t *testing.T) {
+	serverID := uuid.New()
+	agent := &fakeAgent{
+		status: testStatus(),
+		addErr: status.Error(codes.FailedPrecondition,
+			"this rule set denies port 22, which would block SSH access"),
+	}
+	dialer := &fakeDialer{agents: map[uuid.UUID]*fakeAgent{serverID: agent}}
+	router := newTestService(t, dialer)
+
+	rec := do(t, router, http.MethodPost, "/v1/servers/"+serverID.String()+"/firewall/rules",
+		`{"rule":{"action":"deny","direction":"in","protocol":"tcp","port":"22","enabled":true}}`)
+	if rec.Code != http.StatusConflict {
+		t.Fatalf("code = %d %s", rec.Code, rec.Body.String())
+	}
+	body := decodeBody[errorBody](t, rec)
+	if body.Code != "" {
+		t.Fatalf("an old agent must not invent a code: %#v", body)
+	}
+	if !strings.Contains(body.Message, "denies port 22") {
+		t.Fatalf("message = %q", body.Message)
+	}
+}
+
+func TestRoutesReportAnOutdatedAgent(t *testing.T) {
+	serverID := uuid.New()
+	agent := &fakeAgent{
+		status: testStatus(),
+		addErr: status.Error(codes.Unimplemented, "unknown service"),
+	}
+	dialer := &fakeDialer{agents: map[uuid.UUID]*fakeAgent{serverID: agent}}
+	router := newTestService(t, dialer)
+
+	rec := do(t, router, http.MethodPost, "/v1/servers/"+serverID.String()+"/firewall/rules",
+		`{"rule":{"action":"allow","direction":"in","protocol":"tcp","port":"8080","enabled":true}}`)
+	if rec.Code != http.StatusBadGateway {
+		t.Fatalf("code = %d %s", rec.Code, rec.Body.String())
+	}
+	if body := decodeBody[errorBody](t, rec); body.Code != "agent_outdated" {
+		t.Fatalf("body = %#v", body)
+	}
+}
+
+func TestRoutesForwardTheStatusDetailCode(t *testing.T) {
+	serverID := uuid.New()
+	statusReply := testStatus()
+	statusReply.Manageable = false
+	statusReply.Detail = "This node uses nftables."
+	statusReply.DetailCode = "unsupported_backend"
+	statusReply.DetailParams = map[string]string{"backend": "nftables"}
+	dialer := &fakeDialer{agents: map[uuid.UUID]*fakeAgent{serverID: {status: statusReply}}}
+	router := newTestService(t, dialer)
+
+	rec := do(t, router, http.MethodGet, "/v1/servers/"+serverID.String()+"/firewall", "")
+	if rec.Code != http.StatusOK {
+		t.Fatalf("code = %d %s", rec.Code, rec.Body.String())
+	}
+	body := decodeBody[statusEnvelope](t, rec)
+	if body.Status.DetailCode != "unsupported_backend" || body.Status.DetailParams["backend"] != "nftables" {
+		t.Fatalf("status = %#v", body.Status)
+	}
+}
+
+func TestRoutesValidationCarriesACode(t *testing.T) {
+	serverID := uuid.New()
+	dialer := &fakeDialer{agents: map[uuid.UUID]*fakeAgent{serverID: {status: testStatus()}}}
+	router := newTestService(t, dialer)
+
+	cases := map[string]string{
+		"invalid_action":  `{"rule":{"action":"block","direction":"in","protocol":"tcp","port":"22","enabled":true}}`,
+		"invalid_port":    `{"rule":{"action":"allow","direction":"in","protocol":"tcp","port":"0","enabled":true}}`,
+		"invalid_source":  `{"rule":{"action":"allow","direction":"in","protocol":"tcp","port":"22","source":"not-an-ip","enabled":true}}`,
+		"invalid_request": `{"rule":`,
+	}
+	for want, body := range cases {
+		rec := do(t, router, http.MethodPost, "/v1/servers/"+serverID.String()+"/firewall/rules", body)
+		if rec.Code != http.StatusBadRequest {
+			t.Errorf("%s: code = %d %s", want, rec.Code, rec.Body.String())
+			continue
+		}
+		if got := decodeBody[errorBody](t, rec); got.Code != want {
+			t.Errorf("body %s: code = %q, want %q", body, got.Code, want)
+		}
 	}
 }

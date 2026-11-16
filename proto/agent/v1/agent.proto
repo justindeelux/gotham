@@ -2211,6 +2211,15 @@ message FirewallStatusRequest {
   uint32 control_plane_port = 1;
 }
 
+// FirewallError is the stable failure information of a refused call. It is
+// attached to the gRPC status as a detail. code is stable and translated by
+// the UI; params are the values its text needs. The status message stays the
+// English fallback.
+message FirewallError {
+  string code = 1;
+  map<string, string> params = 2;
+}
+
 message FirewallStatusResponse {
   FirewallBackend backend = 1;
   // available is false when no supported firewall is installed.
@@ -2227,6 +2236,11 @@ message FirewallStatusResponse {
   uint32 agent_port = 7;
   // control_plane_port is the port this request supplied.
   uint32 control_plane_port = 8;
+  // detail_code is the stable code of detail, translated by the UI. It is
+  // empty on older agents; detail is then the only text.
+  string detail_code = 9;
+  // detail_params are the values detail_code's text needs.
+  map<string, string> detail_params = 10;
 }
 
 message FirewallEnabledRequest {

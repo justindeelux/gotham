@@ -2,14 +2,18 @@ package firewall
 
 // Status is one node's firewall state.
 type Status struct {
-	Backend          string   `json:"backend"`
-	Available        bool     `json:"available"`
-	Enabled          bool     `json:"enabled"`
-	Manageable       bool     `json:"manageable"`
-	Detail           string   `json:"detail,omitempty"`
-	SSHPorts         []uint32 `json:"ssh_ports"`
-	AgentPort        uint32   `json:"agent_port"`
-	ControlPlanePort uint32   `json:"control_plane_port"`
+	Backend    string `json:"backend"`
+	Available  bool   `json:"available"`
+	Enabled    bool   `json:"enabled"`
+	Manageable bool   `json:"manageable"`
+	Detail     string `json:"detail,omitempty"`
+	// DetailCode is the stable code of Detail and DetailParams are the values
+	// its translated text needs. Both are empty on an older agent.
+	DetailCode       string            `json:"detail_code,omitempty"`
+	DetailParams     map[string]string `json:"detail_params,omitempty"`
+	SSHPorts         []uint32          `json:"ssh_ports"`
+	AgentPort        uint32            `json:"agent_port"`
+	ControlPlanePort uint32            `json:"control_plane_port"`
 }
 
 // Rule is one firewall rule in the shared model. Enabled reports whether the

@@ -11,7 +11,6 @@ import (
 
 	"github.com/google/uuid"
 	"google.golang.org/grpc/codes"
-	"google.golang.org/grpc/status"
 
 	agentv1 "github.com/justindeelux/gotham/proto/agent/v1"
 )
@@ -79,6 +78,26 @@ type backendStatus struct {
 	SSHPorts   []uint32
 	AgentPort  uint32
 	Detail     string
+	// DetailCode is the stable code of Detail; DetailParams are the values its
+	// translated text needs.
+	DetailCode   string
+	DetailParams map[string]string
+}
+
+func (st backendStatus) detail() detail {
+	return detail{code: st.DetailCode, params: st.DetailParams}
+}
+
+// setDetail records why this backend cannot be managed, with its stable code.
+func (st *backendStatus) setDetail(code string, params map[string]string, message string) {
+	st.DetailCode = code
+	st.DetailParams = params
+	st.Detail = message
+}
+
+// refuse reports why this node's firewall cannot be managed, with its code.
+func refuse(st backendStatus) error {
+	return fail(codes.FailedPrecondition, st.detail(), "%s", st.Detail)
 }
 
 func (s *Server) GetStatus(ctx context.Context, req *agentv1.FirewallStatusRequest) (*agentv1.FirewallStatusResponse, error) {
@@ -89,13 +108,14 @@ func (s *Server) GetStatus(ctx context.Context, req *agentv1.FirewallStatusReque
 func (s *Server) probe(ctx context.Context) (backendStatus, error) {
 	out, err := s.runner.Run(ctx, "firewall-status", "")
 	if err != nil {
-		detail := "The node's host helper could not report the firewall. Update this node (run its Gotham update) and try again."
+		reasonText := "The node's host helper could not report the firewall. Update this node (run its Gotham update) and try again."
 		if reason := strings.TrimSpace(err.Error()); reason != "" {
-			detail += " Reason: " + truncate(reason, maxCommentLength)
+			reasonText += " Reason: " + truncate(reason, maxCommentLength)
 		}
 		return backendStatus{
-			Backend: agentv1.FirewallBackend_FIREWALL_BACKEND_NONE,
-			Detail:  detail,
+			Backend:    agentv1.FirewallBackend_FIREWALL_BACKEND_NONE,
+			Detail:     reasonText,
+			DetailCode: codeHelperMissing,
 		}, err
 	}
 	st := parseBackendStatus(out)
@@ -129,13 +149,15 @@ func parseBackendStatus(out string) backendStatus {
 	case agentv1.FirewallBackend_FIREWALL_BACKEND_UFW, agentv1.FirewallBackend_FIREWALL_BACKEND_FIREWALLD:
 	case agentv1.FirewallBackend_FIREWALL_BACKEND_NFTABLES:
 		st.Manageable = false
-		st.Detail = "This node uses nftables. Gotham can detect it but cannot edit its rules yet; manage them on the node."
+		st.setDetail(codeUnsupportedBackend, map[string]string{"backend": "nftables"},
+			"This node uses nftables. Gotham can detect it but cannot edit its rules yet; manage them on the node.")
 	case agentv1.FirewallBackend_FIREWALL_BACKEND_IPTABLES:
 		st.Manageable = false
-		st.Detail = "This node uses iptables. Gotham can detect it but cannot edit its rules yet; manage them on the node."
+		st.setDetail(codeUnsupportedBackend, map[string]string{"backend": "iptables"},
+			"This node uses iptables. Gotham can detect it but cannot edit its rules yet; manage them on the node.")
 	default:
 		st.Manageable = false
-		st.Detail = "No supported firewall is installed on this node."
+		st.setDetail(codeNoFirewall, nil, "No supported firewall is installed on this node.")
 	}
 	return st
 }
@@ -185,6 +207,8 @@ func (s *Server) statusProto(st backendStatus, controlPlanePort uint32) *agentv1
 		Enabled:          st.Enabled,
 		Manageable:       st.Manageable,
 		Detail:           st.Detail,
+		DetailCode:       st.DetailCode,
+		DetailParams:     st.DetailParams,
 		SshPorts:         st.SSHPorts,
 		AgentPort:        st.AgentPort,
 		ControlPlanePort: controlPlanePort,
@@ -194,10 +218,10 @@ func (s *Server) statusProto(st backendStatus, controlPlanePort uint32) *agentv1
 func (s *Server) requireManageable(ctx context.Context) (backendStatus, []rule, error) {
 	st, err := s.probe(ctx)
 	if err != nil {
-		return st, nil, status.Error(codes.FailedPrecondition, st.Detail)
+		return st, nil, refuse(st)
 	}
 	if !st.Manageable {
-		return st, nil, status.Error(codes.FailedPrecondition, st.Detail)
+		return st, nil, refuse(st)
 	}
 	rules, err := s.list(ctx, st)
 	if err != nil {
@@ -214,7 +238,8 @@ func (s *Server) list(ctx context.Context, st backendStatus) ([]rule, error) {
 	}
 	state, err := loadState(s.statePath)
 	if err != nil {
-		return nil, status.Error(codes.Internal, "cannot read the node's saved firewall rules")
+		return nil, fail(codes.Internal, detail{code: codeStateReadFailed},
+			"cannot read the node's saved firewall rules")
 	}
 	for i := range applied {
 		if comment := state.Comments[fingerprint(applied[i])]; comment != "" {
@@ -231,11 +256,12 @@ func (s *Server) list(ctx context.Context, st backendStatus) ([]rule, error) {
 func (s *Server) appliedRules(ctx context.Context, st backendStatus) ([]rule, error) {
 	out, err := s.runner.Run(ctx, "firewall-list", "")
 	if err != nil {
-		return nil, status.Error(codes.FailedPrecondition, err.Error())
+		return nil, fail(codes.FailedPrecondition, detail{code: codeHelperFailed}, "%s", err)
 	}
 	header, listing, extra := splitList(out)
 	if backendValue(headerValue(header, "backend")) != st.Backend {
-		return nil, status.Error(codes.FailedPrecondition, "the node's firewall backend changed; reload the page")
+		return nil, fail(codes.FailedPrecondition, detail{code: codeBackendChanged},
+			"the node's firewall backend changed; reload the page")
 	}
 	switch st.Backend {
 	case agentv1.FirewallBackend_FIREWALL_BACKEND_UFW:
@@ -259,7 +285,7 @@ func headerValue(header, key string) string {
 func (s *Server) ListRules(ctx context.Context, req *agentv1.FirewallRulesRequest) (*agentv1.FirewallRules, error) {
 	st, err := s.probe(ctx)
 	if err != nil {
-		return nil, status.Error(codes.FailedPrecondition, st.Detail)
+		return nil, refuse(st)
 	}
 	if !st.Manageable {
 		return &agentv1.FirewallRules{}, nil
@@ -278,10 +304,10 @@ func (s *Server) SetEnabled(ctx context.Context, req *agentv1.FirewallEnabledReq
 
 	st, err := s.probe(ctx)
 	if err != nil {
-		return nil, status.Error(codes.FailedPrecondition, st.Detail)
+		return nil, refuse(st)
 	}
 	if !st.Manageable {
-		return nil, status.Error(codes.FailedPrecondition, st.Detail)
+		return nil, refuse(st)
 	}
 	ports := protectedPorts(st, req.GetControlPlanePort())
 	if req.GetEnabled() {
@@ -289,12 +315,12 @@ func (s *Server) SetEnabled(ctx context.Context, req *agentv1.FirewallEnabledReq
 			return nil, err
 		}
 	} else if err := s.run(ctx, "firewall-disable", ""); err != nil {
-		return nil, status.Error(codes.FailedPrecondition, err.Error())
+		return nil, fail(codes.FailedPrecondition, detail{code: codeHelperFailed}, "%s", err)
 	}
 
 	st, err = s.probe(ctx)
 	if err != nil {
-		return nil, status.Error(codes.FailedPrecondition, st.Detail)
+		return nil, refuse(st)
 	}
 	rules, err := s.list(ctx, st)
 	if err != nil {
@@ -314,7 +340,7 @@ func (s *Server) enable(ctx context.Context, st backendStatus, ports []accessPor
 		started := !st.Enabled
 		if started {
 			if err := s.run(ctx, "firewall-enable", ""); err != nil {
-				return status.Error(codes.FailedPrecondition, err.Error())
+				return fail(codes.FailedPrecondition, detail{code: codeHelperFailed}, "%s", err)
 			}
 			st.Enabled = true
 		}
@@ -330,7 +356,7 @@ func (s *Server) enable(ctx context.Context, st backendStatus, ports []accessPor
 		return err
 	}
 	if err := s.run(ctx, "firewall-enable", ""); err != nil {
-		return status.Error(codes.FailedPrecondition, err.Error())
+		return fail(codes.FailedPrecondition, detail{code: codeHelperFailed}, "%s", err)
 	}
 	return nil
 }
@@ -341,7 +367,7 @@ func (s *Server) ensureAccess(ctx context.Context, st backendStatus, ports []acc
 		return err
 	}
 	if err := denyBlocks(rules, ports); err != nil {
-		return status.Error(codes.FailedPrecondition, err.Error())
+		return err
 	}
 	for _, missing := range missingAccessRules(rules, ports) {
 		if err := s.applyAdd(ctx, missing); err != nil {
@@ -357,7 +383,7 @@ func (s *Server) AddRule(ctx context.Context, req *agentv1.FirewallRuleCreateReq
 
 	in, err := normalizeRule(ruleFromProto(req.GetRule()))
 	if err != nil {
-		return nil, status.Error(codes.InvalidArgument, err.Error())
+		return nil, err
 	}
 	st, rules, err := s.requireManageable(ctx)
 	if err != nil {
@@ -366,13 +392,14 @@ func (s *Server) AddRule(ctx context.Context, req *agentv1.FirewallRuleCreateReq
 	ports := protectedPorts(st, req.GetControlPlanePort())
 	state, err := loadState(s.statePath)
 	if err != nil {
-		return nil, status.Error(codes.Internal, "cannot read the node's saved firewall rules")
+		return nil, fail(codes.Internal, detail{code: codeStateReadFailed},
+			"cannot read the node's saved firewall rules")
 	}
 	if in.Enabled {
 		in.assignID()
 		if st.Enabled {
 			if err := denyBlocks(append(enabledRules(rules), in), ports); err != nil {
-				return nil, status.Error(codes.FailedPrecondition, err.Error())
+				return nil, err
 			}
 		}
 		if err := s.applyAdd(ctx, in); err != nil {
@@ -399,7 +426,7 @@ func (s *Server) UpdateRule(ctx context.Context, req *agentv1.FirewallRuleUpdate
 
 	in, err := normalizeRule(ruleFromProto(req.GetRule()))
 	if err != nil {
-		return nil, status.Error(codes.InvalidArgument, err.Error())
+		return nil, err
 	}
 	st, rules, err := s.requireManageable(ctx)
 	if err != nil {
@@ -407,16 +434,17 @@ func (s *Server) UpdateRule(ctx context.Context, req *agentv1.FirewallRuleUpdate
 	}
 	old, ok := findRule(rules, req.GetId())
 	if !ok {
-		return nil, status.Error(codes.NotFound, "firewall rule not found")
+		return nil, ruleNotFound()
 	}
 	if old.ReadOnly {
-		return nil, status.Error(codes.FailedPrecondition, "this rule is managed on the node and cannot be edited from Gotham")
+		return nil, readOnlyRule("this rule is managed on the node and cannot be edited from Gotham")
 	}
 	in.ID = old.ID
 	ports := protectedPorts(st, req.GetControlPlanePort())
 	state, err := loadState(s.statePath)
 	if err != nil {
-		return nil, status.Error(codes.Internal, "cannot read the node's saved firewall rules")
+		return nil, fail(codes.Internal, detail{code: codeStateReadFailed},
+			"cannot read the node's saved firewall rules")
 	}
 
 	switch {
@@ -425,7 +453,7 @@ func (s *Server) UpdateRule(ctx context.Context, req *agentv1.FirewallRuleUpdate
 		applied = replaceRule(applied, old.ID, in)
 		if st.Enabled {
 			if err := lostAccess(enabledRules(rules), applied, ports); err != nil {
-				return nil, status.Error(codes.FailedPrecondition, err.Error())
+				return nil, err
 			}
 		}
 		if fingerprint(old) != fingerprint(in) {
@@ -450,7 +478,7 @@ func (s *Server) UpdateRule(ctx context.Context, req *agentv1.FirewallRuleUpdate
 		applied := removeRule(enabledRules(rules), old.ID)
 		if st.Enabled {
 			if err := lostAccess(enabledRules(rules), applied, ports); err != nil {
-				return nil, status.Error(codes.FailedPrecondition, err.Error())
+				return nil, err
 			}
 		}
 		if err := s.applyDelete(ctx, old); err != nil {
@@ -461,7 +489,7 @@ func (s *Server) UpdateRule(ctx context.Context, req *agentv1.FirewallRuleUpdate
 	case !old.Enabled && in.Enabled:
 		if st.Enabled {
 			if err := denyBlocks(append(enabledRules(rules), in), ports); err != nil {
-				return nil, status.Error(codes.FailedPrecondition, err.Error())
+				return nil, err
 			}
 		}
 		if err := s.applyAdd(ctx, in); err != nil {
@@ -490,20 +518,21 @@ func (s *Server) DeleteRule(ctx context.Context, req *agentv1.FirewallRuleDelete
 	}
 	old, ok := findRule(rules, req.GetId())
 	if !ok {
-		return nil, status.Error(codes.NotFound, "firewall rule not found")
+		return nil, ruleNotFound()
 	}
 	if old.ReadOnly {
-		return nil, status.Error(codes.FailedPrecondition, "this rule is managed on the node and cannot be deleted from Gotham")
+		return nil, readOnlyRule("this rule is managed on the node and cannot be deleted from Gotham")
 	}
 	ports := protectedPorts(st, req.GetControlPlanePort())
 	state, err := loadState(s.statePath)
 	if err != nil {
-		return nil, status.Error(codes.Internal, "cannot read the node's saved firewall rules")
+		return nil, fail(codes.Internal, detail{code: codeStateReadFailed},
+			"cannot read the node's saved firewall rules")
 	}
 	if old.Enabled {
 		if st.Enabled {
 			if err := lostAccess(enabledRules(rules), removeRule(enabledRules(rules), old.ID), ports); err != nil {
-				return nil, status.Error(codes.FailedPrecondition, err.Error())
+				return nil, err
 			}
 		}
 		if err := s.applyDelete(ctx, old); err != nil {
@@ -530,14 +559,15 @@ func (s *Server) rulesReply(ctx context.Context, st backendStatus, ports []acces
 
 func (s *Server) stateError(err error) (*agentv1.FirewallRules, error) {
 	s.log.Error("firewall: saved rule state failed", "error", err)
-	return nil, status.Error(codes.Internal, "the firewall change was applied but its saved rule state could not be written")
+	return nil, fail(codes.Internal, detail{code: codeStateWriteFailed},
+		"the firewall change was applied but its saved rule state could not be written")
 }
 
 func (s *Server) applyAdd(ctx context.Context, r rule) error {
 	mode := "firewall-add"
 	input := hostctlInput(r)
 	if err := s.run(ctx, mode, input); err != nil {
-		return status.Error(codes.FailedPrecondition, err.Error())
+		return fail(codes.FailedPrecondition, detail{code: codeHelperFailed}, "%s", err)
 	}
 	return nil
 }
@@ -549,7 +579,7 @@ func (s *Server) applyDelete(ctx context.Context, r rule) error {
 		input = "raw=" + r.raw + "\n"
 	}
 	if err := s.run(ctx, mode, input); err != nil {
-		return status.Error(codes.FailedPrecondition, err.Error())
+		return fail(codes.FailedPrecondition, detail{code: codeHelperFailed}, "%s", err)
 	}
 	return nil
 }

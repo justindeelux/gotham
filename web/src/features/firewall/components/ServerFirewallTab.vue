@@ -23,7 +23,7 @@ import { useI18n } from "vue-i18n";
 import type { FirewallRule } from "../api/firewall";
 import { useFirewall } from "../composables/useFirewall";
 import { firewallRuleFormSchema } from "../schemas/firewall";
-import { errorText } from "@/shared/api/errors";
+import { firewallDetailText, firewallErrorText } from "../utils/errors";
 import { firstIssueMessage, ruleFrom } from "@/shared/validation/naiveAdapter";
 
 const props = defineProps<{ serverId: string }>();
@@ -287,7 +287,7 @@ async function handleToggle(value: boolean): Promise<void> {
     await firewall.toggle(value);
     message.success(value ? t("firewall.toasts.enabled") : t("firewall.toasts.disabled"));
   } catch (error) {
-    toggleError.value = errorText(error) || t("firewall.errors.toggle");
+    toggleError.value = firewallErrorText(error, t, t("firewall.errors.toggle"));
   }
 }
 
@@ -304,7 +304,7 @@ async function handleSubmit(): Promise<void> {
     message.success(t("firewall.toasts.saved"));
     formOpen.value = false;
   } catch (error) {
-    formError.value = errorText(error) || t("firewall.errors.save");
+    formError.value = firewallErrorText(error, t, t("firewall.errors.save"));
   } finally {
     submitting.value = false;
   }
@@ -315,7 +315,7 @@ async function removeRule(rule: FirewallRule): Promise<void> {
     await firewall.remove(rule.id);
     message.success(t("firewall.toasts.deleted"));
   } catch (error) {
-    message.error(errorText(error) || t("firewall.errors.delete"));
+    message.error(firewallErrorText(error, t, t("firewall.errors.delete")));
   }
 }
 
@@ -339,7 +339,7 @@ onMounted(() => {
       v-else-if="firewall.status.value && !firewall.status.value.manageable"
       :title="t('firewall.status.unsupportedTitle')"
     >
-      <NEmpty :description="firewall.status.value.detail || t('firewall.status.unsupportedBody')">
+      <NEmpty :description="firewallDetailText(firewall.status.value, t)">
         <template #extra>
           <NButton size="small" @click="firewall.load">
             {{ t("firewall.status.reload") }}

@@ -487,6 +487,13 @@ const en = {
     buildPackTitle: "Build pack",
     buildPackIntro: "Detection runs server-side at build time from the repo layout — the choice below is a hint, never a guess.",
     buildPackDockerfileNote: "Dockerfile sources always build with the Dockerfile engine from the pasted text — no build pack choice needed.",
+    scanChecking: "Scanning the repository root for a build pack…",
+    scanFound: "Found {file} in the repository root.",
+    scanEmpty:
+      "No build markers were found in the repository root. Pick a build pack below or keep auto-detect.",
+    scanFailed:
+      "Couldn't scan the repository. Build packs stay manual, so creating the application is not blocked.",
+    composeServicesScanned: "Services read from {file}.",
     packAuto: "Auto-detect (recommended)",
     packAutoHint: "The control plane picks Dockerfile, Railpack, Buildpacks or static from the repo layout.",
     packRailpack: "Railpack",

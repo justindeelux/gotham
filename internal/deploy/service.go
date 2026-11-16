@@ -58,6 +58,7 @@ type DeployService interface {
 	GetGitCredential(ctx context.Context, userID, appID uuid.UUID) (GitCredentialState, error)
 	DeleteGitCredential(ctx context.Context, userID, appID uuid.UUID) (bool, error)
 	TestGitConnection(ctx context.Context, userID, appID uuid.UUID) (GitConnectionResult, error)
+	ScanRepository(ctx context.Context, userID uuid.UUID, in ScanRepositoryInput) (RepositoryScan, error)
 	DeleteDeployKey(ctx context.Context, userID, appID uuid.UUID) (bool, error)
 	Deploy(ctx context.Context, userID, appID uuid.UUID) (Deployment, error)
 	ListDeployments(ctx context.Context, userID, appID uuid.UUID) ([]Deployment, error)

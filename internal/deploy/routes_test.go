@@ -58,6 +58,9 @@ type fakeDeployService struct {
 	deletedGitCred  bool
 	connResult      GitConnectionResult
 	connErr         error
+	scanResult      RepositoryScan
+	scanErr         error
+	seenScan        ScanRepositoryInput
 
 	installAttempted bool
 	installCalls     int

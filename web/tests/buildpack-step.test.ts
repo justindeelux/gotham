@@ -12,28 +12,57 @@ registerDiscoveredCatalogs();
 const installBuildPack = vi.fn();
 const retryNodeTools = vi.fn();
 const subscribeNodeTools = vi.fn();
+const markBuildPackTouched = vi.fn();
 
 interface StepOptions {
   choices?: BuildPackChoice[];
   loading?: boolean;
   error?: boolean;
   noEngine?: boolean;
+  buildPack?: string;
+  scan?: {
+    loading?: boolean;
+    ran?: boolean;
+    failed?: boolean;
+    detectedPack?: string;
+    markerFile?: string;
+    composeFiles?: string[];
+    composeFile?: string;
+    composeServices?: string[];
+  };
 }
 
 function mountStep(options: StepOptions = {}) {
-  const form = reactive({ buildPack: "", serverId: "srv-1" });
+  const form = reactive({ buildPack: options.buildPack ?? "", serverId: "srv-1" });
   const state = {
     form,
     isCompose: computed(() => false),
-    isComposePack: computed(() => false),
+    isComposePack: computed(() => form.buildPack === "docker_compose"),
     isDockerfile: computed(() => false),
     nodeToolsLoading: computed(() => options.loading ?? false),
     nodeToolsError: computed(() => options.error ?? false),
     noBuildEngine: computed(() => options.noEngine ?? false),
     buildPackChoices: computed(() => options.choices ?? []),
+    scan: {
+      loading: options.scan?.loading ?? false,
+      ran: options.scan?.ran ?? false,
+      failed: options.scan?.failed ?? false,
+      detectedPack: options.scan?.detectedPack ?? "",
+      markerFile: options.scan?.markerFile ?? "",
+      composeFiles: options.scan?.composeFiles ?? [],
+      composeFile: options.scan?.composeFile ?? "",
+      composeServices: options.scan?.composeServices ?? [],
+    },
+    scanComposeFileOptions: computed(() =>
+      (options.scan?.composeFiles ?? []).map((name) => ({ label: name, value: name })),
+    ),
+    scannedComposeServiceOptions: computed(() =>
+      (options.scan?.composeServices ?? []).map((name) => ({ label: name, value: name })),
+    ),
     installBuildPack,
     retryNodeTools,
     subscribeNodeTools,
+    markBuildPackTouched,
   };
   const Harness = defineComponent({
     setup() {
@@ -104,6 +133,53 @@ describe("build-pack step rendering", () => {
     expect(cta).toBeTruthy();
     await cta.trigger("click");
     expect(installBuildPack).toHaveBeenCalledWith("railpack");
+    wrapper.unmount();
+  });
+});
+
+describe("repository scan hints", () => {
+  it("shows the scan state without blocking the pack choice", () => {
+    const loading = mountStep({ scan: { loading: true } });
+    expect(loading.text()).toContain("Scanning the repository root");
+    expect(loading.find(".n-radio-group").exists()).toBe(true);
+    loading.unmount();
+
+    const found = mountStep({ scan: { ran: true, markerFile: "docker-compose.yml" } });
+    expect(found.text()).toContain("Found docker-compose.yml in the repository root");
+    found.unmount();
+
+    const empty = mountStep({ scan: { ran: true } });
+    expect(empty.text()).toContain("No build markers were found");
+    empty.unmount();
+
+    const failed = mountStep({ scan: { failed: true } });
+    expect(failed.text()).toContain("Couldn't scan the repository");
+    expect(failed.text()).toContain("not blocked");
+    failed.unmount();
+  });
+
+  it("uses the scanned compose files and services as selectors", () => {
+    const wrapper = mountStep({
+      buildPack: "docker_compose",
+      scan: {
+        ran: true,
+        markerFile: "docker-compose.yml",
+        composeFiles: ["docker-compose.yml", "compose.yaml"],
+        composeFile: "docker-compose.yml",
+        composeServices: ["web", "worker"],
+      },
+    });
+    const fields = wrapper.find(".app-compose-pack-fields");
+    expect(fields.findAll(".n-select")).toHaveLength(2);
+    expect(fields.text()).toContain("Services read from docker-compose.yml.");
+    wrapper.unmount();
+  });
+
+  it("keeps the free-text fields when the scan returned no compose data", () => {
+    const wrapper = mountStep({ buildPack: "docker_compose", scan: { ran: true } });
+    const fields = wrapper.find(".app-compose-pack-fields");
+    expect(fields.findAll(".n-select")).toHaveLength(0);
+    expect(fields.findAll("input")).toHaveLength(2);
     wrapper.unmount();
   });
 });

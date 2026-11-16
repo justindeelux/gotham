@@ -94,6 +94,23 @@ Khi không chọn gói nào, việc phát hiện thử Dockerfile, rồi Railpac
 Buildpacks, rồi static. Công cụ máy chủ bắt buộc bị thiếu sẽ được báo lúc triển
 khai; cài các công cụ từ [Kho ứng dụng](/vi/operating/app-store).
 
+Sau khi chọn kho và nhánh, wizard quét thư mục gốc của kho và chọn sẵn gói build
+phù hợp, kèm tên tệp đã tìm thấy. Chỉ một thứ tự ưu tiên được áp dụng, khớp đầu
+tiên thắng:
+
+1. **Docker Compose** cho `compose.yaml`, `compose.yml`, `docker-compose.yaml`
+   hoặc `docker-compose.yml`.
+2. **Dockerfile** cho `Dockerfile` ở thư mục gốc.
+3. **Railpack** cho dấu hiệu ngôn ngữ: `package.json` (Node), `go.mod` (Go),
+   hoặc `requirements.txt` / `pyproject.toml` (Python).
+
+Vì vậy `Dockerfile` ở gốc thắng `package.json`, còn tệp compose thắng cả hai. Bạn
+vẫn đổi được gói build; khi bạn tự chọn một gói, lần quét sau sẽ giữ nguyên lựa
+chọn đó. Với Docker Compose, wizard liệt kê các tệp compose ở thư mục gốc và các
+service đọc từ tệp đã chọn, nên bạn chọn service web thay vì tự nhập. Lần quét
+lỗi hoặc không thấy dấu hiệu nào sẽ hiện gợi ý và để gói build ở chế độ tự phát
+hiện; việc tạo ứng dụng không bao giờ bị chặn.
+
 Nguồn Dockerfile được dán luôn build từ văn bản đã lưu. Nguồn Docker Compose được
 dán không có gói build: nó chạy trực tiếp các dịch vụ trong tài liệu. Nguồn
 container image không có gói build: lần triển khai pull tham chiếu.

@@ -280,6 +280,26 @@ type gitConnectionResponse struct {
 	Host    string `json:"host,omitempty"`
 }
 
+type scanRepositoryRequest struct {
+	SourceType         string `json:"source_type"`
+	Provider           string `json:"provider"`
+	Repo               string `json:"repo"`
+	CloneURL           string `json:"clone_url"`
+	Branch             string `json:"branch"`
+	GitHubAppID        string `json:"github_app_id"`
+	CredentialUsername string `json:"credential_username"`
+	CredentialToken    string `json:"credential_token"`
+}
+
+type repositoryScanResponse struct {
+	DetectedBuildPack string   `json:"detected_build_pack"`
+	MarkerFile        string   `json:"marker_file"`
+	ComposeFiles      []string `json:"compose_files"`
+	ComposeFile       string   `json:"compose_file"`
+	ComposeServices   []string `json:"compose_services"`
+	Error             string   `json:"error,omitempty"`
+}
+
 type handler struct {
 	svc    DeployService
 	userID UserIDFunc
@@ -294,6 +314,7 @@ func Mount(r chi.Router, auth func(http.Handler) http.Handler, userID UserIDFunc
 	r.Group(func(protected chi.Router) {
 		protected.Use(auth)
 		protected.Post("/v1/applications", h.createApplication)
+		protected.Post("/v1/applications/scan", h.scanRepository)
 		protected.With(requestreplay.RequireStrict).Post("/v1/mcp/applications", h.createApplication)
 		protected.With(requestreplay.RequireStrict).Post("/v1/mcp/applications/{id}/deploy", h.deploy)
 		protected.Get("/v1/applications", h.listApplications)
@@ -939,6 +960,43 @@ func (h *handler) testConnection(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	writeJSON(w, http.StatusOK, newGitConnectionResponse(result))
+}
+
+func (h *handler) scanRepository(w http.ResponseWriter, r *http.Request) {
+	userID, ok := h.currentUser(w, r)
+	if !ok {
+		return
+	}
+	var req scanRepositoryRequest
+	if !decodeBody(w, r, &req) {
+		return
+	}
+	githubAppID, ok := optionalUUID(w, "github_app_id", req.GitHubAppID)
+	if !ok {
+		return
+	}
+	scan, err := h.svc.ScanRepository(r.Context(), userID, ScanRepositoryInput{
+		SourceType:         req.SourceType,
+		Provider:           req.Provider,
+		Repo:               req.Repo,
+		CloneURL:           req.CloneURL,
+		Branch:             req.Branch,
+		GitHubAppID:        githubAppID,
+		CredentialUsername: req.CredentialUsername,
+		CredentialToken:    req.CredentialToken,
+	})
+	if err != nil {
+		h.writeServiceError(w, err)
+		return
+	}
+	writeJSON(w, http.StatusOK, repositoryScanResponse{
+		DetectedBuildPack: scan.BuildPack,
+		MarkerFile:        scan.MarkerFile,
+		ComposeFiles:      append([]string{}, scan.ComposeFiles...),
+		ComposeFile:       scan.ComposeFile,
+		ComposeServices:   append([]string{}, scan.ComposeServices...),
+		Error:             scan.Error,
+	})
 }
 
 type applicationDomainResponse struct {

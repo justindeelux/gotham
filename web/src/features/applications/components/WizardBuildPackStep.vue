@@ -7,6 +7,7 @@ import {
   NInput,
   NRadio,
   NRadioGroup,
+  NSelect,
   NSpace,
   NText,
   NTooltip,
@@ -43,6 +44,18 @@ useEventListener(window, "focus", () => wizard.subscribeNodeTools());
       <NText depth="3">
         {{ t("applications.wizard.buildPackIntro") }}
       </NText>
+      <NText v-if="wizard.scan.loading" depth="3" class="app-scan-state">
+        {{ t("applications.wizard.scanChecking") }}
+      </NText>
+      <NAlert v-else-if="wizard.scan.failed" type="warning" :show-icon="true">
+        {{ t("applications.wizard.scanFailed") }}
+      </NAlert>
+      <NText v-else-if="wizard.scan.markerFile !== ''" depth="3" class="app-scan-state">
+        {{ t("applications.wizard.scanFound", { file: wizard.scan.markerFile }) }}
+      </NText>
+      <NText v-else-if="wizard.scan.ran" depth="3" class="app-scan-state">
+        {{ t("applications.wizard.scanEmpty") }}
+      </NText>
       <NAlert v-if="wizard.nodeToolsLoading.value" type="info" :show-icon="true">
         {{ t("applications.wizard.packChecking") }}
       </NAlert>
@@ -62,7 +75,7 @@ useEventListener(window, "focus", () => wizard.subscribeNodeTools());
           </NButton>
         </NSpace>
       </NAlert>
-      <NRadioGroup v-model:value="form.buildPack">
+      <NRadioGroup v-model:value="form.buildPack" @update:value="wizard.markBuildPackTouched">
         <NSpace vertical :size="8">
           <div
             v-for="pack in wizard.buildPackChoices.value"
@@ -102,7 +115,16 @@ useEventListener(window, "focus", () => wizard.subscribeNodeTools());
       </NRadioGroup>
       <div v-if="wizard.isComposePack.value" class="app-compose-pack-fields">
         <NFormItem :label="t('applications.wizard.composeFile')">
+          <NSelect
+            v-if="wizard.scanComposeFileOptions.value.length > 0"
+            v-model:value="form.composeFile"
+            :options="wizard.scanComposeFileOptions.value"
+            filterable
+            tag
+            class="app-compose-pack-mono"
+          />
           <NInput
+            v-else
             v-model:value="form.composeFile"
             class="app-compose-pack-mono"
             placeholder="docker-compose.yml"
@@ -110,12 +132,30 @@ useEventListener(window, "focus", () => wizard.subscribeNodeTools());
           <span class="app-compose-pack-hint">{{ t("applications.wizard.composeFileHint") }}</span>
         </NFormItem>
         <NFormItem :label="t('applications.wizard.composeService')">
+          <NSelect
+            v-if="wizard.scannedComposeServiceOptions.value.length > 0"
+            v-model:value="form.composeService"
+            :options="wizard.scannedComposeServiceOptions.value"
+            :placeholder="t('applications.wizard.composeServicePlaceholder')"
+            filterable
+            tag
+            class="app-compose-pack-mono"
+          />
           <NInput
+            v-else
             v-model:value="form.composeService"
             class="app-compose-pack-mono"
             :placeholder="t('applications.wizard.composeServiceInputPlaceholder')"
           />
-          <span class="app-compose-pack-hint">{{ t("applications.wizard.composeServiceHint") }}</span>
+          <span class="app-compose-pack-hint">
+            {{
+              wizard.scannedComposeServiceOptions.value.length > 0
+                ? t("applications.wizard.composeServicesScanned", {
+                    file: wizard.scan.composeFile,
+                  })
+                : t("applications.wizard.composeServiceHint")
+            }}
+          </span>
         </NFormItem>
       </div>
     </template>
@@ -135,6 +175,10 @@ useEventListener(window, "focus", () => wizard.subscribeNodeTools());
   color: var(--warn);
   border-bottom: 1px dotted var(--warn);
   cursor: help;
+}
+
+.app-scan-state {
+  font-size: var(--text-sm);
 }
 
 .app-compose-pack-fields {

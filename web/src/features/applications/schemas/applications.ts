@@ -505,3 +505,14 @@ export const composeFileSchema = z
   .refine((value) => new TextEncoder().encode(value).length <= MAX_COMPOSE_FILE_PATH)
   .refine((value) => !value.startsWith("/") && value !== "." && value !== "..")
   .refine((value) => !/(^|\/)\.\.(\/|$)/.test(value));
+
+export const repositoryScanSchema = z.object({
+  detected_build_pack: z.string(),
+  marker_file: z.string(),
+  compose_files: z.array(z.string()),
+  compose_file: z.string(),
+  compose_services: z.array(z.string()),
+  error: z.string().optional(),
+});
+
+export type RepositoryScan = z.infer<typeof repositoryScanSchema>;

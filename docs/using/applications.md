@@ -96,6 +96,23 @@ With no pack chosen, detection tries Dockerfile, then Railpack, then
 Buildpacks, then static. A missing required host tool is reported at deploy
 time; install the tools from [App store](/operating/app-store).
 
+After you pick a repository and branch, the wizard scans the repository root and
+preselects the matching pack, then says which file it found. One precedence
+order applies, first match wins:
+
+1. **Docker Compose** for `compose.yaml`, `compose.yml`, `docker-compose.yaml`
+   or `docker-compose.yml`.
+2. **Dockerfile** for a root `Dockerfile`.
+3. **Railpack** for a language marker: `package.json` (Node), `go.mod` (Go), or
+   `requirements.txt` / `pyproject.toml` (Python).
+
+A root `Dockerfile` therefore wins over `package.json`, and a compose file wins
+over both. You can still change the pack; once you pick one yourself, a later
+scan keeps it. For Docker Compose the wizard lists the compose files found at
+the root and the services parsed from the chosen file, so you can select the web
+service instead of typing it. A scan that fails or finds no marker shows a hint
+and leaves the pack on auto-detect; creating the application is never blocked.
+
 A pasted Dockerfile source always builds from its saved text. A pasted Docker
 Compose source has no build pack: it runs the document's services directly.
 Container-image sources have no build pack: the deploy pulls the reference.

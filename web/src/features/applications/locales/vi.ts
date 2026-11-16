@@ -488,6 +488,13 @@ const vi: ApplicationsMessages = {
     buildPackTitle: "Gói build",
     buildPackIntro: "Việc nhận diện chạy phía server khi build dựa trên cấu trúc kho — lựa chọn bên dưới chỉ là gợi ý, không phải phỏng đoán.",
     buildPackDockerfileNote: "Nguồn Dockerfile luôn build bằng engine Dockerfile từ nội dung đã dán — không cần chọn gói build.",
+    scanChecking: "Đang quét thư mục gốc của kho để chọn gói build…",
+    scanFound: "Tìm thấy {file} trong thư mục gốc của kho.",
+    scanEmpty:
+      "Không tìm thấy dấu hiệu build nào trong thư mục gốc của kho. Chọn gói build bên dưới hoặc giữ tự nhận diện.",
+    scanFailed:
+      "Không quét được kho. Gói build vẫn để bạn tự chọn nên việc tạo ứng dụng không bị chặn.",
+    composeServicesScanned: "Danh sách service đọc từ {file}.",
     packAuto: "Tự nhận diện (khuyến nghị)",
     packAutoHint: "Control plane chọn Dockerfile, Railpack, Buildpacks hoặc static từ cấu trúc kho.",
     packRailpack: "Railpack",

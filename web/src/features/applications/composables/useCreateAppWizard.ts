@@ -1,11 +1,23 @@
 import { useMessage } from "naive-ui";
-import { computed, inject, provide, reactive, ref, toValue, watch, type InjectionKey, type Ref } from "vue";
+import {
+  computed,
+  inject,
+  onScopeDispose,
+  provide,
+  reactive,
+  ref,
+  toValue,
+  watch,
+  type InjectionKey,
+  type Ref,
+} from "vue";
 
 import {
   createApplication,
   createDeployKey,
   deleteApplication,
   describeApplicationError,
+  scanRepository,
   setGitCredential,
   testConnection,
 } from "@/features/applications/api/applications";
@@ -14,6 +26,7 @@ import type {
   BuildPack,
   CreateApplicationInput,
   EnvVar,
+  ScanRepositoryInput,
   StorageMapping,
 } from "@/features/applications/api/applications";
 import { useApplicationsStore } from "@/features/applications/stores/applications";
@@ -48,6 +61,7 @@ import {
   serverSchema,
   sourceTypeImplemented,
   sourceTypeSchema,
+  type RepositoryScan,
   type SourceType,
 } from "@/features/applications/schemas/applications";
 import type { BuildArgRow } from "@/features/applications/utils/buildArgs";
@@ -156,6 +170,18 @@ export function useCreateAppWizard(
   const submitting = ref(false);
   const submitFailure = ref<{ kind: "scope" } | { kind: "error"; error: unknown } | null>(null);
   const noSshUrl = ref(false);
+
+  const scan = reactive({
+    loading: false,
+    ran: false,
+    failed: false,
+    detectedPack: "" as BuildPack,
+    markerFile: "",
+    composeFiles: [] as string[],
+    composeFile: "",
+    composeServices: [] as string[],
+  });
+  const buildPackTouched = ref(false);
 
   const createdKey = ref<{ application: Application; publicKey: string } | null>(null);
   const keyRecovery = ref<{ application: Application } | null>(null);
@@ -605,6 +631,159 @@ export function useCreateAppWizard(
     () => form.sourceType === "dockerfile" || form.sourceType === "image",
   );
 
+  const scanComposeFileOptions = computed<Array<{ label: string; value: string }>>(() =>
+    scan.composeFiles.map((name) => ({ label: name, value: name })),
+  );
+
+  const scannedComposeServiceOptions = computed<Array<{ label: string; value: string }>>(() =>
+    scan.composeServices.map((name) => ({ label: name, value: name })),
+  );
+
+  function scanPack(value: string): BuildPack {
+    switch (value) {
+      case "dockerfile":
+      case "railpack":
+      case "buildpacks":
+      case "static":
+      case "docker_compose":
+        return value;
+      default:
+        return "";
+    }
+  }
+
+  function repositoryScanInput(): ScanRepositoryInput | null {
+    if (!isRepoSource.value) {
+      return null;
+    }
+    const input: ScanRepositoryInput = {
+      source_type: form.sourceType,
+      provider: "",
+      repo: "",
+      clone_url: "",
+      branch: form.branch.trim(),
+    };
+    if (form.sourceType === "git_public") {
+      if (!publicCloneUrlSchema.safeParse(form.publicCloneUrl).success) {
+        return null;
+      }
+      input.repo = form.publicCloneUrl.trim();
+      input.clone_url = form.publicCloneUrl.trim();
+      return input;
+    }
+    if (form.sourceType === "git_private") {
+      if (!privateCloneUrlSchema.safeParse(form.privateCloneUrl).success) {
+        return null;
+      }
+      input.repo = form.privateCloneUrl.trim();
+      input.clone_url = form.privateCloneUrl.trim();
+      if (form.privateAuth === "https" && form.httpsToken.trim() !== "") {
+        input.credential_username = form.httpsUsername.trim();
+        input.credential_token = form.httpsToken.trim();
+      }
+      return input;
+    }
+    if (
+      form.providerId === "" ||
+      !repoSchema.safeParse(form.repoFullName).success ||
+      !cloneUrlSchema.safeParse(form.cloneUrl).success
+    ) {
+      return null;
+    }
+    input.provider = isGitHubAppFlow.value ? "github" : selectedProviderName.value;
+    input.repo = form.repoFullName;
+    input.clone_url = form.cloneUrl;
+    if (isGitHubAppFlow.value) {
+      input.github_app_id = form.providerId;
+    }
+    return input;
+  }
+
+  function clearScanResult(): void {
+    scan.ran = false;
+    scan.failed = false;
+    scan.detectedPack = "";
+    scan.markerFile = "";
+    scan.composeFiles = [];
+    scan.composeFile = "";
+    scan.composeServices = [];
+  }
+
+  function markBuildPackTouched(): void {
+    buildPackTouched.value = true;
+  }
+
+  function applyScanResult(result: RepositoryScan): void {
+    scan.failed = (result.error ?? "") !== "";
+    scan.ran = !scan.failed;
+    scan.detectedPack = scanPack(result.detected_build_pack);
+    scan.markerFile = result.marker_file;
+    scan.composeFiles = result.compose_files;
+    scan.composeFile = result.compose_file;
+    scan.composeServices = result.compose_services;
+    if (buildPackTouched.value) {
+      return;
+    }
+    const detected = scan.failed ? "" : scan.detectedPack;
+    const choice = buildPackChoices.value.find((item) => item.value === detected);
+    form.buildPack =
+      detected !== "" && choice !== undefined && choice.selectable ? detected : "";
+    if (form.buildPack !== "docker_compose") {
+      return;
+    }
+    if (scan.composeFile !== "") {
+      form.composeFile = scan.composeFile;
+    }
+    if (form.composeService.trim() === "" && scan.composeServices.length === 1) {
+      form.composeService = scan.composeServices[0] ?? "";
+    }
+  }
+
+  async function runScan(input: ScanRepositoryInput, request: number): Promise<void> {
+    try {
+      const result = await scanRepository(input);
+      if (request === scanRequest) {
+        applyScanResult(result);
+      }
+    } catch {
+      if (request === scanRequest) {
+        clearScanResult();
+        scan.failed = true;
+        if (!buildPackTouched.value) {
+          form.buildPack = "";
+        }
+      }
+    } finally {
+      if (request === scanRequest) {
+        scan.loading = false;
+      }
+    }
+  }
+
+  let scanTimer: number | undefined;
+  let scanRequest = 0;
+
+  const scanDebounceMs = 500;
+
+  function scheduleScan(): void {
+    const input = repositoryScanInput();
+    const request = ++scanRequest;
+    if (scanTimer !== undefined) {
+      window.clearTimeout(scanTimer);
+      scanTimer = undefined;
+    }
+    if (input === null) {
+      scan.loading = false;
+      clearScanResult();
+      return;
+    }
+    scan.loading = true;
+    scanTimer = window.setTimeout(() => {
+      scanTimer = undefined;
+      void runScan(input, request);
+    }, scanDebounceMs);
+  }
+
   function nextStep(): void {
     step.value += 1;
     if (step.value === 2 && buildPackSkipped.value) {
@@ -719,6 +898,19 @@ export function useCreateAppWizard(
       }
     },
   );
+
+  watch(
+    () => JSON.stringify(repositoryScanInput()),
+    () => scheduleScan(),
+  );
+
+  onScopeDispose(() => {
+    scanRequest += 1;
+    if (scanTimer !== undefined) {
+      window.clearTimeout(scanTimer);
+      scanTimer = undefined;
+    }
+  });
 
   async function loadRepos(): Promise<void> {
     if (form.providerId === "") {
@@ -1110,6 +1302,14 @@ export function useCreateAppWizard(
     providersStore.reposErrorRaw = null;
     toolchainStore.closeQueueModal();
     disconnectNodeTools();
+    scanRequest += 1;
+    if (scanTimer !== undefined) {
+      window.clearTimeout(scanTimer);
+      scanTimer = undefined;
+    }
+    scan.loading = false;
+    clearScanResult();
+    buildPackTouched.value = false;
   }
 
   return {
@@ -1156,6 +1356,10 @@ export function useCreateAppWizard(
     canContinue,
     buildPackLabel,
     buildPackSkipped,
+    scan,
+    markBuildPackTouched,
+    scanComposeFileOptions,
+    scannedComposeServiceOptions,
     stepPosition,
     stepTotal,
     visibleStepNames,

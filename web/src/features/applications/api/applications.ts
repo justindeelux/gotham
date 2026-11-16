@@ -1,5 +1,6 @@
 import { http } from "@/shared/api/http";
-import type { SourceType } from "@/features/applications/schemas/applications";
+import type { RepositoryScan, SourceType } from "@/features/applications/schemas/applications";
+import { repositoryScanSchema } from "@/features/applications/schemas/applications";
 import type { VolumeListing } from "@/features/applications/schemas/volumes";
 import { volumeListingSchema } from "@/features/applications/schemas/volumes";
 import { parseWith } from "@/shared/validation/parse";
@@ -659,6 +660,32 @@ export async function testConnection(
     {},
   );
   return response.data;
+}
+
+export interface ScanRepositoryInput {
+  source_type: SourceType;
+  provider: string;
+  repo: string;
+  clone_url: string;
+  branch: string;
+  github_app_id?: string;
+  credential_username?: string;
+  credential_token?: string;
+}
+
+// The control plane bounds the scan at 60s; keep the client slightly later so
+// the server's own soft failure reaches the wizard.
+const scanTimeout = 70_000;
+
+export async function scanRepository(
+  input: ScanRepositoryInput,
+): Promise<RepositoryScan> {
+  const response = await http.post<RepositoryScan>("/applications/scan", input, {
+    timeout: scanTimeout,
+  });
+  return parseWith(repositoryScanSchema, response.data, {
+    context: "RepositoryScan",
+  });
 }
 
 export async function startApplication(appId: string): Promise<Deployment> {

@@ -168,6 +168,7 @@ owner PATCH /api/v1/proxy/redirects/{id}
 owner PATCH /api/v1/servers/{id}
 project PATCH /api/v1/services/{id}
 project POST /api/v1/applications
+owner POST /api/v1/applications/scan
 project POST /api/v1/applications/{id}/deploy
 owner POST /api/v1/applications/{id}/deploy-key
 project POST /api/v1/applications/{id}/domains

@@ -24,7 +24,7 @@ giữ hiệu lực.
 | Khóa | Biến môi trường | Mặc định | Bắt buộc |
 |---|---|---|---|
 | `server.addr` | `GOTHAM_SERVER_ADDR` | `0.0.0.0` | không |
-| `server.port` | `GOTHAM_SERVER_PORT` | `8000` | không |
+| `server.port` | `GOTHAM_SERVER_PORT` | `9074` | không |
 | `server.trusted_proxies` | `GOTHAM_TRUSTED_PROXIES` | rỗng — không tin cậy peer nào | không |
 
 - `server.port` phải nằm trong khoảng 1 đến 65535.

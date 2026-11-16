@@ -4,7 +4,7 @@ title: Domain and HTTPS
 
 # Domain and HTTPS
 
-You can use Gotham at `http://<server-ip>:8000` right after the install. This
+You can use Gotham at `http://<server-ip>:9074` right after the install. This
 page turns that into your own domain with a trusted certificate, either during
 the install or later in the panel.
 
@@ -33,7 +33,7 @@ available. It then:
 
 1. sets the instance `control_plane_url` to `https://panel.example.com`;
 2. restarts the service so the panel answers on the new address;
-3. prints that address and the direct `http://<server-ip>:8000` one.
+3. prints that address and the direct `http://<server-ip>:9074` one.
 
 The install-time domain is committed at once: certificate issuance starts on its
 own and HTTPS takes over as soon as it is ready, with no confirmation step. A
@@ -43,7 +43,7 @@ the domain later in the panel.
 
 ## Set the domain later
 
-1. Open the panel on `http://<server-ip>:8000`.
+1. Open the panel on `http://<server-ip>:9074`.
 2. In **System → Settings → General**, set the instance `control_plane_url` to
    `https://panel.example.com` and save.
 3. Open the proposed host over HTTP and confirm the change before the trial

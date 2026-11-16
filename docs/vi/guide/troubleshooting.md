@@ -30,11 +30,12 @@ Dịch vụ thoát kèm lý do trong journal. Các nguyên nhân thường gặp
 - **Lỗi cấu hình.** `gotham serve` in `config: ...` trước khi làm bất cứ việc gì.
   Kiểm tra `/etc/gotham/gotham.env` xem có giá trị sai định dạng không (dấu nháy
   và dấu gạch chéo ngược ở cuối bị từ chối), rồi khởi động lại.
-- **Cổng đang được dùng.** Bảng điều khiển mặc định lắng nghe trên `0.0.0.0:8000`
-  (`GOTHAM_SERVER_ADDR`, `GOTHAM_SERVER_PORT`). Một tiến trình `gotham` thứ hai,
-  một unit cũ hoặc một dịch vụ không liên quan trên cùng cổng làm listener thất
-  bại. Tìm chủ sở hữu bằng `ss -ltnp` rồi dừng nó, hoặc chuyển bảng điều khiển
-  sang cổng khác.
+- **Cổng đang được dùng.** Bảng điều khiển mặc định lắng nghe trên `0.0.0.0:9074`
+  (`GOTHAM_SERVER_ADDR`, `GOTHAM_SERVER_PORT`); một bản cài đã cập nhật từ phiên
+  bản trước cổng này vẫn giữ cổng nó đang dùng, thường là `8000`. Một tiến trình
+  `gotham` thứ hai, một unit cũ hoặc một dịch vụ không liên quan trên cùng cổng
+  làm listener thất bại. Tìm chủ sở hữu bằng `ss -ltnp` rồi dừng nó, hoặc chuyển
+  bảng điều khiển sang cổng khác.
 - **Không với tới PostgreSQL.** Cơ sở dữ liệu là bắt buộc: tiến trình thoát khi
   không kết nối được. Kiểm tra `pg_isready`, dịch vụ `postgresql` và
   `GOTHAM_DATABASE_DSN`. Bản cài đặt trọn gói dùng cơ sở dữ liệu cục bộ; cơ sở dữ

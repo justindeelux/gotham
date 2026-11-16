@@ -72,8 +72,8 @@
 server:
   # Interface to bind. Default: 0.0.0.0
   addr: 0.0.0.0
-  # TCP port to listen on. Default: 8000
-  port: 8000
+  # TCP port to listen on. Default: 9074
+  port: 9074
   # Reverse proxies whose X-Forwarded-For / X-Forwarded-Proto headers are
   # trusted. Comma-separated IPs and CIDRs via GOTHAM_TRUSTED_PROXIES, or a
   # YAML list. Empty (default) trusts no peer: rate limits key on the direct
@@ -179,12 +179,12 @@ oauth:
   github:
     # GitHub OAuth app credentials (Settings > Developer settings > OAuth apps).
     # The app's "Authorization callback URL" must be:
-    #   http://localhost:8000/api/v1/auth/oauth/github/callback
+    #   http://localhost:9074/api/v1/auth/oauth/github/callback
     # client_id: <github-oauth-app-client-id>
     # client_secret: <github-oauth-app-client-secret>
     # Must match the registered callback URL. When empty the browser is sent to
     # a relative /oauth/callback route on the current origin.
-    # redirect_url: http://localhost:8000/api/v1/auth/oauth/github/callback
+    # redirect_url: http://localhost:9074/api/v1/auth/oauth/github/callback
 
 # Hot reload: Gotham watches this file (fsnotify) and re-applies changes at
 # runtime, including the log level. No SIGHUP signal is required.

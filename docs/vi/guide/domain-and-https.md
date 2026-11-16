@@ -4,7 +4,7 @@ title: Tên miền và HTTPS
 
 # Tên miền và HTTPS
 
-Bạn có thể dùng Gotham tại `http://<server-ip>:8000` ngay sau khi cài. Trang này
+Bạn có thể dùng Gotham tại `http://<server-ip>:9074` ngay sau khi cài. Trang này
 đổi địa chỉ đó thành tên miền của bạn với một chứng chỉ tin cậy, trong lúc cài
 hoặc sau đó trong bảng điều khiển.
 
@@ -33,7 +33,7 @@ Sau đó nó:
 
 1. đặt `control_plane_url` của instance thành `https://panel.example.com`;
 2. khởi động lại dịch vụ để bảng điều khiển trả lời ở địa chỉ mới;
-3. in địa chỉ đó cùng địa chỉ trực tiếp `http://<server-ip>:8000`.
+3. in địa chỉ đó cùng địa chỉ trực tiếp `http://<server-ip>:9074`.
 
 Tên miền đặt trong lúc cài được ghi nhận ngay: việc cấp chứng chỉ tự bắt đầu và
 HTTPS tiếp quản khi sẵn sàng, không có bước xác nhận. Tên miền chưa phân giải
@@ -42,7 +42,7 @@ chỉ HTTP của máy chủ khả dụng; bạn có thể đặt tên miền sau
 
 ## Đặt tên miền sau
 
-1. Mở bảng điều khiển tại `http://<server-ip>:8000`.
+1. Mở bảng điều khiển tại `http://<server-ip>:9074`.
 2. Trong **Hệ thống → Cài đặt → Chung**, đặt `control_plane_url` của instance thành
    `https://panel.example.com` rồi lưu.
 3. Mở host được đề xuất qua HTTP và xác nhận thay đổi trước khi phiên thử hết hạn.

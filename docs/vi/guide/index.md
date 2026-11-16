@@ -33,7 +33,7 @@ Khi đã có tài khoản, việc tự đăng ký bị đóng; người khác th
 mời dùng một lần tạo trong **Người dùng** (xem
 [Đăng nhập lần đầu](/vi/guide/first-login)).
 
-Mở URL mà trình cài đặt in ra (bảng điều khiển mặc định lắng nghe trên cổng 8000)
+Mở URL mà trình cài đặt in ra (bảng điều khiển mặc định lắng nghe trên cổng 9074)
 và đăng nhập bằng email và mật khẩu. Có thêm hai cách đăng nhập:
 
 - **GitHub OAuth.** Dùng được khi instance đã cấu hình GitHub OAuth với

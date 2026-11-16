@@ -10,7 +10,7 @@ account was not created.
 
 ## What you need
 
-- The panel URL printed by the installer, usually `http://<server-ip>:8000`.
+- The panel URL printed by the installer, usually `http://<server-ip>:9074`.
 - The owner email and password from that summary. If you let the installer
   generate the password, it was printed once at the end.
 - A terminal on the control-plane server for the `admin` commands below.

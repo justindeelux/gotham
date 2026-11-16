@@ -71,7 +71,7 @@ The last lines look like this:
 ```text
 Gotham v1.2.3 is installed.
 
-  Web UI:   http://203.0.113.10:8000
+  Web UI:   http://203.0.113.10:9074
   Status:   systemctl status gotham
   Logs:     journalctl -u gotham -f
   File manager on this node: on (--no-file-manager turns it off)
@@ -79,7 +79,7 @@ Gotham v1.2.3 is installed.
 First login:
   Account:  ops@example.com
   Password: <printed once if you left the password empty>
-  Login:    http://203.0.113.10:8000
+  Login:    http://203.0.113.10:9074
 ```
 
 Open that URL and sign in. The local server is already listed under
@@ -98,7 +98,7 @@ Add `-s -- --domain panel.example.com` after `sh` in the command above. The
 domain must already point at this server, with the Cloudflare proxy off. The
 installer waits up to 60 seconds for the local agent, sets the panel URL to
 `https://panel.example.com`, and prints both that address and the direct
-`http://<server-ip>:8000` one. HTTPS starts once the certificate is issued. If
+`http://<server-ip>:9074` one. HTTPS starts once the certificate is issued. If
 the domain does not resolve yet, or still resolves to Cloudflare's proxy
 ranges, the install continues on the server address and you can set the domain
 later in the panel. See [Domain and HTTPS](/guide/domain-and-https).

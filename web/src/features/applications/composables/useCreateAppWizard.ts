@@ -40,6 +40,7 @@ import { cloneUrlFor, suggestAppName } from "@/features/applications/utils/wizar
 import { activeLocale, i18n } from "@/shared/i18n";
 import {
   countDroppedEnvRows,
+  countEnvRowsWithoutValue,
   hasEnvKeyWarnings,
 } from "@/features/applications/schemas/env";
 import {
@@ -182,6 +183,9 @@ export function useCreateAppWizard(
     composeServices: [] as string[],
   });
   const buildPackTouched = ref(false);
+  // Keys added from the repository's .env* files, so the Env step can say
+  // where those rows came from.
+  const envPrefilled = ref<string[]>([]);
 
   const createdKey = ref<{ application: Application; publicKey: string } | null>(null);
   const keyRecovery = ref<{ application: Application } | null>(null);
@@ -604,6 +608,18 @@ export function useCreateAppWizard(
 
   const droppedEnvRows = computed<number>(() => countDroppedEnvRows(form.env));
 
+  // Keys the scan added that still have a row, so the hint disappears once the
+  // user removes them.
+  const prefilledEnvKeys = computed<string[]>(() =>
+    envPrefilled.value.filter((key) =>
+      form.env.some((row) => row.key.trim() === key),
+    ),
+  );
+
+  const envRowsWithoutValue = computed<number>(() =>
+    countEnvRowsWithoutValue(form.env),
+  );
+
   const canContinue = computed<boolean>(() => {
     switch (step.value) {
       case 0:
@@ -713,6 +729,18 @@ export function useCreateAppWizard(
     buildPackTouched.value = true;
   }
 
+  // Appends only: a row the user typed, reordered or deleted is never touched,
+  // and a key already present (including the default NODE_ENV) is not repeated.
+  function applyScanEnvKeys(keys: string[]): void {
+    for (const key of keys) {
+      if (form.env.some((row) => row.key.trim() === key)) {
+        continue;
+      }
+      form.env.push({ key, value: "" });
+      envPrefilled.value.push(key);
+    }
+  }
+
   function applyScanResult(result: RepositoryScan): void {
     scan.failed = (result.error ?? "") !== "";
     scan.ran = !scan.failed;
@@ -721,6 +749,7 @@ export function useCreateAppWizard(
     scan.composeFiles = result.compose_files;
     scan.composeFile = result.compose_file;
     scan.composeServices = result.compose_services;
+    applyScanEnvKeys(scan.failed ? [] : result.env_keys);
     if (buildPackTouched.value) {
       return;
     }
@@ -1310,6 +1339,7 @@ export function useCreateAppWizard(
     scan.loading = false;
     clearScanResult();
     buildPackTouched.value = false;
+    envPrefilled.value = [];
   }
 
   return {
@@ -1353,6 +1383,8 @@ export function useCreateAppWizard(
     scopeValid,
     envKeyWarnings,
     droppedEnvRows,
+    prefilledEnvKeys,
+    envRowsWithoutValue,
     canContinue,
     buildPackLabel,
     buildPackSkipped,

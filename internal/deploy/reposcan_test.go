@@ -2,7 +2,9 @@ package deploy
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
+	"fmt"
 	"io"
 	"log/slog"
 	"os"
@@ -161,15 +163,85 @@ func TestDetectRepositoryListsServicesOfABuiltCompose(t *testing.T) {
 	}
 }
 
+func TestDetectRepositoryReadsEnvKeys(t *testing.T) {
+	result := detectRepository(writeScanDir(t, map[string]string{
+		".env.example": "" +
+			"# Postgres\n" +
+			"DATABASE_URL=\n" +
+			"SECRET_KEY=abc\n" +
+			"\n" +
+			"export EXPORTED_KEY=\"quoted = value\"\n" +
+			"1BAD_KEY=nope\n" +
+			"bad-key=nope\n" +
+			"NO_EQUALS\n",
+		".env": "" +
+			"DATABASE_URL=postgres://hidden\n" +
+			"  SPACED_KEY = value  \n" +
+			"SECOND_KEY='single'\n",
+		"env.txt": "ALSO_IGNORED=1\n",
+	}))
+	want := []string{"DATABASE_URL", "SPACED_KEY", "SECOND_KEY", "SECRET_KEY", "EXPORTED_KEY"}
+	if strings.Join(result.EnvKeys, ",") != strings.Join(want, ",") {
+		t.Fatalf("env keys = %v, want %v", result.EnvKeys, want)
+	}
+	encoded, err := json.Marshal(result)
+	if err != nil {
+		t.Fatalf("marshal scan: %v", err)
+	}
+	for _, value := range []string{"abc", "postgres://hidden", "quoted", "single", "value"} {
+		if strings.Contains(string(encoded), value) {
+			t.Errorf("scan JSON leaks a value: %s", encoded)
+		}
+	}
+}
+
+func TestDetectRepositoryWithoutEnvFiles(t *testing.T) {
+	result := detectRepository(writeScanDir(t, map[string]string{"README.md": "hello\n"}))
+	if len(result.EnvKeys) != 0 {
+		t.Fatalf("env keys = %v, want none", result.EnvKeys)
+	}
+	if result.EnvKeys == nil {
+		t.Fatal("env keys = nil, want an empty list")
+	}
+}
+
+func TestDetectRepositoryCapsEnvKeys(t *testing.T) {
+	var content strings.Builder
+	for i := 0; i < maxEnvKeys+20; i++ {
+		fmt.Fprintf(&content, "KEY_%03d=value\n", i)
+	}
+	result := detectRepository(writeScanDir(t, map[string]string{".env": content.String()}))
+	if len(result.EnvKeys) != maxEnvKeys {
+		t.Fatalf("env keys = %d, want %d", len(result.EnvKeys), maxEnvKeys)
+	}
+	if result.EnvKeys[0] != "KEY_000" || result.EnvKeys[maxEnvKeys-1] != fmt.Sprintf("KEY_%03d", maxEnvKeys-1) {
+		t.Fatalf("env keys = %v, want the first %d in order", result.EnvKeys[:2], maxEnvKeys)
+	}
+}
+
+func TestDetectRepositoryIgnoresOversizedEnvFiles(t *testing.T) {
+	padding := strings.Repeat("# pad\n", maxEnvFileBytes/6+1)
+	result := detectRepository(writeScanDir(t, map[string]string{
+		".env": padding + "LATE_KEY=1\n",
+	}))
+	if len(result.EnvKeys) != 0 {
+		t.Fatalf("env keys = %v, want none past the size cap", result.EnvKeys)
+	}
+}
+
 func TestDetectRepositoryIgnoresSymlinksAndDirectories(t *testing.T) {
 	outside := writeScanDir(t, map[string]string{
 		"docker-compose.yml": "services:\n  stolen:\n    image: example.com/stolen:1.0\n",
+		".env":               "STOLEN_KEY=1\n",
 	})
 	dir := t.TempDir()
 	if err := os.Symlink(filepath.Join(outside, "docker-compose.yml"), filepath.Join(dir, "docker-compose.yml")); err != nil {
 		t.Fatalf("symlink: %v", err)
 	}
 	if err := os.Symlink(filepath.Join(outside, "docker-compose.yml"), filepath.Join(dir, "Dockerfile")); err != nil {
+		t.Fatalf("symlink: %v", err)
+	}
+	if err := os.Symlink(filepath.Join(outside, "docker-compose.yml"), filepath.Join(dir, ".env")); err != nil {
 		t.Fatalf("symlink: %v", err)
 	}
 	if err := os.Mkdir(filepath.Join(dir, "package.json"), 0o755); err != nil {
@@ -181,6 +253,9 @@ func TestDetectRepositoryIgnoresSymlinksAndDirectories(t *testing.T) {
 	}
 	if len(result.ComposeFiles) != 0 || len(result.ComposeServices) != 0 {
 		t.Fatalf("compose = %v %v, want nothing read outside the root", result.ComposeFiles, result.ComposeServices)
+	}
+	if len(result.EnvKeys) != 0 {
+		t.Fatalf("env keys = %v, want nothing read outside the root", result.EnvKeys)
 	}
 }
 

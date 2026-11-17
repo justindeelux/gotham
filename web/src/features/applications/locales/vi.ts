@@ -527,6 +527,8 @@ const vi: ApplicationsMessages = {
     volumesTitle: "Volume",
     envConvention:
       "Một hoặc nhiều tên biến không theo quy ước ^[A-Z][A-Z0-9_]*$ thường dùng. API vẫn chấp nhận nên không bị chặn — nhưng tên không chuẩn có thể không được nạp như mong đợi.",
+    envPrefilled:
+      "Các khóa đọc từ tệp .env trong kho được thêm sẵn bên dưới. Chỉ tên khóa được đọc, không đọc giá trị — nên bạn cần điền giá trị cho từng dòng.",
     droppedRows: "{count} biến không tên sẽ bị bỏ qua khi tạo. | {count} biến không tên sẽ bị bỏ qua khi tạo. | {count} biến không tên sẽ bị bỏ qua khi tạo.",
     reviewTitle: "Tóm tắt",
     reviewApp: "Ứng dụng",
@@ -537,6 +539,8 @@ const vi: ApplicationsMessages = {
     reviewVolumes: "{env} biến · {storage} volume",
     reviewIntro: "Tạo sẽ gửi payload tới API ứng dụng, rồi đợt triển khai đầu tiên xếp hàng ngay.",
     reviewDropped: "{count} biến không tên sẽ bị bỏ qua khi tạo. | {count} biến không tên sẽ bị bỏ qua khi tạo. | {count} biến không tên sẽ bị bỏ qua khi tạo.",
+    reviewEnvNeedsValue:
+      "{count} biến chưa có giá trị. Vẫn triển khai được — hãy điền giá trị trước khi ứng dụng cần dùng. | {count} biến chưa có giá trị. Vẫn triển khai được — hãy điền giá trị trước khi ứng dụng cần dùng. | {count} biến chưa có giá trị. Vẫn triển khai được — hãy điền giá trị trước khi ứng dụng cần dùng.",
     scopeError: "Chọn project và môi trường trước.",
     noSshUrl:
       "Nhà cung cấp không báo SSH URL cho kho riêng này nên không thể dùng deploy key. Chọn kho khác hoặc bổ sung SSH URL trên nhà cung cấp.",

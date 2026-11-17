@@ -512,6 +512,7 @@ export const repositoryScanSchema = z.object({
   compose_files: z.array(z.string()),
   compose_file: z.string(),
   compose_services: z.array(z.string()),
+  env_keys: z.array(z.string()).default([]),
   error: z.string().optional(),
 });
 

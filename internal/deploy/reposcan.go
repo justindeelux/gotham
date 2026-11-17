@@ -3,8 +3,10 @@ package deploy
 import (
 	"context"
 	"fmt"
+	"io"
 	"os"
 	"path/filepath"
+	"regexp"
 	"strings"
 	"time"
 
@@ -28,21 +30,32 @@ type ScanRepositoryInput struct {
 	CredentialToken    string
 }
 
-// RepositoryScan reports what the repository root implies for the build pack.
-// A failed scan keeps BuildPack empty and explains itself in Error; the wizard
-// treats both as a hint, never as a blocker.
+// RepositoryScan reports what the repository root implies for the build pack
+// and the env step. A failed scan keeps BuildPack and EnvKeys empty and
+// explains itself in Error; the wizard treats both as a hint, never as a
+// blocker. EnvKeys carries variable names only, never a value.
 type RepositoryScan struct {
 	BuildPack       string
 	MarkerFile      string
 	ComposeFiles    []string
 	ComposeFile     string
 	ComposeServices []string
+	EnvKeys         []string
 	Error           string
 }
 
 const repositoryScanTimeout = 60 * time.Second
 
 const scanFailureWorkspace = "the scan workspace could not be created"
+
+const (
+	// maxEnvFileBytes and maxEnvKeys bound what a committed .env* file can add
+	// to one scan response.
+	maxEnvFileBytes = 256 << 10
+	maxEnvKeys      = 100
+)
+
+var envKeyPattern = regexp.MustCompile(`^[A-Za-z_][A-Za-z0-9_]*$`)
 
 var composeCandidateFiles = []string{
 	"compose.yaml",
@@ -186,7 +199,12 @@ func (c scanCredential) GitCredential(ctx context.Context, appID uuid.UUID) (str
 }
 
 func scanFailure(message string) RepositoryScan {
-	return RepositoryScan{ComposeFiles: []string{}, ComposeServices: []string{}, Error: message}
+	return RepositoryScan{
+		ComposeFiles:    []string{},
+		ComposeServices: []string{},
+		EnvKeys:         []string{},
+		Error:           message,
+	}
 }
 
 func scanErrorMessage(err error, secret string) string {
@@ -205,7 +223,11 @@ func scanErrorMessage(err error, secret string) string {
 // pyproject.toml for Python. Railpack is the existing language auto-detection
 // pack, so the scan never names a pack id the platform cannot build.
 func detectRepository(dir string) RepositoryScan {
-	result := RepositoryScan{ComposeFiles: []string{}, ComposeServices: []string{}}
+	result := RepositoryScan{
+		ComposeFiles:    []string{},
+		ComposeServices: []string{},
+		EnvKeys:         envKeysFromRoot(dir),
+	}
 	for _, name := range composeCandidateFiles {
 		if isRegularFile(filepath.Join(dir, name)) {
 			result.ComposeFiles = append(result.ComposeFiles, name)
@@ -240,6 +262,76 @@ func detectRepository(dir string) RepositoryScan {
 func isRegularFile(path string) bool {
 	info, err := os.Lstat(path)
 	return err == nil && info.Mode().IsRegular()
+}
+
+// envKeysFromRoot lists the variable names declared by the root .env* files.
+// Values stay on disk: a committed .env may hold real secrets, so only names
+// reach the response, the wizard or a log. Symlinks are skipped like every
+// other root marker.
+func envKeysFromRoot(dir string) []string {
+	entries, err := os.ReadDir(dir)
+	if err != nil {
+		return []string{}
+	}
+	keys := []string{}
+	seen := make(map[string]struct{})
+	for _, entry := range entries {
+		if len(keys) >= maxEnvKeys {
+			break
+		}
+		if !strings.HasPrefix(entry.Name(), ".env") || !entry.Type().IsRegular() {
+			continue
+		}
+		for _, key := range envFileKeys(filepath.Join(dir, entry.Name())) {
+			if _, ok := seen[key]; ok {
+				continue
+			}
+			seen[key] = struct{}{}
+			keys = append(keys, key)
+			if len(keys) >= maxEnvKeys {
+				break
+			}
+		}
+	}
+	return keys
+}
+
+func envFileKeys(path string) []string {
+	file, err := os.Open(path)
+	if err != nil {
+		return nil
+	}
+	defer func() { _ = file.Close() }()
+	data, err := io.ReadAll(io.LimitReader(file, maxEnvFileBytes))
+	if err != nil {
+		return nil
+	}
+	keys := []string{}
+	for _, line := range strings.Split(string(data), "\n") {
+		if key := envLineKey(line); key != "" {
+			keys = append(keys, key)
+		}
+	}
+	return keys
+}
+
+// envLineKey reads the name half of a KEY=value line and drops everything from
+// the first "=" on, so a value never leaves this function.
+func envLineKey(line string) string {
+	line = strings.TrimSpace(line)
+	if line == "" || strings.HasPrefix(line, "#") {
+		return ""
+	}
+	line = strings.TrimSpace(strings.TrimPrefix(line, "export "))
+	key, _, found := strings.Cut(line, "=")
+	if !found {
+		return ""
+	}
+	key = strings.TrimSpace(key)
+	if !envKeyPattern.MatchString(key) {
+		return ""
+	}
+	return key
 }
 
 // composeServiceNames lists services through the same parser the deploy uses,

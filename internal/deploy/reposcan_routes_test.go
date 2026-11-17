@@ -47,6 +47,7 @@ func TestRoutesScanRepository(t *testing.T) {
 		ComposeFiles:    []string{"docker-compose.yml"},
 		ComposeFile:     "docker-compose.yml",
 		ComposeServices: []string{"web", "worker"},
+		EnvKeys:         []string{"DATABASE_URL", "SECRET_KEY"},
 	}}
 	srv := newRouteServer(svc, alwaysUser(userID))
 
@@ -64,7 +65,16 @@ func TestRoutesScanRepository(t *testing.T) {
 		t.Fatalf("status = %d, want 200 (body %s)", rec.Code, rec.Body.String())
 	}
 	assertJSONKeys(t, rec.Body.Bytes(),
-		"detected_build_pack", "marker_file", "compose_files", "compose_file", "compose_services")
+		"detected_build_pack", "marker_file", "compose_files", "compose_file", "compose_services", "env_keys")
+	var payload struct {
+		EnvKeys []string `json:"env_keys"`
+	}
+	if err := json.Unmarshal(rec.Body.Bytes(), &payload); err != nil {
+		t.Fatalf("decode body: %v", err)
+	}
+	if strings.Join(payload.EnvKeys, ",") != "DATABASE_URL,SECRET_KEY" {
+		t.Errorf("env keys = %v, want the scanned names", payload.EnvKeys)
+	}
 
 	if svc.seenUser != userID {
 		t.Errorf("service saw user %s, want %s", svc.seenUser, userID)
@@ -100,11 +110,12 @@ func TestRoutesScanRepositoryCarriesPrivateCredential(t *testing.T) {
 	var payload struct {
 		ComposeFiles    []string `json:"compose_files"`
 		ComposeServices []string `json:"compose_services"`
+		EnvKeys         []string `json:"env_keys"`
 	}
 	if err := json.Unmarshal(rec.Body.Bytes(), &payload); err != nil {
 		t.Fatalf("decode body: %v", err)
 	}
-	if payload.ComposeFiles == nil || payload.ComposeServices == nil {
+	if payload.ComposeFiles == nil || payload.ComposeServices == nil || payload.EnvKeys == nil {
 		t.Errorf("body = %s, want empty arrays instead of null", rec.Body.String())
 	}
 }

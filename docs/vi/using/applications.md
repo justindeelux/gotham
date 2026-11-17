@@ -121,6 +121,14 @@ service đọc từ tệp đã chọn, nên bạn chọn service web thay vì t�
 lỗi hoặc không thấy dấu hiệu nào sẽ hiện gợi ý và để gói build ở chế độ tự phát
 hiện; việc tạo ứng dụng không bao giờ bị chặn.
 
+Lần quét đó cũng đọc các tệp ở thư mục gốc có tên bắt đầu bằng `.env` (`.env`,
+`.env.example`, `.env.sample`, `.env.production`, …) và thêm từng tên biến tìm
+được vào bước **Môi trường** với giá trị trống. Chỉ tên được đọc: tệp `.env` đã
+commit có thể chứa bí mật thật, nên giá trị không bao giờ tới wizard, API hay
+log. Bạn tự điền từng giá trị; các dòng đã sửa được giữ nguyên và lần quét sau
+không thêm khóa trùng. Dòng còn thiếu giá trị được nhắc ở phần tóm tắt, và vẫn
+triển khai được.
+
 Nguồn Dockerfile được dán luôn build từ văn bản đã lưu. Nguồn Docker Compose được
 dán không có gói build: nó chạy trực tiếp các dịch vụ trong tài liệu. Nguồn
 container image không có gói build: lần triển khai pull tham chiếu.

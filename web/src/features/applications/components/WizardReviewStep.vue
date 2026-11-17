@@ -28,6 +28,16 @@ const envVolumesText = computed<string>(() =>
     }),
   ),
 );
+
+const envNeedsValueText = computed<string>(() =>
+  String(
+    t(
+      "applications.wizard.reviewEnvNeedsValue",
+      { count: wizard.envRowsWithoutValue.value },
+      wizard.envRowsWithoutValue.value,
+    ),
+  ),
+);
 </script>
 
 <template>
@@ -48,6 +58,9 @@ const envVolumesText = computed<string>(() =>
     <NText depth="3">
       {{ t("applications.wizard.reviewIntro") }}
     </NText>
+    <NAlert v-if="wizard.envRowsWithoutValue.value > 0" type="warning" :show-icon="false">
+      {{ envNeedsValueText }}
+    </NAlert>
     <NAlert v-if="wizard.droppedEnvRows.value > 0" type="warning" :show-icon="false">
       {{ reviewDroppedText }}
     </NAlert>

@@ -297,6 +297,7 @@ type repositoryScanResponse struct {
 	ComposeFiles      []string `json:"compose_files"`
 	ComposeFile       string   `json:"compose_file"`
 	ComposeServices   []string `json:"compose_services"`
+	EnvKeys           []string `json:"env_keys"`
 	Error             string   `json:"error,omitempty"`
 }
 
@@ -995,6 +996,7 @@ func (h *handler) scanRepository(w http.ResponseWriter, r *http.Request) {
 		ComposeFiles:      append([]string{}, scan.ComposeFiles...),
 		ComposeFile:       scan.ComposeFile,
 		ComposeServices:   append([]string{}, scan.ComposeServices...),
+		EnvKeys:           append([]string{}, scan.EnvKeys...),
 		Error:             scan.Error,
 	})
 }

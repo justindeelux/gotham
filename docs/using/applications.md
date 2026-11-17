@@ -124,6 +124,14 @@ the root and the services parsed from the chosen file, so you can select the web
 service instead of typing it. A scan that fails or finds no marker shows a hint
 and leaves the pack on auto-detect; creating the application is never blocked.
 
+The same scan reads root files whose name starts with `.env` (`.env`,
+`.env.example`, `.env.sample`, `.env.production`, …) and adds each variable name
+it finds to the **Env** step with an empty value. Only names are read: a
+committed `.env` may hold real secrets, so values never reach the wizard, the
+API or a log. Fill each one in yourself; rows you already edited are kept and a
+rescan never adds a key twice. Rows still missing a value are flagged in the
+summary, and deploying is still allowed.
+
 A pasted Dockerfile source always builds from its saved text. A pasted Docker
 Compose source has no build pack: it runs the document's services directly.
 Container-image sources have no build pack: the deploy pulls the reference.

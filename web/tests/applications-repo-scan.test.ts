@@ -74,6 +74,7 @@ describe("repository scan preselects the build pack", () => {
       compose_files: ["docker-compose.yml", "compose.yaml"],
       compose_file: "docker-compose.yml",
       compose_services: ["web", "worker"],
+      env_keys: [],
     });
 
     w.form.publicCloneUrl = "https://github.com/acme/demo.git";
@@ -103,6 +104,7 @@ describe("repository scan preselects the build pack", () => {
       compose_files: ["compose.yaml"],
       compose_file: "compose.yaml",
       compose_services: ["web"],
+      env_keys: [],
     });
 
     w.form.publicCloneUrl = "https://github.com/acme/demo.git";
@@ -125,6 +127,7 @@ describe("repository scan preselects the build pack", () => {
       compose_files: [],
       compose_file: "",
       compose_services: [],
+      env_keys: [],
     });
 
     w.form.publicCloneUrl = "https://github.com/acme/demo.git";
@@ -146,6 +149,7 @@ describe("manual build-pack choice wins", () => {
       compose_files: ["docker-compose.yml"],
       compose_file: "docker-compose.yml",
       compose_services: ["web"],
+      env_keys: [],
     });
 
     w.form.publicCloneUrl = "https://github.com/acme/demo.git";
@@ -190,6 +194,7 @@ describe("a failed scan never blocks creation", () => {
       compose_files: [],
       compose_file: "",
       compose_services: [],
+      env_keys: [],
       error: "git clone failed",
     });
 
@@ -198,6 +203,77 @@ describe("a failed scan never blocks creation", () => {
 
     expect(w.scan.failed).toBe(true);
     expect(w.form.buildPack).toBe("");
+    wrapper.unmount();
+  });
+});
+
+describe("repository scan prefills env keys", () => {
+  const scanWithEnvKeys = (envKeys: string[]) => ({
+    detected_build_pack: "railpack",
+    marker_file: "package.json",
+    compose_files: [],
+    compose_file: "",
+    compose_services: [],
+    env_keys: envKeys,
+  });
+
+  it("adds each key with an empty value and keeps the default row", async () => {
+    vi.useFakeTimers();
+    const { w, wrapper } = mountWizard();
+    scanned.mockResolvedValue(
+      scanWithEnvKeys(["DATABASE_URL", "SECRET_KEY", "NODE_ENV"]),
+    );
+
+    w.form.publicCloneUrl = "https://github.com/acme/demo.git";
+    await settle();
+
+    expect(w.form.env).toEqual([
+      { key: "NODE_ENV", value: "production" },
+      { key: "DATABASE_URL", value: "" },
+      { key: "SECRET_KEY", value: "" },
+    ]);
+    expect(w.prefilledEnvKeys.value).toEqual(["DATABASE_URL", "SECRET_KEY"]);
+    expect(w.envRowsWithoutValue.value).toBe(2);
+    wrapper.unmount();
+  });
+
+  it("keeps typed rows and rescan adds no duplicate", async () => {
+    vi.useFakeTimers();
+    const { w, wrapper } = mountWizard();
+    scanned.mockResolvedValue(scanWithEnvKeys(["DATABASE_URL"]));
+
+    w.form.publicCloneUrl = "https://github.com/acme/demo.git";
+    await settle();
+    w.form.env.push({ key: "MANUAL_KEY", value: "typed" });
+
+    scanned.mockResolvedValue(scanWithEnvKeys(["DATABASE_URL", "REDIS_URL"]));
+    w.form.publicCloneUrl = "https://github.com/acme/other.git";
+    await settle();
+
+    expect(scanned).toHaveBeenCalledTimes(2);
+    expect(w.form.env).toEqual([
+      { key: "NODE_ENV", value: "production" },
+      { key: "DATABASE_URL", value: "" },
+      { key: "MANUAL_KEY", value: "typed" },
+      { key: "REDIS_URL", value: "" },
+    ]);
+    expect(w.envRowsWithoutValue.value).toBe(2);
+    wrapper.unmount();
+  });
+
+  it("leaves the env rows unchanged when the scan fails", async () => {
+    vi.useFakeTimers();
+    const { w, wrapper } = mountWizard();
+    scanned.mockResolvedValue({
+      ...scanWithEnvKeys([]),
+      error: "git clone failed",
+    });
+
+    w.form.publicCloneUrl = "https://github.com/acme/demo.git";
+    await settle();
+
+    expect(w.form.env).toEqual([{ key: "NODE_ENV", value: "production" }]);
+    expect(w.prefilledEnvKeys.value).toEqual([]);
     wrapper.unmount();
   });
 });
@@ -212,6 +288,7 @@ describe("private git scans carry the inline credential", () => {
       compose_files: [],
       compose_file: "",
       compose_services: [],
+      env_keys: [],
     });
 
     w.form.sourceType = "git_private";
@@ -245,6 +322,7 @@ describe("scan requests stay debounced", () => {
       compose_files: [],
       compose_file: "",
       compose_services: [],
+      env_keys: [],
     });
 
     w.form.publicCloneUrl = "https://github.com/acme/d";

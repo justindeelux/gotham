@@ -17,3 +17,7 @@ export function hasEnvKeyWarnings(rows: EnvKeyRow[]): boolean {
 export function countDroppedEnvRows(rows: EnvKeyRow[]): number {
   return rows.filter((row) => row.key.trim() === "" && row.value.trim() !== "").length;
 }
+
+export function countEnvRowsWithoutValue(rows: EnvKeyRow[]): number {
+  return rows.filter((row) => row.key.trim() !== "" && row.value.trim() === "").length;
+}

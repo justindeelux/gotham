@@ -1,7 +1,10 @@
 package deploy
 
 import (
+	"archive/tar"
+	"bytes"
 	"context"
+	"io"
 	"strings"
 	"testing"
 
@@ -10,6 +13,26 @@ import (
 	"github.com/justindeelux/gotham/internal/builds"
 	agentv1 "github.com/justindeelux/gotham/proto/agent/v1"
 )
+
+func readContextTarFiles(t *testing.T, data []byte) map[string]string {
+	t.Helper()
+	files := map[string]string{}
+	reader := tar.NewReader(bytes.NewReader(data))
+	for {
+		header, err := reader.Next()
+		if err == io.EOF {
+			return files
+		}
+		if err != nil {
+			t.Fatalf("read context tar: %v", err)
+		}
+		content, err := io.ReadAll(reader)
+		if err != nil {
+			t.Fatalf("read context entry: %v", err)
+		}
+		files[header.Name] = string(content)
+	}
+}
 
 const composeBuildServicesFile = `services:
   db:
@@ -70,8 +93,9 @@ func TestOrchestratorBuildsComposeServices(t *testing.T) {
 	app := composeBuildServicesApp()
 	node := newMockNode()
 	composeBuildServicesOrchestrator(t, app, node, map[string]string{
-		composeBuildPackFile: composeBuildServicesFile,
-		"Dockerfile":         "FROM node:22-slim AS web\n",
+		composeBuildPackFile:   composeBuildServicesFile,
+		"deploy/Dockerfile":    "FROM node:22-slim AS web\n",
+		"deploy/.dockerignore": "nothing\n",
 	})
 
 	if node.buildCalls != 1 {
@@ -90,6 +114,9 @@ func TestOrchestratorBuildsComposeServices(t *testing.T) {
 	if len(node.contexts[0]) == 0 {
 		t.Error("build context tar is empty")
 	}
+	if files := readContextTarFiles(t, node.contexts[0]); len(files) == 0 {
+		t.Error("build context tar has no entries")
+	}
 	if node.composeUpCalls != 1 {
 		t.Fatalf("compose up calls = %d, want 1", node.composeUpCalls)
 	}
@@ -102,6 +129,29 @@ func TestOrchestratorBuildsComposeServices(t *testing.T) {
 	}
 	if !strings.Contains(document, "postgres:16-alpine") {
 		t.Errorf("compose document lost the pulled image:\n%s", document)
+	}
+}
+
+func TestOrchestratorComposeBuildContextIsRelativeToTheComposeFile(t *testing.T) {
+	app := composeBuildServicesApp()
+	app.ComposeFile = "stack/compose.yaml"
+	node := newMockNode()
+	composeBuildServicesOrchestrator(t, app, node, map[string]string{
+		"stack/compose.yaml":   "services:\n  web:\n    build:\n      context: app\n      target: web\n    ports:\n      - \"8000:8000\"\n",
+		"stack/app/Dockerfile": "FROM python:3.12 AS web\n",
+		"stack/app/main.py":    "print('hi')\n",
+		"elsewhere/Dockerfile": "FROM scratch\n",
+	})
+
+	if node.buildCalls != 1 {
+		t.Fatalf("build calls = %d, want 1", node.buildCalls)
+	}
+	files := readContextTarFiles(t, node.contexts[0])
+	if _, ok := files["main.py"]; !ok {
+		t.Error("context is missing a file from the compose file's directory")
+	}
+	if _, ok := files["Dockerfile"]; !ok {
+		t.Error("context is missing the Dockerfile")
 	}
 }
 

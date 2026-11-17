@@ -139,6 +139,9 @@ func (o *Orchestrator) buildComposeImages(ctx context.Context, st *runState, ren
 		return rewritten, composeBuildTagList(tags), err
 	}
 
+	// Compose resolves a build context relative to the compose file, not the
+	// repository root.
+	baseDir := filepath.Join(st.repoDir, filepath.Dir(st.app.ComposeFile))
 	logs := newLineLog(st.log)
 	builder := newNodeBuilder(st.node, st.app.ID, st.dep.ID, func(chunk []byte) {
 		_, _ = logs.Write(chunk)
@@ -146,7 +149,7 @@ func (o *Orchestrator) buildComposeImages(ctx context.Context, st *runState, ren
 	engine := builds.NewDockerfileEngine(builder)
 	for _, name := range names {
 		directive := directives[name]
-		contextDir, err := composeBuildContextDir(st.repoDir, directive.Context)
+		contextDir, err := composeBuildContextDir(baseDir, directive.Context)
 		if err != nil {
 			return "", nil, fmt.Errorf("compose: service %q: %w", name, err)
 		}
@@ -187,7 +190,7 @@ func composeBuildTagList(tags map[string]string) []string {
 
 // composeBuildContextDir keeps the build context inside the clone: a compose
 // file must not point the node build at anything outside the repository.
-func composeBuildContextDir(repoDir, context string) (string, error) {
+func composeBuildContextDir(baseDir, context string) (string, error) {
 	trimmed := strings.TrimSpace(context)
 	if trimmed == "" {
 		trimmed = "."
@@ -197,8 +200,8 @@ func composeBuildContextDir(repoDir, context string) (string, error) {
 		strings.HasPrefix(cleaned, ".."+string(filepath.Separator)) {
 		return "", fmt.Errorf("%w: build context %q escapes the repository", ErrValidation, context)
 	}
-	dir := filepath.Join(repoDir, cleaned)
-	rel, err := filepath.Rel(repoDir, dir)
+	dir := filepath.Join(baseDir, cleaned)
+	rel, err := filepath.Rel(baseDir, dir)
 	if err != nil || rel == ".." || strings.HasPrefix(rel, ".."+string(filepath.Separator)) {
 		return "", fmt.Errorf("%w: build context %q escapes the repository", ErrValidation, context)
 	}

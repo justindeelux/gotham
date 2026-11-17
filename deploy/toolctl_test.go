@@ -187,7 +187,11 @@ func TestToolctlInstallsSystemdNetworkStack(t *testing.T) {
 			if strings.Contains(out, "apt-get install") {
 				t.Errorf("%s installs a package apt does not offer: %q", id, out)
 			}
-			if !strings.Contains(out, "systemctl enable "+unit) ||
+			if id == "systemd-networkd" {
+				if !strings.Contains(out, "systemctl enable --now systemd-networkd") {
+					t.Errorf("%s does not enable %s: %q", id, unit, out)
+				}
+			} else if !strings.Contains(out, "systemctl enable "+unit) ||
 				!strings.Contains(out, "systemctl restart "+unit) {
 				t.Errorf("%s does not enable and restart %s: %q", id, unit, out)
 			}
@@ -209,7 +213,11 @@ func TestToolctlInstallsSystemdNetworkStack(t *testing.T) {
 			if !strings.Contains(out, "DEBIAN_FRONTEND=noninteractive apt-get install -y "+pkg) {
 				t.Errorf("%s does not install %s: %q", id, pkg, out)
 			}
-			if !strings.Contains(out, "systemctl enable ") ||
+			if id == "systemd-networkd" {
+				if !strings.Contains(out, "systemctl enable --now systemd-networkd") {
+					t.Errorf("%s does not enable its unit: %q", id, out)
+				}
+			} else if !strings.Contains(out, "systemctl enable ") ||
 				!strings.Contains(out, "systemctl restart ") {
 				t.Errorf("%s does not enable and restart its unit: %q", id, out)
 			}
@@ -275,7 +283,6 @@ func TestToolctlInstallsSystemdNetworkStack(t *testing.T) {
 		// reload dbus, then restart the unit, then prove it answers.
 		root := t.TempDir()
 		for _, tc := range []struct{ id, unit, probe string }{
-			{"systemd-networkd", "systemd-networkd", "timeout 10 networkctl status"},
 			{"systemd-resolved", "systemd-resolved", "timeout 10 resolvectl status"},
 			{"resolvectl", "systemd-resolved", "timeout 10 resolvectl status"},
 		} {
@@ -294,6 +301,19 @@ func TestToolctlInstallsSystemdNetworkStack(t *testing.T) {
 				t.Errorf("%s steps out of order (reload=%d enable=%d restart=%d probe=%d): %q",
 					tc.id, reload, enable, restart, probe, out)
 			}
+		}
+	})
+
+	t.Run("networkd is enabled without a restart", func(t *testing.T) {
+		out, err := runToolctl(t, t.TempDir(), nil, "install-tool", "systemd-networkd")
+		if err != nil {
+			t.Fatalf("install-tool systemd-networkd: %v: %s", err, out)
+		}
+		if !strings.Contains(out, "systemctl enable --now systemd-networkd") {
+			t.Errorf("networkd not enabled with --now: %q", out)
+		}
+		if strings.Contains(out, "systemctl restart") || strings.Contains(out, "reload dbus") {
+			t.Errorf("networkd install restarts or reloads: %q", out)
 		}
 	})
 

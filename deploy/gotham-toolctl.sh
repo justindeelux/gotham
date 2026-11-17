@@ -456,7 +456,9 @@ install_systemd_networkd() {
         dnf) run dnf install -y systemd-networkd ;;
         *) die "systemd-networkd: unsupported distribution" 5 ;;
     esac
-    claim_bus_name systemd-networkd networkctl status
+    # No restart: networkd's D-Bus policy ships in the base systemd package, and
+    # restarting it on a host it already manages would re-apply the uplink config.
+    run systemctl enable --now systemd-networkd
 }
 
 install_systemd_resolved() {

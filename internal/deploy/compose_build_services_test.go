@@ -66,7 +66,7 @@ func composeBuildServicesApp() Application {
 	}
 }
 
-func composeBuildServicesOrchestrator(t *testing.T, app Application, node *mockNode, files map[string]string) *Orchestrator {
+func composeBuildServicesOrchestrator(t *testing.T, app Application, node *mockNode, files map[string]string) {
 	t.Helper()
 	repo := &fakeRepository{app: app}
 	dep := seedDeployment(t, repo, app, Deployment{Kind: KindDeploy})
@@ -86,7 +86,6 @@ func composeBuildServicesOrchestrator(t *testing.T, app Application, node *mockN
 	if stored.State != StateRunning {
 		t.Fatalf("state = %s (%q), want running", stored.State, stored.Error)
 	}
-	return o
 }
 
 func TestOrchestratorBuildsComposeServices(t *testing.T) {
@@ -105,8 +104,8 @@ func TestOrchestratorBuildsComposeServices(t *testing.T) {
 	if meta.Target != "web" {
 		t.Errorf("build target = %q, want web", meta.Target)
 	}
-	if meta.Tag != "gotham/"+app.ID.String()+":"+meta.DeployID+"-web" {
-		t.Errorf("build tag = %q, want the per-service release tag", meta.Tag)
+	if meta.Tag != meta.DeployID+"-web" {
+		t.Errorf("build tag = %q, want the per-service tag suffix", meta.Tag)
 	}
 	if meta.BuildArgs["NODE_ENV"] != "production" {
 		t.Errorf("build args = %v, want NODE_ENV from the compose directive", meta.BuildArgs)
@@ -208,5 +207,18 @@ func TestValidateComposeSourceRejectsPastedBuild(t *testing.T) {
 	err := validateComposeSource(app)
 	if err == nil || !strings.Contains(err.Error(), "pasted compose cannot build") {
 		t.Fatalf("validateComposeSource = %v, want a pasted-build rejection", err)
+	}
+}
+
+func TestImageTagSuffix(t *testing.T) {
+	cases := map[string]string{
+		"gotham/app:d1-web":  "d1-web",
+		"gotham/app":         "gotham/app",
+		"127.0.0.1:5000/x:y": "y",
+	}
+	for ref, want := range cases {
+		if got := imageTagSuffix(ref); got != want {
+			t.Errorf("imageTagSuffix(%q) = %q, want %q", ref, got, want)
+		}
 	}
 }

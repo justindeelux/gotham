@@ -388,7 +388,7 @@ func (b *nodeImageBuilder) Build(ctx context.Context, contextTar []byte, opts bu
 		Engine:     string(opts.Engine),
 		BuildArgs:  opts.BuildArgs,
 		Target:     opts.Target,
-		Tag:        opts.Tag,
+		Tag:        imageTagSuffix(opts.Tag),
 	}, contextTar, b.log)
 	if err != nil {
 		return builds.ImageBuildResult{}, err
@@ -396,6 +396,16 @@ func (b *nodeImageBuilder) Build(ctx context.Context, contextTar []byte, opts bu
 	b.outcome = outcome
 	b.built = true
 	return builds.ImageBuildResult{Digest: outcome.Digest}, nil
+}
+
+// imageTagSuffix keeps the tag part of gotham/{app}:{tag}: the agent builds
+// the reference from the app and deploy ids itself and only accepts a tag.
+func imageTagSuffix(ref string) string {
+	index := strings.LastIndex(ref, ":")
+	if index < 0 {
+		return ref
+	}
+	return ref[index+1:]
 }
 
 func (b *nodeImageBuilder) outcomeOf() (BuildOutcome, bool) {

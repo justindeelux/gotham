@@ -363,24 +363,75 @@ func checkLocalRefs(path string, value any, declared map[string]bool, what strin
 }
 
 func checkDependsOn(path string, value any, all []string) error {
-	entries, ok := value.([]any)
-	if !ok {
-		return at(path, "depends_on must be a list of service names")
-	}
-	for _, entry := range entries {
-		name, ok := entry.(string)
-		if !ok || !composeServiceNamePattern.MatchString(strings.TrimSpace(name)) {
-			return at(path, "depends_on entries must be service names")
-		}
-		known := false
-		for _, candidate := range all {
-			if candidate == strings.TrimSpace(name) {
-				known = true
-				break
+	switch entries := value.(type) {
+	case []any:
+		for _, entry := range entries {
+			name, ok := entry.(string)
+			if !ok {
+				return at(path, "depends_on entries must be service names")
+			}
+			if err := checkDependency(path, name, all); err != nil {
+				return err
 			}
 		}
-		if !known {
-			return at(path, "depends_on service %q is not declared", strings.TrimSpace(name))
+		return nil
+	case map[string]any:
+		for name, options := range entries {
+			if err := checkDependency(path, name, all); err != nil {
+				return err
+			}
+			if err := checkDependencyOptions(path+"."+name, options); err != nil {
+				return err
+			}
+		}
+		return nil
+	default:
+		return at(path, "depends_on must be a list of service names or a mapping of service options")
+	}
+}
+
+func checkDependency(path, name string, all []string) error {
+	if !composeServiceNamePattern.MatchString(strings.TrimSpace(name)) {
+		return at(path, "depends_on entries must be service names")
+	}
+	for _, candidate := range all {
+		if candidate == strings.TrimSpace(name) {
+			return nil
+		}
+	}
+	return at(path, "depends_on service %q is not declared", strings.TrimSpace(name))
+}
+
+// checkDependencyOptions accepts the long form, `db: {condition: ...}`, which
+// docker compose evaluates on the node. Only the documented keys are allowed.
+func checkDependencyOptions(path string, options any) error {
+	if options == nil {
+		return nil
+	}
+	mapping, ok := options.(map[string]any)
+	if !ok {
+		return at(path, "depends_on options must be a mapping")
+	}
+	for key, value := range mapping {
+		var err error
+		switch key {
+		case "condition":
+			condition, ok := value.(string)
+			if !ok {
+				return at(path+".condition", "value must be a condition string")
+			}
+			switch strings.TrimSpace(condition) {
+			case "service_started", "service_healthy", "service_completed_successfully":
+			default:
+				return at(path+".condition", "condition %q is not supported", condition)
+			}
+		case "restart", "required":
+			err = checkBool(path+"."+key, value)
+		default:
+			return at(path, "depends_on key %q is not allowed", key)
+		}
+		if err != nil {
+			return err
 		}
 	}
 	return nil

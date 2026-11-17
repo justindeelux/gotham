@@ -105,7 +105,9 @@ func TestValidateBypassTable(t *testing.T) {
 		{"no image", "services:\n  web:\n    command: sleep infinity\n", "services.web"},
 		{"no services", "volumes:\n  data: {}\n", "no services"},
 		{"depends undeclared", "services:\n  web:\n    image: x\n    depends_on:\n      - ghost\n", "services.web"},
-		{"depends long form", "services:\n  web:\n    image: x\n    depends_on:\n      db:\n        condition: service_healthy\n  db:\n    image: y\n", "services.web"},
+		{"depends long form unknown service", "services:\n  web:\n    image: x\n    depends_on:\n      ghost:\n        condition: service_healthy\n", "services.web"},
+		{"depends long form bad condition", "services:\n  web:\n    image: x\n    depends_on:\n      db:\n        condition: whenever\n  db:\n    image: y\n", "services.web"},
+		{"depends long form unknown key", "services:\n  web:\n    image: x\n    depends_on:\n      db:\n        network: host\n  db:\n    image: y\n", "services.web"},
 		{"logging syslog", serviceDoc("    logging:\n      driver: syslog\n"), "services.web"},
 		{"multi document", "services:\n  web:\n    image: x\n---\nservices:\n  evil:\n    image: y\n    privileged: true\n", "single document"},
 		{"nul byte", "services:\n  web:\n    image: a\x00b\n", "NUL"},
@@ -160,13 +162,14 @@ func TestValidateBypassTable(t *testing.T) {
 
 func TestValidateBuildAccepts(t *testing.T) {
 	accept := map[string]string{
-		"path form":   serviceDoc("    build: .\n"),
-		"context":     serviceDoc("    build:\n      context: ./app\n"),
-		"dockerfile":  serviceDoc("    build:\n      context: .\n      dockerfile: docker/Dockerfile\n"),
-		"target":      serviceDoc("    build:\n      context: .\n      target: web\n"),
-		"args map":    serviceDoc("    build:\n      context: .\n      args:\n        NODE_ENV: production\n"),
-		"args list":   serviceDoc("    build:\n      context: .\n      args:\n        - NODE_ENV=production\n"),
-		"image+build": "services:\n  web:\n    image: example.com/web:1\n    build: .\n",
+		"path form":         serviceDoc("    build: .\n"),
+		"context":           serviceDoc("    build:\n      context: ./app\n"),
+		"dockerfile":        serviceDoc("    build:\n      context: .\n      dockerfile: docker/Dockerfile\n"),
+		"target":            serviceDoc("    build:\n      context: .\n      target: web\n"),
+		"args map":          serviceDoc("    build:\n      context: .\n      args:\n        NODE_ENV: production\n"),
+		"args list":         serviceDoc("    build:\n      context: .\n      args:\n        - NODE_ENV=production\n"),
+		"image+build":       "services:\n  web:\n    image: example.com/web:1\n    build: .\n",
+		"depends long form": "services:\n  web:\n    image: x\n    depends_on:\n      db:\n        condition: service_healthy\n        restart: true\n  db:\n    image: y\n",
 	}
 	for name, content := range accept {
 		t.Run(name, func(t *testing.T) {

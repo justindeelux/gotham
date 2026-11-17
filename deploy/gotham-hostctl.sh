@@ -267,6 +267,19 @@ mkdir -p "${STATE}" 2>/dev/null
 chmod 0755 "${STATE}" 2>/dev/null
 
 # ---- live host network probe (status) --------------------------------------
+# bounded runs a status probe under a short timeout when the host has one: a
+# daemon that never claimed its D-Bus name makes every client wait the 25s
+# service_start_timeout, and one hung probe must not stall the whole status.
+# A cut probe leaves its field empty, which the JSON reports as unknown/null.
+bounded() { # seconds command...
+    secs="$1"; shift
+    if command -v timeout >/dev/null 2>&1; then
+        timeout "${secs}" "$@"
+    else
+        "$@"
+    fi
+}
+
 # host_network_json reports the default-route interface as the host sees it:
 # live addresses/gateways from `ip`, the modes from the winning .network
 # file (/etc shadows /run, lexical first match wins), DNS from resolvectl
@@ -343,7 +356,7 @@ cur_dns() { # iface: effective resolvers (at most 3, comma separated).
 }
 
 link_dns() { # iface: link DNS from resolvectl only (no file fallback).
-    dns="$(collect_ips $(resolvectl --no-pager dns "$1" 2>/dev/null | sed -n 's/^[^:]*:[[:space:]]*//p' | head -n 1))"
+    dns="$(collect_ips $(bounded 5 resolvectl --no-pager dns "$1" 2>/dev/null | sed -n 's/^[^:]*:[[:space:]]*//p' | head -n 1))"
     printf '%s' "${dns}" | cut -d, -f1-3
     return 0
 }
@@ -388,14 +401,14 @@ host_network_json() {
 }
 
 host_name() {
-    v="$(hostnamectl hostname 2>/dev/null)" || v=""
+    v="$(bounded 5 hostnamectl hostname 2>/dev/null)" || v=""
     [ -n "${v}" ] || v="$(hostname 2>/dev/null)"
     is_host "${v}" && printf '%s' "${v}"
     return 0
 }
 
 ntp_state() {
-    v="$(timedatectl show --property=NTP --value 2>/dev/null | tr 'A-Z' 'a-z')"
+    v="$(bounded 5 timedatectl show --property=NTP --value 2>/dev/null | tr 'A-Z' 'a-z')"
     case "${v}" in
         true | yes) printf 'true' ;;
         *) printf 'false' ;;
@@ -408,13 +421,13 @@ ntp_list() { # comma list: Gotham's own drop-in, else the synced server.
         all_hosts "${v}" 4 && printf '%s' "${v}"
         return 0
     fi
-    v="$(timedatectl show-timesync --property=ServerName --value 2>/dev/null | head -n 1)"
+    v="$(bounded 5 timedatectl show-timesync --property=ServerName --value 2>/dev/null | head -n 1)"
     { is_host "${v}" || is_ip "${v}"; } && printf '%s' "${v}"
     return 0
 }
 
 current_tz() {
-    v="$(timedatectl show --property=Timezone --value 2>/dev/null)"
+    v="$(bounded 5 timedatectl show --property=Timezone --value 2>/dev/null)"
     is_tz "${v}" && printf '%s' "${v}"
     return 0
 }

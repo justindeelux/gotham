@@ -336,8 +336,14 @@ install_git() {
 # Fedora and RHEL package systemd-networkd and systemd-resolved separately.
 # resolvectl ships with whichever package provides resolved.
 #
-# The units are enabled and started, never restarted, so a running link stack
-# keeps its configuration and the control-plane connection is not cut.
+# A unit whose package adds a D-Bus policy file stays invisible to a dbus-daemon
+# started before it: the service runs but never owns its bus name, so every
+# resolvectl/networkctl call waits the 25s D-Bus service_start_timeout. The
+# install reloads dbus, then (re)starts the unit so it claims the name, and
+# proves the daemon answers before returning.
+RESOLV_CONF="${ROOT}/etc/resolv.conf"
+RESOLVED_DNS_CONF="${ROOT}/etc/systemd/resolved.conf.d/gotham-dns.conf"
+
 network_manager_active() {
     case "${NETWORK_MANAGER_OVERRIDE}" in
         networkmanager) return 0 ;;
@@ -355,6 +361,65 @@ network_manager_active() {
 require_networkd_host() {
     network_manager_active && die "networking is managed by NetworkManager (or netplan rendering to it); Gotham only configures systemd-networkd hosts. Nothing was changed: stop NetworkManager or switch netplan to the networkd renderer, then install again" 3
     return 0
+}
+
+# carry_over_dns keeps the host resolving after the package repoints
+# /etc/resolv.conf at the 127.0.0.53 stub: resolved then has no upstream
+# servers and every lookup fails ("No appropriate name servers"). The static
+# file's servers are captured before the install; a drop-in Gotham did not write
+# that already sets DNS= is left alone. With none found it falls back to public
+# resolvers, so the host never ends up without DNS.
+carry_over_dns() {
+    [ -f "${RESOLV_CONF}" ] || return 0
+    if [ -L "${RESOLV_CONF}" ]; then
+        target="$(readlink "${RESOLV_CONF}" 2>/dev/null)"
+        case "${target}" in *systemd/resolve/*) return 0 ;; esac
+    fi
+    if [ -f "${RESOLVED_DNS_CONF}" ] \
+        && grep -qE '^[[:space:]]*DNS[[:space:]]*=[[:space:]]*[^[:space:]]' "${RESOLVED_DNS_CONF}" 2>/dev/null; then
+        return 0
+    fi
+    servers="$(awk '
+        $1 == "nameserver" {
+            ip = $2
+            if (ip ~ /^127\./ || ip == "::1") next
+            if (ip ~ /^[0-9]+\.[0-9]+\.[0-9]+\.[0-9]+$/ || (ip ~ /^[0-9A-Fa-f:]+$/ && ip ~ /:/)) print ip
+        }' "${RESOLV_CONF}" 2>/dev/null | tr '\n' ' ')"
+    servers="${servers% }"
+    if [ -z "${servers}" ]; then
+        servers="1.1.1.1 8.8.8.8"
+        echo "gotham-toolctl: /etc/resolv.conf has no usable nameserver; using 1.1.1.1 8.8.8.8"
+    fi
+    if [ "${DRYRUN}" = "1" ]; then
+        echo "+ write ${RESOLVED_DNS_CONF} DNS=${servers}"
+        return 0
+    fi
+    mkdir -p "${RESOLVED_DNS_CONF%/*}" || die "cannot create the resolved drop-in directory" 1
+    printf '# Managed by Gotham: nameservers from the static /etc/resolv.conf.\n[Resolve]\nDNS=%s\n' "${servers}" >"${RESOLVED_DNS_CONF}.new" \
+        && mv -f "${RESOLVED_DNS_CONF}.new" "${RESOLVED_DNS_CONF}" \
+        || { rm -f "${RESOLVED_DNS_CONF}.new"; die "cannot write ${RESOLVED_DNS_CONF}" 1; }
+}
+
+# claim_bus_name makes a freshly installed unit own its D-Bus name. Reloading
+# dbus only makes the new policy visible; the unit itself must restart to claim
+# the name, so a reload alone does not fix a hung resolvectl. The bounded probe
+# fails the install instead of leaving a node whose status calls hang.
+claim_bus_name() { # unit check-command...
+    unit="$1"; shift
+    run systemctl reload dbus \
+        || echo "gotham-toolctl: could not reload dbus; restarting ${unit}" >&2
+    run systemctl enable "${unit}"
+    run systemctl restart "${unit}"
+    if [ "${DRYRUN}" = "1" ]; then
+        echo "+ timeout 10 $*"
+        return 0
+    fi
+    if command -v timeout >/dev/null 2>&1; then
+        timeout 10 "$@" >/dev/null 2>&1
+    else
+        "$@" >/dev/null 2>&1
+    fi \
+        || die "${unit} did not answer on D-Bus within 10s; run 'systemctl reload dbus' and 'systemctl restart ${unit}', then install again" 1
 }
 
 # apt_lists_updated keeps one package-list refresh per run: a fresh minimal
@@ -391,17 +456,18 @@ install_systemd_networkd() {
         dnf) run dnf install -y systemd-networkd ;;
         *) die "systemd-networkd: unsupported distribution" 5 ;;
     esac
-    run systemctl enable --now systemd-networkd
+    claim_bus_name systemd-networkd networkctl status
 }
 
 install_systemd_resolved() {
     require_networkd_host
+    carry_over_dns
     case "${DISTRO}" in
         apt) apt_install_if_known systemd-resolved || return $? ;;
         dnf) run dnf install -y systemd-resolved ;;
         *) die "systemd-resolved: unsupported distribution" 5 ;;
     esac
-    run systemctl enable --now systemd-resolved
+    claim_bus_name systemd-resolved resolvectl status
 }
 
 install_resolvectl() {

@@ -187,8 +187,9 @@ func TestToolctlInstallsSystemdNetworkStack(t *testing.T) {
 			if strings.Contains(out, "apt-get install") {
 				t.Errorf("%s installs a package apt does not offer: %q", id, out)
 			}
-			if !strings.Contains(out, "systemctl enable --now "+unit) {
-				t.Errorf("%s does not enable %s: %q", id, unit, out)
+			if !strings.Contains(out, "systemctl enable "+unit) ||
+				!strings.Contains(out, "systemctl restart "+unit) {
+				t.Errorf("%s does not enable and restart %s: %q", id, unit, out)
 			}
 		}
 	})
@@ -208,8 +209,9 @@ func TestToolctlInstallsSystemdNetworkStack(t *testing.T) {
 			if !strings.Contains(out, "DEBIAN_FRONTEND=noninteractive apt-get install -y "+pkg) {
 				t.Errorf("%s does not install %s: %q", id, pkg, out)
 			}
-			if !strings.Contains(out, "systemctl enable --now ") {
-				t.Errorf("%s does not enable its unit: %q", id, out)
+			if !strings.Contains(out, "systemctl enable ") ||
+				!strings.Contains(out, "systemctl restart ") {
+				t.Errorf("%s does not enable and restart its unit: %q", id, out)
 			}
 		}
 	})
@@ -228,7 +230,7 @@ func TestToolctlInstallsSystemdNetworkStack(t *testing.T) {
 		if strings.Contains(empty, "apt-get install") {
 			t.Errorf("empty lists install a package apt cannot see yet: %q", empty)
 		}
-		if !strings.Contains(empty, "systemctl enable --now systemd-resolved") {
+		if !strings.Contains(empty, "systemctl restart systemd-resolved") {
 			t.Errorf("empty lists skip the unit: %q", empty)
 		}
 
@@ -267,15 +269,30 @@ func TestToolctlInstallsSystemdNetworkStack(t *testing.T) {
 		}
 	})
 
-	t.Run("never restarts networking", func(t *testing.T) {
+	t.Run("claims the D-Bus name", func(t *testing.T) {
+		// A dbus-daemon started before the package added its policy keeps the
+		// name unowned, so resolvectl and networkctl wait 25s. The install must
+		// reload dbus, then restart the unit, then prove it answers.
 		root := t.TempDir()
-		for _, id := range []string{"systemd-networkd", "systemd-resolved", "resolvectl"} {
-			out, err := runToolctl(t, root, nil, "install-tool", id)
+		for _, tc := range []struct{ id, unit, probe string }{
+			{"systemd-networkd", "systemd-networkd", "timeout 10 networkctl status"},
+			{"systemd-resolved", "systemd-resolved", "timeout 10 resolvectl status"},
+			{"resolvectl", "systemd-resolved", "timeout 10 resolvectl status"},
+		} {
+			out, err := runToolctl(t, root, nil, "install-tool", tc.id)
 			if err != nil {
-				t.Fatalf("install-tool %s: %v: %s", id, err, out)
+				t.Fatalf("install-tool %s: %v: %s", tc.id, err, out)
 			}
-			if strings.Contains(out, "systemctl restart") {
-				t.Errorf("%s install restarts a unit: %q", id, out)
+			reload := strings.Index(out, "systemctl reload dbus")
+			enable := strings.Index(out, "systemctl enable "+tc.unit)
+			restart := strings.Index(out, "systemctl restart "+tc.unit)
+			probe := strings.Index(out, tc.probe)
+			switch {
+			case reload < 0 || enable < 0 || restart < 0 || probe < 0:
+				t.Fatalf("%s misses reload, enable, restart or the bounded probe: %q", tc.id, out)
+			case reload >= enable || enable >= restart || restart >= probe:
+				t.Errorf("%s steps out of order (reload=%d enable=%d restart=%d probe=%d): %q",
+					tc.id, reload, enable, restart, probe, out)
 			}
 		}
 	})
@@ -289,6 +306,131 @@ func TestToolctlInstallsSystemdNetworkStack(t *testing.T) {
 			t.Errorf("an unsupported distribution still planned a command: %q", out)
 		}
 	})
+}
+
+// writeResolvConf plants the static /etc/resolv.conf a fresh Debian node has
+// before systemd-resolved replaces it with the 127.0.0.53 stub.
+func writeResolvConf(t *testing.T, root, body string) {
+	t.Helper()
+	etc := filepath.Join(root, "etc")
+	if err := os.MkdirAll(etc, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(etc, "resolv.conf"), []byte(body), 0o644); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func TestToolctlCarriesResolvConfNameservers(t *testing.T) {
+	root := t.TempDir()
+	writeResolvConf(t, root, "nameserver 127.0.0.1\nnameserver 9.9.9.9\nnameserver ::1\nnameserver 2001:4860:4860::8888\n")
+	out, err := runToolctl(t, root, aptCacheStub(t, true), "install-tool", "systemd-resolved")
+	if err != nil {
+		t.Fatalf("install-tool systemd-resolved: %v: %s", err, out)
+	}
+	carry := strings.Index(out, "DNS=9.9.9.9 2001:4860:4860::8888")
+	install := strings.Index(out, "apt-get install -y systemd-resolved")
+	if carry < 0 || install < 0 {
+		t.Fatalf("carry-over or package install missing: %q", out)
+	}
+	if carry > install {
+		t.Errorf("resolv.conf nameservers must be captured before the package replaces it: %q", out)
+	}
+}
+
+func TestToolctlResolvConfFallback(t *testing.T) {
+	root := t.TempDir()
+	writeResolvConf(t, root, "nameserver 127.0.0.1\nnameserver ::1\n")
+	out, err := runToolctl(t, root, nil, "install-tool", "systemd-resolved")
+	if err != nil {
+		t.Fatalf("install-tool systemd-resolved: %v: %s", err, out)
+	}
+	if !strings.Contains(out, "no usable nameserver") {
+		t.Errorf("the fallback is silent: %q", out)
+	}
+	if !strings.Contains(out, "DNS=1.1.1.1 8.8.8.8") {
+		t.Errorf("loopback-only resolv.conf does not fall back to public resolvers: %q", out)
+	}
+}
+
+func TestToolctlKeepsExistingResolvedDropIn(t *testing.T) {
+	root := t.TempDir()
+	writeResolvConf(t, root, "nameserver 9.9.9.9\n")
+	dropin := filepath.Join(root, "etc/systemd/resolved.conf.d/gotham-dns.conf")
+	if err := os.MkdirAll(filepath.Dir(dropin), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(dropin, []byte("[Resolve]\nDNS=10.0.0.53\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	out, err := runToolctl(t, root, nil, "install-tool", "systemd-resolved")
+	if err != nil {
+		t.Fatalf("install-tool systemd-resolved: %v: %s", err, out)
+	}
+	if strings.Contains(out, "DNS=") {
+		t.Errorf("an existing DNS= drop-in is overwritten: %q", out)
+	}
+}
+
+func TestToolctlSkipsResolvedStubSymlink(t *testing.T) {
+	root := t.TempDir()
+	etc := filepath.Join(root, "etc")
+	if err := os.MkdirAll(etc, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	stub := filepath.Join(root, "run/systemd/resolve/stub-resolv.conf")
+	if err := os.MkdirAll(filepath.Dir(stub), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(stub, []byte("nameserver 127.0.0.53\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Symlink(stub, filepath.Join(etc, "resolv.conf")); err != nil {
+		t.Skipf("symlinks are not available: %v", err)
+	}
+	out, err := runToolctl(t, root, nil, "install-tool", "systemd-resolved")
+	if err != nil {
+		t.Fatalf("install-tool systemd-resolved: %v: %s", err, out)
+	}
+	if strings.Contains(out, "write ") {
+		t.Errorf("a resolv.conf already pointing at the resolved stub is rewritten: %q", out)
+	}
+}
+
+func TestToolctlWritesResolvedDropIn(t *testing.T) {
+	root := t.TempDir()
+	writeResolvConf(t, root, "nameserver 127.0.0.1\nnameserver 192.0.2.53\n")
+	cmd := exec.Command("sh", "-c", `
+systemctl() { return 0; }
+timeout() { shift; "$@"; }
+resolvectl() { return 0; }
+networkctl() { return 0; }
+flock() { return 0; }
+. ./gotham-toolctl.sh
+`, "toolctl", "install-tool", "systemd-resolved")
+	cmd.Env = append(os.Environ(),
+		"GOTHAM_TOOLCTL_INNER=1",
+		"GOTHAM_TOOLCTL_DRYRUN=0",
+		"GOTHAM_TOOLCTL_ROOT="+root,
+		"GOTHAM_TOOLCTL_LOCK="+filepath.Join(root, "toolctl.lock"),
+		"GOTHAM_TOOLCTL_ARCH=amd64",
+		"GOTHAM_TOOLCTL_DISTRO=apt",
+		"GOTHAM_TOOLCTL_NETWORK_MANAGER=none",
+	)
+	cmd.Env = append(cmd.Env, aptCacheStub(t, false)...)
+	out, err := cmd.CombinedOutput()
+	if err != nil {
+		t.Fatalf("install-tool systemd-resolved: %v: %s", err, out)
+	}
+	data, err := os.ReadFile(filepath.Join(root, "etc/systemd/resolved.conf.d/gotham-dns.conf"))
+	if err != nil {
+		t.Fatalf("resolved drop-in not written: %v: %s", err, out)
+	}
+	for _, want := range []string{"[Resolve]", "DNS=192.0.2.53"} {
+		if !strings.Contains(string(data), want) {
+			t.Errorf("resolved drop-in misses %q:\n%s", want, data)
+		}
+	}
 }
 
 func TestToolctlAptUpdateFailureIsReported(t *testing.T) {

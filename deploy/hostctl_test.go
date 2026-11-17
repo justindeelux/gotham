@@ -7,6 +7,7 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 )
 
 func runHostctl(t *testing.T, root, stdin string, verb string) (string, error) {
@@ -557,6 +558,30 @@ func TestHostctlStatusReportsHostTruth(t *testing.T) {
 		if !strings.Contains(out, want) {
 			t.Errorf("status misses %s:\n%s", want, out)
 		}
+	}
+}
+
+func TestHostctlStatusBoundsHangingResolvectl(t *testing.T) {
+	if _, err := exec.LookPath("timeout"); err != nil {
+		t.Skip("timeout is not available on this host")
+	}
+	root := t.TempDir()
+	extra := stubProbes(t, root)
+	// A resolved that never claims its D-Bus name leaves every client waiting
+	// the 25s service_start_timeout; the status probe must cut it and report
+	// the DNS field as unknown instead of stalling.
+	writeStub(t, filepath.Join(root, "bin"), "resolvectl", "#!/bin/sh\nexec sleep 20\n")
+	start := time.Now()
+	out, err := runHostctlEnv(t, root, "", "status", extra)
+	elapsed := time.Since(start)
+	if err != nil {
+		t.Fatalf("status failed: %v\n%s", err, out)
+	}
+	if elapsed > 15*time.Second {
+		t.Errorf("status took %s with a hanging resolvectl", elapsed)
+	}
+	if !strings.Contains(out, `"dns_servers":[]`) {
+		t.Errorf("a hanging resolvectl must report unknown DNS:\n%s", out)
 	}
 }
 

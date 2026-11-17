@@ -179,6 +179,53 @@ func TestRegistryBuildDockerfile(t *testing.T) {
 	}
 }
 
+func TestDockerfileEngineTagDockerfileAndContextRoot(t *testing.T) {
+	repoDir := t.TempDir()
+	writeTestFile(t, filepath.Join(repoDir, "app", "docker", "web.Dockerfile"), "FROM scratch\n")
+	writeTestFile(t, filepath.Join(repoDir, "app", "main.go"), "package main\n")
+	writeTestFile(t, filepath.Join(repoDir, "secret.txt"), "outside the context\n")
+
+	builder := &mockBuilder{}
+	opts := testOptions(filepath.Join(repoDir, "app"))
+	opts.Tag = "gotham/app:d1-web"
+	opts.Dockerfile = "docker/web.Dockerfile"
+	opts.Target = "web"
+
+	ref, err := NewDockerfileEngine(builder).Build(context.Background(), opts)
+	if err != nil {
+		t.Fatalf("Build: %v", err)
+	}
+	if ref.Tag != "gotham/app:d1-web" {
+		t.Errorf("Tag = %q; want the per-service tag", ref.Tag)
+	}
+	if builder.lastOpts.Dockerfile != "docker/web.Dockerfile" {
+		t.Errorf("Dockerfile = %q; want the relative path", builder.lastOpts.Dockerfile)
+	}
+	if builder.lastOpts.Target != "web" {
+		t.Errorf("Target = %q; want web", builder.lastOpts.Target)
+	}
+	files := readContextTar(t, builder.lastTar)
+	if _, ok := files["main.go"]; !ok {
+		t.Error("context is missing a file from the service context root")
+	}
+	if _, ok := files["secret.txt"]; ok {
+		t.Error("context escaped the service context root")
+	}
+	if _, ok := files["docker/web.Dockerfile"]; !ok {
+		t.Error("context is missing the Dockerfile the build needs")
+	}
+}
+
+func TestDockerfileEngineRejectsDockerfileOutsideContext(t *testing.T) {
+	repoDir := t.TempDir()
+	writeTestFile(t, filepath.Join(repoDir, "Dockerfile"), "FROM scratch\n")
+	opts := testOptions(repoDir)
+	opts.Dockerfile = "../Dockerfile"
+	if _, err := NewDockerfileEngine(&mockBuilder{}).Build(context.Background(), opts); err == nil {
+		t.Fatal("Build accepted a Dockerfile outside the context")
+	}
+}
+
 func TestRegistryBuildDockerfileHonorsDockerIgnore(t *testing.T) {
 	repoDir := t.TempDir()
 	writeTestFile(t, filepath.Join(repoDir, "Dockerfile"), "FROM scratch\nCOPY . /app\n")

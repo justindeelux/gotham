@@ -86,6 +86,19 @@ func TestSelectStaleImages(t *testing.T) {
 	}
 }
 
+func TestSelectStaleImagesKeepsPerServiceTags(t *testing.T) {
+	app := "gotham/web"
+	images := []appImage{
+		{ID: "web", Ref: app + ":dep-2-web", Created: 400},
+		{ID: "worker", Ref: app + ":dep-2-worker", Created: 300},
+		{ID: "old", Ref: app + ":dep-1-web", Created: 100},
+	}
+	stale := imageIDs(selectStaleImages(images, app+":dep-2", map[string]struct{}{}, 0))
+	if len(stale) != 1 || stale[0] != "old" {
+		t.Fatalf("removed = %v, want only the previous release", stale)
+	}
+}
+
 func TestDockerClientPruneAppImages(t *testing.T) {
 	type image struct {
 		ID       string   `json:"Id"`

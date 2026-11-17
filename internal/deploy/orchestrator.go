@@ -54,6 +54,7 @@ type runState struct {
 	composeRaw    string
 	composeYAML   string
 	composeImages []string
+	composeBuilt  []string
 	composeCommit string
 	composeEnv    map[string]string
 	commitInfo    CommitInfo

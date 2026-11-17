@@ -68,6 +68,16 @@ private, GitHub or GitLab) and the **Docker Compose** build pack. The app clones
 the repository with its usual credentials, reads the compose file path you give
 (default `docker-compose.yml`) and routes the service you name.
 
+A repository-backed compose may build its images: a service that declares
+`build` instead of `image` is built on the node from the repository, with the
+directive's `context`, `dockerfile`, `target` and `args`. Each service gets its
+own image per release, a rollback runs the images of the release it restores,
+and the other services keep pulling the images they declare. The build context
+and the Dockerfile must stay inside the repository. `env_file` and `extends`
+still name files the node does not have, so set those values as application
+environment variables instead. A pasted document cannot build: use the git
+source when a service needs a build.
+
 Compose also appears on the **Service** tab of the add-resource picker, where
 the compose project is managed as a service instead of an application. See
 [Services and templates](/using/services-templates).
@@ -90,7 +100,8 @@ on auto-detect:
 - **Static** builds a static directory and serves it through nginx; no process
   runs.
 - **Docker Compose** deploys the compose file in the repository. Choose the file
-  path and the service that domains and ports route to.
+  path and the service that domains and ports route to. Services that declare
+  `build` are built on the node; the rest pull their image.
 
 With no pack chosen, detection tries Dockerfile, then Railpack, then
 Buildpacks, then static. A missing required host tool is reported at deploy

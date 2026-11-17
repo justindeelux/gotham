@@ -70,13 +70,19 @@ func ParseEngineKind(s string) (EngineKind, error) {
 }
 
 type BuildOptions struct {
-	RepoDir        string
-	AppID          uuid.UUID
-	DeployID       uuid.UUID
-	BuildPack      EngineKind
-	BuildArgs      map[string]string
-	Labels         map[string]string
-	Target         string
+	RepoDir   string
+	AppID     uuid.UUID
+	DeployID  uuid.UUID
+	BuildPack EngineKind
+	BuildArgs map[string]string
+	Labels    map[string]string
+	Target    string
+	// Tag overrides the standardized gotham/{app}:{deploy} image tag. A compose
+	// deploy builds one image per service and needs a distinct tag for each.
+	Tag string
+	// Dockerfile is the Dockerfile path relative to RepoDir. Empty finds
+	// Dockerfile or dockerfile at the context root.
+	Dockerfile     string
 	LogWriter      io.Writer
 	InstalledTools map[string]bool
 }

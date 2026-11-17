@@ -39,5 +39,13 @@ func guardServiceDocument(serviceID uuid.UUID, document string) error {
 	}); err != nil {
 		return fmt.Errorf("%w: %v", ErrValidation, err)
 	}
+	spec, err := Parse(document)
+	if err != nil {
+		return fmt.Errorf("%w: %v", ErrValidation, err)
+	}
+	if len(spec.Built) > 0 {
+		return fmt.Errorf("%w: service %q declares build, which a service document cannot run; push an image instead",
+			ErrValidation, spec.Built[0])
+	}
 	return nil
 }

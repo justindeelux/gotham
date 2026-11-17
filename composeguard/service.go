@@ -3,20 +3,24 @@ package composeguard
 import (
 	"fmt"
 	"net"
+	"path/filepath"
 	"strconv"
 	"strings"
 )
 
 func (v *validator) service(name string, service map[string]any, networks map[string]bool, all []string) error {
 	path := "services." + name
-	image, ok := service["image"].(string)
-	if !ok || strings.TrimSpace(image) == "" {
-		return at(path, "service declares no image")
+	image, _ := service["image"].(string)
+	_, hasBuild := service["build"]
+	if strings.TrimSpace(image) == "" && !hasBuild {
+		return at(path, "service declares no image or build")
 	}
 	for key, value := range service {
 		var err error
 		switch key {
 		case "image":
+		case "build":
+			err = checkBuild(path+"."+key, value)
 		case "command", "entrypoint":
 			err = checkStringList(path+"."+key, value)
 		case "environment":
@@ -61,6 +65,72 @@ func (v *validator) service(name string, service map[string]any, networks map[st
 		}
 	}
 	return nil
+}
+
+// checkBuild accepts the two compose forms, `build: .` and a mapping, and keeps
+// every path inside the repository the deploy clones. Other build keys are
+// rejected: the node build does not pass them on.
+func checkBuild(path string, value any) error {
+	switch directive := value.(type) {
+	case string:
+		return checkBuildPath(path, directive)
+	case map[string]any:
+		for key, entry := range directive {
+			var err error
+			switch key {
+			case "context":
+				err = checkBuildPath(path+"."+key, entry)
+			case "dockerfile":
+				err = checkBuildPath(path+"."+key, entry)
+			case "target":
+				err = checkNonEmptyString(path+"."+key, entry)
+			case "args":
+				err = checkBuildArgs(path+"."+key, entry)
+			default:
+				return at(path, "build key %q is not supported", key)
+			}
+			if err != nil {
+				return err
+			}
+		}
+		return nil
+	default:
+		return at(path, "value must be a path or a mapping")
+	}
+}
+
+func checkBuildPath(path string, value any) error {
+	text, ok := value.(string)
+	if !ok || strings.TrimSpace(text) == "" {
+		return at(path, "value must be a non-empty path")
+	}
+	cleaned := filepath.Clean(strings.TrimSpace(text))
+	if filepath.IsAbs(cleaned) || cleaned == ".." ||
+		strings.HasPrefix(cleaned, ".."+string(filepath.Separator)) {
+		return at(path, "path %q must stay inside the repository", text)
+	}
+	return nil
+}
+
+func checkBuildArgs(path string, value any) error {
+	switch entries := value.(type) {
+	case map[string]any:
+		for key, entry := range entries {
+			if err := checkScalar(path+"."+key, entry); err != nil {
+				return err
+			}
+		}
+		return nil
+	case []any:
+		for _, entry := range entries {
+			if _, ok := entry.(string); !ok {
+				return at(path, "list entries must be KEY=VALUE strings")
+			}
+		}
+		return nil
+	default:
+		return at(path, "value must be a mapping or a list of KEY=VALUE strings")
+	}
 }
 
 func checkNonEmptyString(path string, value any) error {
@@ -180,6 +250,11 @@ func checkPorts(path string, value any) error {
 }
 
 func checkShortPublished(path, entry string) error {
+	if strings.Contains(entry, "${") {
+		// A reference is rendered from the app environment and the rendered
+		// document is checked again before the node runs it.
+		return nil
+	}
 	target := entry
 	if index := strings.LastIndex(target, "/"); index >= 0 {
 		target = target[:index]
@@ -288,24 +363,75 @@ func checkLocalRefs(path string, value any, declared map[string]bool, what strin
 }
 
 func checkDependsOn(path string, value any, all []string) error {
-	entries, ok := value.([]any)
-	if !ok {
-		return at(path, "depends_on must be a list of service names")
-	}
-	for _, entry := range entries {
-		name, ok := entry.(string)
-		if !ok || !composeServiceNamePattern.MatchString(strings.TrimSpace(name)) {
-			return at(path, "depends_on entries must be service names")
-		}
-		known := false
-		for _, candidate := range all {
-			if candidate == strings.TrimSpace(name) {
-				known = true
-				break
+	switch entries := value.(type) {
+	case []any:
+		for _, entry := range entries {
+			name, ok := entry.(string)
+			if !ok {
+				return at(path, "depends_on entries must be service names")
+			}
+			if err := checkDependency(path, name, all); err != nil {
+				return err
 			}
 		}
-		if !known {
-			return at(path, "depends_on service %q is not declared", strings.TrimSpace(name))
+		return nil
+	case map[string]any:
+		for name, options := range entries {
+			if err := checkDependency(path, name, all); err != nil {
+				return err
+			}
+			if err := checkDependencyOptions(path+"."+name, options); err != nil {
+				return err
+			}
+		}
+		return nil
+	default:
+		return at(path, "depends_on must be a list of service names or a mapping of service options")
+	}
+}
+
+func checkDependency(path, name string, all []string) error {
+	if !composeServiceNamePattern.MatchString(strings.TrimSpace(name)) {
+		return at(path, "depends_on entries must be service names")
+	}
+	for _, candidate := range all {
+		if candidate == strings.TrimSpace(name) {
+			return nil
+		}
+	}
+	return at(path, "depends_on service %q is not declared", strings.TrimSpace(name))
+}
+
+// checkDependencyOptions accepts the long form, `db: {condition: ...}`, which
+// docker compose evaluates on the node. Only the documented keys are allowed.
+func checkDependencyOptions(path string, options any) error {
+	if options == nil {
+		return nil
+	}
+	mapping, ok := options.(map[string]any)
+	if !ok {
+		return at(path, "depends_on options must be a mapping")
+	}
+	for key, value := range mapping {
+		var err error
+		switch key {
+		case "condition":
+			condition, ok := value.(string)
+			if !ok {
+				return at(path+".condition", "value must be a condition string")
+			}
+			switch strings.TrimSpace(condition) {
+			case "service_started", "service_healthy", "service_completed_successfully":
+			default:
+				return at(path+".condition", "condition %q is not supported", condition)
+			}
+		case "restart", "required":
+			err = checkBool(path+"."+key, value)
+		default:
+			return at(path, "depends_on key %q is not allowed", key)
+		}
+		if err != nil {
+			return err
 		}
 	}
 	return nil

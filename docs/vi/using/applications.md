@@ -67,6 +67,15 @@ GitHub hoặc GitLab) và gói build **Docker Compose**. Ứng dụng clone kho 
 tin đăng nhập thông thường, đọc đường dẫn tệp compose bạn nhập (mặc định
 `docker-compose.yml`) và định tuyến service bạn chọn.
 
+Compose từ kho có thể build image: service khai báo `build` thay vì `image` sẽ
+được build trên node từ kho, theo `context`, `dockerfile`, `target` và `args`
+trong khối đó. Mỗi service có image riêng cho từng bản phát hành, quay lui chạy
+đúng image của bản được khôi phục, còn các service khác vẫn pull image như khai
+báo. Thư mục context và Dockerfile phải nằm trong kho. `env_file` và `extends`
+vẫn trỏ tới tệp node không có, nên hãy đặt các giá trị đó thành biến môi trường
+của ứng dụng. Tài liệu dán không build được: hãy dùng nguồn git khi service cần
+build.
+
 Compose cũng xuất hiện ở tab **Dịch vụ** của bộ chọn thêm tài nguyên, nơi dự án
 compose được quản lý như một dịch vụ thay vì một ứng dụng. Xem
 [Dịch vụ và template](/vi/using/services-templates).
@@ -88,7 +97,8 @@ hiện:
 - **Static** build một thư mục tĩnh và phục vụ nó qua nginx; không tiến trình nào
   chạy.
 - **Docker Compose** triển khai tệp compose trong kho. Chọn đường dẫn tệp và
-  service mà tên miền và cổng sẽ định tuyến tới.
+  service mà tên miền và cổng sẽ định tuyến tới. Service khai báo `build` được
+  build trên node; các service còn lại pull image.
 
 Khi không chọn gói nào, việc phát hiện thử Dockerfile, rồi Railpack, rồi
 Buildpacks, rồi static. Công cụ máy chủ bắt buộc bị thiếu sẽ được báo lúc triển

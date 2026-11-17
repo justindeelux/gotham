@@ -25,6 +25,9 @@ type BuildMeta struct {
 	Dockerfile string
 	Engine     string
 	BuildArgs  map[string]string
+	Target     string
+	// Tag overrides {deploy_id} in gotham/{app_id}:{deploy_id}.
+	Tag string
 }
 
 type BuildOutcome struct {
@@ -156,6 +159,8 @@ func (n *agentNode) sendBuild(stream grpc.BidiStreamingClient[agentv1.BuildImage
 			Dockerfile: meta.Dockerfile,
 			Engine:     meta.Engine,
 			BuildArgs:  meta.BuildArgs,
+			Target:     meta.Target,
+			Tag:        meta.Tag,
 		}},
 	})
 	if err != nil {
@@ -382,6 +387,8 @@ func (b *nodeImageBuilder) Build(ctx context.Context, contextTar []byte, opts bu
 		Dockerfile: opts.Dockerfile,
 		Engine:     string(opts.Engine),
 		BuildArgs:  opts.BuildArgs,
+		Target:     opts.Target,
+		Tag:        imageTagSuffix(opts.Tag),
 	}, contextTar, b.log)
 	if err != nil {
 		return builds.ImageBuildResult{}, err
@@ -389,6 +396,16 @@ func (b *nodeImageBuilder) Build(ctx context.Context, contextTar []byte, opts bu
 	b.outcome = outcome
 	b.built = true
 	return builds.ImageBuildResult{Digest: outcome.Digest}, nil
+}
+
+// imageTagSuffix keeps the tag part of gotham/{app}:{tag}: the agent builds
+// the reference from the app and deploy ids itself and only accepts a tag.
+func imageTagSuffix(ref string) string {
+	index := strings.LastIndex(ref, ":")
+	if index < 0 {
+		return ref
+	}
+	return ref[index+1:]
 }
 
 func (b *nodeImageBuilder) outcomeOf() (BuildOutcome, bool) {

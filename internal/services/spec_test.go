@@ -173,10 +173,6 @@ func TestParseRejections(t *testing.T) {
 			document: "services: {}\n",
 			want:     "declares no services",
 		},
-		"build context": {
-			document: "services:\n  web:\n    build: .\n",
-			want:     "uses build",
-		},
 		"env_file": {
 			document: "services:\n  web:\n    image: nginx\n    env_file: .env\n",
 			want:     "uses env_file",
@@ -191,7 +187,7 @@ func TestParseRejections(t *testing.T) {
 		},
 		"missing image": {
 			document: "services:\n  web:\n    labels:\n      gotham.domain: app.example.com\n",
-			want:     "declares no image",
+			want:     "declares no image or build",
 		},
 		"invalid service name": {
 			document: "services:\n  \"web bad\":\n    image: nginx\n",
@@ -237,6 +233,20 @@ func TestParseRejections(t *testing.T) {
 				t.Fatalf("Parse = %v, want ErrValidation containing %q", err, tc.want)
 			}
 		})
+	}
+}
+
+func TestParseBuildServices(t *testing.T) {
+	document := "services:\n  db:\n    image: postgres:16\n  web:\n    build: .\n  worker:\n    build:\n      context: ./app\n      target: worker\n"
+	spec, err := Parse(document)
+	if err != nil {
+		t.Fatalf("Parse = %v, want nil", err)
+	}
+	if strings.Join(spec.Built, ",") != "web,worker" {
+		t.Errorf("Built = %v, want web,worker", spec.Built)
+	}
+	if strings.Join(spec.Services, ",") != "db,web,worker" {
+		t.Errorf("Services = %v, want db,web,worker", spec.Services)
 	}
 }
 

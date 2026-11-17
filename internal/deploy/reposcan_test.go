@@ -139,13 +139,25 @@ func TestDetectRepositoryParsesComposeServices(t *testing.T) {
 
 func TestDetectRepositoryKeepsFreeTextForUnsupportedCompose(t *testing.T) {
 	result := detectRepository(writeScanDir(t, map[string]string{
-		"docker-compose.yml": "services:\n  web:\n    build: .\n",
+		"docker-compose.yml": "services:\n  web:\n    image: x\n    env_file: .env\n",
 	}))
 	if result.BuildPack != "docker_compose" || result.ComposeFile != "docker-compose.yml" {
 		t.Fatalf("detect = %+v, want the compose pack", result)
 	}
 	if len(result.ComposeServices) != 0 {
 		t.Fatalf("services = %v, want none for a file deploy rejects", result.ComposeServices)
+	}
+}
+
+func TestDetectRepositoryListsServicesOfABuiltCompose(t *testing.T) {
+	result := detectRepository(writeScanDir(t, map[string]string{
+		"docker-compose.yml": "services:\n  db:\n    image: postgres:16\n  web:\n    build: .\n",
+	}))
+	if result.BuildPack != "docker_compose" {
+		t.Fatalf("build pack = %q, want the compose pack", result.BuildPack)
+	}
+	if strings.Join(result.ComposeServices, ",") != "db,web" {
+		t.Fatalf("services = %v, want db,web", result.ComposeServices)
 	}
 }
 

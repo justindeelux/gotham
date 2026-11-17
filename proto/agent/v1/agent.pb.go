@@ -9696,7 +9696,15 @@ type BuildMeta struct {
 	// "dockerfile" (the default) or "static" build the context as a Dockerfile;
 	// "railpack" and "buildpacks" run that toolchain on the node, so a build
 	// engine that needs a language toolchain is not tied to the control plane.
-	Engine        string `protobuf:"bytes,5,opt,name=engine,proto3" json:"engine,omitempty"`
+	Engine string `protobuf:"bytes,5,opt,name=engine,proto3" json:"engine,omitempty"`
+	// target builds one named stage of the Dockerfile (docker build --target).
+	// Empty builds the last stage.
+	Target string `protobuf:"bytes,6,opt,name=target,proto3" json:"target,omitempty"`
+	// tag overrides {deploy_id} in the standardized local tag
+	// gotham/{app_id}:{deploy_id}. A compose deploy builds one image per service
+	// and passes "{deploy_id}-{service}" so one release's images stay distinct.
+	// Empty keeps the standardized tag.
+	Tag           string `protobuf:"bytes,7,opt,name=tag,proto3" json:"tag,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
 }
@@ -9762,6 +9770,20 @@ func (x *BuildMeta) GetBuildArgs() map[string]string {
 func (x *BuildMeta) GetEngine() string {
 	if x != nil {
 		return x.Engine
+	}
+	return ""
+}
+
+func (x *BuildMeta) GetTarget() string {
+	if x != nil {
+		return x.Target
+	}
+	return ""
+}
+
+func (x *BuildMeta) GetTag() string {
+	if x != nil {
+		return x.Tag
 	}
 	return ""
 }
@@ -13117,7 +13139,7 @@ const file_agent_v1_agent_proto_rawDesc = "" +
 	"\x11BuildImageRequest\x12)\n" +
 	"\x04meta\x18\x01 \x01(\v2\x13.agent.v1.BuildMetaH\x00R\x04meta\x12%\n" +
 	"\rcontext_chunk\x18\x02 \x01(\fH\x00R\fcontextChunkB\x06\n" +
-	"\x04part\"\xf8\x01\n" +
+	"\x04part\"\xa2\x02\n" +
 	"\tBuildMeta\x12\x15\n" +
 	"\x06app_id\x18\x01 \x01(\tR\x05appId\x12\x1b\n" +
 	"\tdeploy_id\x18\x02 \x01(\tR\bdeployId\x12\x1e\n" +
@@ -13126,7 +13148,9 @@ const file_agent_v1_agent_proto_rawDesc = "" +
 	"dockerfile\x12A\n" +
 	"\n" +
 	"build_args\x18\x04 \x03(\v2\".agent.v1.BuildMeta.BuildArgsEntryR\tbuildArgs\x12\x16\n" +
-	"\x06engine\x18\x05 \x01(\tR\x06engine\x1a<\n" +
+	"\x06engine\x18\x05 \x01(\tR\x06engine\x12\x16\n" +
+	"\x06target\x18\x06 \x01(\tR\x06target\x12\x10\n" +
+	"\x03tag\x18\a \x01(\tR\x03tag\x1a<\n" +
 	"\x0eBuildArgsEntry\x12\x10\n" +
 	"\x03key\x18\x01 \x01(\tR\x03key\x12\x14\n" +
 	"\x05value\x18\x02 \x01(\tR\x05value:\x028\x01\"\x80\x01\n" +

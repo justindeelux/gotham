@@ -95,6 +95,7 @@ func TestDockerClientBuild(t *testing.T) {
 		BuildArgs:  map[string]string{"NODE_ENV": "production"},
 		Context:    strings.NewReader("tar-bytes"),
 		Dockerfile: "deploy/Dockerfile",
+		Target:     "web",
 	}, func(data []byte) error {
 		logs.Write(data)
 		return nil
@@ -113,6 +114,9 @@ func TestDockerClientBuild(t *testing.T) {
 	}
 	if gotQuery.Get("dockerfile") != "deploy/Dockerfile" {
 		t.Errorf("dockerfile = %q", gotQuery.Get("dockerfile"))
+	}
+	if gotQuery.Get("target") != "web" {
+		t.Errorf("target = %q, want web", gotQuery.Get("target"))
 	}
 	if gotQuery.Get("rm") != "1" {
 		t.Errorf("rm = %q", gotQuery.Get("rm"))

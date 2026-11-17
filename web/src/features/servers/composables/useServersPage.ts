@@ -4,8 +4,9 @@ import { computed, onMounted, ref, watch } from "vue";
 import { useI18n } from "vue-i18n";
 import { useRoute, useRouter } from "vue-router";
 
+import { useAppVersion } from "@/app/layouts/useAppVersion";
 import { describeServerError } from "@/features/servers/api/servers";
-import type { Server } from "@/features/servers/api/servers";
+import type { AgentUpdateInfo, Server } from "@/features/servers/api/servers";
 import { useServersStore } from "@/features/servers/stores/servers";
 import {
   matchesFilter,
@@ -22,6 +23,7 @@ export function useServersPage() {
   const serversStore = useServersStore();
   const message = useMessage();
   const { t } = useI18n();
+  const { versionTag: controlPlaneVersion } = useAppVersion();
 
   const wizardOpen = ref(false);
   const editOpen = ref(false);
@@ -39,13 +41,16 @@ export function useServersPage() {
     () => serversStore.servers.filter((server) => server.status === "offline").length,
   );
   const updateCount = computed<number>(
-    () => serversStore.servers.filter((server) => needsAgentUpdate(server)).length,
+    () =>
+      serversStore.servers.filter((server) =>
+        needsAgentUpdate(server, serversStore.agentLatestVersion),
+      ).length,
   );
 
   const filteredServers = computed<Server[]>(() =>
     serversStore.servers.filter(
       (server) =>
-        matchesFilter(server, activeFilter.value) &&
+        matchesFilter(server, activeFilter.value, serversStore.agentLatestVersion) &&
         matchesSearch(server, searchQuery.value),
     ),
   );
@@ -150,6 +155,22 @@ export function useServersPage() {
     }
   }
 
+  function agentUpdateFor(server: Server): AgentUpdateInfo | undefined {
+    return server.node_id ? serversStore.agentUpdates[server.node_id] : undefined;
+  }
+
+  async function handleUpdateAgent(server: Server): Promise<void> {
+    if (!server.node_id) {
+      return;
+    }
+    try {
+      await serversStore.updateAgentVersion(server.node_id);
+      message.success(t("servers.toasts.agentUpdateQueued", { name: server.name }));
+    } catch (error) {
+      message.error(describeServerError(error));
+    }
+  }
+
   onMounted(() => {
     void serversStore.fetchServers().catch(() => {
     });
@@ -184,8 +205,11 @@ export function useServersPage() {
     pageCount,
     currentPage,
     pagedServers,
+    controlPlaneVersion,
+    agentUpdateFor,
     handleValidate,
     handleCheckAll,
+    handleUpdateAgent,
     openNode,
     openContainers,
     openEdit,

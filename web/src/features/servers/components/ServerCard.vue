@@ -5,12 +5,15 @@ import { useI18n } from "vue-i18n";
 import { RouterLink } from "vue-router";
 
 import { useAuthStore } from "@/features/auth";
-import type { Server } from "@/features/servers/api/servers";
+import type { AgentUpdateInfo, Server } from "@/features/servers/api/servers";
 import ServerStatusTag from "@/features/servers/components/ServerStatusTag.vue";
 import {
+  agentUpdateInFlight,
+  agentVersionMismatch,
   containerLabel,
   initials,
   keyLabel,
+  needsAgentUpdate,
   nodeMeta,
 } from "@/features/servers/utils/serverListView";
 import { formatBytes, relativeTime, toPercent, usageLevel, usageView } from "@/shared/utils/format";
@@ -18,6 +21,9 @@ import { formatBytes, relativeTime, toPercent, usageLevel, usageView } from "@/s
 interface Props {
   server: Server;
   validating: boolean;
+  agentUpdate?: AgentUpdateInfo;
+  agentTargetVersion?: string | null;
+  controlPlaneVersion?: string | null;
 }
 
 const props = defineProps<Props>();
@@ -27,11 +33,38 @@ const emit = defineEmits<{
   validate: [];
   containers: [];
   delete: [];
+  "update-agent": [];
 }>();
 
-const { locale } = useI18n();
+const { locale, t } = useI18n();
 const authStore = useAuthStore();
 const diskHigh = computed(() => usageLevel(toPercent(props.server.disk_usage)) !== "ok");
+const canUpdate = computed<boolean>(() =>
+  needsAgentUpdate(props.server, props.agentTargetVersion),
+);
+const versionMismatch = computed<boolean>(() =>
+  agentVersionMismatch(props.server, props.controlPlaneVersion),
+);
+const updateRunning = computed<boolean>(() => agentUpdateInFlight(props.agentUpdate?.state));
+const agentStatus = computed<string>(() => {
+  if (updateRunning.value) {
+    return t("servers.card.updatingAgent");
+  }
+  switch (props.agentUpdate?.state) {
+    case "failed":
+      return t("servers.card.agentUpdateFailed");
+    case "up_to_date":
+      return t("servers.card.agentUpToDate");
+    case "pending":
+      return canUpdate.value ? t("servers.card.agentUpdatePending") : "";
+    default:
+      return canUpdate.value
+        ? t("servers.card.agentUpdateNeeded")
+        : versionMismatch.value
+          ? t("servers.card.agentVersionMismatch")
+          : "";
+  }
+});
 </script>
 
 <template>
@@ -54,8 +87,30 @@ const diskHigh = computed(() => usageLevel(toPercent(props.server.disk_usage)) !
         {{ formatBytes(server.total_disk) }} disk
       </dd>
       <dt>{{ $t("servers.card.agent") }}</dt>
-      <dd class="mono">
-        {{ server.node_id ?? "—" }} · {{ relativeTime(server.last_seen) }}
+      <dd>
+        <div class="agent-line">
+          <span class="mono">{{ server.agent_version ?? $t("servers.list.unknownAgent") }}</span>
+          <span v-if="controlPlaneVersion" class="muted small">
+            · {{ $t("servers.card.controlPlaneVersion", { version: controlPlaneVersion }) }}
+          </span>
+        </div>
+        <div class="agent-line muted small">
+          {{ server.node_id ?? "—" }} · {{ relativeTime(server.last_seen) }}
+        </div>
+        <div v-if="agentStatus" class="agent-state">
+          <span
+            class="tag"
+            :class="{
+              'tag-warn': canUpdate || versionMismatch || agentUpdate?.state === 'failed',
+              'tag-ok': agentUpdate?.state === 'up_to_date',
+            }"
+          >
+            {{ agentStatus }}
+          </span>
+          <span v-if="agentUpdate?.state === 'failed' && agentUpdate.detail" class="agent-detail">
+            {{ agentUpdate.detail }}
+          </span>
+        </div>
       </dd>
       <dt>{{ $t("servers.card.ssh") }}</dt>
       <dd>
@@ -117,6 +172,17 @@ const diskHigh = computed(() => usageLevel(toPercent(props.server.disk_usage)) !
 
     <div class="node-foot">
       <span class="tag">{{ containerLabel(server, locale) }}</span>
+      <NButton
+        v-if="canUpdate"
+        size="small"
+        type="primary"
+        secondary
+        :loading="updateRunning"
+        :disabled="updateRunning"
+        @click="emit('update-agent')"
+      >
+        {{ $t("servers.card.updateAgent") }}
+      </NButton>
       <NButton size="small" style="margin-left: auto" @click="emit('open')">
         {{ $t("servers.card.openNode") }}
       </NButton>
@@ -218,6 +284,28 @@ const diskHigh = computed(() => usageLevel(toPercent(props.server.disk_usage)) !
   color: var(--muted);
 }
 
+.agent-line {
+  display: flex;
+  align-items: baseline;
+  gap: var(--space-1);
+  flex-wrap: wrap;
+}
+
+.agent-state {
+  display: flex;
+  align-items: baseline;
+  gap: var(--space-2);
+  flex-wrap: wrap;
+  margin-top: var(--space-1);
+}
+
+.agent-detail {
+  min-width: 0;
+  overflow-wrap: anywhere;
+  font-size: var(--text-xs);
+  color: var(--muted);
+}
+
 .kv dd {
   margin: 0;
   font-size: var(--text-sm);
@@ -248,6 +336,18 @@ const diskHigh = computed(() => usageLevel(toPercent(props.server.disk_usage)) !
   background: var(--surface);
   border: 1px solid var(--border);
   color: var(--muted);
+}
+
+.tag-warn {
+  background: var(--warn-soft);
+  border-color: transparent;
+  color: var(--warn-ink);
+}
+
+.tag-ok {
+  background: var(--success-soft);
+  border-color: transparent;
+  color: var(--success-ink);
 }
 
 .stat-label {

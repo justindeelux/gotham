@@ -52,6 +52,10 @@ type Updater struct {
 
 	backoffMu sync.Mutex
 	backoff   map[string]*backoffState
+
+	// reportFloor suppresses the pre-retry wrapper outcome after an operator
+	// retry, so the control plane does not show the old failure again.
+	reportFloor time.Time
 }
 
 type backoffState struct {
@@ -122,12 +126,19 @@ func (u *Updater) Run(ctx context.Context, client agentv1.UpdateServiceClient) {
 func (u *Updater) checkOnce(ctx context.Context, client agentv1.UpdateServiceClient) {
 	u.consumeRetry()
 
-	rpcCtx, cancel := context.WithTimeout(ctx, updateRPCTimeout)
-	resp, err := client.RequestUpdate(rpcCtx, &agentv1.UpdateRequest{
+	request := &agentv1.UpdateRequest{
 		AgentVersion: u.version(),
 		Os:           runtime.GOOS,
 		Arch:         runtime.GOARCH,
-	})
+	}
+	if status := u.lastStatus(); status != nil {
+		request.UpdateResult = status.Result
+		request.UpdateDetail = status.Detail
+		request.UpdateVersion = status.Version
+	}
+
+	rpcCtx, cancel := context.WithTimeout(ctx, updateRPCTimeout)
+	resp, err := client.RequestUpdate(rpcCtx, request)
 	cancel()
 	if err != nil {
 		if ctx.Err() == nil {
@@ -137,6 +148,9 @@ func (u *Updater) checkOnce(ctx context.Context, client agentv1.UpdateServiceCli
 	}
 	if !resp.GetUpdateAvailable() {
 		return
+	}
+	if resp.GetRetry() {
+		u.resetFailedState()
 	}
 	if !u.cfg.AutoUpdate && !resp.GetRollout() {
 		u.log.Debug("agent: update available; unattended auto-update is off",
@@ -189,6 +203,47 @@ func (u *Updater) statusHealthy(version string) bool {
 		return false
 	}
 	return time.Since(status.At) <= statusFreshness
+}
+
+// lastStatus reports the wrapper's durable outcome to the control plane so a
+// failed rollout is visible with its reason. The status file is root-owned and
+// read-only for the agent; a missing or unreadable file is simply no evidence.
+// A status at or below reportFloor is the attempt an operator already retried
+// and is not reported again.
+func (u *Updater) lastStatus() *updatecore.Status {
+	status := u.rawStatus()
+	if status == nil {
+		return nil
+	}
+	if !status.At.IsZero() && !status.At.After(u.reportFloor) {
+		return nil
+	}
+	return status
+}
+
+func (u *Updater) rawStatus() *updatecore.Status {
+	status, err := u.applier.Status.Read()
+	if err != nil || status == nil {
+		return nil
+	}
+	return status
+}
+
+// resetFailedState honours a control-plane retry (the "Update agent" button):
+// it clears the local backoff and pending marker exactly like
+// `gotham-agent update reset`, so the same version is attempted again. The
+// root-owned status file is left for the next successful update to overwrite;
+// the control plane ignores a report older than its rollout.
+func (u *Updater) resetFailedState() {
+	if status := u.rawStatus(); status != nil && !status.At.IsZero() {
+		u.reportFloor = status.At
+	}
+	u.backoffMu.Lock()
+	u.backoff = map[string]*backoffState{}
+	u.backoffMu.Unlock()
+	u.clearBackoffCount()
+	_ = updatecore.NewStatusStore(u.cfg.PendingPath).Remove()
+	u.log.Info("agent: retry requested by the control plane; cleared the failed-update state")
 }
 
 func (u *Updater) inBackoff(version string) bool {

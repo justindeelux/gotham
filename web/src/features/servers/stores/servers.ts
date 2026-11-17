@@ -6,17 +6,22 @@ import {
   deleteServer,
   failureText,
   installServerKey,
+  listAgentUpdates,
   listServers,
+  updateAgent,
   updateServer,
   validateServer,
 } from "@/features/servers/api/servers";
-import type { CreateServerInput, Server, UpdateServerInput, ValidateOptions, ValidateOutcome } from "@/features/servers/api/servers";
+import type { AgentUpdateInfo, AgentUpdateQueued, CreateServerInput, Server, UpdateServerInput, ValidateOptions, ValidateOutcome } from "@/features/servers/api/servers";
 import { createServerListSync } from "./serverListSync";
 
 const pollIntervalMs = 5_000;
 
 export const useServersStore = defineStore("servers", () => {
   const servers = ref<Server[]>([]);
+  const agentUpdates = ref<Record<string, AgentUpdateInfo>>({});
+  const agentLatestVersion = ref<string | null>(null);
+  const agentRolloutVersion = ref<string | null>(null);
   const loading = ref(false);
   const failure = ref<unknown>(null);
   const error = computed<string | null>(() =>
@@ -49,6 +54,17 @@ export const useServersStore = defineStore("servers", () => {
     return list;
   }
 
+  async function loadAgentUpdates(): Promise<void> {
+    const data = await listAgentUpdates();
+    const next: Record<string, AgentUpdateInfo> = {};
+    for (const agent of data.agents) {
+      next[agent.node_id] = agent;
+    }
+    agentUpdates.value = next;
+    agentLatestVersion.value = data.latest_version || null;
+    agentRolloutVersion.value = data.rollout_version || null;
+  }
+
   async function fetchServers(): Promise<void> {
     loading.value = true;
     failure.value = null;
@@ -60,6 +76,7 @@ export const useServersStore = defineStore("servers", () => {
     } finally {
       loading.value = false;
     }
+    await loadAgentUpdates().catch(() => undefined);
   }
 
   async function refreshServers(): Promise<void> {
@@ -68,6 +85,13 @@ export const useServersStore = defineStore("servers", () => {
     } catch (err) {
       failure.value = err;
     }
+    await loadAgentUpdates().catch(() => undefined);
+  }
+
+  async function updateAgentVersion(nodeID: string): Promise<AgentUpdateQueued> {
+    const queued = await updateAgent(nodeID);
+    await loadAgentUpdates().catch(() => undefined);
+    return queued;
   }
 
   function clearPollTimer(): void {
@@ -146,6 +170,9 @@ export const useServersStore = defineStore("servers", () => {
 
   return {
     servers,
+    agentUpdates,
+    agentLatestVersion,
+    agentRolloutVersion,
     loading,
     error,
     fetchServers,
@@ -156,6 +183,7 @@ export const useServersStore = defineStore("servers", () => {
     removeServer,
     validate,
     installKey,
+    updateAgentVersion,
     updateServer: updateServerById,
   };
 });

@@ -104,9 +104,11 @@ open the host sections.
 
 A node whose agent is old or unreachable, or whose host lacks the systemd
 network and time stack, shows the sections read-only with a plain-language
-reason instead of failing a save. Remote nodes need a current agent: re-run the
-agent installer to add host settings support. See
-[General and node host settings](/operating/instance-network) for the
+reason instead of failing a save. Remote nodes need a current agent: update it
+from **Servers**, or let the control-plane rollout carry it, so the self-update
+refreshes the host helper too. A node installed before this release needs one
+agent-installer re-run first, because its old wrapper never installs the new
+one. See [General and node host settings](/operating/instance-network) for the
 capability states and the keep/revert countdown.
 
 ## Node overview

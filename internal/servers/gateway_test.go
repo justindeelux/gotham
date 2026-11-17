@@ -556,6 +556,30 @@ func TestGatewayRequestUpdate(t *testing.T) {
 			t.Errorf("rollout = false during an active rollout")
 		}
 	})
+
+	t.Run("control-plane release is rolled out without an operator", func(t *testing.T) {
+		updater := &fakeAgentUpdater{release: release}
+		service := NewService(Config{Secret: "gateway-test-secret", Version: "1.2.0", Logger: discardLogger(), Updater: updater})
+		service.RecordAgentVersion("node-update", "v1.0.0")
+		conn := startTestGateway(t, service)
+		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+		defer cancel()
+		ctx = metadata.AppendToOutgoingContext(ctx, nodeIDMetadataKey, "node-update")
+
+		resp, err := agentv1.NewUpdateServiceClient(conn).RequestUpdate(ctx, &agentv1.UpdateRequest{AgentVersion: "v1.0.0", Arch: "amd64"})
+		if err != nil {
+			t.Fatalf("RequestUpdate: %v", err)
+		}
+		if !resp.GetRollout() {
+			t.Error("rollout = false when the offer is the control plane's own release")
+		}
+		if resp.GetRetry() {
+			t.Error("retry = true on an automatic rollout")
+		}
+		if state, _ := service.AgentUpdateStatus("node-update", "v1.2.0"); state != AgentUpdateUpdating {
+			t.Errorf("state = %q, want updating after the offer", state)
+		}
+	})
 }
 
 func startAuthorityGateway(t *testing.T, service *ServerService, authority *Authority) string {

@@ -121,10 +121,12 @@ nhưng chỉ cài Railpack là chưa đủ — nó còn cần BuildKit và Docke
 
 - **Không kết nối được agent trên node** — chưa có gì được xếp hàng. Hãy kiểm tra
   node đang trực tuyến.
-- **Thiếu helper máy chủ hoặc helper từ chối lệnh** — một node chỉ được cập nhật
-  qua tính năng tự cập nhật của agent có thể còn bản cài cũ trên máy chủ. Hãy chạy
-  lại trình cài đặt node, vốn có tính lũy đẳng, rồi thử lại; xem
-  [Thêm node](/vi/guide/nodes).
+- **Thiếu helper máy chủ hoặc helper từ chối lệnh** — hãy cập nhật agent của nút
+  từ **Servers**. Tự cập nhật thay helper máy chủ và các quy tắc sudoers của nó từ
+  bản phát hành đã ký. Node được cài trước bản phát hành này vẫn chạy wrapper đặc
+  quyền cũ, và wrapper đó không bao giờ cài bản mới, nên hãy chạy lại trình cài
+  đặt node một lần (lũy đẳng) trước khi thử lại; sau đó tự cập nhật giữ bản cài
+  hiện hành. Xem [Thêm node](/vi/guide/nodes).
 - **Công cụ đang được dùng** — lệnh gỡ bỏ bị từ chối khi đang có bản build chạy,
   hoặc khi một công cụ đã cài khác phụ thuộc vào nó. Hãy gỡ công cụ phụ thuộc
   trước (Railpack trước BuildKit).

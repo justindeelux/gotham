@@ -115,11 +115,15 @@ func rolledBackRestart(statusPath, version string) updatecore.RestartFunc {
 }
 
 type fakeUpdateClient struct {
-	resp *agentv1.UpdateResponse
-	err  error
+	resp     *agentv1.UpdateResponse
+	err      error
+	last     *agentv1.UpdateRequest
+	requests int
 }
 
-func (f *fakeUpdateClient) RequestUpdate(context.Context, *agentv1.UpdateRequest, ...grpc.CallOption) (*agentv1.UpdateResponse, error) {
+func (f *fakeUpdateClient) RequestUpdate(_ context.Context, req *agentv1.UpdateRequest, _ ...grpc.CallOption) (*agentv1.UpdateResponse, error) {
+	f.last = req
+	f.requests++
 	return f.resp, f.err
 }
 
@@ -316,6 +320,48 @@ func TestAgentUpdaterRejectsDigestMismatch(t *testing.T) {
 
 	if got := readFileString(t, target); got != "old binary" {
 		t.Fatalf("target = %q, want it unchanged after a digest mismatch", got)
+	}
+}
+
+func TestAgentUpdaterReportsStatusAndRetriesOnDemand(t *testing.T) {
+	release := newAgentReleaseServer(t, false)
+	setTestPublicKey(t, release.public)
+
+	target := filepath.Join(t.TempDir(), "gotham-agent")
+	if err := os.WriteFile(target, []byte("old binary"), 0o755); err != nil {
+		t.Fatalf("write target: %v", err)
+	}
+	statusPath := filepath.Join(filepath.Dir(target), "update.status")
+	if err := updatecore.NewStatusStore(statusPath).Write(updatecore.Status{
+		Result: updatecore.StatusRolledBack, Version: testAgentVersion, Detail: "health check failed",
+	}); err != nil {
+		t.Fatalf("write status: %v", err)
+	}
+	runner := newTestUpdater(t, updaterTestConfig(t, target, healthyRestart(statusPath, testAgentVersion)))
+	runner.recordFailure(testAgentVersion)
+	if !runner.inBackoff(testAgentVersion) {
+		t.Fatal("the backoff was not armed before the retry")
+	}
+
+	offer := release.offer()
+	offer.Retry = true
+	client := &fakeUpdateClient{resp: offer}
+	runner.checkOnce(context.Background(), client)
+
+	if got := client.last.GetUpdateResult(); got != updatecore.StatusRolledBack {
+		t.Fatalf("reported update_result = %q, want the wrapper's rolled_back", got)
+	}
+	if got := client.last.GetUpdateDetail(); got != "health check failed" {
+		t.Fatalf("reported update_detail = %q", got)
+	}
+	if got := client.last.GetUpdateVersion(); got != testAgentVersion {
+		t.Fatalf("reported update_version = %q, want %q", got, testAgentVersion)
+	}
+	if runner.inBackoff(testAgentVersion) {
+		t.Fatal("the control-plane retry did not clear the failed-update backoff")
+	}
+	if got := readFileString(t, target); got == "old binary" {
+		t.Fatal("the agent did not apply the release after a retry")
 	}
 }
 

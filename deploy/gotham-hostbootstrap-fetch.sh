@@ -18,10 +18,12 @@
 # https://github.com/o/r/releases/download); <version> the candidate release tag
 # (v...), a locator only; <arch> amd64|arm64; <key> the root-owned PEM Ed25519
 # release public key; <dest-dir> an existing root-owned mode-0700 directory;
-# <staged-binary> the binary the wrapper is about to restart. On success the
-# extracted payload directory is printed on stdout and the signed manifest
-# version is written to <dest-dir>/version; on failure the reason goes to stderr,
-# the exit status is nonzero and the caller applies nothing.
+# <staged-binary> the binary the wrapper is about to restart. The manifest family
+# follows the staged binary: gotham-agent uses gotham-agent-manifest-<arch>.txt,
+# the control plane uses gotham-manifest-<arch>.txt. On success the extracted
+# payload directory is printed on stdout and the signed manifest version is
+# written to <dest-dir>/version; on failure the reason goes to stderr, the exit
+# status is nonzero and the caller applies nothing.
 #
 # Anti-rollback: the candidate <version> only locates the release. The version
 # that matters is read from the signature-verified manifest, and it must equal
@@ -99,7 +101,11 @@ sha256_file() {
     fi
 }
 
-manifest="gotham-manifest-${arch}.txt"
+manifest_prefix="gotham-manifest"
+case "$(basename "${staged_binary}")" in
+    gotham-agent) manifest_prefix="gotham-agent-manifest" ;;
+esac
+manifest="${manifest_prefix}-${arch}.txt"
 signature="${manifest}.sig"
 base_url="${release_base}/${version}"
 

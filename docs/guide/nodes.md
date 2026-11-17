@@ -298,11 +298,13 @@ Behaviour:
   clear "already running" refusal instead of overlapping it; a graceful cancel
   (`SIGTERM`) may defer the helper's stop trap until the foreground
   `systemd-run` returns, so it does not guarantee an immediate stop.
-- **Upgrading a node.** The helper and its sudoers rule are installed by
-  `install-agent.sh`, not by the self-update binary swap: a node that updated
-  only through `gotham-agent` self-update keeps the old install and its tool
-  install/uninstall calls fail with sudo's "not allowed". Re-run
-  `deploy/install-agent.sh` on the node (idempotent) to install them.
+- **Upgrading a node.** A self-update replaces the binary and, from the same
+  signed release, the host helper, its sudoers rules and the systemd unit.
+  A node installed before this release needs one `deploy/install-agent.sh`
+  re-run first: its installed wrapper predates the refresh and self-update alone
+  never replaces it, so the helper, unit and sudoers stay old until then. After
+  that run, self-update keeps them current. Re-run only to change install-time
+  choices such as the file manager or CA, or to repair a broken install.
 - **Uninstall refuses while a tool is in use** (`FAILED_PRECONDITION`): while a
   build runs, and while another installed tool depends on it (for example
   BuildKit cannot go while Railpack is installed). Only in-flight *builds* are

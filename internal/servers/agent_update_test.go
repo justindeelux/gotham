@@ -1,10 +1,13 @@
 package servers
 
 import (
+	"context"
 	"fmt"
 	"strings"
 	"testing"
 	"time"
+
+	"github.com/justindeelux/gotham/updatecore"
 )
 
 func TestAgentVersionMapBounds(t *testing.T) {
@@ -63,5 +66,174 @@ func TestRolloutForces(t *testing.T) {
 		if got := rolloutForces(tc.target, tc.offered); got != tc.want {
 			t.Errorf("rolloutForces(%q, %q) = %v, want %v", tc.target, tc.offered, got, tc.want)
 		}
+	}
+}
+
+func TestAgentUpdateAutoRolloutFollowsControlPlaneVersion(t *testing.T) {
+	release := &updatecore.Release{Version: "v1.2.0"}
+
+	current := NewService(Config{Secret: "test-secret", Version: "1.2.0", Logger: discardLogger(), Updater: &fakeAgentUpdater{release: release}})
+	_, rollout, retry, err := current.OfferAgentUpdate(context.Background(), "node-a", "v1.0.0", "linux", "amd64")
+	if err != nil {
+		t.Fatalf("OfferAgentUpdate: %v", err)
+	}
+	if !rollout {
+		t.Fatal("rollout = false for the release the control plane runs; want an automatic rollout")
+	}
+	if retry {
+		t.Fatal("retry = true on an automatic rollout; only a manual update retries")
+	}
+
+	behind := NewService(Config{Secret: "test-secret", Version: "1.1.0", Logger: discardLogger(), Updater: &fakeAgentUpdater{release: release}})
+	_, rollout, _, err = behind.OfferAgentUpdate(context.Background(), "node-a", "v1.0.0", "linux", "amd64")
+	if err != nil {
+		t.Fatalf("OfferAgentUpdate: %v", err)
+	}
+	if rollout {
+		t.Fatal("rollout = true before the control plane runs that release; want a plain offer")
+	}
+
+	dev := NewService(Config{Secret: "test-secret", Version: "dev", Logger: discardLogger(), Updater: &fakeAgentUpdater{release: release}})
+	_, rollout, _, err = dev.OfferAgentUpdate(context.Background(), "node-a", "v1.0.0", "linux", "amd64")
+	if err != nil {
+		t.Fatalf("OfferAgentUpdate: %v", err)
+	}
+	if rollout {
+		t.Fatal("rollout = true on a dev build; want a plain offer")
+	}
+}
+
+func TestAgentUpdateStatusAndManualRetry(t *testing.T) {
+	release := &updatecore.Release{Version: "v1.2.0"}
+	service := NewService(Config{Secret: "test-secret", Version: "dev", Logger: discardLogger(), Updater: &fakeAgentUpdater{release: release}})
+	service.RecordAgentVersion("node-a", "v1.0.0")
+
+	if state, _ := service.AgentUpdateStatus("node-a", "v1.2.0"); state != AgentUpdatePending {
+		t.Fatalf("state before an offer = %q, want pending", state)
+	}
+
+	_, rollout, _, err := service.OfferAgentUpdate(context.Background(), "node-a", "v1.0.0", "linux", "amd64")
+	if err != nil {
+		t.Fatalf("OfferAgentUpdate: %v", err)
+	}
+	if rollout {
+		t.Fatal("rollout = true without a manual trigger on a dev build")
+	}
+	// A plain offer is not a rollout, so the node stays pending.
+	if state, _ := service.AgentUpdateStatus("node-a", "v1.2.0"); state != AgentUpdatePending {
+		t.Fatalf("state after a plain offer = %q, want pending", state)
+	}
+
+	service.StartAgentRolloutFor("node-a", "v1.2.0")
+	if state, _ := service.AgentUpdateStatus("node-a", "v1.2.0"); state != AgentUpdatePending {
+		t.Fatalf("state after the manual update = %q, want pending", state)
+	}
+	_, rollout, retry, err := service.OfferAgentUpdate(context.Background(), "node-a", "v1.0.0", "linux", "amd64")
+	if err != nil {
+		t.Fatalf("OfferAgentUpdate: %v", err)
+	}
+	if !rollout || !retry {
+		t.Fatalf("manual rollout = %v retry = %v, want both true", rollout, retry)
+	}
+	if state, _ := service.AgentUpdateStatus("node-a", "v1.2.0"); state != AgentUpdateUpdating {
+		t.Fatalf("state after the offer = %q, want updating", state)
+	}
+	// The retry is one-shot: a second poll keeps the rollout but does not clear
+	// the agent's backoff again.
+	_, _, retry, err = service.OfferAgentUpdate(context.Background(), "node-a", "v1.0.0", "linux", "amd64")
+	if err != nil {
+		t.Fatalf("OfferAgentUpdate: %v", err)
+	}
+	if retry {
+		t.Fatal("retry = true on a second poll; want a one-shot retry")
+	}
+
+	service.RecordAgentUpdateReport("node-a", updatecore.StatusRolledBack, "health check failed", "v1.2.0")
+	state, detail := service.AgentUpdateStatus("node-a", "v1.2.0")
+	if state != AgentUpdateFailed || detail != "health check failed" {
+		t.Fatalf("state = %q detail = %q, want failed with the wrapper reason", state, detail)
+	}
+
+	service.StartAgentRolloutFor("node-a", "v1.2.0")
+	if state, detail := service.AgentUpdateStatus("node-a", "v1.2.0"); state != AgentUpdatePending || detail != "" {
+		t.Fatalf("state after retry = %q detail = %q, want pending with no old failure", state, detail)
+	}
+
+	service.RecordAgentVersion("node-a", "v1.2.0")
+	if state, _ := service.AgentUpdateStatus("node-a", "v1.2.0"); state != AgentUpdateUpToDate {
+		t.Fatalf("state after reaching the target = %q, want up_to_date", state)
+	}
+}
+
+func TestAgentUpdateStaleOfferBecomesFailedAndRetryRestartsIt(t *testing.T) {
+	release := &updatecore.Release{Version: "v1.2.0"}
+	service := NewService(Config{Secret: "test-secret", Version: "dev", Logger: discardLogger(), Updater: &fakeAgentUpdater{release: release}})
+	service.RecordAgentVersion("node-a", "v1.0.0")
+	service.StartAgentRolloutFor("node-a", "v1.2.0")
+	if _, _, _, err := service.OfferAgentUpdate(context.Background(), "node-a", "v1.0.0", "linux", "amd64"); err != nil {
+		t.Fatalf("OfferAgentUpdate: %v", err)
+	}
+	if state, _ := service.AgentUpdateStatus("node-a", "v1.2.0"); state != AgentUpdateUpdating {
+		t.Fatalf("state after the first offer = %q, want updating", state)
+	}
+
+	// A repeated poll keeps the first offer time instead of refreshing it.
+	first := service.agentUpdate.offers["node-a"]
+	if _, _, _, err := service.OfferAgentUpdate(context.Background(), "node-a", "v1.0.0", "linux", "amd64"); err != nil {
+		t.Fatalf("OfferAgentUpdate: %v", err)
+	}
+	if got := service.agentUpdate.offers["node-a"]; !got.at.Equal(first.at) {
+		t.Fatalf("second poll moved the offer time from %v to %v", first.at, got.at)
+	}
+
+	service.agentUpdate.mu.Lock()
+	service.agentUpdate.offers["node-a"] = agentOffer{version: "v1.2.0", at: time.Now().Add(-agentOfferStaleAfter - time.Minute)}
+	service.agentUpdate.mu.Unlock()
+	state, detail := service.AgentUpdateStatus("node-a", "v1.2.0")
+	if state != AgentUpdateFailed || detail != "agent did not apply the offer" {
+		t.Fatalf("state = %q detail = %q, want the stale-offer failure", state, detail)
+	}
+
+	// The manual retry re-enables the action and starts a fresh timer.
+	service.StartAgentRolloutFor("node-a", "v1.2.0")
+	if state, _ := service.AgentUpdateStatus("node-a", "v1.2.0"); state != AgentUpdatePending {
+		t.Fatalf("state after the retry = %q, want pending", state)
+	}
+	if _, _, retry, err := service.OfferAgentUpdate(context.Background(), "node-a", "v1.0.0", "linux", "amd64"); err != nil {
+		t.Fatalf("OfferAgentUpdate: %v", err)
+	} else if !retry {
+		t.Fatal("retry = false on the manual update poll")
+	}
+	if state, _ := service.AgentUpdateStatus("node-a", "v1.2.0"); state != AgentUpdateUpdating {
+		t.Fatalf("state after the retry offer = %q, want updating", state)
+	}
+	if offer := service.agentUpdate.offers["node-a"]; time.Since(offer.at) > time.Minute {
+		t.Fatalf("offer time was not refreshed by the retry: %v", offer.at)
+	}
+}
+
+func TestAgentUpdateRetryDropsTheFailureReportedInTheSamePoll(t *testing.T) {
+	release := &updatecore.Release{Version: "v1.2.0"}
+	service := NewService(Config{Secret: "test-secret", Version: "dev", Logger: discardLogger(), Updater: &fakeAgentUpdater{release: release}})
+	service.RecordAgentVersion("node-a", "v1.0.0")
+	service.StartAgentRolloutFor("node-a", "v1.2.0")
+
+	// The agent reports its previous failure before it reads the retry flag.
+	service.RecordAgentUpdateReport("node-a", updatecore.StatusRolledBack, "old failure", "v1.2.0")
+	_, _, retry, err := service.OfferAgentUpdate(context.Background(), "node-a", "v1.0.0", "linux", "amd64")
+	if err != nil {
+		t.Fatalf("OfferAgentUpdate: %v", err)
+	}
+	if !retry {
+		t.Fatal("retry = false on the first manual update poll")
+	}
+	if state, detail := service.AgentUpdateStatus("node-a", "v1.2.0"); state != AgentUpdateUpdating || detail != "" {
+		t.Fatalf("state = %q detail = %q, want updating without the retried failure", state, detail)
+	}
+
+	// A new attempt's failure is reported normally.
+	service.RecordAgentUpdateReport("node-a", updatecore.StatusRolledBack, "new failure", "v1.2.0")
+	if state, detail := service.AgentUpdateStatus("node-a", "v1.2.0"); state != AgentUpdateFailed || detail != "new failure" {
+		t.Fatalf("state = %q detail = %q, want the new failure", state, detail)
 	}
 }

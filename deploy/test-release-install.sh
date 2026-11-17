@@ -350,7 +350,7 @@ grep -q 'chmod 0755 "${ENV_DIR}"' "${AGENT_INSTALLER}" \
 
 # B2 static guard: the sudoers installers create /etc/sudoers.d and validate the
 # drop-in with visudo, and the installers check for sudo/visudo up front.
-for installer in "${SCRIPT_DIR}/install-sudoers.sh" "${SCRIPT_DIR}/install-agent-sudoers.sh"; do
+for installer in "${SCRIPT_DIR}/install-sudoers.sh"; do
     grep -q 'install -d -m 0750 /etc/sudoers.d' "${installer}" \
         || { echo "FAIL: ${installer} does not create /etc/sudoers.d" >&2; exit 1; }
     grep -q 'mktemp /etc/sudoers.d' "${installer}" \
@@ -360,6 +360,17 @@ for installer in "${SCRIPT_DIR}/install-sudoers.sh" "${SCRIPT_DIR}/install-agent
     grep -q '^visudo -cf' "${installer}" \
         || { echo "FAIL: ${installer} does not validate the drop-in with visudo" >&2; exit 1; }
 done
+# The agent installer honours the hostbootstrap fake-root seam; in production
+# SUDOERS_DIR is /etc/sudoers.d.
+installer="${SCRIPT_DIR}/install-agent-sudoers.sh"
+grep -q 'install -d -m 0750 "${SUDOERS_DIR}"' "${installer}" \
+    || { echo "FAIL: ${installer} does not create /etc/sudoers.d" >&2; exit 1; }
+grep -q 'mktemp "${SUDOERS_DIR}' "${installer}" \
+    || { echo "FAIL: ${installer} does not validate a temp copy first" >&2; exit 1; }
+grep -q 'mv -f "${SUDOERS_TMP}" "${SUDOERS_FILE}"' "${installer}" \
+    || { echo "FAIL: ${installer} does not move the validated drop-in into place" >&2; exit 1; }
+grep -q '^visudo -cf' "${installer}" \
+    || { echo "FAIL: ${installer} does not validate the drop-in with visudo" >&2; exit 1; }
 for installer in "${INSTALL_SH}" "${AGENT_INSTALLER}"; do
     grep -q 'require_cmd visudo' "${installer}" \
         || { echo "FAIL: ${installer} does not require visudo" >&2; exit 1; }

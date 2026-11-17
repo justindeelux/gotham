@@ -72,6 +72,7 @@ fi
 PAYLOAD_DIR="${ROOT}/usr/libexec/gotham/hostbootstrap"
 HELPER_DIR="${ROOT}/usr/libexec/gotham"
 SUDOERS_DIR="${ROOT}/etc/sudoers.d"
+SYSTEMD_DIR="${ROOT}/etc/systemd/system"
 HOSTCTL="${HELPER_DIR}/gotham-hostctl"
 TOOLCTL="${HELPER_DIR}/gotham-toolctl"
 HOSTCTL_DROPIN="${SUDOERS_DIR}/gotham-hostctl"
@@ -347,6 +348,32 @@ apply_payload() {
     install_sudoers "${PAYLOAD_DIR}/gotham-hostctl.sudoers" "${HOSTCTL_DROPIN}"
 }
 
+# refresh_agent_install refreshes the rest of a node's install from the same
+# verified release: the systemd unit and the two sudoers drop-ins the agent
+# itself cannot rewrite. It runs only where an agent user is recorded, and its
+# failures are reported without failing the binary update: a host that predates
+# one of these files keeps a working (if older) install. A node whose installed
+# wrapper predates this refresh must run install-agent.sh once; the old wrapper
+# never installs the new one, so apply_release is not reached until then.
+refresh_agent_install() {
+    agent_user="$(payload_agent_user)"
+    [ -n "${agent_user}" ] || return 0
+    if [ -f "${PAYLOAD_DIR}/gotham-agent.service" ] && [ ! -L "${PAYLOAD_DIR}/gotham-agent.service" ]; then
+        ensure_dir "${SYSTEMD_DIR}" 0755
+        install_file "${PAYLOAD_DIR}/gotham-agent.service" "${SYSTEMD_DIR}/gotham-agent.service" 0644
+        if [ -z "${ROOT}" ]; then
+            systemctl daemon-reload >/dev/null 2>&1 \
+                || echo "gotham-hostbootstrap: systemd daemon-reload failed; the unit is installed but not reloaded" >&2
+        fi
+    fi
+    for script in install-agent-sudoers.sh install-toolctl-sudoers.sh; do
+        [ -f "${PAYLOAD_DIR}/${script}" ] || continue
+        if ! GOTHAM_HOST_BOOTSTRAP_ROOT="${ROOT}" sh "${PAYLOAD_DIR}/${script}" "${agent_user}" >/dev/null 2>&1; then
+            echo "gotham-hostbootstrap: ${script} did not apply; the existing sudoers rule is left in place" >&2
+        fi
+    done
+}
+
 # check_version version allow_downgrade: validate the release version and refuse
 # to lower the installed high-water mark. The bridge must seed the mark: a host
 # left without one could only ever refuse a refresh (a missing mark is never
@@ -387,6 +414,12 @@ write_payload() {
     install_file "${SELF_DIR}/gotham-toolctl.sh" "${PAYLOAD_DIR}/gotham-toolctl" 0755
     install_file "${SELF_DIR}/gotham-hostbootstrap.sh" "${PAYLOAD_DIR}/gotham-hostbootstrap.sh" 0755
     install_file "${SELF_DIR}/gotham-hostbootstrap-fetch.sh" "${PAYLOAD_DIR}/gotham-hostbootstrap-fetch.sh" 0755
+    # Agent host install bits refresh through the same signed payload, so a
+    # self-update also keeps the unit and the sudoers rules current. Optional:
+    # a control-plane-only checkout may not ship them.
+    install_optional "${SELF_DIR}/gotham-agent.service" "${PAYLOAD_DIR}/gotham-agent.service" 0644
+    install_optional "${SELF_DIR}/install-agent-sudoers.sh" "${PAYLOAD_DIR}/install-agent-sudoers.sh" 0755
+    install_optional "${SELF_DIR}/install-toolctl-sudoers.sh" "${PAYLOAD_DIR}/install-toolctl-sudoers.sh" 0755
 
     # A dedicated name: install_file assigns its own global `tmp`, so reusing that
     # name here would leave this temp behind on the way out.
@@ -523,6 +556,9 @@ apply_release() {
     install_file "${rel_src}/gotham-toolctl" "${PAYLOAD_DIR}/gotham-toolctl" 0755
     install_optional "${rel_src}/gotham-hostbootstrap.sh" "${PAYLOAD_DIR}/gotham-hostbootstrap.sh" 0755
     install_optional "${rel_src}/gotham-hostbootstrap-fetch.sh" "${PAYLOAD_DIR}/gotham-hostbootstrap-fetch.sh" 0755
+    install_optional "${rel_src}/gotham-agent.service" "${PAYLOAD_DIR}/gotham-agent.service" 0644
+    install_optional "${rel_src}/install-agent-sudoers.sh" "${PAYLOAD_DIR}/install-agent-sudoers.sh" 0755
+    install_optional "${rel_src}/install-toolctl-sudoers.sh" "${PAYLOAD_DIR}/install-toolctl-sudoers.sh" 0755
     install_file "${dropin_tmp}" "${PAYLOAD_DIR}/gotham-hostctl.sudoers" 0644
     rm -f "${dropin_tmp}" 2>/dev/null || true
     trap - EXIT
@@ -531,6 +567,9 @@ apply_release() {
     install_optional "${rel_src}/gotham-hostbootstrap-fetch.sh" "${FETCH_SCRIPT}" 0755
     # Refresh the wrapper too, so future updates use the released logic.
     install_optional "${rel_src}/gotham-update.sh" "${WRAPPER}" 0755
+    # The agent unit and its sudoers rules live outside the helper, so refresh
+    # them only after the released wrapper is in place for the next update.
+    refresh_agent_install
     # Record the applied version (>= the high-water mark) atomically.
     write_record "${VERSION_FILE}" "${rel_version}"
     echo "gotham-hostbootstrap: applied the released host-helper payload ${rel_version}"

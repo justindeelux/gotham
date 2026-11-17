@@ -1111,6 +1111,16 @@ message UpdateRequest {
   string os = 2;
   // arch is the agent's GOARCH (e.g. "amd64", "arm64").
   string arch = 3;
+  // update_result is the last self-update outcome recorded on the node
+  // ("ok", "rolled_back", "rollback_failed", "no_backup", "wrapper_failed").
+  // The control plane uses it to show a failed rollout with its reason. Empty
+  // when the node has no recorded outcome (a fresh install).
+  string update_result = 4;
+  // update_detail is the human-readable reason the wrapper recorded for
+  // update_result (for example "health check failed; previous binary restored").
+  string update_detail = 5;
+  // update_version is the release the outcome belongs to.
+  string update_version = 6;
 }
 
 // UpdateResponse reports whether an update is available and, when it is, the
@@ -1134,11 +1144,17 @@ message UpdateResponse {
   string sha256 = 6;
   // channel is the release channel the offer came from ("stable"/"beta").
   string channel = 7;
-  // rollout is true when an operator has triggered an "update all agents"
-  // rollout that includes this agent. An agent applies an offer when rollout is
-  // set even if its own unattended auto-update is disabled; a plain offer is
-  // informational and only applied when AGENT_AUTO_UPDATE is on.
+  // rollout is true when the control plane has started a rollout that includes
+  // this agent: either its own release or an operator-triggered update. An agent
+  // applies an offer when rollout is set even if its own unattended auto-update
+  // is disabled; a plain offer is informational and only applied when
+  // AGENT_AUTO_UPDATE is on.
   bool rollout = 8;
+  // retry asks the agent to clear its failed-update backoff and pending marker
+  // before applying this offer. The control plane sets it when an operator
+  // triggers a manual agent update, which is what `gotham-agent update reset`
+  // does on the node. A stable node still refuses a beta offer first.
+  bool retry = 9;
 }
 
 // ToolService runs on the node agent. The control plane dials it to list the

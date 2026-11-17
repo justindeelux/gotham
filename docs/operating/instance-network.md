@@ -130,15 +130,17 @@ fails:
 |---|---|
 | `ready` | The host helper runs and the node has the network and time stack. |
 | `unsupported_stack` | The node lacks systemd-networkd/resolved or timedatectl. Installing the helper cannot fix a missing stack. |
-| `helper_outdated` | The helper is older than this control plane and cannot report the timezone. On the control-plane machine **Install host helper** updates it; on a remote node, update the agent or re-run the agent installer. |
-| `helper_missing` | The helper file is absent. On the control-plane machine **Install host helper** can restore it when the privileged repair path is present. On a remote node, re-run the agent installer. |
-| `helper_denied` | The helper is present but the privilege rule refuses it. Re-run the matching installer. |
-| `agent_outdated` | The agent predates host settings. Update the agent, or re-run the agent installer on that node, then reload the page. |
+| `helper_outdated` | The helper is older than this control plane and cannot report the timezone. On the control-plane machine **Install host helper** updates it; on a remote node, update the agent from **Servers** (the self-update carries the helper). |
+| `helper_missing` | The helper file is absent. On the control-plane machine **Install host helper** can restore it when the privileged repair path is present. On a remote node, update the agent from **Servers**. |
+| `helper_denied` | The helper is present but the privilege rule refuses it. Update the agent from **Servers**, or re-run the matching installer once if the node was installed before this release and its wrapper predates the refresh. |
+| `agent_outdated` | The agent predates host settings. Update the agent from **Servers**, then reload the page. |
 | `offline` | The agent is not reachable. Settings are read-only until it reconnects. |
 
 A failed helper install shows the installer's output so you can read the
-cause. Re-running the agent installer on every remote node is a manual step:
-existing agents are not upgraded to host support automatically.
+cause. A control-plane update and the **Update agent** action on **Servers**
+carry host support to remote nodes. A node installed before this release needs
+one installer re-run first, because its old wrapper never installs the new one;
+after that, no separate installer run is needed.
 
 See [Nodes and containers](/operating/nodes-containers) for registering a node
 and the agent installer.

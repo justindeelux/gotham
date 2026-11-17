@@ -97,8 +97,9 @@ every 10 seconds, so this is a live connection problem, not a stale row.
    offers the newest agent release when it is newer than the version the node
    reported; the node accepts it only if the channel matches (a `stable` node
    refuses `beta`), and no offer is made when it is already current. Update the
-   node (see [Updates](/guide/updates)) or reinstall it. Node certificates issued
-   before mutual TLS stop being accepted after the legacy-leaf sunset
+   node from **Servers → Update agent** (see [Updates](/guide/updates)); a
+   control-plane update triggers the same rollout automatically. Node certificates
+   issued before mutual TLS stop being accepted after the legacy-leaf sunset
    (`GOTHAM_GRPC_LEGACY_LEAF_UNTIL`); they renew on the next connection, and a
    node that cannot renew must be reinstalled with the CA.
 

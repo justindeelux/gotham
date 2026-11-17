@@ -516,7 +516,10 @@ func (g *Gateway) RequestUpdate(ctx context.Context, req *agentv1.UpdateRequest)
 		return nil, err
 	}
 
-	release, rollout, err := g.service.OfferAgentUpdate(ctx, req.GetAgentVersion(), req.GetOs(), req.GetArch())
+	g.service.RecordAgentUpdateReport(nodeID, req.GetUpdateResult(), req.GetUpdateDetail(),
+		req.GetUpdateVersion())
+
+	release, rollout, retry, err := g.service.OfferAgentUpdate(ctx, nodeID, req.GetAgentVersion(), req.GetOs(), req.GetArch())
 	switch {
 	case err != nil:
 		g.logger.Warn("servers: agent update offer failed",
@@ -527,7 +530,8 @@ func (g *Gateway) RequestUpdate(ctx context.Context, req *agentv1.UpdateRequest)
 	}
 
 	g.logger.Info("servers: offering agent update",
-		"node_id", nodeID, "from", req.GetAgentVersion(), "to", release.Version, "rollout", rollout)
+		"node_id", nodeID, "from", req.GetAgentVersion(), "to", release.Version,
+		"rollout", rollout, "retry", retry)
 	return &agentv1.UpdateResponse{
 		UpdateAvailable:      true,
 		LatestVersion:        release.Version,
@@ -537,6 +541,7 @@ func (g *Gateway) RequestUpdate(ctx context.Context, req *agentv1.UpdateRequest)
 		Sha256:               release.SHA256,
 		Channel:              release.Channel,
 		Rollout:              rollout,
+		Retry:                retry,
 	}, nil
 }
 

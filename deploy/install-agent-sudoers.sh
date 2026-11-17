@@ -13,11 +13,18 @@
 set -eu
 
 SERVICE_USER="${1:-gotham-agent}"
-WRAPPER="/usr/libexec/gotham/gotham-agent-update"
-CONF="/etc/gotham/agent-updater.conf"
-SUDOERS_FILE="/etc/sudoers.d/gotham-agent-update"
+# Test seam: the hostbootstrap fake-root test passes this when it runs without
+# sudo. Production is always "/" and the value is ignored under sudo.
+ROOT=""
+if [ -z "${SUDO_USER:-}${SUDO_UID:-}" ]; then
+    ROOT="${GOTHAM_HOST_BOOTSTRAP_ROOT:-}"
+fi
+WRAPPER="${ROOT}/usr/libexec/gotham/gotham-agent-update"
+CONF="${ROOT}/etc/gotham/agent-updater.conf"
+SUDOERS_DIR="${ROOT}/etc/sudoers.d"
+SUDOERS_FILE="${SUDOERS_DIR}/gotham-agent-update"
 
-if [ "$(id -u)" -ne 0 ]; then
+if [ -z "${ROOT}" ] && [ "$(id -u)" -ne 0 ]; then
     echo "install-agent-sudoers.sh must run as root (try sudo)" >&2
     exit 1
 fi
@@ -45,18 +52,18 @@ if [ ! -f "${CONF}" ]; then
     echo "install-agent-sudoers.sh: ${CONF} is missing" >&2
     exit 1
 fi
-if [ "$(stat -c '%U' "${WRAPPER}" 2>/dev/null || echo unknown)" != "root" ]; then
+if [ -z "${ROOT}" ] && [ "$(stat -c '%U' "${WRAPPER}" 2>/dev/null || echo unknown)" != "root" ]; then
     echo "install-agent-sudoers.sh: ${WRAPPER} must be owned by root" >&2
     exit 1
 fi
-if [ "$(stat -c '%U' "${CONF}" 2>/dev/null || echo unknown)" != "root" ]; then
+if [ -z "${ROOT}" ] && [ "$(stat -c '%U' "${CONF}" 2>/dev/null || echo unknown)" != "root" ]; then
     echo "install-agent-sudoers.sh: ${CONF} must be owned by root" >&2
     exit 1
 fi
 
 # Minimal hosts and containers may not ship /etc/sudoers.d; create it with the
 # sudoers(5) convention (root:root 0750) before writing the drop-in.
-install -d -m 0750 /etc/sudoers.d
+install -d -m 0750 "${SUDOERS_DIR}"
 
 # sudoers(5): a command with no argument list permits any arguments. The empty
 # string "" pins the invocation to zero arguments.
@@ -64,8 +71,8 @@ install -d -m 0750 /etc/sudoers.d
 # Write the drop-in to a temp file and validate it BEFORE it lands in
 # /etc/sudoers.d: a broken file there could disable sudo on the host. The move
 # is atomic within the directory and the final path is re-checked.
-SUDOERS_TMP="$(mktemp /etc/sudoers.d/.gotham-agent-update.XXXXXX)" \
-    || { echo "install-agent-sudoers.sh: could not create a temp file in /etc/sudoers.d" >&2; exit 1; }
+SUDOERS_TMP="$(mktemp "${SUDOERS_DIR}/.gotham-agent-update.XXXXXX")" \
+    || { echo "install-agent-sudoers.sh: could not create a temp file in ${SUDOERS_DIR}" >&2; exit 1; }
 cat >"${SUDOERS_TMP}" <<EOF
 # Allow the Gotham node agent to trigger its own update restart wrapper.
 # The wrapper is root-owned and outside every writable path; "" pins it to zero

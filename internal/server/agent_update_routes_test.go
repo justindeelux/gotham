@@ -16,17 +16,35 @@ const ownerHeader = "Bearer owner-token"
 
 type fakeAgentUpdateRegistry struct {
 	*fakeServerService
-	versions  []servers.AgentVersion
-	rollout   string
-	target    string
-	targetErr error
+	versions    []servers.AgentVersion
+	rollout     string
+	target      string
+	targetErr   error
+	nodeRollout string
+	state       string
+	detail      string
 }
 
 func (f *fakeAgentUpdateRegistry) KnownAgentVersions() []servers.AgentVersion { return f.versions }
 func (f *fakeAgentUpdateRegistry) AgentRolloutVersion() string                { return f.rollout }
 func (f *fakeAgentUpdateRegistry) StartAgentRollout(version string)           { f.rollout = version }
+func (f *fakeAgentUpdateRegistry) StartAgentRolloutFor(nodeID, version string) {
+	f.rollout = version
+	f.nodeRollout = nodeID
+}
 func (f *fakeAgentUpdateRegistry) AgentUpdateTarget(context.Context) (string, error) {
 	return f.target, f.targetErr
+}
+func (f *fakeAgentUpdateRegistry) AgentUpdateStatus(string, string) (string, string) {
+	return f.state, f.detail
+}
+func (f *fakeAgentUpdateRegistry) AgentVersionForNode(nodeID string) (servers.AgentVersion, bool) {
+	for _, version := range f.versions {
+		if version.NodeID == nodeID {
+			return version, true
+		}
+	}
+	return servers.AgentVersion{}, false
 }
 
 type fakeUpdatesService struct {
@@ -87,6 +105,57 @@ func TestAgentUpdateRoutes(t *testing.T) {
 	}
 	if fake.rollout != "v1.2.0" {
 		t.Fatalf("rollout = %q, want v1.2.0 (CP current + agents behind ⇒ rollout)", fake.rollout)
+	}
+}
+
+func TestAgentUpdateRoutesExposeStateAndAction(t *testing.T) {
+	fake := &fakeAgentUpdateRegistry{
+		fakeServerService: newFakeServerService(),
+		versions:          []servers.AgentVersion{{NodeID: "node-a", Version: "v1.0.0", At: time.Now().UTC()}},
+		target:            "v1.2.0",
+		state:             servers.AgentUpdateFailed,
+		detail:            "health check failed",
+	}
+	s := newServerRoutesTestServer(t, fake)
+
+	rec := doRequest(t, s, http.MethodGet, "/api/v1/servers/agents", "", ownerHeader)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("list status = %d, want 200 (body %s)", rec.Code, rec.Body.String())
+	}
+	var list agentVersionsEnvelope
+	if err := json.Unmarshal(rec.Body.Bytes(), &list); err != nil {
+		t.Fatalf("decode: %v", err)
+	}
+	if len(list.Agents) != 1 || list.Agents[0].State != servers.AgentUpdateFailed || list.Agents[0].Detail != "health check failed" {
+		t.Fatalf("list = %+v, want the per-node failed state and reason", list.Agents)
+	}
+
+	rec = doRequest(t, s, http.MethodPost, "/api/v1/servers/agents/node-a/update", "", ownerHeader)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("update status = %d, want 200 (body %s)", rec.Code, rec.Body.String())
+	}
+	var result updateAgentResponse
+	if err := json.Unmarshal(rec.Body.Bytes(), &result); err != nil {
+		t.Fatalf("decode: %v", err)
+	}
+	if result.NodeID != "node-a" || result.TargetVersion != "v1.2.0" {
+		t.Fatalf("update = %+v", result)
+	}
+	if fake.nodeRollout != "node-a" || fake.rollout != "v1.2.0" {
+		t.Fatalf("queued rollout = %q for %q, want v1.2.0 for node-a", fake.rollout, fake.nodeRollout)
+	}
+}
+
+func TestAgentUpdateNodeActionUnknownNode(t *testing.T) {
+	fake := &fakeAgentUpdateRegistry{fakeServerService: newFakeServerService(), target: "v1.2.0"}
+	s := newServerRoutesTestServer(t, fake)
+
+	rec := doRequest(t, s, http.MethodPost, "/api/v1/servers/agents/missing/update", "", ownerHeader)
+	if rec.Code != http.StatusNotFound {
+		t.Fatalf("status = %d, want 404 (body %s)", rec.Code, rec.Body.String())
+	}
+	if fake.rollout != "" {
+		t.Fatalf("rollout = %q for an unknown node", fake.rollout)
 	}
 }
 

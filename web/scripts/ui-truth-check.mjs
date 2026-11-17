@@ -898,6 +898,8 @@ async function main() {
         "export const validateServer = (...a) => api().validateServer(...a);",
         "export const installServerKey = (...a) => api().installServerKey(...a);",
         "export const updateServer = (...a) => api().updateServer(...a);",
+        "export const listAgentUpdates = (...a) => api().listAgentUpdates(...a);",
+        "export const updateAgent = (...a) => api().updateAgent(...a);",
         "export const describeServerError = (e) => String((e && e.message) || e);",
         "export const isApiError = (e) => typeof e === 'object' && e !== null && 'message' in e && 'status' in e;",
         "export const stripErrorPrefix = (m) => String(m ?? '').trim();",

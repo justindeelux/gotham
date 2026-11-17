@@ -197,9 +197,13 @@ jobs:
           cp deploy/gotham-hostbootstrap.sh "${helper_dir}/gotham-hostbootstrap.sh"
           cp deploy/gotham-hostbootstrap-fetch.sh "${helper_dir}/gotham-hostbootstrap-fetch.sh"
           cp deploy/gotham-update.sh "${helper_dir}/gotham-update.sh"
+          cp deploy/gotham-agent.service "${helper_dir}/gotham-agent.service"
+          cp deploy/install-agent-sudoers.sh "${helper_dir}/install-agent-sudoers.sh"
+          cp deploy/install-toolctl-sudoers.sh "${helper_dir}/install-toolctl-sudoers.sh"
           tar -czf signed/gotham-hosthelpers.tar.gz -C "${helper_dir}" \
             gotham-hostctl gotham-toolctl gotham-hostbootstrap.sh \
-            gotham-hostbootstrap-fetch.sh gotham-update.sh
+            gotham-hostbootstrap-fetch.sh gotham-update.sh gotham-agent.service \
+            install-agent-sudoers.sh install-toolctl-sudoers.sh
           rm -rf "${helper_dir}"
 
           count=0
@@ -210,10 +214,9 @@ jobs:
             base="$(basename "$bin")"
             asset="${base}-linux-${arch}"
             cp "$bin" "signed/${asset}"
-            helper_args=()
+            helper_args=(-helper signed/gotham-hosthelpers.tar.gz)
             if [ "$base" = "gotham" ]; then
               prefix="gotham-manifest"
-              helper_args=(-helper signed/gotham-hosthelpers.tar.gz)
             else
               prefix="gotham-agent-manifest"
             fi

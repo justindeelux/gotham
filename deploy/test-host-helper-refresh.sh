@@ -169,6 +169,70 @@ grep -q "alice ALL=(root)" "${ROOT}/etc/sudoers.d/gotham-hostctl" || fail "the r
     || fail "the refresh did not record the high-water mark"
 pass "the refresh upgrades the helper content and keeps the recorded drop-in"
 
+# ---- agent refresh: unit and sudoers rules from the same verified payload ---
+# The agent wrapper replaces its binary and then refreshes the rest of the
+# install (unit, wrapper/tool sudoers) from the same signed helper payload.
+make_agent_payload() { # $1 dir, $2 marker
+    dir="$1"; marker="$2"
+    mkdir -p "${dir}"
+    cat >"${dir}/gotham-hostctl" <<EOF
+#!/bin/sh
+echo hostctl-${marker}
+EOF
+    cat >"${dir}/gotham-toolctl" <<EOF
+#!/bin/sh
+echo toolctl-${marker}
+EOF
+    cp "${SCRIPT_DIR}/gotham-hostbootstrap.sh" "${dir}/gotham-hostbootstrap.sh"
+    cp "${SCRIPT_DIR}/gotham-hostbootstrap-fetch.sh" "${dir}/gotham-hostbootstrap-fetch.sh"
+    cp "${SCRIPT_DIR}/gotham-update.sh" "${dir}/gotham-update.sh"
+    cp "${SCRIPT_DIR}/gotham-agent.service" "${dir}/gotham-agent.service"
+    cp "${SCRIPT_DIR}/install-agent-sudoers.sh" "${dir}/install-agent-sudoers.sh"
+    cp "${SCRIPT_DIR}/install-toolctl-sudoers.sh" "${dir}/install-toolctl-sudoers.sh"
+    tar -czf "${dir}.tar.gz" -C "${dir}" \
+        gotham-hostctl gotham-toolctl gotham-hostbootstrap.sh \
+        gotham-hostbootstrap-fetch.sh gotham-update.sh gotham-agent.service \
+        install-agent-sudoers.sh install-toolctl-sudoers.sh
+}
+
+publish_agent() { # $1 release dir, $2 tarball, $3 version
+    dir="$1"; tarball="$2"; ver="$3"
+    mkdir -p "${dir}"
+    cp "${tarball}" "${dir}/gotham-hosthelpers.tar.gz"
+    "${SCRATCH}/signer" manifest -key "${SCRATCH}/signing.key" -in "${AGENT_BIN}" \
+        -version "${ver}" -arch "${ARCH}" -channel stable \
+        -helper "${dir}/gotham-hosthelpers.tar.gz" \
+        -out "${dir}/gotham-agent-manifest-${ARCH}.txt" >/dev/null
+}
+
+AGENT_BIN="${SCRATCH}/gotham-agent"
+cp "${BIN}" "${AGENT_BIN}"
+AGENT_REL="${SCRATCH}/agent-release"
+AGENT_ROOT="$(mktemp -d "${SCRATCH}/agent-root.XXXXXX")"
+make_agent_payload "${SCRATCH}/agent-p1" agentone
+publish_agent "${AGENT_REL}/${VERSION}" "${SCRATCH}/agent-p1.tar.gz" "${VERSION}"
+GOTHAM_HOST_BOOTSTRAP_ROOT="${AGENT_ROOT}" sh "${BOOTSTRAP}" create-agent bob "${VERSION}" >/dev/null
+AGENT_INSTALLED_FETCH="${AGENT_ROOT}/usr/libexec/gotham/gotham-hostbootstrap-fetch.sh"
+cp "${KEY}" "${AGENT_ROOT}/usr/libexec/gotham/gotham-signing-key.pub"
+mkdir -p "${AGENT_ROOT}/etc/gotham"
+printf '# test config\n' >"${AGENT_ROOT}/etc/gotham/agent-updater.conf"
+# The agent installer installs the shared wrapper under the agent name.
+cp "${SCRIPT_DIR}/gotham-update.sh" "${AGENT_ROOT}/usr/libexec/gotham/gotham-agent-update"
+chmod 0755 "${AGENT_ROOT}/usr/libexec/gotham/gotham-agent-update"
+AGENT_STAGE="$(mktemp -d "${SCRATCH}/agent-stage.XXXXXX")"
+AGENT_PAYLOAD="$(sh "${AGENT_INSTALLED_FETCH}" "file://${AGENT_REL}" "${VERSION}" "${ARCH}" \
+    "${AGENT_ROOT}/usr/libexec/gotham/gotham-signing-key.pub" "${AGENT_STAGE}" "${AGENT_BIN}")"
+grep -q "hostctl-agentone" "${AGENT_PAYLOAD}/gotham-hostctl" \
+    || fail "the agent fetch did not select the agent manifest family"
+GOTHAM_HOST_BOOTSTRAP_ROOT="${AGENT_ROOT}" sh "${BOOTSTRAP}" apply-release "${AGENT_PAYLOAD}" "${VERSION}" >/dev/null
+[ -f "${AGENT_ROOT}/etc/systemd/system/gotham-agent.service" ] \
+    || fail "the agent refresh did not install the systemd unit"
+grep -q "bob ALL=(root)" "${AGENT_ROOT}/etc/sudoers.d/gotham-agent-update" \
+    || fail "the agent refresh did not reinstall the update wrapper sudoers rule"
+grep -q "bob ALL=(root)" "${AGENT_ROOT}/etc/sudoers.d/gotham-toolctl" \
+    || fail "the agent refresh did not reinstall the tool sudoers rule"
+pass "the agent refresh installs the unit and both sudoers rules from the signed payload"
+
 # ---- tamper: payload digest mismatch is refused ----------------------------
 make_payload "${SCRATCH}/p3" three
 publish "${REL}/${VERSION}" "${SCRATCH}/p3.tar.gz" "${VERSION}"

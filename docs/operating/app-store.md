@@ -122,9 +122,10 @@ Buildpacks needs `pack`. A missing tool is reported on the deployment. See
 
 - **The node agent is unreachable** — nothing was queued. Check that the node
   is online.
-- **The host helper is missing or refuses the verb** — a node that was updated
-  only through the agent's self-update can keep an old host install. Re-run the
-  node installer, which is idempotent, then retry; see
+- **The host helper is missing or refuses the verb** — update the node's agent
+  from **Servers**. The self-update replaces the host helper and its sudoers
+  rules from the signed release. If the node's privileged wrapper predates that
+  refresh support, re-run the node installer (idempotent), then retry; see
   [Add nodes](/guide/nodes).
 - **A tool is in use** — an uninstall is refused while a build runs, or while
   another installed tool depends on it. Remove the dependent tool first

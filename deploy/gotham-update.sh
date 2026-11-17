@@ -56,8 +56,9 @@ fi
 # wrapper serves both the control plane (gotham-update) and the node agent
 # (gotham-agent-update). The file is root-owned and is the only source of the
 # paths it acts on.
-# IS_AGENT distinguishes the two wrappers: the host-helper refresh (JUS-188) is a
-# control-plane concern, so the agent wrapper never runs it.
+# IS_AGENT distinguishes the two wrappers: the agent wrapper replaces both the
+# binary and the rest of its host install (unit and sudoers rules) from the same
+# signed release payload.
 IS_AGENT=0
 case "$(basename "$0")" in
     gotham-agent-update)
@@ -470,7 +471,6 @@ require_newer_helper() {
 # installed before the one-time bridge) is a clean no-op, so a helper refresh can
 # never block or brick an update.
 refresh_host_helpers() {
-    [ "${IS_AGENT}" -eq 0 ] || return 0
     [ -f "${FETCH_SCRIPT}" ] || return 0
     [ -f "${BINARY}" ] || return 0
     if [ ! -f "${SIGNING_KEY}" ] || [ -L "${SIGNING_KEY}" ]; then

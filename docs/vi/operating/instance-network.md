@@ -120,15 +120,16 @@ bại:
 |---|---|
 | `ready` | Helper máy chủ chạy được và nút có đủ ngăn xếp mạng và thời gian. |
 | `unsupported_stack` | Nút thiếu systemd-networkd/resolved hoặc timedatectl. Cài helper không khắc phục được ngăn xếp thiếu. |
-| `helper_outdated` | Helper cũ hơn control plane này và không báo được múi giờ. Trên máy chạy control plane, **Cài helper máy chủ** sẽ cập nhật nó; trên nút từ xa, hãy cập nhật agent hoặc chạy lại trình cài agent. |
-| `helper_missing` | Thiếu tệp helper. Trên máy chạy control plane, **Cài helper máy chủ** có thể khôi phục khi đường sửa chữa đặc quyền có mặt. Trên nút từ xa, hãy chạy lại trình cài agent. |
-| `helper_denied` | Helper có mặt nhưng quy tắc đặc quyền từ chối nó. Hãy chạy lại trình cài tương ứng. |
-| `agent_outdated` | Agent cũ hơn tính năng cài đặt máy chủ. Hãy cập nhật agent hoặc chạy lại trình cài agent trên nút đó, rồi tải lại trang. |
+| `helper_outdated` | Helper cũ hơn control plane này và không báo được múi giờ. Trên máy chạy control plane, **Cài helper máy chủ** sẽ cập nhật nó; trên nút từ xa, hãy cập nhật agent từ **Servers** (tự cập nhật mang theo helper). |
+| `helper_missing` | Thiếu tệp helper. Trên máy chạy control plane, **Cài helper máy chủ** có thể khôi phục khi đường sửa chữa đặc quyền có mặt. Trên nút từ xa, hãy cập nhật agent từ **Servers**. |
+| `helper_denied` | Helper có mặt nhưng quy tắc đặc quyền từ chối nó. Hãy cập nhật agent từ **Servers**, hoặc chạy lại trình cài tương ứng nếu nút cũ hơn hỗ trợ làm mới. |
+| `agent_outdated` | Agent cũ hơn tính năng cài đặt máy chủ. Hãy cập nhật agent từ **Servers**, rồi tải lại trang. |
 | `offline` | Không kết nối được agent. Cài đặt chỉ để xem cho tới khi agent kết nối lại. |
 
 Một lần cài helper thất bại hiển thị kết quả của trình cài đặt để bạn đọc nguyên
-nhân. Việc chạy lại trình cài agent trên mọi nút từ xa là thao tác thủ công: agent
-hiện có không tự được nâng cấp để hỗ trợ cài đặt máy chủ.
+nhân. Cập nhật control plane và thao tác **Cập nhật agent** trên **Servers** mang
+hỗ trợ cài đặt máy chủ tới các nút từ xa; không cần chạy trình cài riêng khi nút
+đã chạy agent hiện hành.
 
 Xem [Node và container](/vi/operating/nodes-containers) để đăng ký nút và dùng
 trình cài agent.

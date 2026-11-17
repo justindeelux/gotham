@@ -11,18 +11,62 @@ function catalogFor(locale?: string | null): typeof enCatalog {
 
 export type ServerFilter = "all" | "ready" | "offline" | "update";
 
-export function needsAgentUpdate(_server: Server): boolean {
-  return false;
+// normalizeVersion makes "v1.2.3" and "1.2.3+build" compare as the same release
+// tag. Semantic ordering is not needed here, only equality.
+export function normalizeVersion(version: string | null | undefined): string {
+  const raw = (version ?? "").trim();
+  if (raw === "") {
+    return "";
+  }
+  return raw.replace(/^v/i, "").split("+")[0].toLowerCase();
 }
 
-export function matchesFilter(server: Server, filter: ServerFilter): boolean {
+export function versionsMatch(
+  a: string | null | undefined,
+  b: string | null | undefined,
+): boolean {
+  const left = normalizeVersion(a);
+  const right = normalizeVersion(b);
+  return left !== "" && left === right;
+}
+
+export function needsAgentUpdate(
+  server: Server,
+  latestVersion?: string | null,
+): boolean {
+  if (!server.node_id || !latestVersion) {
+    return false;
+  }
+  if (!server.agent_version) {
+    // An agent older than the version contract reports nothing; it is behind by
+    // definition and the update offer is the only way to learn its version.
+    return true;
+  }
+  return !versionsMatch(server.agent_version, latestVersion);
+}
+
+export function agentVersionMismatch(
+  server: Server,
+  controlPlaneVersion?: string | null,
+): boolean {
+  if (!server.agent_version || !controlPlaneVersion) {
+    return false;
+  }
+  return !versionsMatch(server.agent_version, controlPlaneVersion);
+}
+
+export function matchesFilter(
+  server: Server,
+  filter: ServerFilter,
+  latestVersion?: string | null,
+): boolean {
   switch (filter) {
     case "ready":
       return server.status === "ready";
     case "offline":
       return server.status === "offline";
     case "update":
-      return needsAgentUpdate(server);
+      return needsAgentUpdate(server, latestVersion);
     case "all":
     default:
       return true;

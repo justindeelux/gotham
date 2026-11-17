@@ -40,8 +40,24 @@ export interface Server {
   disk_usage: number | null;
   container_count: number | null;
   last_seen: string | null;
+  agent_version: string | null;
+  agent_version_reported_at: string | null;
   created_at: string;
   updated_at: string;
+}
+
+export interface AgentUpdateInfo {
+  node_id: string;
+  version: string;
+  at: string;
+  state?: string;
+  detail?: string;
+}
+
+export interface AgentUpdatesResponse {
+  agents: AgentUpdateInfo[];
+  rollout_version?: string;
+  latest_version?: string;
 }
 
 export interface CheckResult {
@@ -141,6 +157,25 @@ export async function getServer(id: string): Promise<Server> {
 
 export async function deleteServer(id: string): Promise<void> {
   await http.delete(`/servers/${id}`);
+}
+
+export async function listAgentUpdates(): Promise<AgentUpdatesResponse> {
+  const response = await http.get<AgentUpdatesResponse>("/servers/agents");
+  return response.data;
+}
+
+export interface AgentUpdateQueued {
+  node_id: string;
+  target_version?: string;
+  message?: string;
+}
+
+export async function updateAgent(nodeID: string): Promise<AgentUpdateQueued> {
+  const response = await http.post<AgentUpdateQueued>(
+    `/servers/agents/${encodeURIComponent(nodeID)}/update`,
+    {},
+  );
+  return response.data;
 }
 
 export async function validateServer(

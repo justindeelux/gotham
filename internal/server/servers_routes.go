@@ -169,12 +169,20 @@ type agentVersionDTO struct {
 	NodeID  string    `json:"node_id"`
 	Version string    `json:"version"`
 	At      time.Time `json:"at"`
+	State   string    `json:"state,omitempty"`
+	Detail  string    `json:"detail,omitempty"`
 }
 
 type agentVersionsEnvelope struct {
 	Agents         []agentVersionDTO `json:"agents"`
 	RolloutVersion string            `json:"rollout_version,omitempty"`
 	LatestVersion  string            `json:"latest_version,omitempty"`
+}
+
+type updateAgentResponse struct {
+	NodeID        string `json:"node_id"`
+	TargetVersion string `json:"target_version,omitempty"`
+	Message       string `json:"message,omitempty"`
 }
 
 type updateAllAgentsResponse struct {
@@ -188,7 +196,10 @@ type agentUpdateController interface {
 	KnownAgentVersions() []servers.AgentVersion
 	AgentRolloutVersion() string
 	StartAgentRollout(version string)
+	StartAgentRolloutFor(nodeID, version string)
 	AgentUpdateTarget(ctx context.Context) (string, error)
+	AgentUpdateStatus(nodeID, target string) (string, string)
+	AgentVersionForNode(nodeID string) (servers.AgentVersion, bool)
 }
 
 func (s *Server) mountServerRoutes(api chi.Router) {
@@ -224,6 +235,7 @@ func (s *Server) mountServerRoutes(api chi.Router) {
 			platform.Use(s.RequireAuth, s.RequireOwner)
 			platform.Get("/v1/servers/agents", s.handleListAgentVersions)
 			platform.Post("/v1/servers/agents/update-all", s.handleUpdateAllAgents)
+			platform.Post("/v1/servers/agents/{nodeID}/update", s.handleUpdateAgent)
 		})
 	}
 }
@@ -739,19 +751,58 @@ func (s *Server) handleListAgentVersions(w http.ResponseWriter, r *http.Request)
 		Agents:         make([]agentVersionDTO, 0),
 		RolloutVersion: controller.AgentRolloutVersion(),
 	}
+	target, err := controller.AgentUpdateTarget(r.Context())
+	if err != nil {
+		s.logger.Warn("servers: agent target lookup failed", "error", err)
+	}
+	response.LatestVersion = target
 	for _, agent := range controller.KnownAgentVersions() {
+		state, detail := controller.AgentUpdateStatus(agent.NodeID, target)
 		response.Agents = append(response.Agents, agentVersionDTO{
 			NodeID:  agent.NodeID,
 			Version: agent.Version,
 			At:      agent.At,
+			State:   state,
+			Detail:  detail,
 		})
 	}
-	if target, err := controller.AgentUpdateTarget(r.Context()); err != nil {
-		s.logger.Warn("servers: agent target lookup failed", "error", err)
-	} else {
-		response.LatestVersion = target
-	}
 	writeJSON(w, http.StatusOK, response)
+}
+
+func (s *Server) handleUpdateAgent(w http.ResponseWriter, r *http.Request) {
+	controller, ok := s.servers.(agentUpdateController)
+	if !ok {
+		writeJSON(w, http.StatusServiceUnavailable, apiError{Message: "agent updates are not configured"})
+		return
+	}
+	nodeID := strings.TrimSpace(chi.URLParam(r, "nodeID"))
+	if nodeID == "" {
+		writeJSON(w, http.StatusBadRequest, apiError{Message: "node id is required"})
+		return
+	}
+	if _, found := controller.AgentVersionForNode(nodeID); !found {
+		writeJSON(w, http.StatusNotFound, apiError{Message: "node has not reported an agent version"})
+		return
+	}
+
+	target, err := controller.AgentUpdateTarget(r.Context())
+	if err != nil {
+		s.logger.Error("servers: agent update target lookup failed", "error", err)
+		writeJSON(w, http.StatusBadGateway, apiError{Message: "release server error"})
+		return
+	}
+	if target == "" {
+		writeJSON(w, http.StatusServiceUnavailable, apiError{Message: "no agent release is available (agent updates may be disabled)"})
+		return
+	}
+
+	controller.StartAgentRolloutFor(nodeID, target)
+	s.logger.Info("servers: agent update requested", "node_id", nodeID, "target_version", target)
+	writeJSON(w, http.StatusOK, updateAgentResponse{
+		NodeID:        nodeID,
+		TargetVersion: target,
+		Message:       "update queued; the agent updates on its next poll",
+	})
 }
 
 func (s *Server) handleUpdateAllAgents(w http.ResponseWriter, r *http.Request) {

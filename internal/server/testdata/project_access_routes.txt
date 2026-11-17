@@ -245,6 +245,7 @@ owner POST /api/v1/proxy/redirects
 owner POST /api/v1/proxy/sync
 owner POST /api/v1/servers
 owner POST /api/v1/servers/agents/update-all
+owner POST /api/v1/servers/agents/{nodeID}/update
 owner POST /api/v1/servers/{id}/containers/run
 owner POST /api/v1/servers/{id}/containers/{containerID}/logs/stream
 owner POST /api/v1/servers/{id}/containers/{containerID}/restart

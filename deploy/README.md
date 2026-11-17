@@ -116,7 +116,9 @@ bare wrapper with **zero arguments**.
 Installed under two names: `gotham-update` (control plane) and
 `gotham-agent-update` (agent). Takes **no arguments**; the name selects the
 default config. Root-only steps: restart the fixed unit, probe the loopback
-`/healthz`, roll back to the previous binary on failure, write the status.
+`/healthz`, roll back to the previous binary on failure, write the status. Both
+names also fetch, verify and apply the release's signed host-helper payload, and
+the agent name additionally refreshes the agent unit and its sudoers rules.
 Exit codes: `0` healthy, `1` rolled back or rollback failed, `2` invalid config.
 Under sudo it ignores every `GOTHAM_*` override; the root-owned config is the
 only source of paths.
@@ -125,9 +127,9 @@ only source of paths.
 
 Installed as `/etc/gotham/updater.conf` and `/etc/gotham/agent-updater.conf`,
 `root:root 0644`. Keys: `GOTHAM_BINARY`, `GOTHAM_SERVICE`, `GOTHAM_HEALTH`,
-`GOTHAM_TIMEOUT` (30 s), `GOTHAM_STATUS`, `GOTHAM_PENDING`, `GOTHAM_LOCK`. The
-control-plane config also carries the release base and staging root used by the
-host-helper refresh.
+`GOTHAM_TIMEOUT` (30 s), `GOTHAM_STATUS`, `GOTHAM_PENDING`, `GOTHAM_LOCK`,
+`GOTHAM_RELEASE_BASE` and the optional `GOTHAM_STAGING` used by the host-helper
+refresh.
 
 ### `gotham.service`, `gotham-agent.service` — systemd units
 
@@ -167,7 +169,10 @@ Writes fixed root-owned paths under `/usr/libexec/gotham/` and a sudoers drop-in
 for the recorded users: the control-plane user gets the fixed host-control
 verbs plus the pinned repair verb, the node agent user gets exactly the fixed
 host-control verbs. `create` and `create-agent` keep each other's grantee, so
-the control-plane machine can carry both. Validates sudoers with `visudo`, is
+the control-plane machine can carry both. `apply-release` (run by the wrapper
+from a verified release payload) also installs the released agent unit and the
+two agent sudoers rules when an agent user is recorded, so a node self-update
+keeps the whole install current. Validates sudoers with `visudo`, is
 idempotent, refuses symlinked destinations, and records a root-owned high-water
 mark so a replayed older signed payload is refused. `apply` reapplies the local
 payload; `apply-release <dir> <version>` applies a verified payload; `version-cmp

@@ -37,8 +37,12 @@ const {
   page,
   currentPage,
   pagedServers,
+  controlPlaneVersion,
+  agentUpdateFor,
+  agentUpdateRunning,
   handleValidate,
   handleCheckAll,
+  handleUpdateAgent,
   openNode,
   openContainers,
   openEdit,
@@ -115,9 +119,14 @@ const emptyHint = computed<string>(() =>
             :key="server.id"
             :server="server"
             :validating="validatingId === server.id"
+            :agent-update="agentUpdateFor(server)"
+            :agent-target-version="serversStore.agentLatestVersion"
+            :control-plane-version="controlPlaneVersion"
+            :update-running="agentUpdateRunning(server)"
             @open="openNode(server.id)"
             @edit="openEdit(server)"
             @validate="handleValidate(server)"
+            @update-agent="handleUpdateAgent(server)"
             @containers="openContainers(server.id)"
             @delete="handleDelete(server)"
           />

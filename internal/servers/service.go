@@ -139,7 +139,10 @@ func NewService(cfg Config) *ServerService {
 		logger:    logger,
 		updater:   cfg.Updater,
 		agentUpdate: agentUpdateState{
-			agents: map[string]AgentVersion{},
+			agents:       map[string]AgentVersion{},
+			nodeRollouts: map[string]agentRollout{},
+			offers:       map[string]agentOffer{},
+			failures:     map[string]agentFailure{},
 		},
 		lastMetricAt: map[string]time.Time{},
 		now:          time.Now,

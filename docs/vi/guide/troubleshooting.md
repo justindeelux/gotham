@@ -97,11 +97,12 @@ dòng dữ liệu cũ.
    `GET /api/v1/servers/agents` liệt kê phiên bản theo từng node. Control plane
    đề nghị bản phát hành agent mới nhất khi nó mới hơn phiên bản node báo; node chỉ
    nhận nếu kênh khớp (node `stable` từ chối `beta`), và không có đề nghị nào khi
-   nó đã là bản mới nhất. Cập nhật node (xem [Cập nhật](/vi/guide/updates)) hoặc
-   cài lại nó. Chứng chỉ node cấp trước mutual TLS sẽ không còn được chấp nhận sau
-   mốc loại bỏ chứng chỉ kiểu cũ (`GOTHAM_GRPC_LEGACY_LEAF_UNTIL`); chúng được gia
-   hạn ở lần kết nối tiếp theo, và node không thể gia hạn phải được cài lại kèm
-   CA.
+   nó đã là bản mới nhất. Cập nhật node từ **Servers → Cập nhật agent** (xem
+   [Cập nhật](/vi/guide/updates)); một lần cập nhật control plane cũng tự kích
+   hoạt đợt triển khai tương tự. Chứng chỉ node cấp trước mutual TLS sẽ không còn
+   được chấp nhận sau mốc loại bỏ chứng chỉ kiểu cũ
+   (`GOTHAM_GRPC_LEGACY_LEAF_UNTIL`); chúng được gia hạn ở lần kết nối tiếp theo,
+   và node không thể gia hạn phải được cài lại kèm CA.
 
 Nếu node với tới được qua SSH nhưng bước kiểm tra của wizard thất bại, hãy kiểm
 tra Docker, dung lượng đĩa còn trống, và rằng người dùng SSH chạy được Docker mà

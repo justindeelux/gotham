@@ -4,8 +4,9 @@ import { computed, onMounted, ref, watch } from "vue";
 import { useI18n } from "vue-i18n";
 import { useRoute, useRouter } from "vue-router";
 
+import { useAppVersion } from "@/app/layouts/useAppVersion";
 import { describeServerError } from "@/features/servers/api/servers";
-import type { Server } from "@/features/servers/api/servers";
+import type { AgentUpdateInfo, Server } from "@/features/servers/api/servers";
 import { useServersStore } from "@/features/servers/stores/servers";
 import {
   matchesFilter,
@@ -22,12 +23,14 @@ export function useServersPage() {
   const serversStore = useServersStore();
   const message = useMessage();
   const { t } = useI18n();
+  const { versionTag: controlPlaneVersion } = useAppVersion();
 
   const wizardOpen = ref(false);
   const editOpen = ref(false);
   const editTarget = ref<Server | null>(null);
   const validatingId = ref<string | null>(null);
   const checkingAll = ref(false);
+  const queuedUpdates = ref<Record<string, boolean>>({});
 
   const activeFilter = ref<ServerFilter>("all");
   const searchQuery = ref("");
@@ -39,13 +42,16 @@ export function useServersPage() {
     () => serversStore.servers.filter((server) => server.status === "offline").length,
   );
   const updateCount = computed<number>(
-    () => serversStore.servers.filter((server) => needsAgentUpdate(server)).length,
+    () =>
+      serversStore.servers.filter((server) =>
+        needsAgentUpdate(server, serversStore.agentLatestVersion),
+      ).length,
   );
 
   const filteredServers = computed<Server[]>(() =>
     serversStore.servers.filter(
       (server) =>
-        matchesFilter(server, activeFilter.value) &&
+        matchesFilter(server, activeFilter.value, serversStore.agentLatestVersion) &&
         matchesSearch(server, searchQuery.value),
     ),
   );
@@ -150,6 +156,52 @@ export function useServersPage() {
     }
   }
 
+  function agentUpdateFor(server: Server): AgentUpdateInfo | undefined {
+    return server.node_id ? serversStore.agentUpdates[server.node_id] : undefined;
+  }
+
+  function agentUpdateRunning(server: Server): boolean {
+    if (server.node_id && queuedUpdates.value[server.node_id]) {
+      return true;
+    }
+    return agentUpdateFor(server)?.state === "updating";
+  }
+
+  async function handleUpdateAgent(server: Server): Promise<void> {
+    if (!server.node_id) {
+      return;
+    }
+    const nodeID = server.node_id;
+    queuedUpdates.value = { ...queuedUpdates.value, [nodeID]: true };
+    try {
+      await serversStore.updateAgentVersion(nodeID);
+      message.success(t("servers.toasts.agentUpdateQueued", { name: server.name }));
+    } catch (error) {
+      const next = { ...queuedUpdates.value };
+      delete next[nodeID];
+      queuedUpdates.value = next;
+      message.error(describeServerError(error));
+    }
+  }
+
+  watch(
+    () => serversStore.agentUpdates,
+    (updates) => {
+      const next = { ...queuedUpdates.value };
+      let changed = false;
+      for (const nodeID of Object.keys(next)) {
+        const state = updates[nodeID]?.state;
+        if (state === "up_to_date" || state === "failed") {
+          delete next[nodeID];
+          changed = true;
+        }
+      }
+      if (changed) {
+        queuedUpdates.value = next;
+      }
+    },
+  );
+
   onMounted(() => {
     void serversStore.fetchServers().catch(() => {
     });
@@ -184,8 +236,12 @@ export function useServersPage() {
     pageCount,
     currentPage,
     pagedServers,
+    controlPlaneVersion,
+    agentUpdateFor,
+    agentUpdateRunning,
     handleValidate,
     handleCheckAll,
+    handleUpdateAgent,
     openNode,
     openContainers,
     openEdit,

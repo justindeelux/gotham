@@ -81,13 +81,29 @@ manifest.
 
 ## Fleet-wide agent rollout
 
-Agents do not update themselves on their own unless you opt in. Each agent polls
-the control plane over the CA-verified channel every 5 minutes by default. For
-each supported architecture (`amd64`, `arm64`) the control plane resolves the
-newest agent release, verifies its signed manifest, and offers it only when it is
-newer than the version the agent reported on its last heartbeat.
+The control plane treats its own release as the node-agent target. When it runs
+a release, every agent that polls it is offered that same signed release as a
+rollout, so a control-plane update reaches the nodes without a separate step. A
+node that was offline during the update applies it when it reconnects, because
+the condition is the running control-plane version, not a timer.
 
-Trigger a rollout with the owner API:
+An agent does not move to a release the control plane has not taken: a plain
+offer (a newer release the control plane has not installed) is informational
+unless the node sets `GOTHAM_AGENT_AUTO_UPDATE=true` in its agent environment.
+
+The self-update replaces the whole node install, not only the binary. The signed
+release also carries the host helper, its sudoers rules and the systemd unit,
+and the privileged wrapper applies them before it restarts the agent. A
+stable-channel node still refuses a beta offer, and an unsigned, mismatched or
+unverifiable release is rejected before anything is applied.
+
+The Servers page shows each node's agent version next to the control-plane
+version and flags a mismatch. **Update agent** on an outdated node queues the
+release for that node and clears a previous failed-update state, so the same
+version is retried without a shell command. The node updates on its next poll;
+the card then shows pending, updating, up to date or the failure reason.
+
+An owner can still trigger a fleet-wide rollout through the API:
 
 ```sh
 curl -X POST -H "Authorization: Bearer <admin-token>" \
@@ -95,23 +111,24 @@ curl -X POST -H "Authorization: Bearer <admin-token>" \
 ```
 
 The call records a rollout target and returns without waiting: each agent picks
-the target up on its next poll. There is no console control for this yet.
-`GET /api/v1/servers/agents` returns the per-node reported versions, the active
-rollout target and the latest release the control plane can see.
+the target up on its next poll. `GET /api/v1/servers/agents` returns the
+per-node reported versions and states, the active rollout target and the latest
+release the control plane can see.
 
-To let a single node update unattended, set `GOTHAM_AGENT_AUTO_UPDATE=true` in
-its agent environment. A failed activation rolls back and backs off like the
-control plane; retrying the same version needs an operator reset on the node:
+A failed activation rolls back and backs off like the control plane. The
+**Update agent** button clears that backoff for the node it targets; the
+node-side reset remains available when the agent cannot reach the control plane:
 
 ```sh
 sudo gotham-agent update reset
 ```
 
-The binary-only update also fixes the docker CLI environment under the systemd
-sandbox: when the unit hides `~/.docker` (`ProtectHome=true`), the agent points
+The self-update also fixes the docker CLI environment under the systemd sandbox:
+when the unit hides `~/.docker` (`ProtectHome=true`), the agent points
 `DOCKER_CONFIG` at `/var/lib/gotham-agent/.docker` at startup, so `docker
-compose` finds its plugin without a reinstall. A reinstall additionally writes
-the variable (and that directory) into the unit.
+compose` finds its plugin without a reinstall. A reinstall is only needed to
+change install-time choices (the file manager or CA) or to repair a node whose
+privileged wrapper predates the refresh support.
 
 Reinstalling a specific version is a normal install with
 `GOTHAM_VERSION=vX.Y.Z`; see [Install](/guide/install).

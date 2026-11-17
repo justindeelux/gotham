@@ -82,13 +82,30 @@ một bản cài đặt `beta` nhận bản `stable` mới hơn vẫn xác minh 
 
 ## Triển khai agent toàn hệ thống
 
-Agent không tự cập nhật trừ khi bạn bật. Theo mặc định, mỗi agent hỏi control
-plane qua kênh đã xác minh bằng CA mỗi 5 phút. Với mỗi kiến trúc được hỗ trợ
-(`amd64`, `arm64`), control plane xác định bản phát hành agent mới nhất, xác minh
-manifest đã ký của nó, và chỉ đề nghị khi nó mới hơn phiên bản agent báo trong nhịp
-tim gần nhất.
+Control plane coi bản phát hành của chính nó là mục tiêu của agent trên node. Khi
+nó chạy một bản phát hành, mọi agent hỏi nó sẽ được đề nghị cùng bản phát hành đã
+ký đó dưới dạng một đợt triển khai, nên cập nhật control plane đến được các node
+mà không cần bước riêng. Một node ngoại tuyến trong lúc cập nhật sẽ áp dụng khi
+kết nối lại, vì điều kiện là phiên bản control plane đang chạy chứ không phải một
+bộ đếm thời gian.
 
-Kích hoạt một đợt triển khai bằng API của chủ sở hữu:
+Agent không chuyển sang bản phát hành mà control plane chưa nhận: một đề nghị
+thường (bản mới hơn control plane chưa cài) chỉ là thông tin trừ khi node đặt
+`GOTHAM_AGENT_AUTO_UPDATE=true` trong môi trường agent của nó.
+
+Tự cập nhật thay toàn bộ bản cài trên node, không chỉ tệp nhị phân. Bản phát hành
+đã ký còn mang theo host helper, các quy tắc sudoers và unit systemd, và wrapper
+đặc quyền áp dụng chúng trước khi khởi động lại agent. Một node kênh `stable` vẫn
+từ chối đề nghị `beta`, và một bản phát hành không ký, không khớp hoặc không xác
+minh được sẽ bị từ chối trước khi áp dụng bất cứ thứ gì.
+
+Trang Servers hiển thị phiên bản agent của từng node cạnh phiên bản control plane
+và đánh dấu khi không khớp. **Cập nhật agent** trên một node lỗi thời xếp hàng bản
+phát hành cho node đó và xóa trạng thái thất bại trước đó, nên cùng phiên bản được
+thử lại mà không cần lệnh shell. Node cập nhật ở lần hỏi tiếp theo; thẻ node sau
+đó hiển thị đang chờ, đang cập nhật, đã mới nhất hoặc lý do thất bại.
+
+Chủ sở hữu vẫn có thể kích hoạt một đợt triển khai toàn hệ thống qua API:
 
 ```sh
 curl -X POST -H "Authorization: Bearer <admin-token>" \
@@ -96,24 +113,23 @@ curl -X POST -H "Authorization: Bearer <admin-token>" \
 ```
 
 Lệnh gọi này ghi lại mục tiêu triển khai và trả về ngay, không chờ: mỗi agent nhận
-mục tiêu ở lần hỏi tiếp theo. Chưa có điều khiển nào trên bảng điều khiển cho việc
-này. `GET /api/v1/servers/agents` trả về phiên bản từng node báo cáo, mục tiêu
-triển khai đang hoạt động và bản phát hành mới nhất mà control plane thấy được.
+mục tiêu ở lần hỏi tiếp theo. `GET /api/v1/servers/agents` trả về phiên bản và
+trạng thái từng node báo cáo, mục tiêu triển khai đang hoạt động và bản phát hành
+mới nhất mà control plane thấy được.
 
-Để cho phép một node tự cập nhật không cần giám sát, đặt
-`GOTHAM_AGENT_AUTO_UPDATE=true` trong môi trường agent của node đó. Một lần kích
-hoạt thất bại sẽ quay lui và giãn thời gian chờ giống control plane; muốn thử lại
-cùng phiên bản cần người vận hành đặt lại trên node:
+Một lần kích hoạt thất bại sẽ quay lui và giãn thời gian chờ giống control plane.
+Nút **Cập nhật agent** xóa thời gian chờ đó cho node được chọn; đặt lại trên node
+vẫn dùng được khi agent không kết nối được tới control plane:
 
 ```sh
 sudo gotham-agent update reset
 ```
 
-Bản cập nhật chỉ thay tệp nhị phân cũng sửa môi trường CLI docker trong sandbox
-systemd: khi unit ẩn `~/.docker` (`ProtectHome=true`), agent trỏ `DOCKER_CONFIG`
-vào `/var/lib/gotham-agent/.docker` lúc khởi động, nên `docker compose` tìm thấy
-plugin mà không cần cài lại. Việc cài lại còn ghi biến này (và thư mục đó) vào
-unit.
+Tự cập nhật cũng sửa môi trường CLI docker trong sandbox systemd: khi unit ẩn
+`~/.docker` (`ProtectHome=true`), agent trỏ `DOCKER_CONFIG` vào
+`/var/lib/gotham-agent/.docker` lúc khởi động, nên `docker compose` tìm thấy
+plugin mà không cần cài lại. Chỉ cần cài lại để đổi lựa chọn lúc cài (file
+manager hoặc CA) hay sửa một node có wrapper đặc quyền cũ hơn hỗ trợ làm mới.
 
 Cài lại một phiên bản cụ thể là một lần cài bình thường với
 `GOTHAM_VERSION=vX.Y.Z`; xem [Cài đặt](/vi/guide/install).

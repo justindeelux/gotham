@@ -5718,7 +5718,17 @@ type UpdateRequest struct {
 	// today; the field keeps the contract explicit for the CP's asset selection.
 	Os string `protobuf:"bytes,2,opt,name=os,proto3" json:"os,omitempty"`
 	// arch is the agent's GOARCH (e.g. "amd64", "arm64").
-	Arch          string `protobuf:"bytes,3,opt,name=arch,proto3" json:"arch,omitempty"`
+	Arch string `protobuf:"bytes,3,opt,name=arch,proto3" json:"arch,omitempty"`
+	// update_result is the last self-update outcome recorded on the node
+	// ("ok", "rolled_back", "rollback_failed", "no_backup", "wrapper_failed").
+	// The control plane uses it to show a failed rollout with its reason. Empty
+	// when the node has no recorded outcome (a fresh install).
+	UpdateResult string `protobuf:"bytes,4,opt,name=update_result,json=updateResult,proto3" json:"update_result,omitempty"`
+	// update_detail is the human-readable reason the wrapper recorded for
+	// update_result (for example "health check failed; previous binary restored").
+	UpdateDetail string `protobuf:"bytes,5,opt,name=update_detail,json=updateDetail,proto3" json:"update_detail,omitempty"`
+	// update_version is the release the outcome belongs to.
+	UpdateVersion string `protobuf:"bytes,6,opt,name=update_version,json=updateVersion,proto3" json:"update_version,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
 }
@@ -5774,6 +5784,27 @@ func (x *UpdateRequest) GetArch() string {
 	return ""
 }
 
+func (x *UpdateRequest) GetUpdateResult() string {
+	if x != nil {
+		return x.UpdateResult
+	}
+	return ""
+}
+
+func (x *UpdateRequest) GetUpdateDetail() string {
+	if x != nil {
+		return x.UpdateDetail
+	}
+	return ""
+}
+
+func (x *UpdateRequest) GetUpdateVersion() string {
+	if x != nil {
+		return x.UpdateVersion
+	}
+	return ""
+}
+
 // UpdateResponse reports whether an update is available and, when it is, the
 // signed release material the agent needs to download and verify it. The CP
 // only ever returns material it has itself verified; an empty asset_url with
@@ -5796,11 +5827,15 @@ type UpdateResponse struct {
 	Sha256 string `protobuf:"bytes,6,opt,name=sha256,proto3" json:"sha256,omitempty"`
 	// channel is the release channel the offer came from ("stable"/"beta").
 	Channel string `protobuf:"bytes,7,opt,name=channel,proto3" json:"channel,omitempty"`
-	// rollout is true when an operator has triggered an "update all agents"
-	// rollout that includes this agent. An agent applies an offer when rollout is
-	// set even if its own unattended auto-update is disabled; a plain offer is
-	// informational and only applied when AGENT_AUTO_UPDATE is on.
-	Rollout       bool `protobuf:"varint,8,opt,name=rollout,proto3" json:"rollout,omitempty"`
+	// update_all_agents rollout that includes this agent. An agent applies an
+	// offer when rollout is set even if its own unattended auto-update is disabled;
+	// a plain offer is informational and only applied when AGENT_AUTO_UPDATE is on.
+	Rollout bool `protobuf:"varint,8,opt,name=rollout,proto3" json:"rollout,omitempty"`
+	// retry asks the agent to clear its failed-update backoff and pending marker
+	// before applying this offer. The control plane sets it when an operator
+	// triggers a manual agent update, which is what `gotham-agent update reset`
+	// does on the node. A stable node still refuses a beta offer first.
+	Retry         bool `protobuf:"varint,9,opt,name=retry,proto3" json:"retry,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
 }
@@ -5887,6 +5922,13 @@ func (x *UpdateResponse) GetChannel() string {
 func (x *UpdateResponse) GetRollout() bool {
 	if x != nil {
 		return x.Rollout
+	}
+	return false
+}
+
+func (x *UpdateResponse) GetRetry() bool {
+	if x != nil {
+		return x.Retry
 	}
 	return false
 }
@@ -12853,11 +12895,14 @@ const file_agent_v1_agent_proto_rawDesc = "" +
 	"receivedAt\x12+\n" +
 	"\x11accepted_sequence\x18\x02 \x01(\x04R\x10acceptedSequence\x12\x1a\n" +
 	"\baccepted\x18\x03 \x01(\bR\baccepted\x120\n" +
-	"\x14expected_interval_ms\x18\x04 \x01(\x03R\x12expectedIntervalMs\"X\n" +
+	"\x14expected_interval_ms\x18\x04 \x01(\x03R\x12expectedIntervalMs\"\xc9\x01\n" +
 	"\rUpdateRequest\x12#\n" +
 	"\ragent_version\x18\x01 \x01(\tR\fagentVersion\x12\x0e\n" +
 	"\x02os\x18\x02 \x01(\tR\x02os\x12\x12\n" +
-	"\x04arch\x18\x03 \x01(\tR\x04arch\"\xa4\x02\n" +
+	"\x04arch\x18\x03 \x01(\tR\x04arch\x12#\n" +
+	"\rupdate_result\x18\x04 \x01(\tR\fupdateResult\x12#\n" +
+	"\rupdate_detail\x18\x05 \x01(\tR\fupdateDetail\x12%\n" +
+	"\x0eupdate_version\x18\x06 \x01(\tR\rupdateVersion\"\xba\x02\n" +
 	"\x0eUpdateResponse\x12)\n" +
 	"\x10update_available\x18\x01 \x01(\bR\x0fupdateAvailable\x12%\n" +
 	"\x0elatest_version\x18\x02 \x01(\tR\rlatestVersion\x12\x1b\n" +
@@ -12866,7 +12911,8 @@ const file_agent_v1_agent_proto_rawDesc = "" +
 	"\x16manifest_signature_url\x18\x05 \x01(\tR\x14manifestSignatureUrl\x12\x16\n" +
 	"\x06sha256\x18\x06 \x01(\tR\x06sha256\x12\x18\n" +
 	"\achannel\x18\a \x01(\tR\achannel\x12\x18\n" +
-	"\arollout\x18\b \x01(\bR\arollout\"\x12\n" +
+	"\arollout\x18\b \x01(\bR\arollout\x12\x14\n" +
+	"\x05retry\x18\t \x01(\bR\x05retry\"\x12\n" +
 	"\x10ListToolsRequest\"\xf3\x02\n" +
 	"\bToolInfo\x12\x0e\n" +
 	"\x02id\x18\x01 \x01(\tR\x02id\x12\x12\n" +

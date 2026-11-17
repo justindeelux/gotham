@@ -261,6 +261,8 @@ async function loadServersStore() {
               "export const validateServer = (...a) => api().validateServer(...a);",
               "export const installServerKey = (...a) => api().installServerKey(...a);",
               "export const updateServer = (...a) => api().updateServer(...a);",
+              "export const listAgentUpdates = (...a) => api().listAgentUpdates(...a);",
+              "export const updateAgent = (...a) => api().updateAgent(...a);",
               "export const describeServerError = (...a) => api().describeServerError(...a);",
               "export const isApiError = (...a) => api().isApiError(...a);",
               "export const stripErrorPrefix = (...a) => api().stripErrorPrefix(...a);",

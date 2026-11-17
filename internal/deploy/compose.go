@@ -206,6 +206,10 @@ func (o *Orchestrator) renderComposeDocument(ctx context.Context, app Applicatio
 	if err != nil {
 		return "", nil, err
 	}
+	injected, err = InjectComposeEnvironment(injected, env)
+	if err != nil {
+		return "", nil, composeValidationError(services.RedactError(err, env))
+	}
 	if err := guardValidate(injected, app.ID); err != nil {
 		return "", nil, composeValidationError(services.RedactError(err, env))
 	}

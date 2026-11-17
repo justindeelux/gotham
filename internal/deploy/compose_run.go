@@ -310,6 +310,105 @@ func portInRange(port, span string) bool {
 	return want >= lo && want <= hi
 }
 
+// InjectComposeEnvironment copies the application environment into every
+// service, so a variable saved in the app reaches its container even when the
+// compose file never references it as ${VAR}. A key the service declares keeps
+// the compose value; only missing keys are added.
+//
+// The whole map is injected, including keys Gotham generates (the PORT variable
+// from composeProjectEnv): it is the same map ${VAR} resolves against, so a
+// service that reads a generated key without a reference sees the same value.
+//
+// Dollars are escaped as $$ because compose interpolates the rendered document
+// a second time on the node.
+func InjectComposeEnvironment(rendered string, env map[string]string) (string, error) {
+	if len(env) == 0 || strings.TrimSpace(rendered) == "" {
+		return rendered, nil
+	}
+	var doc map[string]any
+	if err := yaml.Unmarshal([]byte(rendered), &doc); err != nil {
+		return "", fmt.Errorf("%w: compose document is not valid YAML: %v", ErrValidation, err)
+	}
+	services, ok := doc["services"].(map[string]any)
+	if !ok || len(services) == 0 {
+		return "", fmt.Errorf("%w: compose document declares no services", ErrValidation)
+	}
+	keys := make([]string, 0, len(env))
+	for key := range env {
+		keys = append(keys, key)
+	}
+	sort.Strings(keys)
+	changed := false
+	for name, rawService := range services {
+		service, ok := rawService.(map[string]any)
+		if !ok {
+			return "", fmt.Errorf("%w: compose service %q is not a mapping", ErrValidation, name)
+		}
+		merged, serviceChanged, err := composeEnvironmentWithApp(service["environment"], env, keys)
+		if err != nil {
+			return "", fmt.Errorf("%w: compose service %q: %v", ErrValidation, name, err)
+		}
+		service["environment"] = merged
+		services[name] = service
+		changed = changed || serviceChanged
+	}
+	if !changed {
+		return rendered, nil
+	}
+	doc["services"] = services
+	out, err := yaml.Marshal(doc)
+	if err != nil {
+		return "", fmt.Errorf("%w: render compose document: %v", ErrValidation, err)
+	}
+	return string(out), nil
+}
+
+func composeEnvironmentWithApp(raw any, env map[string]string, keys []string) (any, bool, error) {
+	switch entries := raw.(type) {
+	case nil:
+		merged := make(map[string]any, len(keys))
+		for _, key := range keys {
+			merged[key] = composeEnvValue(env[key])
+		}
+		return merged, len(keys) > 0, nil
+	case map[string]any:
+		changed := false
+		for _, key := range keys {
+			if _, ok := entries[key]; ok {
+				continue
+			}
+			entries[key] = composeEnvValue(env[key])
+			changed = true
+		}
+		return entries, changed, nil
+	case []any:
+		declared := make(map[string]bool, len(entries))
+		for _, entry := range entries {
+			text, ok := entry.(string)
+			key, _, found := strings.Cut(text, "=")
+			if !ok || !found {
+				return nil, false, fmt.Errorf("environment list entries must be KEY=VALUE strings")
+			}
+			declared[strings.TrimSpace(key)] = true
+		}
+		changed := false
+		for _, key := range keys {
+			if declared[key] {
+				continue
+			}
+			entries = append(entries, key+"="+composeEnvValue(env[key]))
+			changed = true
+		}
+		return entries, changed, nil
+	default:
+		return nil, false, fmt.Errorf("environment must be a mapping or a list of KEY=VALUE strings")
+	}
+}
+
+func composeEnvValue(value string) string {
+	return strings.ReplaceAll(value, "$", "$$")
+}
+
 var composeNamedVolumePattern = regexp.MustCompile(`^[a-zA-Z0-9][a-zA-Z0-9_.-]*$`)
 
 func RewriteComposeManagedVolumes(rendered, root string, appID uuid.UUID) (string, error) {

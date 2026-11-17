@@ -78,6 +78,12 @@ still name files the node does not have, so set those values as application
 environment variables instead. A pasted document cannot build: use the git
 source when a service needs a build.
 
+The variables saved on the **Environment** tab of the app are passed to every
+service of the compose project, so a value reaches a container even when the
+document never references it as `${VAR}`. A key the service declares itself
+keeps the value written in the compose file, and secrets stay sealed:
+`compose_document` and the build log never hold a resolved value.
+
 Compose also appears on the **Service** tab of the add-resource picker, where
 the compose project is managed as a service instead of an application. See
 [Services and templates](/using/services-templates).

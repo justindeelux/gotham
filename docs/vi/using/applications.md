@@ -76,6 +76,12 @@ vẫn trỏ tới tệp node không có, nên hãy đặt các giá trị đó t
 của ứng dụng. Tài liệu dán không build được: hãy dùng nguồn git khi service cần
 build.
 
+Các biến lưu ở tab **Môi trường** của ứng dụng được truyền cho mọi service của dự
+án compose, nên một giá trị vẫn tới được container dù tài liệu không tham chiếu
+tới nó bằng `${VAR}`. Khóa mà service tự khai báo vẫn giữ giá trị trong tệp
+compose, còn bí mật vẫn được niêm phong: `compose_document` và nhật ký build
+không bao giờ chứa giá trị đã giải mã.
+
 Compose cũng xuất hiện ở tab **Dịch vụ** của bộ chọn thêm tài nguyên, nơi dự án
 compose được quản lý như một dịch vụ thay vì một ứng dụng. Xem
 [Dịch vụ và template](/vi/using/services-templates).

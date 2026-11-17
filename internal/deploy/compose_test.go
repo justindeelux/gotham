@@ -14,6 +14,7 @@ import (
 	"github.com/google/uuid"
 	"gopkg.in/yaml.v3"
 
+	"github.com/justindeelux/gotham/composeguard"
 	"github.com/justindeelux/gotham/internal/providers"
 	agentv1 "github.com/justindeelux/gotham/proto/agent/v1"
 )
@@ -486,6 +487,292 @@ func TestInjectComposeWebPorts(t *testing.T) {
 			t.Fatalf("inject = %v, want ErrValidation", err)
 		}
 	})
+}
+
+type composeEnvDocument struct {
+	Services map[string]struct {
+		Environment any `yaml:"environment"`
+	} `yaml:"services"`
+}
+
+func decodeComposeEnv(t *testing.T, content string) composeEnvDocument {
+	t.Helper()
+	var doc composeEnvDocument
+	if err := yaml.Unmarshal([]byte(content), &doc); err != nil {
+		t.Fatalf("decode compose document: %v\n%s", err, content)
+	}
+	return doc
+}
+
+func composeEnvMap(t *testing.T, raw any) map[string]string {
+	t.Helper()
+	switch entries := raw.(type) {
+	case nil:
+		return map[string]string{}
+	case map[string]any:
+		out := make(map[string]string, len(entries))
+		for key, value := range entries {
+			out[key] = value.(string)
+		}
+		return out
+	case []any:
+		out := make(map[string]string, len(entries))
+		for _, entry := range entries {
+			key, value, found := strings.Cut(entry.(string), "=")
+			if !found {
+				t.Fatalf("environment entry %q has no value", entry)
+			}
+			out[key] = value
+		}
+		return out
+	default:
+		t.Fatalf("environment %T is neither a mapping nor a list", raw)
+		return nil
+	}
+}
+
+func TestInjectComposeEnvironment(t *testing.T) {
+	env := map[string]string{"APP_URL": "https://app.example.com", "SESSION_SECRET": "session-value"}
+
+	t.Run("map form merges", func(t *testing.T) {
+		out, err := InjectComposeEnvironment(`services:
+  web:
+    image: example.com/app:1.0
+    environment:
+      APP_URL: declared
+  worker:
+    image: example.com/worker:1.0
+`, env)
+		if err != nil {
+			t.Fatalf("inject = %v, want nil", err)
+		}
+		doc := decodeComposeEnv(t, out)
+		web := composeEnvMap(t, doc.Services["web"].Environment)
+		if web["APP_URL"] != "declared" {
+			t.Errorf("web APP_URL = %q, want the compose value kept", web["APP_URL"])
+		}
+		if web["SESSION_SECRET"] != "session-value" {
+			t.Errorf("web SESSION_SECRET = %q, want the app value added", web["SESSION_SECRET"])
+		}
+		worker := composeEnvMap(t, doc.Services["worker"].Environment)
+		if worker["APP_URL"] != "https://app.example.com" || worker["SESSION_SECRET"] != "session-value" {
+			t.Errorf("worker environment = %v, want the app values", worker)
+		}
+	})
+
+	t.Run("list form merges", func(t *testing.T) {
+		out, err := InjectComposeEnvironment(`services:
+  web:
+    image: example.com/app:1.0
+    environment:
+      - APP_URL=declared
+`, env)
+		if err != nil {
+			t.Fatalf("inject = %v, want nil", err)
+		}
+		merged := composeEnvMap(t, decodeComposeEnv(t, out).Services["web"].Environment)
+		if merged["APP_URL"] != "declared" {
+			t.Errorf("APP_URL = %q, want the compose value kept", merged["APP_URL"])
+		}
+		if merged["SESSION_SECRET"] != "session-value" {
+			t.Errorf("SESSION_SECRET = %q, want the app value added", merged["SESSION_SECRET"])
+		}
+		if !strings.Contains(out, "- APP_URL=declared") {
+			t.Errorf("document = %q, want the declared list entry kept as written", out)
+		}
+	})
+
+	t.Run("dollar and quotes survive the guard", func(t *testing.T) {
+		value := `pa$$ "double" 'single' $HOME`
+		out, err := InjectComposeEnvironment("services:\n  web:\n    image: x\n", map[string]string{"PASSWORD": value})
+		if err != nil {
+			t.Fatalf("inject = %v, want nil", err)
+		}
+		got := composeEnvMap(t, decodeComposeEnv(t, out).Services["web"].Environment)["PASSWORD"]
+		if want := strings.ReplaceAll(value, "$", "$$"); got != want {
+			t.Errorf("PASSWORD = %q, want %q escaped for compose", got, want)
+		}
+		if err := composeguard.CheckNoInterpolation(out); err != nil {
+			t.Fatalf("CheckNoInterpolation = %v, want the escaped value accepted", err)
+		}
+	})
+
+	t.Run("declared keys leave the document unchanged", func(t *testing.T) {
+		content := "services:\n  web:\n    image: x\n    environment:\n      APP_URL: declared\n      SESSION_SECRET: declared\n"
+		out, err := InjectComposeEnvironment(content, env)
+		if err != nil {
+			t.Fatalf("inject = %v, want nil", err)
+		}
+		if out != content {
+			t.Errorf("document = %q, want it untouched", out)
+		}
+	})
+
+	t.Run("empty environment", func(t *testing.T) {
+		out, err := InjectComposeEnvironment("services:\n  web:\n    image: x\n", nil)
+		if err != nil || out != "services:\n  web:\n    image: x\n" {
+			t.Errorf("inject = %q, %v, want the document untouched", out, err)
+		}
+	})
+
+	t.Run("invalid environment rejected", func(t *testing.T) {
+		content := "services:\n  web:\n    image: x\n    environment: INHERIT_ME\n"
+		if _, err := InjectComposeEnvironment(content, env); !errors.Is(err, ErrValidation) {
+			t.Fatalf("inject = %v, want ErrValidation", err)
+		}
+	})
+}
+
+func TestRenderComposeDocumentInjectsAppEnvironment(t *testing.T) {
+	userID := uuid.New()
+	app := testComposeApp(userID)
+	app.ComposeContent = `services:
+  db:
+    image: postgres:16
+    environment:
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD}
+  web:
+    image: example.com/hoyo-tool:1.0
+    environment:
+      DATABASE_URL: postgres://hoyo:${POSTGRES_PASSWORD}@db:5432/hoyo
+      NODE_ENV: production
+  worker:
+    image: example.com/hoyo-tool:1.0
+    environment:
+      DATABASE_URL: postgres://hoyo:${POSTGRES_PASSWORD}@db:5432/hoyo
+`
+	repo := &fakeRepository{app: app}
+	repo.envVars = []EnvVar{
+		{Key: "APP_URL", Value: "https://hoyo.example.com"},
+		{Key: "APP_ENCRYPTION_KEY", Value: "encryption-key-value"},
+		{Key: "SESSION_SECRET", Value: "session-secret-value"},
+		{Key: "WEBAUTHN_RP_ID", Value: "hoyo.example.com"},
+	}
+	sealed, err := providers.SealSecret(testSecretKey, "db-password-value")
+	if err != nil {
+		t.Fatalf("seal secret: %v", err)
+	}
+	repo.secrets = []Secret{{Key: "POSTGRES_PASSWORD", Ciphertext: sealed}}
+
+	o := newTestOrchestrator(Config{Repository: repo, Source: &fakeSource{}})
+	rendered, _, err := o.renderComposeDocument(context.Background(), app, app.ComposeContent)
+	if err != nil {
+		t.Fatalf("render = %v, want nil", err)
+	}
+	doc := decodeComposeEnv(t, rendered)
+	want := map[string]string{
+		"APP_URL":            "https://hoyo.example.com",
+		"APP_ENCRYPTION_KEY": "encryption-key-value",
+		"SESSION_SECRET":     "session-secret-value",
+		"WEBAUTHN_RP_ID":     "hoyo.example.com",
+	}
+	for _, service := range []string{"web", "worker"} {
+		env := composeEnvMap(t, doc.Services[service].Environment)
+		for key, value := range want {
+			if env[key] != value {
+				t.Errorf("%s %s = %q, want %q", service, key, env[key], value)
+			}
+		}
+		if env["DATABASE_URL"] != "postgres://hoyo:db-password-value@db:5432/hoyo" {
+			t.Errorf("%s DATABASE_URL = %q, want the declared reference resolved", service, env["DATABASE_URL"])
+		}
+	}
+	if strings.Contains(rendered, "${") {
+		t.Errorf("rendered document still holds a reference:\n%s", rendered)
+	}
+}
+
+func TestOrchestratorComposeInjectsEnvWithoutLeaking(t *testing.T) {
+	userID := uuid.New()
+	app := testComposeApp(userID)
+	app.ComposeContent = `services:
+  web:
+    image: example.com/app:1.0
+    environment:
+      DATABASE_URL: postgres://app:${POSTGRES_PASSWORD}@db:5432/app
+  worker:
+    image: example.com/worker:1.0
+`
+	repo := &fakeRepository{app: app}
+	repo.envVars = []EnvVar{{Key: "APP_URL", Value: "https://app.example.com"}}
+	sealed, err := providers.SealSecret(testSecretKey, "db-password-value")
+	if err != nil {
+		t.Fatalf("seal secret: %v", err)
+	}
+	repo.secrets = []Secret{{Key: "POSTGRES_PASSWORD", Ciphertext: sealed}}
+	dep := seedDeployment(t, repo, app, Deployment{Kind: KindDeploy})
+
+	node := newMockNode()
+	node.composeContainers = []ComposeContainer{{ID: "web-id", Service: "web", State: "running", Status: "Up 1 second"}}
+	node.listed = []*agentv1.ContainerInfo{{Id: "web-id", State: "running", Status: "Up 1 second"}}
+	o := newTestOrchestrator(Config{
+		Repository: repo,
+		Source:     &fakeSource{},
+		Dial:       dialAlways(node),
+		Emitter:    NewEmitter(&recordPublisher{}),
+	})
+	o.run(context.Background(), job{app: app, dep: dep})
+
+	stored, ok := repo.deployment(dep.ID)
+	if !ok {
+		t.Fatal("deployment row is gone")
+	}
+	if stored.State != StateRunning {
+		t.Fatalf("state = %s (%q), want running", stored.State, stored.Error)
+	}
+	if len(node.composeDocuments) != 1 {
+		t.Fatalf("compose documents = %d, want 1", len(node.composeDocuments))
+	}
+	doc := decodeComposeEnv(t, node.composeDocuments[0])
+	worker := composeEnvMap(t, doc.Services["worker"].Environment)
+	if worker["APP_URL"] != "https://app.example.com" {
+		t.Errorf("worker APP_URL = %q, want the app value injected", worker["APP_URL"])
+	}
+	if worker["POSTGRES_PASSWORD"] != "db-password-value" {
+		t.Errorf("worker POSTGRES_PASSWORD = %q, want the secret injected", worker["POSTGRES_PASSWORD"])
+	}
+	for what, content := range map[string]string{"compose_document": stored.ComposeDocument, "build_log": stored.BuildLog} {
+		if strings.Contains(content, "db-password-value") || strings.Contains(content, "https://app.example.com") {
+			t.Errorf("%s holds a resolved value:\n%s", what, content)
+		}
+	}
+}
+
+func TestOrchestratorComposeInjectedSecretRedactedInErrors(t *testing.T) {
+	userID := uuid.New()
+	app := testComposeApp(userID)
+	app.ComposeContent = "services:\n  web:\n    image: example.com/app:1.0\n"
+	repo := &fakeRepository{app: app}
+	sealed, err := providers.SealSecret(testSecretKey, "db-password-value")
+	if err != nil {
+		t.Fatalf("seal secret: %v", err)
+	}
+	repo.secrets = []Secret{{Key: "POSTGRES_PASSWORD", Ciphertext: sealed}}
+	dep := seedDeployment(t, repo, app, Deployment{Kind: KindDeploy})
+
+	node := newMockNode()
+	node.composeUpErr = errors.New("invalid value db-password-value")
+	o := newTestOrchestrator(Config{
+		Repository: repo,
+		Source:     &fakeSource{},
+		Dial:       dialAlways(node),
+		Emitter:    NewEmitter(&recordPublisher{}),
+	})
+	o.run(context.Background(), job{app: app, dep: dep})
+
+	stored, ok := repo.deployment(dep.ID)
+	if !ok {
+		t.Fatal("deployment row is gone")
+	}
+	if stored.State != StateFailed {
+		t.Fatalf("state = %s, want failed", stored.State)
+	}
+	if strings.Contains(stored.Error, "db-password-value") {
+		t.Errorf("error leaks the injected secret: %q", stored.Error)
+	}
+	if !strings.Contains(stored.Error, "<redacted>") {
+		t.Errorf("error = %q, want the redaction marker", stored.Error)
+	}
 }
 
 func TestValidateComposeSourceTable(t *testing.T) {

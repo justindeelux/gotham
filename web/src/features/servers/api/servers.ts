@@ -261,6 +261,7 @@ const errorPrefixPackages = new Set([
   "backupwatch",
   "builds",
   "cleanup",
+  "compose",
   "containers",
   "cronexpr",
   "databases",

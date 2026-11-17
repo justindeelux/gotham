@@ -23,17 +23,20 @@ type Engine string
 const (
 	Railpack   Engine = "railpack"
 	Buildpacks Engine = "buildpacks"
+	Dockerfile Engine = "dockerfile"
 )
 
 const (
 	RailpackCLI   = "railpack"
 	BuildpacksCLI = "pack"
+	DockerCLI     = "docker"
 )
 
 const (
 	railpackInstallHint   = "install it from the App Store"
 	railpackBuildKitHint  = "install Docker from the App Store so Gotham can run its BuildKit container"
 	buildpacksInstallHint = "install it from the App Store"
+	dockerBuildKitHint    = "install Docker from the App Store; Dockerfile builds need its docker CLI with the buildx plugin (BuildKit)"
 )
 
 var ErrCLIMissing = errors.New("builds: build toolchain unavailable")
@@ -45,6 +48,11 @@ type Options struct {
 	LogWriter  io.Writer
 	DockerHost string
 	StateDir   string
+	// Context is the tarball build context, streamed on stdin to docker buildx.
+	Context io.Reader
+	// Dockerfile and Target only apply to the Dockerfile engine.
+	Dockerfile string
+	Target     string
 
 	buildKitHost string
 }
@@ -67,16 +75,26 @@ func Available(engine Engine) error {
 			return fmt.Errorf("%w: %q is not on PATH; %s", ErrCLIMissing, BuildpacksCLI, buildpacksInstallHint)
 		}
 		return nil
+	case Dockerfile:
+		if !toolcatalog.Installed(toolcatalog.IDDocker) || !buildxAvailable() {
+			return fmt.Errorf("%w: Dockerfile builds need BuildKit through %s buildx; %s",
+				ErrCLIMissing, DockerCLI, dockerBuildKitHint)
+		}
+		return nil
 	default:
 		return fmt.Errorf("%w: unknown engine %q", ErrCLIMissing, engine)
 	}
+}
+
+func buildxAvailable() bool {
+	return exec.Command(DockerCLI, "buildx", "version").Run() == nil
 }
 
 func Run(ctx context.Context, engine Engine, opts Options) error {
 	if err := Available(engine); err != nil {
 		return err
 	}
-	if strings.TrimSpace(opts.Dir) == "" {
+	if strings.TrimSpace(opts.Dir) == "" && engine != Dockerfile {
 		return fmt.Errorf("%w: empty build directory", ErrCLIMissing)
 	}
 	if strings.TrimSpace(opts.Tag) == "" {
@@ -102,6 +120,15 @@ func Run(ctx context.Context, engine Engine, opts Options) error {
 		name = BuildpacksCLI
 		args = []string{"build", opts.Tag, "--path", "."}
 		args = append(args, buildEnvFlags(opts.BuildArgs)...)
+	case Dockerfile:
+		name = DockerCLI
+		args = []string{"buildx", "build", "--tag", opts.Tag, "--file", opts.Dockerfile,
+			"--load", "--progress", "plain"}
+		args = append(args, buildArgFlags(opts.BuildArgs)...)
+		if target := strings.TrimSpace(opts.Target); target != "" {
+			args = append(args, "--target", target)
+		}
+		args = append(args, "-")
 	default:
 		return fmt.Errorf("%w: unknown engine %q", ErrCLIMissing, engine)
 	}
@@ -118,6 +145,7 @@ func run(ctx context.Context, name string, args []string, opts Options, home str
 	command := exec.CommandContext(ctx, name, args...)
 	command.Dir = opts.Dir
 	command.Env = toolchainEnv(opts.DockerHost, opts.buildKitHost, home)
+	command.Stdin = opts.Context
 	command.Stdout = tee
 	command.Stderr = tee
 	_, _ = io.WriteString(sink, redactedCommandLine(name, args)+"\n")
@@ -400,6 +428,14 @@ func ensureBuildKit(ctx context.Context, opts Options, home string) (string, err
 }
 
 func buildEnvFlags(args map[string]string) []string {
+	return flagPairs("--env", args)
+}
+
+func buildArgFlags(args map[string]string) []string {
+	return flagPairs("--build-arg", args)
+}
+
+func flagPairs(flag string, args map[string]string) []string {
 	if len(args) == 0 {
 		return nil
 	}
@@ -410,7 +446,7 @@ func buildEnvFlags(args map[string]string) []string {
 	sort.Strings(keys)
 	flags := make([]string, 0, len(keys)*2)
 	for _, key := range keys {
-		flags = append(flags, "--env", key+"="+args[key])
+		flags = append(flags, flag, key+"="+args[key])
 	}
 	return flags
 }
@@ -420,10 +456,12 @@ func redactedCommandLine(name string, args []string) string {
 	copy(redacted, args)
 	for i := range redacted {
 		switch {
-		case redacted[i] == "--env" && i+1 < len(redacted):
+		case (redacted[i] == "--env" || redacted[i] == "--build-arg") && i+1 < len(redacted):
 			redacted[i+1] = redactBuildArg(redacted[i+1])
 		case strings.HasPrefix(redacted[i], "--env="):
 			redacted[i] = "--env=" + redactBuildArg(strings.TrimPrefix(redacted[i], "--env="))
+		case strings.HasPrefix(redacted[i], "--build-arg="):
+			redacted[i] = "--build-arg=" + redactBuildArg(strings.TrimPrefix(redacted[i], "--build-arg="))
 		}
 	}
 	return "$ " + name + " " + strings.Join(redacted, " ")

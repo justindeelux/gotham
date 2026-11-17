@@ -59,29 +59,19 @@ func (c *DockerClient) Build(ctx context.Context, opts BuildOptions, emit func([
 		dockerfile = "Dockerfile"
 	}
 
-	query := url.Values{}
-	query.Set("t", opts.Tag)
-	query.Set("dockerfile", dockerfile)
-	query.Set("rm", "1")
-	query.Set("forcerm", "1")
-	if len(opts.BuildArgs) > 0 {
-		encoded, err := json.Marshal(opts.BuildArgs)
-		if err != nil {
-			return fmt.Errorf("docker: marshal build args: %w", err)
-		}
-		query.Set("buildargs", string(encoded))
+	options := buildtool.Options{
+		Tag:        opts.Tag,
+		BuildArgs:  opts.BuildArgs,
+		Context:    opts.Context,
+		Dockerfile: dockerfile,
+		Target:     opts.Target,
+		DockerHost: c.dockerHost,
+		StateDir:   c.registryStateDir,
 	}
-	if target := strings.TrimSpace(opts.Target); target != "" {
-		query.Set("target", target)
+	if emit != nil {
+		options.LogWriter = emitWriter(emit)
 	}
-
-	response, err := c.doHeader(ctx, http.MethodPost, "/build?"+query.Encode(), opts.Context, "application/x-tar")
-	if err != nil {
-		return err
-	}
-	defer func() { _ = response.Body.Close() }()
-
-	return streamDockerMessages("build "+opts.Tag, response.Body, emit)
+	return buildtool.Run(ctx, buildtool.Dockerfile, options)
 }
 
 type emitWriter func([]byte) error

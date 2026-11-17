@@ -115,7 +115,11 @@ func (s *BuildServer) BuildImage(stream agentv1.BuildService_BuildImageServer) e
 		return dockerError("build image", err)
 	}
 
-	imageTag := imageRepoPrefix + meta.GetAppId() + ":" + meta.GetDeployId()
+	localTag := strings.TrimSpace(meta.GetTag())
+	if localTag == "" {
+		localTag = meta.GetDeployId()
+	}
+	imageTag := imageRepoPrefix + meta.GetAppId() + ":" + localTag
 
 	registryAddr, err := s.docker.EnsureRegistry(ctx)
 	if err != nil {
@@ -138,18 +142,19 @@ func (s *BuildServer) BuildImage(stream agentv1.BuildService_BuildImageServer) e
 		Dockerfile: dockerfilePath(meta),
 		BuildArgs:  meta.GetBuildArgs(),
 		Context:    contextFile,
+		Target:     meta.GetTarget(),
 	}, emit); err != nil {
 		return fail(err)
 	}
 
-	if err := s.docker.TagImage(ctx, registryImage, imageRepoPrefix+meta.GetAppId(), meta.GetDeployId()); err != nil {
+	if err := s.docker.TagImage(ctx, registryImage, imageRepoPrefix+meta.GetAppId(), localTag); err != nil {
 		return fail(err)
 	}
 
 	if err := emit([]byte("pushing " + registryImage + "\n")); err != nil {
 		return sendErr
 	}
-	if err := s.docker.PushImage(ctx, stripImageTag(registryImage), meta.GetDeployId(), emit); err != nil {
+	if err := s.docker.PushImage(ctx, stripImageTag(registryImage), localTag, emit); err != nil {
 		return fail(err)
 	}
 
@@ -218,6 +223,11 @@ func validateBuildMeta(meta *agentv1.BuildMeta) error {
 	}
 	if err := validateTagSegment("deploy_id", meta.GetDeployId()); err != nil {
 		return err
+	}
+	if tag := strings.TrimSpace(meta.GetTag()); tag != "" {
+		if err := validateTagSegment("tag", tag); err != nil {
+			return err
+		}
 	}
 	switch strings.ToLower(strings.TrimSpace(meta.GetEngine())) {
 	case "", "dockerfile", "static", string(buildtool.Railpack), string(buildtool.Buildpacks):

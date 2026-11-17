@@ -279,6 +279,41 @@ func TestBuildServerBuildImageUsesDockerfileAndBuildArgs(t *testing.T) {
 	}
 }
 
+func TestBuildServerUsesPerServiceTagAndTarget(t *testing.T) {
+	fake := &fakeBuildClient{}
+	client, _ := newBuildServiceClient(t, fake)
+
+	meta := &agentv1.BuildMeta{
+		AppId:    "api",
+		DeployId: "d2",
+		Tag:      "d2-web",
+		Target:   "web",
+	}
+	_, result, err := runBuild(t, client, meta, nil)
+	if err != nil {
+		t.Fatalf("build image: %v", err)
+	}
+	if result.GetImageTag() != "gotham/api:d2-web" {
+		t.Errorf("image tag = %q, want gotham/api:d2-web", result.GetImageTag())
+	}
+	if fake.buildOpts.Target != "web" {
+		t.Errorf("build target = %q, want web", fake.buildOpts.Target)
+	}
+	if fake.tagRepo != "gotham/api" || fake.tagTag != "d2-web" {
+		t.Errorf("tag options = %q:%q, want the per-service tag", fake.tagRepo, fake.tagTag)
+	}
+}
+
+func TestBuildServerRejectsUnsafeServiceTag(t *testing.T) {
+	fake := &fakeBuildClient{}
+	client, _ := newBuildServiceClient(t, fake)
+
+	_, _, err := runBuild(t, client, &agentv1.BuildMeta{AppId: "api", DeployId: "d2", Tag: "d2/../evil"}, nil)
+	if status.Code(err) != codes.InvalidArgument {
+		t.Fatalf("build image = %v, want InvalidArgument", err)
+	}
+}
+
 func TestBuildServerRunsToolchainOnNode(t *testing.T) {
 	fake := &fakeBuildClient{digest: "sha256:tool"}
 	client, _ := newBuildServiceClient(t, fake)

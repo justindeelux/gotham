@@ -73,6 +73,9 @@ func (o *Orchestrator) resolveComposeContent(ctx context.Context, app Applicatio
 		if err := ValidateComposeContent(content, app.ID); err != nil {
 			return "", CommitInfo{}, err
 		}
+		if err := rejectPastedBuild(content); err != nil {
+			return "", CommitInfo{}, err
+		}
 		if err := ValidateComposeService(content, app.ComposeService); err != nil {
 			return "", CommitInfo{}, err
 		}
@@ -176,41 +179,37 @@ func (o *Orchestrator) composeDomainTargets(ctx context.Context, app Application
 	return targets, primaryPort, nil
 }
 
-func (o *Orchestrator) renderComposeDocument(ctx context.Context, app Application, raw string) (rendered string, images []string, env map[string]string, err error) {
+func (o *Orchestrator) renderComposeDocument(ctx context.Context, app Application, raw string) (rendered string, env map[string]string, err error) {
 	targets, primaryPort, err := o.composeDomainTargets(ctx, app, raw)
 	if err != nil {
-		return "", nil, nil, err
+		return "", nil, err
 	}
 	env, err = o.loadComposeEnv(ctx, app, primaryPort)
 	if err != nil {
-		return "", nil, nil, err
+		return "", nil, err
 	}
 	spec, err := services.Render(raw, env)
 	if err != nil {
-		return "", nil, nil, composeValidationError(services.RedactError(err, env))
+		return "", nil, composeValidationError(services.RedactError(err, env))
 	}
 	if err := composeguard.CheckNoInterpolation(spec.ComposeYAML); err != nil {
-		return "", nil, nil, composeValidationError(err)
+		return "", nil, composeValidationError(err)
 	}
 	if err := guardValidate(spec.ComposeYAML, app.ID); err != nil {
-		return "", nil, nil, composeValidationError(services.RedactError(err, env))
-	}
-	images, err = ComposeImages(spec.ComposeYAML)
-	if err != nil {
-		return "", nil, nil, err
+		return "", nil, composeValidationError(services.RedactError(err, env))
 	}
 	injected, err := InjectComposeDomainPorts(spec.ComposeYAML, targets)
 	if err != nil {
-		return "", nil, nil, err
+		return "", nil, err
 	}
 	injected, err = RewriteComposeManagedVolumes(injected, managedVolumeRoot(), app.ID)
 	if err != nil {
-		return "", nil, nil, err
+		return "", nil, err
 	}
 	if err := guardValidate(injected, app.ID); err != nil {
-		return "", nil, nil, composeValidationError(services.RedactError(err, env))
+		return "", nil, composeValidationError(services.RedactError(err, env))
 	}
-	return injected, images, env, nil
+	return injected, env, nil
 }
 
 func composeValidationError(err error) error {
@@ -224,12 +223,24 @@ func (o *Orchestrator) buildCompose(ctx context.Context, st *runState) error {
 	if strings.TrimSpace(st.composeRaw) == "" {
 		return fmt.Errorf("%w: compose: no document resolved", ErrValidation)
 	}
-	rendered, images, env, err := o.renderComposeDocument(ctx, st.app, st.composeRaw)
+	rendered, env, err := o.renderComposeDocument(ctx, st.app, st.composeRaw)
+	if err != nil {
+		return err
+	}
+	rendered, built, err := o.buildComposeImages(ctx, st, rendered)
+	if err != nil {
+		return err
+	}
+	if err := guardValidate(rendered, st.app.ID); err != nil {
+		return composeValidationError(services.RedactError(err, env))
+	}
+	images, err := ComposeImages(rendered)
 	if err != nil {
 		return err
 	}
 	st.composeYAML = rendered
 	st.composeImages = images
+	st.composeBuilt = built
 	st.composeEnv = env
 	st.dep.ComposeDocument = st.composeRaw
 	st.dep.ComposeCommit = st.composeCommit
@@ -251,7 +262,14 @@ func (o *Orchestrator) pushCompose(ctx context.Context, st *runState) error {
 		return services.RedactError(err, st.composeEnv)
 	}
 	project := services.ProjectName(st.app.ID)
+	built := make(map[string]bool, len(st.composeBuilt))
+	for _, tag := range st.composeBuilt {
+		built[tag] = true
+	}
 	for _, image := range st.composeImages {
+		if built[image] {
+			continue
+		}
 		st.log("pulling image " + services.Redact(image, st.composeEnv))
 		if err := st.node.Pull(ctx, image); err != nil {
 			st.log("could not refresh image " + services.Redact(image, st.composeEnv) +

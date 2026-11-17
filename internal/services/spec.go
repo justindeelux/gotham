@@ -36,6 +36,9 @@ type ComposeSpec struct {
 	Domains      []DomainRoute
 	NamedVolumes []string
 	Mounts       []StorageMount
+	// Built lists the services that declare build instead of image. Only a
+	// repository-backed deploy can build them; a pasted document cannot.
+	Built []string
 }
 
 type RenderedSpec struct {
@@ -302,7 +305,7 @@ func Parse(document string) (ComposeSpec, error) {
 		return ComposeSpec{}, fmt.Errorf("%w: compose document declares more than %d services", ErrValidation, MaxComposeServices)
 	}
 
-	spec := ComposeSpec{Mounts: []StorageMount{}, Domains: []DomainRoute{}}
+	spec := ComposeSpec{Mounts: []StorageMount{}, Domains: []DomainRoute{}, Built: []string{}}
 	declaredVolumes := make(map[string]bool, len(doc.Volumes))
 	for name, definition := range doc.Volumes {
 		if err := validateNamedVolume(name); err != nil {
@@ -334,19 +337,17 @@ func Parse(document string) (ComposeSpec, error) {
 		if !composeServiceNamePattern.MatchString(name) {
 			return ComposeSpec{}, fmt.Errorf("%w: invalid compose service name %q", ErrValidation, name)
 		}
-		if service.Build != nil {
-			return ComposeSpec{}, fmt.Errorf(
-				"%w: service %q uses build, which needs a build context the control plane cannot ship; push an image instead",
-				ErrValidation, name)
-		}
 		if service.Extends != nil {
 			return ComposeSpec{}, fmt.Errorf("%w: service %q uses extends, which references a file the node does not have", ErrValidation, name)
 		}
 		if service.EnvFile != nil {
 			return ComposeSpec{}, fmt.Errorf("%w: service %q uses env_file, which references a file the node does not have", ErrValidation, name)
 		}
-		if strings.TrimSpace(service.Image) == "" {
-			return ComposeSpec{}, fmt.Errorf("%w: service %q declares no image", ErrValidation, name)
+		if strings.TrimSpace(service.Image) == "" && service.Build == nil {
+			return ComposeSpec{}, fmt.Errorf("%w: service %q declares no image or build", ErrValidation, name)
+		}
+		if service.Build != nil {
+			spec.Built = append(spec.Built, name)
 		}
 		if err := validateEnvironment(service.Environment); err != nil {
 			return ComposeSpec{}, fmt.Errorf("service %q: %w", name, err)
@@ -383,6 +384,7 @@ func Parse(document string) (ComposeSpec, error) {
 		spec.NamedVolumes = append(spec.NamedVolumes, name)
 	}
 	sort.Strings(spec.NamedVolumes)
+	sort.Strings(spec.Built)
 	sort.Slice(spec.Domains, func(i, j int) bool { return spec.Domains[i].Service < spec.Domains[j].Service })
 	sort.Slice(spec.Mounts, func(i, j int) bool {
 		if spec.Mounts[i].Service != spec.Mounts[j].Service {

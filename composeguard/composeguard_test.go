@@ -74,7 +74,11 @@ func TestValidateBypassTable(t *testing.T) {
 		{"label app id map", serviceDoc("    labels:\n      gotham.app_id: 00000000-0000-0000-0000-000000000000\n"), "services.web"},
 		{"label app id list", serviceDoc("    labels:\n      - gotham.app_id=00000000-0000-0000-0000-000000000000\n"), "services.web"},
 		{"label domain", serviceDoc("    labels:\n      gotham.domain: evil.example.com\n"), "services.web"},
-		{"build", serviceDoc("    build: .\n"), "services.web"},
+		{"build absolute context", serviceDoc("    build:\n      context: /etc\n"), "services.web.build.context"},
+		{"build parent context", serviceDoc("    build:\n      context: ../outside\n"), "services.web.build.context"},
+		{"build absolute dockerfile", serviceDoc("    build:\n      context: .\n      dockerfile: /etc/Dockerfile\n"), "services.web.build.dockerfile"},
+		{"build unknown key", serviceDoc("    build:\n      context: .\n      network: host\n"), "services.web.build"},
+		{"build bad args", serviceDoc("    build:\n      context: .\n      args:\n        A: [1]\n"), "services.web.build.args"},
 		{"extends", serviceDoc("    extends:\n      service: base\n"), "services.web"},
 		{"env file", serviceDoc("    env_file: .env\n"), "services.web"},
 		{"container name", serviceDoc("    container_name: web\n"), "services.web"},
@@ -154,6 +158,25 @@ func TestValidateBypassTable(t *testing.T) {
 	}
 }
 
+func TestValidateBuildAccepts(t *testing.T) {
+	accept := map[string]string{
+		"path form":   serviceDoc("    build: .\n"),
+		"context":     serviceDoc("    build:\n      context: ./app\n"),
+		"dockerfile":  serviceDoc("    build:\n      context: .\n      dockerfile: docker/Dockerfile\n"),
+		"target":      serviceDoc("    build:\n      context: .\n      target: web\n"),
+		"args map":    serviceDoc("    build:\n      context: .\n      args:\n        NODE_ENV: production\n"),
+		"args list":   serviceDoc("    build:\n      context: .\n      args:\n        - NODE_ENV=production\n"),
+		"image+build": "services:\n  web:\n    image: example.com/web:1\n    build: .\n",
+	}
+	for name, content := range accept {
+		t.Run(name, func(t *testing.T) {
+			if err := Validate(content, guardOpts()); err != nil {
+				t.Fatalf("Validate = %v, want nil", err)
+			}
+		})
+	}
+}
+
 func TestValidatePublishedBandAccepts(t *testing.T) {
 	accept := map[string]string{
 		"ephemeral bare":     serviceDoc("    ports:\n      - \"3000\"\n"),
@@ -162,6 +185,7 @@ func TestValidatePublishedBandAccepts(t *testing.T) {
 		"high published ip":  serviceDoc("    ports:\n      - \"0.0.0.0:8080:80\"\n"),
 		"high range":         serviceDoc("    ports:\n      - \"8000-8010:8000-8010\"\n"),
 		"reference raw":      serviceDoc("    ports:\n      - \"${PUB}:80\"\n"),
+		"reference default":  serviceDoc("    ports:\n      - \"127.0.0.1:${DB_PORT:-5432}:5432\"\n"),
 		"long ephemeral":     "services:\n  web:\n    image: x\n    ports:\n      - target: 80\n",
 		"long high":          "services:\n  web:\n    image: x\n    ports:\n      - target: 80\n        published: 8080\n",
 		"long loopback high": "services:\n  web:\n    image: x\n    ports:\n      - target: 80\n        published: 8080\n        host_ip: 127.0.0.1\n",

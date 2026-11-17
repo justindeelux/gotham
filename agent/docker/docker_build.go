@@ -42,6 +42,8 @@ type BuildOptions struct {
 	Dockerfile string
 	BuildArgs  map[string]string
 	Context    io.Reader
+	// Target selects one named stage of a multi-stage Dockerfile.
+	Target string
 }
 
 func (c *DockerClient) Build(ctx context.Context, opts BuildOptions, emit func([]byte) error) error {
@@ -68,6 +70,9 @@ func (c *DockerClient) Build(ctx context.Context, opts BuildOptions, emit func([
 			return fmt.Errorf("docker: marshal build args: %w", err)
 		}
 		query.Set("buildargs", string(encoded))
+	}
+	if target := strings.TrimSpace(opts.Target); target != "" {
+		query.Set("target", target)
 	}
 
 	response, err := c.doHeader(ctx, http.MethodPost, "/build?"+query.Encode(), opts.Context, "application/x-tar")

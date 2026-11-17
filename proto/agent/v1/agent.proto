@@ -1767,6 +1767,14 @@ message BuildMeta {
   // "railpack" and "buildpacks" run that toolchain on the node, so a build
   // engine that needs a language toolchain is not tied to the control plane.
   string engine = 5;
+  // target builds one named stage of the Dockerfile (docker build --target).
+  // Empty builds the last stage.
+  string target = 6;
+  // tag overrides {deploy_id} in the standardized local tag
+  // gotham/{app_id}:{deploy_id}. A compose deploy builds one image per service
+  // and passes "{deploy_id}-{service}" so one release's images stay distinct.
+  // Empty keeps the standardized tag.
+  string tag = 7;
 }
 
 // BuildImageResponse is one message of a BuildImage stream: either a build

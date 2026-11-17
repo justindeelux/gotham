@@ -143,7 +143,7 @@ func selectStaleImages(images []appImage, keepTag string, active map[string]stru
 	kept := 0
 	var stale []appImage
 	for _, image := range sorted {
-		if image.Ref == keepTag || imageActive(image, active) {
+		if keepImage(image.Ref, keepTag) || imageActive(image, active) {
 			continue
 		}
 		if kept < history {
@@ -153,6 +153,12 @@ func selectStaleImages(images []appImage, keepTag string, active map[string]stru
 		stale = append(stale, image)
 	}
 	return stale
+}
+
+// keepImage keeps the release tag and the per-service tags a compose build
+// appends to it (gotham/{app}:{deploy}-{service}).
+func keepImage(ref, keepTag string) bool {
+	return ref == keepTag || strings.HasPrefix(ref, keepTag+"-")
 }
 
 func imageActive(image appImage, active map[string]struct{}) bool {

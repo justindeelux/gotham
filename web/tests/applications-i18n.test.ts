@@ -2,7 +2,7 @@ import { mount } from "@vue/test-utils";
 import { NMessageProvider } from "naive-ui";
 import { createPinia, setActivePinia } from "pinia";
 import { beforeEach, describe, expect, it, vi } from "vitest";
-import { defineComponent, h, ref } from "vue";
+import { defineComponent, h, ref, reactive, computed } from "vue";
 
 import {
   describeApplicationError,
@@ -10,6 +10,9 @@ import {
 import { describePreviewError } from "@/features/applications/api/previews";
 import { describeProviderError } from "@/features/applications/api/providers";
 import { useCreateAppWizard } from "@/features/applications/composables/useCreateAppWizard";
+import { createWizardKey } from "@/features/applications/composables/useCreateAppWizard";
+import WizardEnvStep from "@/features/applications/components/WizardEnvStep.vue";
+import WizardReviewStep from "@/features/applications/components/WizardReviewStep.vue";
 import * as applicationsApi from "@/features/applications/api/applications";
 import en from "@/features/applications/locales/en";
 import viMessages from "@/features/applications/locales/vi";
@@ -322,6 +325,53 @@ describe("native textbox names follow the locale", () => {
     await panel.vm.$nextTick();
     expect(panel.find('input[aria-label="Tên miền"]').exists()).toBe(true);
     panel.unmount();
+  });
+});
+
+describe("wizard env prefill copy follows the locale", () => {
+  it("renders the prefilled hint and the missing-value warning in both locales", async () => {
+    const form = reactive({
+      name: "storefront",
+      env: [{ key: "DATABASE_URL", value: "" }],
+      storage: [],
+    });
+    const state = {
+      form,
+      buildPackLabel: computed(() => ""),
+      reviewSource: computed(() => "https://github.com/acme/demo.git"),
+      isCompose: computed(() => false),
+      envKeyWarnings: computed(() => false),
+      prefilledEnvKeys: computed<string[]>(() => ["DATABASE_URL"]),
+      droppedEnvRows: computed(() => 0),
+      envRowsWithoutValue: computed(() => 1),
+    };
+    const mountStep = (component: unknown) =>
+      mount(component as never, {
+        global: {
+          plugins: [i18n],
+          provide: { [createWizardKey as symbol]: state },
+        },
+      });
+
+    const envStep = mountStep(WizardEnvStep);
+    expect(envStep.text()).toContain(
+      "Keys read from the repository's .env files are listed below.",
+    );
+    setLocale("vi", null);
+    await envStep.vm.$nextTick();
+    expect(envStep.text()).toContain("Các khóa đọc từ tệp .env trong kho");
+    expect(envStep.text()).not.toContain("applications.wizard.envPrefilled");
+    envStep.unmount();
+
+    const reviewStep = mountStep(WizardReviewStep);
+    expect(reviewStep.text()).toContain("1 biến chưa có giá trị.");
+    setLocale("en", null);
+    await reviewStep.vm.$nextTick();
+    expect(reviewStep.text()).toContain(
+      "1 variable row has no value yet. Deploying is still allowed",
+    );
+    expect(reviewStep.text()).not.toContain("applications.wizard.reviewEnvNeedsValue");
+    reviewStep.unmount();
   });
 });
 

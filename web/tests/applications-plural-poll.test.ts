@@ -63,6 +63,7 @@ describe("wizard dropped rows render library plurals", () => {
     const state = {
       form,
       envKeyWarnings: computed(() => false),
+      prefilledEnvKeys: computed<string[]>(() => []),
       droppedEnvRows: computed(() =>
         form.env.filter((row) => row.key.trim() === "" && row.value.trim() !== "").length,
       ),

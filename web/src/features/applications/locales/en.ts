@@ -526,6 +526,8 @@ const en = {
     volumesTitle: "Volumes",
     envConvention:
       "One or more variable names do not follow the usual ^[A-Z][A-Z0-9_]*$ convention. The API accepts them, so they are not blocked — but a non-standard name may not be injected as you expect.",
+    envPrefilled:
+      "Keys read from the repository's .env files are listed below. Only names are read, never values — so fill each one in.",
     droppedRows: "{count} variable rows without a name will be ignored on create. | {count} variable row without a name will be ignored on create. | {count} variable rows without a name will be ignored on create.",
     reviewTitle: "Summary",
     reviewApp: "Application",
@@ -536,6 +538,8 @@ const en = {
     reviewVolumes: "{env} vars · {storage} volumes",
     reviewIntro: "Creating posts the payload to the applications API, then the first deploy queues immediately.",
     reviewDropped: "{count} nameless variable rows will be ignored on create. | {count} nameless variable row will be ignored on create. | {count} nameless variable rows will be ignored on create.",
+    reviewEnvNeedsValue:
+      "{count} variable rows have no value yet. Deploying is still allowed — fill them in before the app can use them. | {count} variable row has no value yet. Deploying is still allowed — fill it in before the app can use it. | {count} variable rows have no value yet. Deploying is still allowed — fill them in before the app can use them.",
     scopeError: "Select a project and environment first.",
     noSshUrl:
       "The provider reported no SSH URL for this private repository, so a deploy key cannot be used. Pick another repository or make the SSH URL available on the provider.",

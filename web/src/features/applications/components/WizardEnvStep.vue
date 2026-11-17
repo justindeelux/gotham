@@ -28,6 +28,13 @@ const droppedText = computed<string>(() =>
     <div>
       <NText strong>{{ t("applications.wizard.envTitle") }}</NText>
       <EnvEditor v-model="form.env" />
+      <NText
+        v-if="wizard.prefilledEnvKeys.value.length > 0"
+        depth="3"
+        class="env-prefilled"
+      >
+        {{ t("applications.wizard.envPrefilled") }}
+      </NText>
     </div>
     <div>
       <NText strong>{{ t("applications.wizard.volumesTitle") }}</NText>
@@ -41,3 +48,11 @@ const droppedText = computed<string>(() =>
     </NAlert>
   </NSpace>
 </template>
+
+<style scoped>
+.env-prefilled {
+  display: block;
+  margin-top: var(--space-2);
+  font-size: var(--text-xs);
+}
+</style>

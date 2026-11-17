@@ -682,6 +682,78 @@ func TestRenderComposeDocumentInjectsAppEnvironment(t *testing.T) {
 	}
 }
 
+func TestRenderComposeDocumentSkipsGeneratedPort(t *testing.T) {
+	seedDomain := func(t *testing.T, repo *fakeRepository, app Application, port int32) {
+		t.Helper()
+		if _, err := repo.CreateApplicationDomain(context.Background(), ApplicationDomain{
+			ApplicationID: app.ID, Domain: "app.example.com", IsPrimary: true, Port: port, Service: "web", Protocol: ProtocolHTTP,
+		}); err != nil {
+			t.Fatalf("seed domain: %v", err)
+		}
+	}
+	const content = `services:
+  web:
+    image: example.com/app:1.0
+  api:
+    image: example.com/api:1.0
+    environment:
+      PORT: ${PORT}
+  worker:
+    image: example.com/worker:1.0
+`
+
+	t.Run("generated port stays out of every service", func(t *testing.T) {
+		userID := uuid.New()
+		app := testComposeApp(userID)
+		app.ComposeContent = content
+		repo := &fakeRepository{app: app}
+		repo.envVars = []EnvVar{{Key: "APP_URL", Value: "https://app.example.com"}}
+		seedDomain(t, repo, app, 3000)
+
+		o := newTestOrchestrator(Config{Repository: repo, Source: &fakeSource{}})
+		rendered, _, err := o.renderComposeDocument(context.Background(), app, content)
+		if err != nil {
+			t.Fatalf("render = %v, want nil", err)
+		}
+		doc := decodeComposeEnv(t, rendered)
+		api := composeEnvMap(t, doc.Services["api"].Environment)
+		if api["PORT"] != "3000" {
+			t.Errorf("api PORT = %q, want the ${PORT} reference resolved", api["PORT"])
+		}
+		for _, service := range []string{"web", "api", "worker"} {
+			env := composeEnvMap(t, doc.Services[service].Environment)
+			if _, ok := env["PORT"]; ok && service != "api" {
+				t.Errorf("%s gained the generated PORT (%q), want only user values injected", service, env["PORT"])
+			}
+			if env["APP_URL"] != "https://app.example.com" {
+				t.Errorf("%s APP_URL = %q, want the user value injected", service, env["APP_URL"])
+			}
+		}
+	})
+
+	t.Run("user-defined port is injected", func(t *testing.T) {
+		userID := uuid.New()
+		app := testComposeApp(userID)
+		app.ComposeContent = content
+		repo := &fakeRepository{app: app}
+		repo.envVars = []EnvVar{{Key: "PORT", Value: "8080"}}
+		seedDomain(t, repo, app, 3000)
+
+		o := newTestOrchestrator(Config{Repository: repo, Source: &fakeSource{}})
+		rendered, _, err := o.renderComposeDocument(context.Background(), app, content)
+		if err != nil {
+			t.Fatalf("render = %v, want nil", err)
+		}
+		doc := decodeComposeEnv(t, rendered)
+		for _, service := range []string{"web", "api", "worker"} {
+			env := composeEnvMap(t, doc.Services[service].Environment)
+			if env["PORT"] != "8080" {
+				t.Errorf("%s PORT = %q, want the user-defined value injected", service, env["PORT"])
+			}
+		}
+	})
+}
+
 func TestOrchestratorComposeInjectsEnvWithoutLeaking(t *testing.T) {
 	userID := uuid.New()
 	app := testComposeApp(userID)

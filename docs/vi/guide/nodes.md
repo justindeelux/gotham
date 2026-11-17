@@ -278,10 +278,12 @@ Hành vi:
   nhàng (`SIGTERM`) có thể hoãn trap dừng của helper cho đến khi lệnh `systemd-run`
   phía trước trả về, nên nó không bảo đảm dừng ngay.
 - **Nâng cấp một node.** Tự cập nhật thay tệp nhị phân và, từ cùng bản phát hành
-  đã ký, cả host helper, các quy tắc sudoers và unit systemd, nên việc cài/gỡ công
-  cụ vẫn hoạt động mà không cần cài lại. Chỉ chạy lại `deploy/install-agent.sh`
-  (lũy đẳng) để đổi lựa chọn lúc cài như file manager hoặc CA, hay để sửa một
-  node có wrapper đặc quyền cũ hơn hỗ trợ làm mới.
+  đã ký, cả host helper, các quy tắc sudoers và unit systemd. Một node được cài
+  trước bản phát hành này cần chạy lại `deploy/install-agent.sh` một lần trước:
+  wrapper đã cài của nó cũ hơn bản làm mới và tự cập nhật một mình không bao giờ
+  thay wrapper đó, nên helper, unit và sudoers vẫn cũ cho đến lúc đó. Sau lần chạy
+  đó, tự cập nhật giữ chúng hiện hành. Chỉ chạy lại để đổi lựa chọn lúc cài như
+  file manager hoặc CA, hay để sửa một bản cài hỏng.
 - **Gỡ bị từ chối khi một công cụ đang được dùng** (`FAILED_PRECONDITION`): khi
   một bản build đang chạy, và khi một công cụ đã cài khác phụ thuộc vào nó (ví dụ
   BuildKit không thể đi khi Railpack đã cài). Chỉ các *bản build* đang diễn ra được

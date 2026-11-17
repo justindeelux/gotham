@@ -2,6 +2,7 @@ import { describe, expect, it } from "vitest";
 
 import type { Server } from "@/features/servers/api/servers";
 import {
+  agentUpdateInFlight,
   agentVersionMismatch,
   needsAgentUpdate,
   versionsMatch,
@@ -56,5 +57,13 @@ describe("agent version matching", () => {
     expect(needsAgentUpdate(server({ agent_version: null }), "v0.3.3")).toBe(true);
     expect(needsAgentUpdate(server(), null)).toBe(false);
     expect(needsAgentUpdate(server({ node_id: null }), "v0.3.3")).toBe(false);
+  });
+
+  it("only blocks the update action while the control plane reports updating", () => {
+    expect(agentUpdateInFlight("updating")).toBe(true);
+    expect(agentUpdateInFlight("pending")).toBe(false);
+    expect(agentUpdateInFlight("failed")).toBe(false);
+    expect(agentUpdateInFlight("up_to_date")).toBe(false);
+    expect(agentUpdateInFlight(undefined)).toBe(false);
   });
 });

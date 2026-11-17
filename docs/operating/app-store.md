@@ -124,9 +124,10 @@ Buildpacks needs `pack`. A missing tool is reported on the deployment. See
   is online.
 - **The host helper is missing or refuses the verb** — update the node's agent
   from **Servers**. The self-update replaces the host helper and its sudoers
-  rules from the signed release. If the node's privileged wrapper predates that
-  refresh support, re-run the node installer (idempotent), then retry; see
-  [Add nodes](/guide/nodes).
+  rules from the signed release. Nodes installed before this release still run
+  the old privileged wrapper, which never installs the new one, so re-run the
+  node installer once (idempotent) before retrying; after that, self-update
+  keeps the install current. See [Add nodes](/guide/nodes).
 - **A tool is in use** — an uninstall is refused while a build runs, or while
   another installed tool depends on it. Remove the dependent tool first
   (Railpack before BuildKit).

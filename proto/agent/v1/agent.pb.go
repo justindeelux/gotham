@@ -5827,9 +5827,11 @@ type UpdateResponse struct {
 	Sha256 string `protobuf:"bytes,6,opt,name=sha256,proto3" json:"sha256,omitempty"`
 	// channel is the release channel the offer came from ("stable"/"beta").
 	Channel string `protobuf:"bytes,7,opt,name=channel,proto3" json:"channel,omitempty"`
-	// update_all_agents rollout that includes this agent. An agent applies an
-	// offer when rollout is set even if its own unattended auto-update is disabled;
-	// a plain offer is informational and only applied when AGENT_AUTO_UPDATE is on.
+	// rollout is true when the control plane has started a rollout that includes
+	// this agent: either its own release or an operator-triggered update. An agent
+	// applies an offer when rollout is set even if its own unattended auto-update
+	// is disabled; a plain offer is informational and only applied when
+	// AGENT_AUTO_UPDATE is on.
 	Rollout bool `protobuf:"varint,8,opt,name=rollout,proto3" json:"rollout,omitempty"`
 	// retry asks the agent to clear its failed-update backoff and pending marker
 	// before applying this offer. The control plane sets it when an operator

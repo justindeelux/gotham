@@ -1144,9 +1144,11 @@ message UpdateResponse {
   string sha256 = 6;
   // channel is the release channel the offer came from ("stable"/"beta").
   string channel = 7;
-  // update_all_agents rollout that includes this agent. An agent applies an
-  // offer when rollout is set even if its own unattended auto-update is disabled;
-  // a plain offer is informational and only applied when AGENT_AUTO_UPDATE is on.
+  // rollout is true when the control plane has started a rollout that includes
+  // this agent: either its own release or an operator-triggered update. An agent
+  // applies an offer when rollout is set even if its own unattended auto-update
+  // is disabled; a plain offer is informational and only applied when
+  // AGENT_AUTO_UPDATE is on.
   bool rollout = 8;
   // retry asks the agent to clear its failed-update backoff and pending marker
   // before applying this offer. The control plane sets it when an operator

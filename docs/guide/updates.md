@@ -97,6 +97,13 @@ and the privileged wrapper applies them before it restarts the agent. A
 stable-channel node still refuses a beta offer, and an unsigned, mismatched or
 unverifiable release is rejected before anything is applied.
 
+A node installed before this release still runs the old privileged wrapper. Its
+agent binary updates, but that wrapper never installs the new one, so the
+helper, unit and sudoers refresh starts only after one `deploy/install-agent.sh`
+run on that node. The installer is idempotent and keeps
+`/etc/gotham/agent.env`; after that run, self-update keeps the whole install
+current.
+
 The Servers page shows each node's agent version next to the control-plane
 version and flags a mismatch. **Update agent** on an outdated node queues the
 release for that node and clears a previous failed-update state, so the same
@@ -126,9 +133,10 @@ sudo gotham-agent update reset
 The self-update also fixes the docker CLI environment under the systemd sandbox:
 when the unit hides `~/.docker` (`ProtectHome=true`), the agent points
 `DOCKER_CONFIG` at `/var/lib/gotham-agent/.docker` at startup, so `docker
-compose` finds its plugin without a reinstall. A reinstall is only needed to
-change install-time choices (the file manager or CA) or to repair a node whose
-privileged wrapper predates the refresh support.
+compose` finds its plugin without a reinstall. A reinstall is needed once on a
+node installed before this release so its wrapper can refresh the helper and
+unit; after that it is only needed to change install-time choices (the file
+manager or CA) or to repair a broken install.
 
 Reinstalling a specific version is a normal install with
 `GOTHAM_VERSION=vX.Y.Z`; see [Install](/guide/install).

@@ -99,6 +99,13 @@ Tự cập nhật thay toàn bộ bản cài trên node, không chỉ tệp nh�
 từ chối đề nghị `beta`, và một bản phát hành không ký, không khớp hoặc không xác
 minh được sẽ bị từ chối trước khi áp dụng bất cứ thứ gì.
 
+Một node được cài trước bản phát hành này vẫn chạy wrapper đặc quyền cũ. Tệp nhị
+phân agent được cập nhật, nhưng wrapper đó không bao giờ cài bản mới, nên việc làm
+mới helper, unit và sudoers chỉ bắt đầu sau một lần chạy
+`deploy/install-agent.sh` trên node đó. Trình cài đặt có tính lũy đẳng và giữ
+`/etc/gotham/agent.env`; sau lần chạy đó, tự cập nhật giữ toàn bộ bản cài hiện
+hành.
+
 Trang Servers hiển thị phiên bản agent của từng node cạnh phiên bản control plane
 và đánh dấu khi không khớp. **Cập nhật agent** trên một node lỗi thời xếp hàng bản
 phát hành cho node đó và xóa trạng thái thất bại trước đó, nên cùng phiên bản được
@@ -128,8 +135,9 @@ sudo gotham-agent update reset
 Tự cập nhật cũng sửa môi trường CLI docker trong sandbox systemd: khi unit ẩn
 `~/.docker` (`ProtectHome=true`), agent trỏ `DOCKER_CONFIG` vào
 `/var/lib/gotham-agent/.docker` lúc khởi động, nên `docker compose` tìm thấy
-plugin mà không cần cài lại. Chỉ cần cài lại để đổi lựa chọn lúc cài (file
-manager hoặc CA) hay sửa một node có wrapper đặc quyền cũ hơn hỗ trợ làm mới.
+plugin mà không cần cài lại. Cần cài lại một lần trên node được cài trước bản
+phát hành này để wrapper của nó có thể làm mới helper và unit; sau đó chỉ cần cài
+lại để đổi lựa chọn lúc cài (file manager hoặc CA) hay sửa một bản cài hỏng.
 
 Cài lại một phiên bản cụ thể là một lần cài bình thường với
 `GOTHAM_VERSION=vX.Y.Z`; xem [Cài đặt](/vi/guide/install).

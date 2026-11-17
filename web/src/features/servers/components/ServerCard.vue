@@ -8,6 +8,7 @@ import { useAuthStore } from "@/features/auth";
 import type { AgentUpdateInfo, Server } from "@/features/servers/api/servers";
 import ServerStatusTag from "@/features/servers/components/ServerStatusTag.vue";
 import {
+  agentUpdateInFlight,
   agentVersionMismatch,
   containerLabel,
   initials,
@@ -23,7 +24,6 @@ interface Props {
   agentUpdate?: AgentUpdateInfo;
   agentTargetVersion?: string | null;
   controlPlaneVersion?: string | null;
-  updateRunning?: boolean;
 }
 
 const props = defineProps<Props>();
@@ -45,8 +45,9 @@ const canUpdate = computed<boolean>(() =>
 const versionMismatch = computed<boolean>(() =>
   agentVersionMismatch(props.server, props.controlPlaneVersion),
 );
+const updateRunning = computed<boolean>(() => agentUpdateInFlight(props.agentUpdate?.state));
 const agentStatus = computed<string>(() => {
-  if (props.updateRunning || props.agentUpdate?.state === "updating") {
+  if (updateRunning.value) {
     return t("servers.card.updatingAgent");
   }
   switch (props.agentUpdate?.state) {
@@ -176,8 +177,8 @@ const agentStatus = computed<string>(() => {
         size="small"
         type="primary"
         secondary
-        :loading="updateRunning || agentUpdate?.state === 'updating'"
-        :disabled="updateRunning || agentUpdate?.state === 'updating'"
+        :loading="updateRunning"
+        :disabled="updateRunning"
         @click="emit('update-agent')"
       >
         {{ $t("servers.card.updateAgent") }}

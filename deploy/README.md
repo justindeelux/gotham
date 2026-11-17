@@ -171,8 +171,10 @@ verbs plus the pinned repair verb, the node agent user gets exactly the fixed
 host-control verbs. `create` and `create-agent` keep each other's grantee, so
 the control-plane machine can carry both. `apply-release` (run by the wrapper
 from a verified release payload) also installs the released agent unit and the
-two agent sudoers rules when an agent user is recorded, so a node self-update
-keeps the whole install current. Validates sudoers with `visudo`, is
+two agent sudoers rules when an agent user is recorded. A node whose installed
+wrapper predates this support needs one `install-agent.sh` re-run: the old
+wrapper never replaces itself, so `apply-release` is not reached until then.
+Validates sudoers with `visudo`, is
 idempotent, refuses symlinked destinations, and records a root-owned high-water
 mark so a replayed older signed payload is refused. `apply` reapplies the local
 payload; `apply-release <dir> <version>` applies a verified payload; `version-cmp

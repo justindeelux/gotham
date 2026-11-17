@@ -55,6 +55,12 @@ export function agentVersionMismatch(
   return !versionsMatch(server.agent_version, controlPlaneVersion);
 }
 
+// The control plane only reports "updating" while its offer is fresh; a stale
+// offer becomes "failed" after about ten minutes, which re-enables the action.
+export function agentUpdateInFlight(state?: string | null): boolean {
+  return state === "updating";
+}
+
 export function matchesFilter(
   server: Server,
   filter: ServerFilter,

@@ -18,6 +18,13 @@ const (
 	maxAgentVersionEntries = 10000
 	maxAgentVersionLength  = 64
 	maxAgentUpdateDetail   = 200
+
+	// A rollout offer is refreshed on every agent poll, but the first offer is
+	// the one that counts: if the node is still behind after this window, the
+	// offer is reported as failed so the operator can retry it. The window must
+	// cover a download, the wrapper restart and the heartbeat that reports the
+	// new version.
+	agentOfferStaleAfter = 10 * time.Minute
 )
 
 // Agent update states reported to the Servers page.
@@ -202,6 +209,9 @@ func (s *ServerService) AgentUpdateStatus(nodeID, target string) (string, string
 		return AgentUpdateFailed, failure.detail
 	}
 	if offer, ok := s.agentUpdate.offers[nodeID]; ok && sameAgentVersion(offer.version, target) {
+		if time.Since(offer.at) > agentOfferStaleAfter {
+			return AgentUpdateFailed, "agent did not apply the offer"
+		}
 		return AgentUpdateUpdating, ""
 	}
 	return AgentUpdatePending, ""
@@ -222,7 +232,9 @@ func (s *ServerService) OfferAgentUpdate(ctx context.Context, nodeID, agentVersi
 		rollout = true
 	}
 	if rollout {
-		s.agentUpdate.offers[nodeID] = agentOffer{version: release.Version, at: now}
+		if existing, ok := s.agentUpdate.offers[nodeID]; !ok || !sameAgentVersion(existing.version, release.Version) {
+			s.agentUpdate.offers[nodeID] = agentOffer{version: release.Version, at: now}
+		}
 		if entry, ok := s.agentUpdate.nodeRollouts[nodeID]; ok && entry.retry {
 			entry.retry = false
 			s.agentUpdate.nodeRollouts[nodeID] = entry

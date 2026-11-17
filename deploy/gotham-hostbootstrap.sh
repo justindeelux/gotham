@@ -352,7 +352,9 @@ apply_payload() {
 # verified release: the systemd unit and the two sudoers drop-ins the agent
 # itself cannot rewrite. It runs only where an agent user is recorded, and its
 # failures are reported without failing the binary update: a host that predates
-# one of these files keeps a working (if older) install.
+# one of these files keeps a working (if older) install. A node whose installed
+# wrapper predates this refresh must run install-agent.sh once; the old wrapper
+# never installs the new one, so apply_release is not reached until then.
 refresh_agent_install() {
     agent_user="$(payload_agent_user)"
     [ -n "${agent_user}" ] || return 0

@@ -99,7 +99,9 @@ thay đổi mạng đang chờ. Chỉ chủ sở hữu mới mở được các 
 Nút có agent cũ hoặc không kết nối được, hoặc thiếu ngăn xếp mạng và thời gian
 systemd, sẽ hiển thị các phần ở chế độ chỉ đọc kèm lý do rõ ràng thay vì lưu thất
 bại. Nút từ xa cần agent mới: hãy cập nhật nó từ **Servers**, hoặc để đợt triển
-khai của control plane mang tới, để tự cập nhật làm mới cả helper máy chủ. Xem
+khai của control plane mang tới, để tự cập nhật làm mới cả helper máy chủ. Một nút
+được cài trước bản phát hành này cần chạy lại trình cài agent một lần trước, vì
+wrapper cũ của nó không bao giờ cài bản mới. Xem
 [Chung và cài đặt máy chủ của nút](/vi/operating/instance-network) để biết các
 trạng thái khả năng và đếm ngược giữ/hoàn tác.
 

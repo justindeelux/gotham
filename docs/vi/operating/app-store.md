@@ -123,9 +123,10 @@ nhưng chỉ cài Railpack là chưa đủ — nó còn cần BuildKit và Docke
   node đang trực tuyến.
 - **Thiếu helper máy chủ hoặc helper từ chối lệnh** — hãy cập nhật agent của nút
   từ **Servers**. Tự cập nhật thay helper máy chủ và các quy tắc sudoers của nó từ
-  bản phát hành đã ký. Nếu wrapper đặc quyền của nút cũ hơn hỗ trợ làm mới đó, hãy
-  chạy lại trình cài đặt node (lũy đẳng), rồi thử lại; xem
-  [Thêm node](/vi/guide/nodes).
+  bản phát hành đã ký. Node được cài trước bản phát hành này vẫn chạy wrapper đặc
+  quyền cũ, và wrapper đó không bao giờ cài bản mới, nên hãy chạy lại trình cài
+  đặt node một lần (lũy đẳng) trước khi thử lại; sau đó tự cập nhật giữ bản cài
+  hiện hành. Xem [Thêm node](/vi/guide/nodes).
 - **Công cụ đang được dùng** — lệnh gỡ bỏ bị từ chối khi đang có bản build chạy,
   hoặc khi một công cụ đã cài khác phụ thuộc vào nó. Hãy gỡ công cụ phụ thuộc
   trước (Railpack trước BuildKit).

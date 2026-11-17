@@ -165,6 +165,53 @@ func TestAgentUpdateStatusAndManualRetry(t *testing.T) {
 	}
 }
 
+func TestAgentUpdateStaleOfferBecomesFailedAndRetryRestartsIt(t *testing.T) {
+	release := &updatecore.Release{Version: "v1.2.0"}
+	service := NewService(Config{Secret: "test-secret", Version: "dev", Logger: discardLogger(), Updater: &fakeAgentUpdater{release: release}})
+	service.RecordAgentVersion("node-a", "v1.0.0")
+	service.StartAgentRolloutFor("node-a", "v1.2.0")
+	if _, _, _, err := service.OfferAgentUpdate(context.Background(), "node-a", "v1.0.0", "linux", "amd64"); err != nil {
+		t.Fatalf("OfferAgentUpdate: %v", err)
+	}
+	if state, _ := service.AgentUpdateStatus("node-a", "v1.2.0"); state != AgentUpdateUpdating {
+		t.Fatalf("state after the first offer = %q, want updating", state)
+	}
+
+	// A repeated poll keeps the first offer time instead of refreshing it.
+	first := service.agentUpdate.offers["node-a"]
+	if _, _, _, err := service.OfferAgentUpdate(context.Background(), "node-a", "v1.0.0", "linux", "amd64"); err != nil {
+		t.Fatalf("OfferAgentUpdate: %v", err)
+	}
+	if got := service.agentUpdate.offers["node-a"]; !got.at.Equal(first.at) {
+		t.Fatalf("second poll moved the offer time from %v to %v", first.at, got.at)
+	}
+
+	service.agentUpdate.mu.Lock()
+	service.agentUpdate.offers["node-a"] = agentOffer{version: "v1.2.0", at: time.Now().Add(-agentOfferStaleAfter - time.Minute)}
+	service.agentUpdate.mu.Unlock()
+	state, detail := service.AgentUpdateStatus("node-a", "v1.2.0")
+	if state != AgentUpdateFailed || detail != "agent did not apply the offer" {
+		t.Fatalf("state = %q detail = %q, want the stale-offer failure", state, detail)
+	}
+
+	// The manual retry re-enables the action and starts a fresh timer.
+	service.StartAgentRolloutFor("node-a", "v1.2.0")
+	if state, _ := service.AgentUpdateStatus("node-a", "v1.2.0"); state != AgentUpdatePending {
+		t.Fatalf("state after the retry = %q, want pending", state)
+	}
+	if _, _, retry, err := service.OfferAgentUpdate(context.Background(), "node-a", "v1.0.0", "linux", "amd64"); err != nil {
+		t.Fatalf("OfferAgentUpdate: %v", err)
+	} else if !retry {
+		t.Fatal("retry = false on the manual update poll")
+	}
+	if state, _ := service.AgentUpdateStatus("node-a", "v1.2.0"); state != AgentUpdateUpdating {
+		t.Fatalf("state after the retry offer = %q, want updating", state)
+	}
+	if offer := service.agentUpdate.offers["node-a"]; time.Since(offer.at) > time.Minute {
+		t.Fatalf("offer time was not refreshed by the retry: %v", offer.at)
+	}
+}
+
 func TestAgentUpdateRetryDropsTheFailureReportedInTheSamePoll(t *testing.T) {
 	release := &updatecore.Release{Version: "v1.2.0"}
 	service := NewService(Config{Secret: "test-secret", Version: "dev", Logger: discardLogger(), Updater: &fakeAgentUpdater{release: release}})

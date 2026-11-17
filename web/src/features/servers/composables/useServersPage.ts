@@ -30,7 +30,6 @@ export function useServersPage() {
   const editTarget = ref<Server | null>(null);
   const validatingId = ref<string | null>(null);
   const checkingAll = ref(false);
-  const queuedUpdates = ref<Record<string, boolean>>({});
 
   const activeFilter = ref<ServerFilter>("all");
   const searchQuery = ref("");
@@ -160,47 +159,17 @@ export function useServersPage() {
     return server.node_id ? serversStore.agentUpdates[server.node_id] : undefined;
   }
 
-  function agentUpdateRunning(server: Server): boolean {
-    if (server.node_id && queuedUpdates.value[server.node_id]) {
-      return true;
-    }
-    return agentUpdateFor(server)?.state === "updating";
-  }
-
   async function handleUpdateAgent(server: Server): Promise<void> {
     if (!server.node_id) {
       return;
     }
-    const nodeID = server.node_id;
-    queuedUpdates.value = { ...queuedUpdates.value, [nodeID]: true };
     try {
-      await serversStore.updateAgentVersion(nodeID);
+      await serversStore.updateAgentVersion(server.node_id);
       message.success(t("servers.toasts.agentUpdateQueued", { name: server.name }));
     } catch (error) {
-      const next = { ...queuedUpdates.value };
-      delete next[nodeID];
-      queuedUpdates.value = next;
       message.error(describeServerError(error));
     }
   }
-
-  watch(
-    () => serversStore.agentUpdates,
-    (updates) => {
-      const next = { ...queuedUpdates.value };
-      let changed = false;
-      for (const nodeID of Object.keys(next)) {
-        const state = updates[nodeID]?.state;
-        if (state === "up_to_date" || state === "failed") {
-          delete next[nodeID];
-          changed = true;
-        }
-      }
-      if (changed) {
-        queuedUpdates.value = next;
-      }
-    },
-  );
 
   onMounted(() => {
     void serversStore.fetchServers().catch(() => {
@@ -238,7 +207,6 @@ export function useServersPage() {
     pagedServers,
     controlPlaneVersion,
     agentUpdateFor,
-    agentUpdateRunning,
     handleValidate,
     handleCheckAll,
     handleUpdateAgent,

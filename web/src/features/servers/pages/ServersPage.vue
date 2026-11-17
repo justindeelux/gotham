@@ -39,7 +39,6 @@ const {
   pagedServers,
   controlPlaneVersion,
   agentUpdateFor,
-  agentUpdateRunning,
   handleValidate,
   handleCheckAll,
   handleUpdateAgent,
@@ -122,7 +121,6 @@ const emptyHint = computed<string>(() =>
             :agent-update="agentUpdateFor(server)"
             :agent-target-version="serversStore.agentLatestVersion"
             :control-plane-version="controlPlaneVersion"
-            :update-running="agentUpdateRunning(server)"
             @open="openNode(server.id)"
             @edit="openEdit(server)"
             @validate="handleValidate(server)"

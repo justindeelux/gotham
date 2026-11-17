@@ -123,7 +123,7 @@ func Run(ctx context.Context, engine Engine, opts Options) error {
 	case Dockerfile:
 		name = DockerCLI
 		args = []string{"buildx", "build", "--tag", opts.Tag, "--file", opts.Dockerfile,
-			"--load", "--progress", "plain"}
+			"--load", "--progress", "plain", "--provenance=false", "--sbom=false"}
 		args = append(args, buildArgFlags(opts.BuildArgs)...)
 		if target := strings.TrimSpace(opts.Target); target != "" {
 			args = append(args, "--target", target)
@@ -141,15 +141,20 @@ func run(ctx context.Context, name string, args []string, opts Options, home str
 		sink = io.Discard
 	}
 	tail := newOutputTail(buildArgValues(opts.BuildArgs))
-	tee := io.MultiWriter(tail, sink)
+	out := &maskWriter{sink: sink, masks: tail.masks}
+	tee := io.MultiWriter(tail, out)
 	command := exec.CommandContext(ctx, name, args...)
 	command.Dir = opts.Dir
 	command.Env = toolchainEnv(opts.DockerHost, opts.buildKitHost, home)
 	command.Stdin = opts.Context
 	command.Stdout = tee
 	command.Stderr = tee
-	_, _ = io.WriteString(sink, redactedCommandLine(name, args)+"\n")
-	if err := command.Run(); err != nil {
+	_, _ = io.WriteString(out.sink, redactedCommandLine(name, args)+"\n")
+	err := command.Run()
+	if flushErr := out.flush(); flushErr != nil && err == nil {
+		err = flushErr
+	}
+	if err != nil {
 		if ctxErr := ctx.Err(); ctxErr != nil {
 			return fmt.Errorf("%s build: %w", name, ctxErr)
 		}
@@ -159,6 +164,51 @@ func run(ctx context.Context, name string, args []string, opts Options, home str
 		return fmt.Errorf("%s build: %w", name, err)
 	}
 	return nil
+}
+
+// maskWriter masks build-arg values line by line on the way to the log, so the
+// deploy log never shows a secret a builder expanded into its output.
+type maskWriter struct {
+	sink    io.Writer
+	masks   []string
+	pending strings.Builder
+}
+
+func (w *maskWriter) Write(p []byte) (int, error) {
+	if len(w.masks) == 0 {
+		return w.sink.Write(p)
+	}
+	w.pending.Write(p)
+	s := w.pending.String()
+	var out strings.Builder
+	start := 0
+	for i := 0; i < len(s); i++ {
+		if s[i] != '\n' && s[i] != '\r' {
+			continue
+		}
+		out.WriteString(redactLine(s[start:i], w.masks))
+		out.WriteByte(s[i])
+		start = i + 1
+	}
+	w.pending.Reset()
+	w.pending.WriteString(s[start:])
+	if out.Len() == 0 {
+		return len(p), nil
+	}
+	if _, err := io.WriteString(w.sink, out.String()); err != nil {
+		return 0, err
+	}
+	return len(p), nil
+}
+
+func (w *maskWriter) flush() error {
+	if len(w.masks) == 0 || w.pending.Len() == 0 {
+		return nil
+	}
+	rest := w.pending.String()
+	w.pending.Reset()
+	_, err := io.WriteString(w.sink, redactLine(rest, w.masks))
+	return err
 }
 
 const (
@@ -238,9 +288,7 @@ func (t *outputTail) String() string {
 
 func (t *outputTail) push(raw string) {
 	line := oscEscape.ReplaceAllString(ansiEscape.ReplaceAllString(strings.TrimSuffix(raw, "\r"), ""), "")
-	for _, secret := range t.masks {
-		line = strings.ReplaceAll(line, secret, "***")
-	}
+	line = redactLine(line, t.masks)
 	line = strings.ToValidUTF8(line, "\uFFFD")
 	if len(line) > tailMaxBytes {
 		line = line[len(line)-tailMaxBytes:]
@@ -254,6 +302,13 @@ func (t *outputTail) push(raw string) {
 		t.size -= len(t.lines[0])
 		t.lines = t.lines[1:]
 	}
+}
+
+func redactLine(line string, masks []string) string {
+	for _, secret := range masks {
+		line = strings.ReplaceAll(line, secret, "***")
+	}
+	return line
 }
 
 func buildArgValues(args map[string]string) []string {

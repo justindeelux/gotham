@@ -115,7 +115,8 @@ echo '#9 exporting to image'`, contextFile, argsFile))
 
 	got := strings.Join(strings.Split(strings.TrimSuffix(readTestFile(t, argsFile), "\n"), "\n"), " ")
 	want := "buildx build --tag 127.0.0.1:5000/gotham/web:dep-1 --file deploy/Dockerfile" +
-		" --load --progress plain --build-arg NODE_ENV=production --target web -"
+		" --load --progress plain --provenance=false --sbom=false" +
+		" --build-arg NODE_ENV=production --target web -"
 	if got != want {
 		t.Errorf("docker args = %q; want %q", got, want)
 	}
@@ -187,7 +188,8 @@ exit 1`)
 func TestDockerClientBuildRedactsBuildArgs(t *testing.T) {
 	fakeDockerCLI(t, `if [ "$1" = buildx ] && [ "$2" = version ]; then exit 0; fi
 cat > /dev/null
-echo '#5 [2/3] RUN npm run build'`)
+echo 'building with s3cr3t-value'
+echo '#5 [2/2] RUN echo "tok=s3cr3t-value"'`)
 
 	var logs strings.Builder
 	err := newTestDockerClient(t, nil).Build(context.Background(), BuildOptions{
@@ -204,8 +206,10 @@ echo '#5 [2/3] RUN npm run build'`)
 	if strings.Contains(logs.String(), "s3cr3t-value") {
 		t.Fatalf("build log leaked a build-arg value: %q", logs.String())
 	}
-	if !strings.Contains(logs.String(), "API_TOKEN=***") {
-		t.Errorf("build log should show the masked build-arg: %q", logs.String())
+	for _, want := range []string{"API_TOKEN=***", `RUN echo "tok=***"`} {
+		if !strings.Contains(logs.String(), want) {
+			t.Errorf("build log missing %q: %q", want, logs.String())
+		}
 	}
 }
 

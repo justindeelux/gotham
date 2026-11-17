@@ -91,7 +91,7 @@ echo solved`, argsFile))
 		"buildx", "build",
 		"--tag", "127.0.0.1:5000/gotham/app:dep",
 		"--file", "deploy/Dockerfile",
-		"--load", "--progress", "plain",
+		"--load", "--progress", "plain", "--provenance=false", "--sbom=false",
 		"--build-arg", "A=1", "--build-arg", "B=2",
 		"--target", "web",
 		"-",
@@ -485,6 +485,32 @@ func TestRunRedactsBuildArgValues(t *testing.T) {
 	}
 	if !strings.Contains(logs.String(), "API_TOKEN=***") {
 		t.Errorf("deploy log does not show the redacted key: %q", logs.String())
+	}
+}
+
+func TestRunMasksBuildArgValuesInLog(t *testing.T) {
+	dir := t.TempDir()
+	fakeCLI(t, RailpackCLI, `echo 'tok=sekret'
+echo '#5 [2/2] RUN echo "tok=sekret"'
+printf 'progress tok=sekret'`)
+	t.Setenv("BUILDKIT_HOST", "docker-container://buildkit")
+
+	var logs bytes.Buffer
+	if err := Run(context.Background(), Railpack, Options{
+		Dir:       dir,
+		Tag:       "gotham/app:dep",
+		BuildArgs: map[string]string{"TOK": "sekret"},
+		LogWriter: &logs,
+	}); err != nil {
+		t.Fatalf("Run: %v", err)
+	}
+	if strings.Contains(logs.String(), "sekret") {
+		t.Fatalf("deploy log leaked the build-arg value: %q", logs.String())
+	}
+	for _, want := range []string{"tok=***", `RUN echo "tok=***"`, "progress tok=***"} {
+		if !strings.Contains(logs.String(), want) {
+			t.Errorf("log missing %q: %q", want, logs.String())
+		}
 	}
 }
 

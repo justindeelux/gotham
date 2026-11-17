@@ -134,14 +134,14 @@ func readComposeFile(dir, ref string) (string, error) {
 	return string(data), nil
 }
 
-func (o *Orchestrator) loadComposeEnv(ctx context.Context, app Application, port int32) (map[string]string, error) {
+func (o *Orchestrator) loadComposeEnv(ctx context.Context, app Application, port int32) (map[string]string, map[string]bool, error) {
 	envVars, secrets, err := o.repo.ListEnvConfig(ctx, app.ID)
 	if err != nil {
-		return nil, err
+		return nil, nil, err
 	}
 	sharedProject, sharedEnvironment, err := o.repo.ListSharedVariables(ctx, app.ProjectID, app.EnvironmentID)
 	if err != nil {
-		return nil, err
+		return nil, nil, err
 	}
 	return composeProjectEnv(envVars, secrets, sharedProject, sharedEnvironment, o.secret, port)
 }
@@ -184,7 +184,7 @@ func (o *Orchestrator) renderComposeDocument(ctx context.Context, app Applicatio
 	if err != nil {
 		return "", nil, err
 	}
-	env, err = o.loadComposeEnv(ctx, app, primaryPort)
+	env, generated, err := o.loadComposeEnv(ctx, app, primaryPort)
 	if err != nil {
 		return "", nil, err
 	}
@@ -205,6 +205,10 @@ func (o *Orchestrator) renderComposeDocument(ctx context.Context, app Applicatio
 	injected, err = RewriteComposeManagedVolumes(injected, managedVolumeRoot(), app.ID)
 	if err != nil {
 		return "", nil, err
+	}
+	injected, err = InjectComposeEnvironment(injected, composeAppEnv(env, generated))
+	if err != nil {
+		return "", nil, composeValidationError(services.RedactError(err, env))
 	}
 	if err := guardValidate(injected, app.ID); err != nil {
 		return "", nil, composeValidationError(services.RedactError(err, env))

@@ -274,7 +274,7 @@ func (s *Service) GetApplicationLogs(ctx context.Context, userID, appID uuid.UUI
 	if current.ServerID != app.ServerID || current.EnvironmentID != app.EnvironmentID || isComposeApp(current) != isComposeApp(app) {
 		return ApplicationLogs{}, ErrConflict
 	}
-	env, err := s.loadComposeEnv(ctx, app, 0)
+	env, _, err := s.loadComposeEnv(ctx, app, 0)
 	if err != nil {
 		return ApplicationLogs{}, errors.New("deploy: log masking unavailable")
 	}
@@ -344,7 +344,7 @@ func (s *Service) GetDeploymentLogs(ctx context.Context, userID, appID, deployme
 	if err != nil {
 		return DeploymentLogs{}, err
 	}
-	env, err := s.loadComposeEnv(ctx, app, 0)
+	env, _, err := s.loadComposeEnv(ctx, app, 0)
 	if err != nil {
 		return DeploymentLogs{}, errors.New("deploy: log masking unavailable")
 	}

@@ -310,6 +310,117 @@ func portInRange(port, span string) bool {
 	return want >= lo && want <= hi
 }
 
+// InjectComposeEnvironment copies the application environment into every
+// service, so a variable saved in the app reaches its container even when the
+// compose file never references it as ${VAR}. A key the service declares keeps
+// the compose value; only missing keys are added. Callers pass the user-defined
+// values only: composeAppEnv drops the keys Gotham generates (the PORT from the
+// primary domain port), which still resolve through ${PORT} substitution.
+//
+// Dollars are escaped as $$ because compose interpolates the rendered document
+// a second time on the node.
+func InjectComposeEnvironment(rendered string, env map[string]string) (string, error) {
+	if len(env) == 0 || strings.TrimSpace(rendered) == "" {
+		return rendered, nil
+	}
+	var doc map[string]any
+	if err := yaml.Unmarshal([]byte(rendered), &doc); err != nil {
+		return "", fmt.Errorf("%w: compose document is not valid YAML: %v", ErrValidation, err)
+	}
+	services, ok := doc["services"].(map[string]any)
+	if !ok || len(services) == 0 {
+		return "", fmt.Errorf("%w: compose document declares no services", ErrValidation)
+	}
+	keys := make([]string, 0, len(env))
+	for key := range env {
+		keys = append(keys, key)
+	}
+	sort.Strings(keys)
+	changed := false
+	for name, rawService := range services {
+		service, ok := rawService.(map[string]any)
+		if !ok {
+			return "", fmt.Errorf("%w: compose service %q is not a mapping", ErrValidation, name)
+		}
+		merged, serviceChanged, err := composeEnvironmentWithApp(service["environment"], env, keys)
+		if err != nil {
+			return "", fmt.Errorf("%w: compose service %q: %v", ErrValidation, name, err)
+		}
+		service["environment"] = merged
+		services[name] = service
+		changed = changed || serviceChanged
+	}
+	if !changed {
+		return rendered, nil
+	}
+	doc["services"] = services
+	out, err := yaml.Marshal(doc)
+	if err != nil {
+		return "", fmt.Errorf("%w: render compose document: %v", ErrValidation, err)
+	}
+	return string(out), nil
+}
+
+func composeEnvironmentWithApp(raw any, env map[string]string, keys []string) (any, bool, error) {
+	switch entries := raw.(type) {
+	case nil:
+		merged := make(map[string]any, len(keys))
+		for _, key := range keys {
+			merged[key] = composeEnvValue(env[key])
+		}
+		return merged, len(keys) > 0, nil
+	case map[string]any:
+		changed := false
+		for _, key := range keys {
+			if _, ok := entries[key]; ok {
+				continue
+			}
+			entries[key] = composeEnvValue(env[key])
+			changed = true
+		}
+		return entries, changed, nil
+	case []any:
+		declared := make(map[string]bool, len(entries))
+		for _, entry := range entries {
+			text, ok := entry.(string)
+			key, _, found := strings.Cut(text, "=")
+			if !ok || !found {
+				return nil, false, fmt.Errorf("environment list entries must be KEY=VALUE strings")
+			}
+			declared[strings.TrimSpace(key)] = true
+		}
+		changed := false
+		for _, key := range keys {
+			if declared[key] {
+				continue
+			}
+			entries = append(entries, key+"="+composeEnvValue(env[key]))
+			changed = true
+		}
+		return entries, changed, nil
+	default:
+		return nil, false, fmt.Errorf("environment must be a mapping or a list of KEY=VALUE strings")
+	}
+}
+
+func composeEnvValue(value string) string {
+	return strings.ReplaceAll(value, "$", "$$")
+}
+
+// composeAppEnv keeps the values the user set and drops the ones Gotham
+// generated, so a second service that reads PORT does not silently inherit the
+// domain port.
+func composeAppEnv(env map[string]string, generated map[string]bool) map[string]string {
+	out := make(map[string]string, len(env))
+	for key, value := range env {
+		if generated[key] {
+			continue
+		}
+		out[key] = value
+	}
+	return out
+}
+
 var composeNamedVolumePattern = regexp.MustCompile(`^[a-zA-Z0-9][a-zA-Z0-9_.-]*$`)
 
 func RewriteComposeManagedVolumes(rendered, root string, appID uuid.UUID) (string, error) {
@@ -449,7 +560,7 @@ func teardownStubDocument() string {
 	return "services:\n  gotham-teardown:\n    image: scratch\n"
 }
 
-func composeProjectEnv(envVars []EnvVar, secrets []Secret, project, environment []SharedVariable, secretKey string, port int32) (map[string]string, error) {
+func composeProjectEnv(envVars []EnvVar, secrets []Secret, project, environment []SharedVariable, secretKey string, port int32) (map[string]string, map[string]bool, error) {
 	envVars, secrets = mergeSharedVariables(project, environment, envVars, secrets)
 	env := make(map[string]string, len(envVars)+len(secrets)+1)
 	for _, v := range envVars {
@@ -457,7 +568,7 @@ func composeProjectEnv(envVars []EnvVar, secrets []Secret, project, environment 
 			continue
 		}
 		if err := checkTextBytes(v.Value, fmt.Sprintf("environment variable %q value", v.Key)); err != nil {
-			return nil, err
+			return nil, nil, err
 		}
 		env[v.Key] = v.Value
 	}
@@ -467,19 +578,25 @@ func composeProjectEnv(envVars []EnvVar, secrets []Secret, project, environment 
 		}
 		value, err := providers.OpenSecret(secretKey, s.Ciphertext)
 		if err != nil {
-			return nil, fmt.Errorf("%w: open secret %s: %v", ErrValidation, s.Key, err)
+			return nil, nil, fmt.Errorf("%w: open secret %s: %v", ErrValidation, s.Key, err)
 		}
 		if err := checkTextBytes(value, fmt.Sprintf("secret %q value", s.Key)); err != nil {
-			return nil, err
+			return nil, nil, err
 		}
 		env[s.Key] = value
 	}
+	// generated records the keys Gotham derives itself, so the compose env
+	// injection can leave them out: only variables the user set belong in
+	// every service.
+	generated := map[string]bool{}
 	for key, value := range defaultPortEnv(port, envVars, secrets) {
-		if _, ok := env[key]; !ok {
-			env[key] = value
+		if _, ok := env[key]; ok {
+			continue
 		}
+		env[key] = value
+		generated[key] = true
 	}
-	return env, nil
+	return env, generated, nil
 }
 
 func scalarString(raw any) string {

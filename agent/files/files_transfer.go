@@ -506,6 +506,9 @@ func (s *FileServer) ReadArtifact(req *agentv1.ReadArtifactRequest, stream grpc.
 }
 
 func (s *FileServer) ReceiveArtifact(stream grpc.ClientStreamingServer[agentv1.ReceiveArtifactRequest, agentv1.ReceiveArtifactResponse]) error {
+	if err := stream.Context().Err(); err != nil {
+		return status.FromContextError(err).Err()
+	}
 	first, err := stream.Recv()
 	if err != nil {
 		return streamRecvError("receive artifact", err)

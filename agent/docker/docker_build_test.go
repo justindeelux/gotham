@@ -1,21 +1,24 @@
 package docker
 
 import (
+	"archive/tar"
 	"bytes"
 	"context"
 	"encoding/base64"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"io"
 	"net/http"
 	"net/http/httptest"
-	"net/url"
 	"os"
 	"path/filepath"
 	"strconv"
 	"strings"
 	"sync"
 	"testing"
+
+	"github.com/justindeelux/gotham/buildtool"
 )
 
 func newTestDockerClient(t *testing.T, handler http.Handler) *DockerClient {
@@ -56,46 +59,143 @@ func writeJSONStream(t *testing.T, w http.ResponseWriter, messages ...any) {
 	}
 }
 
-func TestDockerClientBuild(t *testing.T) {
-	var (
-		mu           sync.Mutex
-		gotQuery     url.Values
-		gotContent   string
-		gotBody      []byte
-		requestCount int
-	)
-
-	client := newTestDockerClient(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		if r.URL.Path != "/build" {
-			t.Errorf("path = %q, want /build", r.URL.Path)
-			http.NotFound(w, r)
-			return
+func tarContext(t *testing.T, files map[string]string) io.Reader {
+	t.Helper()
+	var buf bytes.Buffer
+	writer := tar.NewWriter(&buf)
+	for name, content := range files {
+		if err := writer.WriteHeader(&tar.Header{Name: name, Mode: 0o644, Size: int64(len(content))}); err != nil {
+			t.Fatalf("tar header %s: %v", name, err)
 		}
-		body, err := io.ReadAll(r.Body)
-		if err != nil {
-			t.Errorf("read body: %v", err)
+		if _, err := writer.Write([]byte(content)); err != nil {
+			t.Fatalf("tar write %s: %v", name, err)
 		}
-		mu.Lock()
-		gotQuery = r.URL.Query()
-		gotContent = r.Header.Get("Content-Type")
-		gotBody = body
-		requestCount++
-		mu.Unlock()
+	}
+	if err := writer.Close(); err != nil {
+		t.Fatalf("close tar: %v", err)
+	}
+	return bytes.NewReader(buf.Bytes())
+}
 
-		writeJSONStream(t, w,
-			map[string]string{"stream": "Step 1/2 : FROM scratch\n"},
-			map[string]string{"stream": "Step 2/2 : COPY hello /hello\n"},
-			map[string]string{"stream": "Successfully built sha256:abc\n"},
-		)
-	}))
+func readTestFile(t *testing.T, path string) string {
+	t.Helper()
+	content, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatalf("read %s: %v", path, err)
+	}
+	return string(content)
+}
+
+func TestDockerClientBuildUsesBuildKit(t *testing.T) {
+	dir := t.TempDir()
+	argsFile := filepath.Join(dir, "args")
+	contextFile := filepath.Join(dir, "context.tar")
+	fakeDockerCLI(t, fmt.Sprintf(`if [ "$1" = buildx ] && [ "$2" = version ]; then exit 0; fi
+cat > '%s'
+printf '%%s\n' "$@" > '%s'
+echo '#9 exporting to image'`, contextFile, argsFile))
 
 	var logs strings.Builder
-	err := client.Build(context.Background(), BuildOptions{
+	err := newTestDockerClient(t, nil).Build(context.Background(), BuildOptions{
 		Tag:        "127.0.0.1:5000/gotham/web:dep-1",
-		BuildArgs:  map[string]string{"NODE_ENV": "production"},
-		Context:    strings.NewReader("tar-bytes"),
 		Dockerfile: "deploy/Dockerfile",
+		BuildArgs:  map[string]string{"NODE_ENV": "production"},
 		Target:     "web",
+		Context: tarContext(t, map[string]string{
+			"deploy/Dockerfile": "FROM node:22 AS web\n" +
+				"RUN --mount=type=cache,target=/root/.local/share/pnpm/store pnpm install --frozen-lockfile\n",
+		}),
+	}, func(data []byte) error {
+		logs.Write(data)
+		return nil
+	})
+	if err != nil {
+		t.Fatalf("build: %v\nlogs:\n%s", err, logs.String())
+	}
+
+	got := strings.Join(strings.Split(strings.TrimSuffix(readTestFile(t, argsFile), "\n"), "\n"), " ")
+	want := "buildx build --tag 127.0.0.1:5000/gotham/web:dep-1 --file deploy/Dockerfile" +
+		" --load --progress plain --provenance=false --sbom=false" +
+		" --build-arg NODE_ENV=production --target web -"
+	if got != want {
+		t.Errorf("docker args = %q; want %q", got, want)
+	}
+	if !strings.Contains(builtDockerfile(t, contextFile), "RUN --mount=type=cache") {
+		t.Error("the build context sent to buildx does not carry the cache-mount Dockerfile")
+	}
+	for _, want := range []string{"$ docker buildx build", "#9 exporting to image"} {
+		if !strings.Contains(logs.String(), want) {
+			t.Errorf("logs missing %q:\n%s", want, logs.String())
+		}
+	}
+}
+
+func builtDockerfile(t *testing.T, path string) string {
+	t.Helper()
+	reader := tar.NewReader(strings.NewReader(readTestFile(t, path)))
+	for {
+		header, err := reader.Next()
+		if errors.Is(err, io.EOF) {
+			t.Fatalf("context has no %s", "deploy/Dockerfile")
+		}
+		if err != nil {
+			t.Fatalf("read context tar: %v", err)
+		}
+		if header.Name != "deploy/Dockerfile" {
+			continue
+		}
+		content, err := io.ReadAll(reader)
+		if err != nil {
+			t.Fatalf("read %s: %v", header.Name, err)
+		}
+		return string(content)
+	}
+}
+
+func TestDockerClientBuildDefaultsDockerfile(t *testing.T) {
+	argsFile := filepath.Join(t.TempDir(), "args")
+	fakeDockerCLI(t, fmt.Sprintf(`if [ "$1" = buildx ] && [ "$2" = version ]; then exit 0; fi
+cat > /dev/null
+printf '%%s\n' "$@" > '%s'`, argsFile))
+
+	err := newTestDockerClient(t, nil).Build(context.Background(), BuildOptions{
+		Tag:     "gotham/web:dep-1",
+		Context: tarContext(t, map[string]string{"Dockerfile": "FROM scratch\n"}),
+	}, func([]byte) error { return nil })
+	if err != nil {
+		t.Fatalf("build: %v", err)
+	}
+	args := strings.Join(strings.Split(strings.TrimSuffix(readTestFile(t, argsFile), "\n"), "\n"), " ")
+	if !strings.Contains(args, "--file Dockerfile") {
+		t.Errorf("docker args = %q; want --file Dockerfile", args)
+	}
+}
+
+func TestDockerClientBuildReportsBuildFailure(t *testing.T) {
+	fakeDockerCLI(t, `if [ "$1" = buildx ] && [ "$2" = version ]; then exit 0; fi
+echo 'ERROR: failed to solve: process "/bin/sh -c pnpm install" did not complete successfully: exit code 1'
+exit 1`)
+
+	err := newTestDockerClient(t, nil).Build(context.Background(), BuildOptions{
+		Tag:     "gotham/web:dep-1",
+		Context: tarContext(t, map[string]string{"Dockerfile": "FROM node:22\n"}),
+	}, func([]byte) error { return nil })
+	if err == nil || !strings.Contains(err.Error(), "failed to solve") {
+		t.Fatalf("err = %v, want the build failure output", err)
+	}
+}
+
+func TestDockerClientBuildRedactsBuildArgs(t *testing.T) {
+	fakeDockerCLI(t, `if [ "$1" = buildx ] && [ "$2" = version ]; then exit 0; fi
+cat > /dev/null
+echo 'building with s3cr3t-value'
+echo '#5 [2/2] RUN echo "tok=s3cr3t-value"'`)
+
+	var logs strings.Builder
+	err := newTestDockerClient(t, nil).Build(context.Background(), BuildOptions{
+		Tag:       "gotham/web:dep-1",
+		BuildArgs: map[string]string{"API_TOKEN": "s3cr3t-value"},
+		Context:   tarContext(t, map[string]string{"Dockerfile": "FROM node:22\n"}),
 	}, func(data []byte) error {
 		logs.Write(data)
 		return nil
@@ -103,95 +203,48 @@ func TestDockerClientBuild(t *testing.T) {
 	if err != nil {
 		t.Fatalf("build: %v", err)
 	}
-
-	mu.Lock()
-	defer mu.Unlock()
-	if requestCount != 1 {
-		t.Fatalf("request count = %d, want 1", requestCount)
+	if strings.Contains(logs.String(), "s3cr3t-value") {
+		t.Fatalf("build log leaked a build-arg value: %q", logs.String())
 	}
-	if gotQuery.Get("t") != "127.0.0.1:5000/gotham/web:dep-1" {
-		t.Errorf("t = %q", gotQuery.Get("t"))
-	}
-	if gotQuery.Get("dockerfile") != "deploy/Dockerfile" {
-		t.Errorf("dockerfile = %q", gotQuery.Get("dockerfile"))
-	}
-	if gotQuery.Get("target") != "web" {
-		t.Errorf("target = %q, want web", gotQuery.Get("target"))
-	}
-	if gotQuery.Get("rm") != "1" {
-		t.Errorf("rm = %q", gotQuery.Get("rm"))
-	}
-	if gotQuery.Get("forcerm") != "1" {
-		t.Errorf("forcerm = %q; want 1", gotQuery.Get("forcerm"))
-	}
-	if gotQuery.Get("buildargs") != `{"NODE_ENV":"production"}` {
-		t.Errorf("buildargs = %q", gotQuery.Get("buildargs"))
-	}
-	if gotContent != "application/x-tar" {
-		t.Errorf("content-type = %q", gotContent)
-	}
-	if string(gotBody) != "tar-bytes" {
-		t.Errorf("body = %q", gotBody)
-	}
-
-	want := "Step 1/2 : FROM scratch\nStep 2/2 : COPY hello /hello\nSuccessfully built sha256:abc\n"
-	if logs.String() != want {
-		t.Errorf("logs = %q, want %q", logs.String(), want)
+	for _, want := range []string{"API_TOKEN=***", `RUN echo "tok=***"`} {
+		if !strings.Contains(logs.String(), want) {
+			t.Errorf("build log missing %q: %q", want, logs.String())
+		}
 	}
 }
 
-func TestDockerClientBuildDefaultsDockerfile(t *testing.T) {
-	var gotDockerfile string
-	client := newTestDockerClient(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		gotDockerfile = r.URL.Query().Get("dockerfile")
-		writeJSONStream(t, w, map[string]string{"stream": "ok\n"})
-	}))
+func TestDockerClientBuildRequiresBuildKit(t *testing.T) {
+	fakeDockerCLI(t, `if [ "$1" = buildx ] && [ "$2" = version ]; then
+  echo "docker: 'buildx' is not a docker command." >&2
+  exit 1
+fi
+echo 'build ran'
+exit 0`)
 
-	if err := client.Build(context.Background(), BuildOptions{
+	err := newTestDockerClient(t, nil).Build(context.Background(), BuildOptions{
 		Tag:     "gotham/web:dep-1",
-		Context: strings.NewReader("tar"),
-	}, func([]byte) error { return nil }); err != nil {
-		t.Fatalf("build: %v", err)
+		Context: tarContext(t, map[string]string{"Dockerfile": "FROM node:22\n"}),
+	}, func([]byte) error { return nil })
+	if !errors.Is(err, buildtool.ErrCLIMissing) {
+		t.Fatalf("err = %v; want ErrCLIMissing", err)
 	}
-	if gotDockerfile != "Dockerfile" {
-		t.Fatalf("dockerfile = %q, want Dockerfile", gotDockerfile)
+	if !strings.Contains(err.Error(), "buildx") || !strings.Contains(err.Error(), "BuildKit") {
+		t.Errorf("err = %v; want a clear BuildKit/buildx message", err)
 	}
 }
 
-func TestDockerClientBuildReportsDaemonError(t *testing.T) {
-	client := newTestDockerClient(t, http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
-		w.WriteHeader(http.StatusInternalServerError)
-		_, _ = w.Write([]byte(`{"message":"cannot connect to daemon"}`))
-	}))
+func TestDockerClientBuildStopsWhenLogStreamFails(t *testing.T) {
+	emitErr := errors.New("stream closed")
+	fakeDockerCLI(t, `if [ "$1" = buildx ] && [ "$2" = version ]; then exit 0; fi
+cat > /dev/null
+echo '#1 [internal] load build definition from Dockerfile'`)
 
-	err := client.Build(context.Background(), BuildOptions{
+	err := newTestDockerClient(t, nil).Build(context.Background(), BuildOptions{
 		Tag:     "gotham/web:dep-1",
-		Context: strings.NewReader("tar"),
-	}, func([]byte) error { return nil })
-	if err == nil || !strings.Contains(err.Error(), "status 500") {
-		t.Fatalf("err = %v, want status 500", err)
-	}
-}
-
-func TestDockerClientBuildRedactsBuildArgsInError(t *testing.T) {
-	client := newTestDockerClient(t, http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
-		w.WriteHeader(http.StatusInternalServerError)
-		_, _ = w.Write([]byte(`{"message":"cannot connect to daemon"}`))
-	}))
-
-	err := client.Build(context.Background(), BuildOptions{
-		Tag:       "gotham/web:dep-1",
-		BuildArgs: map[string]string{"API_TOKEN": "s3cr3t-value"},
-		Context:   strings.NewReader("tar"),
-	}, func([]byte) error { return nil })
+		Context: tarContext(t, map[string]string{"Dockerfile": "FROM node:22\n"}),
+	}, func([]byte) error { return emitErr })
 	if err == nil {
-		t.Fatal("expected build error")
-	}
-	if strings.Contains(err.Error(), "s3cr3t-value") {
-		t.Fatalf("error leaked a build-arg value: %v", err)
-	}
-	if !strings.Contains(err.Error(), "REDACTED") {
-		t.Fatalf("error should show the masked buildargs: %v", err)
+		t.Fatal("build succeeded although the log stream failed")
 	}
 }
 
@@ -206,57 +259,6 @@ func TestRedactQuerySecrets(t *testing.T) {
 	}
 	if got := redactQuerySecrets("/_ping"); got != "/_ping" {
 		t.Fatalf("redactQuerySecrets(no query) = %q; want unchanged", got)
-	}
-}
-
-func TestDockerClientBuildRedactsBuildArgsInTransportError(t *testing.T) {
-	client, err := NewDockerClient("http://127.0.0.1:1")
-	if err != nil {
-		t.Fatalf("new docker client: %v", err)
-	}
-	err = client.Build(context.Background(), BuildOptions{
-		Tag:       "gotham/web:dep-1",
-		BuildArgs: map[string]string{"API_TOKEN": "s3cr3t-value"},
-		Context:   strings.NewReader("tar"),
-	}, func([]byte) error { return nil })
-	if err == nil {
-		t.Fatal("expected a transport error")
-	}
-	if strings.Contains(err.Error(), "s3cr3t-value") {
-		t.Fatalf("error leaked a build-arg value: %v", err)
-	}
-	if !errors.Is(err, ErrDockerUnavailable) {
-		t.Fatalf("err = %v; want ErrDockerUnavailable", err)
-	}
-}
-
-func TestDockerClientBuildReportsStreamError(t *testing.T) {
-	client := newTestDockerClient(t, http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
-		writeJSONStream(t, w, map[string]string{"stream": "Step 1/1 : FROM nowhere:latest\n"},
-			map[string]string{"error": "failed to solve: manifest unknown"})
-	}))
-
-	err := client.Build(context.Background(), BuildOptions{
-		Tag:     "gotham/web:dep-1",
-		Context: strings.NewReader("tar"),
-	}, func([]byte) error { return nil })
-	if err == nil || !strings.Contains(err.Error(), "failed to solve") {
-		t.Fatalf("err = %v, want stream error", err)
-	}
-}
-
-func TestDockerClientBuildAbortsWithEmitError(t *testing.T) {
-	client := newTestDockerClient(t, http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
-		writeJSONStream(t, w, map[string]string{"stream": "Step 1/1 : FROM scratch\n"})
-	}))
-
-	emitErr := errors.New("stream closed")
-	err := client.Build(context.Background(), BuildOptions{
-		Tag:     "gotham/web:dep-1",
-		Context: strings.NewReader("tar"),
-	}, func([]byte) error { return emitErr })
-	if !errors.Is(err, emitErr) {
-		t.Fatalf("err = %v, want %v", err, emitErr)
 	}
 }
 

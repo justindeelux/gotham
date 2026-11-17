@@ -60,10 +60,59 @@ func TestExtractTarRejectsTraversal(t *testing.T) {
 
 func TestAvailableMissingCLI(t *testing.T) {
 	t.Setenv("PATH", t.TempDir())
-	for _, engine := range []Engine{Railpack, Buildpacks} {
+	for _, engine := range []Engine{Railpack, Buildpacks, Dockerfile} {
 		if err := Available(engine); !errors.Is(err, ErrCLIMissing) {
 			t.Errorf("Available(%q) = %v; want ErrCLIMissing", engine, err)
 		}
+	}
+}
+
+func TestRunDockerfileBuildsWithBuildKit(t *testing.T) {
+	dir := t.TempDir()
+	argsFile := filepath.Join(dir, "args")
+	fakeCLI(t, DockerCLI, fmt.Sprintf(`if [ "$1" = buildx ] && [ "$2" = version ]; then exit 0; fi
+cat > /dev/null
+printf '%%s\n' "$@" > '%s'
+echo solved`, argsFile))
+
+	var logs bytes.Buffer
+	if err := Run(context.Background(), Dockerfile, Options{
+		Tag:        "127.0.0.1:5000/gotham/app:dep",
+		BuildArgs:  map[string]string{"B": "2", "A": "1"},
+		Context:    strings.NewReader("context-tar"),
+		Dockerfile: "deploy/Dockerfile",
+		Target:     "web",
+		LogWriter:  &logs,
+	}); err != nil {
+		t.Fatalf("Run: %v", err)
+	}
+	args := strings.Split(strings.TrimSuffix(readFile(t, argsFile), "\n"), "\n")
+	want := []string{
+		"buildx", "build",
+		"--tag", "127.0.0.1:5000/gotham/app:dep",
+		"--file", "deploy/Dockerfile",
+		"--load", "--progress", "plain", "--provenance=false", "--sbom=false",
+		"--build-arg", "A=1", "--build-arg", "B=2",
+		"--target", "web",
+		"-",
+	}
+	if strings.Join(args, " ") != strings.Join(want, " ") {
+		t.Errorf("args = %q; want %q", args, want)
+	}
+	if !strings.Contains(logs.String(), "solved") || !strings.Contains(logs.String(), "$ docker buildx build") {
+		t.Errorf("logs = %q", logs.String())
+	}
+}
+
+func TestRunDockerfileRequiresBuildx(t *testing.T) {
+	fakeCLI(t, DockerCLI, `if [ "$1" = buildx ]; then echo "docker: 'buildx' is not a docker command." >&2; exit 1; fi`)
+
+	err := Run(context.Background(), Dockerfile, Options{Dir: t.TempDir(), Tag: "gotham/app:dep"})
+	if !errors.Is(err, ErrCLIMissing) {
+		t.Fatalf("Run = %v; want ErrCLIMissing", err)
+	}
+	if !strings.Contains(err.Error(), "buildx") || !strings.Contains(err.Error(), "BuildKit") {
+		t.Errorf("err = %v; want a clear BuildKit/buildx message", err)
 	}
 }
 
@@ -439,6 +488,32 @@ func TestRunRedactsBuildArgValues(t *testing.T) {
 	}
 }
 
+func TestRunMasksBuildArgValuesInLog(t *testing.T) {
+	dir := t.TempDir()
+	fakeCLI(t, RailpackCLI, `echo 'tok=sekret'
+echo '#5 [2/2] RUN echo "tok=sekret"'
+printf 'progress tok=sekret'`)
+	t.Setenv("BUILDKIT_HOST", "docker-container://buildkit")
+
+	var logs bytes.Buffer
+	if err := Run(context.Background(), Railpack, Options{
+		Dir:       dir,
+		Tag:       "gotham/app:dep",
+		BuildArgs: map[string]string{"TOK": "sekret"},
+		LogWriter: &logs,
+	}); err != nil {
+		t.Fatalf("Run: %v", err)
+	}
+	if strings.Contains(logs.String(), "sekret") {
+		t.Fatalf("deploy log leaked the build-arg value: %q", logs.String())
+	}
+	for _, want := range []string{"tok=***", `RUN echo "tok=***"`, "progress tok=***"} {
+		if !strings.Contains(logs.String(), want) {
+			t.Errorf("log missing %q: %q", want, logs.String())
+		}
+	}
+}
+
 func TestRunFailureIncludesOutputTail(t *testing.T) {
 	dir := t.TempDir()
 	var body strings.Builder
@@ -605,6 +680,16 @@ func TestRedactedCommandLine(t *testing.T) {
 			name: "non build-arg keeps value",
 			args: []string{"build", "--name", "gotham/app:dep"},
 			want: "$ pack build --name gotham/app:dep",
+		},
+		{
+			name: "docker build arg",
+			args: []string{"buildx", "build", "--build-arg", "TOKEN=abc", "."},
+			want: "$ pack buildx build --build-arg TOKEN=*** .",
+		},
+		{
+			name: "docker inline build arg",
+			args: []string{"buildx", "build", "--build-arg=TOKEN=abc"},
+			want: "$ pack buildx build --build-arg=TOKEN=***",
 		},
 	}
 	for _, tt := range tests {

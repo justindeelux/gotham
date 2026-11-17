@@ -23,17 +23,20 @@ type Engine string
 const (
 	Railpack   Engine = "railpack"
 	Buildpacks Engine = "buildpacks"
+	Dockerfile Engine = "dockerfile"
 )
 
 const (
 	RailpackCLI   = "railpack"
 	BuildpacksCLI = "pack"
+	DockerCLI     = "docker"
 )
 
 const (
 	railpackInstallHint   = "install it from the App Store"
 	railpackBuildKitHint  = "install Docker from the App Store so Gotham can run its BuildKit container"
 	buildpacksInstallHint = "install it from the App Store"
+	dockerBuildKitHint    = "install Docker from the App Store; Dockerfile builds need its docker CLI with the buildx plugin (BuildKit)"
 )
 
 var ErrCLIMissing = errors.New("builds: build toolchain unavailable")
@@ -45,6 +48,11 @@ type Options struct {
 	LogWriter  io.Writer
 	DockerHost string
 	StateDir   string
+	// Context is the tarball build context, streamed on stdin to docker buildx.
+	Context io.Reader
+	// Dockerfile and Target only apply to the Dockerfile engine.
+	Dockerfile string
+	Target     string
 
 	buildKitHost string
 }
@@ -67,16 +75,26 @@ func Available(engine Engine) error {
 			return fmt.Errorf("%w: %q is not on PATH; %s", ErrCLIMissing, BuildpacksCLI, buildpacksInstallHint)
 		}
 		return nil
+	case Dockerfile:
+		if !toolcatalog.Installed(toolcatalog.IDDocker) || !buildxAvailable() {
+			return fmt.Errorf("%w: Dockerfile builds need BuildKit through %s buildx; %s",
+				ErrCLIMissing, DockerCLI, dockerBuildKitHint)
+		}
+		return nil
 	default:
 		return fmt.Errorf("%w: unknown engine %q", ErrCLIMissing, engine)
 	}
+}
+
+func buildxAvailable() bool {
+	return exec.Command(DockerCLI, "buildx", "version").Run() == nil
 }
 
 func Run(ctx context.Context, engine Engine, opts Options) error {
 	if err := Available(engine); err != nil {
 		return err
 	}
-	if strings.TrimSpace(opts.Dir) == "" {
+	if strings.TrimSpace(opts.Dir) == "" && engine != Dockerfile {
 		return fmt.Errorf("%w: empty build directory", ErrCLIMissing)
 	}
 	if strings.TrimSpace(opts.Tag) == "" {
@@ -102,6 +120,15 @@ func Run(ctx context.Context, engine Engine, opts Options) error {
 		name = BuildpacksCLI
 		args = []string{"build", opts.Tag, "--path", "."}
 		args = append(args, buildEnvFlags(opts.BuildArgs)...)
+	case Dockerfile:
+		name = DockerCLI
+		args = []string{"buildx", "build", "--tag", opts.Tag, "--file", opts.Dockerfile,
+			"--load", "--progress", "plain", "--provenance=false", "--sbom=false"}
+		args = append(args, buildArgFlags(opts.BuildArgs)...)
+		if target := strings.TrimSpace(opts.Target); target != "" {
+			args = append(args, "--target", target)
+		}
+		args = append(args, "-")
 	default:
 		return fmt.Errorf("%w: unknown engine %q", ErrCLIMissing, engine)
 	}
@@ -114,14 +141,20 @@ func run(ctx context.Context, name string, args []string, opts Options, home str
 		sink = io.Discard
 	}
 	tail := newOutputTail(buildArgValues(opts.BuildArgs))
-	tee := io.MultiWriter(tail, sink)
+	out := &maskWriter{sink: sink, masks: tail.masks}
+	tee := io.MultiWriter(tail, out)
 	command := exec.CommandContext(ctx, name, args...)
 	command.Dir = opts.Dir
 	command.Env = toolchainEnv(opts.DockerHost, opts.buildKitHost, home)
+	command.Stdin = opts.Context
 	command.Stdout = tee
 	command.Stderr = tee
-	_, _ = io.WriteString(sink, redactedCommandLine(name, args)+"\n")
-	if err := command.Run(); err != nil {
+	_, _ = io.WriteString(out.sink, redactedCommandLine(name, args)+"\n")
+	err := command.Run()
+	if flushErr := out.flush(); flushErr != nil && err == nil {
+		err = flushErr
+	}
+	if err != nil {
 		if ctxErr := ctx.Err(); ctxErr != nil {
 			return fmt.Errorf("%s build: %w", name, ctxErr)
 		}
@@ -131,6 +164,51 @@ func run(ctx context.Context, name string, args []string, opts Options, home str
 		return fmt.Errorf("%s build: %w", name, err)
 	}
 	return nil
+}
+
+// maskWriter masks build-arg values line by line on the way to the log, so the
+// deploy log never shows a secret a builder expanded into its output.
+type maskWriter struct {
+	sink    io.Writer
+	masks   []string
+	pending strings.Builder
+}
+
+func (w *maskWriter) Write(p []byte) (int, error) {
+	if len(w.masks) == 0 {
+		return w.sink.Write(p)
+	}
+	w.pending.Write(p)
+	s := w.pending.String()
+	var out strings.Builder
+	start := 0
+	for i := 0; i < len(s); i++ {
+		if s[i] != '\n' && s[i] != '\r' {
+			continue
+		}
+		out.WriteString(redactLine(s[start:i], w.masks))
+		out.WriteByte(s[i])
+		start = i + 1
+	}
+	w.pending.Reset()
+	w.pending.WriteString(s[start:])
+	if out.Len() == 0 {
+		return len(p), nil
+	}
+	if _, err := io.WriteString(w.sink, out.String()); err != nil {
+		return 0, err
+	}
+	return len(p), nil
+}
+
+func (w *maskWriter) flush() error {
+	if len(w.masks) == 0 || w.pending.Len() == 0 {
+		return nil
+	}
+	rest := w.pending.String()
+	w.pending.Reset()
+	_, err := io.WriteString(w.sink, redactLine(rest, w.masks))
+	return err
 }
 
 const (
@@ -210,9 +288,7 @@ func (t *outputTail) String() string {
 
 func (t *outputTail) push(raw string) {
 	line := oscEscape.ReplaceAllString(ansiEscape.ReplaceAllString(strings.TrimSuffix(raw, "\r"), ""), "")
-	for _, secret := range t.masks {
-		line = strings.ReplaceAll(line, secret, "***")
-	}
+	line = redactLine(line, t.masks)
 	line = strings.ToValidUTF8(line, "\uFFFD")
 	if len(line) > tailMaxBytes {
 		line = line[len(line)-tailMaxBytes:]
@@ -226,6 +302,13 @@ func (t *outputTail) push(raw string) {
 		t.size -= len(t.lines[0])
 		t.lines = t.lines[1:]
 	}
+}
+
+func redactLine(line string, masks []string) string {
+	for _, secret := range masks {
+		line = strings.ReplaceAll(line, secret, "***")
+	}
+	return line
 }
 
 func buildArgValues(args map[string]string) []string {
@@ -400,6 +483,14 @@ func ensureBuildKit(ctx context.Context, opts Options, home string) (string, err
 }
 
 func buildEnvFlags(args map[string]string) []string {
+	return flagPairs("--env", args)
+}
+
+func buildArgFlags(args map[string]string) []string {
+	return flagPairs("--build-arg", args)
+}
+
+func flagPairs(flag string, args map[string]string) []string {
 	if len(args) == 0 {
 		return nil
 	}
@@ -410,7 +501,7 @@ func buildEnvFlags(args map[string]string) []string {
 	sort.Strings(keys)
 	flags := make([]string, 0, len(keys)*2)
 	for _, key := range keys {
-		flags = append(flags, "--env", key+"="+args[key])
+		flags = append(flags, flag, key+"="+args[key])
 	}
 	return flags
 }
@@ -420,10 +511,12 @@ func redactedCommandLine(name string, args []string) string {
 	copy(redacted, args)
 	for i := range redacted {
 		switch {
-		case redacted[i] == "--env" && i+1 < len(redacted):
+		case (redacted[i] == "--env" || redacted[i] == "--build-arg") && i+1 < len(redacted):
 			redacted[i+1] = redactBuildArg(redacted[i+1])
 		case strings.HasPrefix(redacted[i], "--env="):
 			redacted[i] = "--env=" + redactBuildArg(strings.TrimPrefix(redacted[i], "--env="))
+		case strings.HasPrefix(redacted[i], "--build-arg="):
+			redacted[i] = "--build-arg=" + redactBuildArg(strings.TrimPrefix(redacted[i], "--build-arg="))
 		}
 	}
 	return "$ " + name + " " + strings.Join(redacted, " ")

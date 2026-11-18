@@ -40,6 +40,9 @@ type Client interface {
 	VolumeMountpoint(ctx context.Context, name string) (string, error)
 	ImportArchive(ctx context.Context, containerID, destination string, body io.Reader) error
 	ExportArchive(ctx context.Context, containerID, source string) (io.ReadCloser, error)
+	StatArchive(ctx context.Context, containerID, source string) (ContainerPathStat, error)
+	ContainerShell(ctx context.Context, containerID string) (string, error)
+	RunContainerCommand(ctx context.Context, containerID string, command []string) (string, int32, error)
 }
 
 type DockerServer struct {

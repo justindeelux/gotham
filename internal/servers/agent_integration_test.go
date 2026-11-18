@@ -336,3 +336,15 @@ func (f *e2eDockerClient) ExportArchive(context.Context, string, string) (io.Rea
 func (f *e2eDockerClient) ImportArchive(context.Context, string, string, io.Reader) error {
 	return nil
 }
+
+func (f *e2eDockerClient) StatArchive(context.Context, string, string) (docker.ContainerPathStat, error) {
+	return docker.ContainerPathStat{}, nil
+}
+
+func (f *e2eDockerClient) ContainerShell(context.Context, string) (string, error) {
+	return "/bin/sh", nil
+}
+
+func (f *e2eDockerClient) RunContainerCommand(context.Context, string, []string) (string, int32, error) {
+	return "", 0, nil
+}

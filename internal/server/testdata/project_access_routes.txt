@@ -338,3 +338,16 @@ owner POST /api/v1/storages
 owner PATCH /api/v1/storages/{id}
 owner DELETE /api/v1/storages/{id}
 owner POST /api/v1/storages/{id}/test
+owner GET /api/v1/applications/{id}/containers/{containerID}/files
+owner GET /api/v1/applications/{id}/containers/{containerID}/files/capabilities
+owner GET /api/v1/applications/{id}/containers/{containerID}/files/content
+owner GET /api/v1/applications/{id}/containers/{containerID}/files/download
+owner GET /api/v1/applications/{id}/containers/{containerID}/files/stat
+owner PUT /api/v1/applications/{id}/containers/{containerID}/files/content
+owner PUT /api/v1/applications/{id}/containers/{containerID}/files/upload
+owner PUT /api/v1/applications/{id}/containers/{containerID}/files/chmod
+owner POST /api/v1/applications/{id}/containers/{containerID}/files/mkdir
+owner POST /api/v1/applications/{id}/containers/{containerID}/files/rename
+owner POST /api/v1/applications/{id}/containers/{containerID}/files/move
+owner POST /api/v1/applications/{id}/containers/{containerID}/files/copy
+owner DELETE /api/v1/applications/{id}/containers/{containerID}/files

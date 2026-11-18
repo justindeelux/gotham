@@ -8,6 +8,7 @@ import ApplicationContainersTab from "@/features/applications/components/Applica
 import ApplicationDeleteDialog from "@/features/applications/components/ApplicationDeleteDialog.vue";
 import ApplicationDeploymentsTab from "@/features/applications/components/ApplicationDeploymentsTab.vue";
 import ApplicationEnvTab from "@/features/applications/components/ApplicationEnvTab.vue";
+import ApplicationFilesTab from "@/features/applications/components/ApplicationFilesTab.vue";
 import ApplicationHeader from "@/features/applications/components/ApplicationHeader.vue";
 import ApplicationImagePanel from "@/features/applications/components/ApplicationImagePanel.vue";
 import ApplicationLogsTab from "@/features/applications/components/ApplicationLogsTab.vue";
@@ -234,6 +235,18 @@ const activeTab = computed<string>({
           @update:draft="detail.envDraft.value = $event"
           @save="detail.handleSaveEnv"
           @retry="detail.loadEnv()"
+        />
+      </NTabPane>
+
+      <NTabPane
+        v-if="showTerminalTab && detail.application.value"
+        name="files"
+        :tab="t('applications.tabs.files')"
+        display-directive="show"
+      >
+        <ApplicationFilesTab
+          :app-id="detail.application.value.id"
+          :can-write="canWrite"
         />
       </NTabPane>
 

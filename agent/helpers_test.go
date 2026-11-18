@@ -233,3 +233,15 @@ func (f *fakeDockerClient) ImportArchive(_ context.Context, _ string, _ string, 
 	_, err := io.Copy(io.Discard, body)
 	return err
 }
+
+func (f *fakeDockerClient) StatArchive(context.Context, string, string) (docker.ContainerPathStat, error) {
+	return docker.ContainerPathStat{}, f.err
+}
+
+func (f *fakeDockerClient) ContainerShell(context.Context, string) (string, error) {
+	return "", f.err
+}
+
+func (f *fakeDockerClient) RunContainerCommand(context.Context, string, []string) (string, int32, error) {
+	return "", 0, f.err
+}

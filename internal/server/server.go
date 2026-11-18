@@ -513,6 +513,11 @@ func (s *Server) routes() (http.Handler, error) {
 
 		s.deploy = s.deployService(containerService, providerSvc, s.proxy, githubAppSvc)
 		deploy.Mount(api, s.resourceAuth(), UserIDFromContext, s.deploy)
+		if files, ok := s.deploy.(deploy.ContainerFileService); ok {
+			// Container files need the same access the application terminal
+			// does: an interactive session owned by the application's owner.
+			deploy.MountContainerFiles(api, s.applicationTerminalAuth(), UserIDFromContext, files)
+		}
 		if s.terminal != nil && s.deploy != nil {
 			if resolver, ok := s.deploy.(deploy.TerminalResolver); ok {
 				s.terminal.SetApplications(terminalApplicationResolver{deploy: resolver})

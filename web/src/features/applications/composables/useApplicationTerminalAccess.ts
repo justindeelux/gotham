@@ -36,7 +36,8 @@ export function useApplicationTerminalAccess(
   );
 
   function resolveTab(tab: string): string {
-    if (tab === "terminal" && !canWrite.value) {
+    // The terminal and files tabs need the application owner.
+    if ((tab === "terminal" || tab === "files") && !canWrite.value) {
       return "overview";
     }
     return tab;

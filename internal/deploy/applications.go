@@ -727,7 +727,9 @@ func (s *Service) controlContainer(ctx context.Context, userID, appID uuid.UUID,
 			s.logger.Debug("deploy: close agent connection", "deployment_id", target.ID, "error", err)
 		}
 	}()
-	if start {
+	if isComposeApp(app) {
+		err = controlComposeProject(callCtx, node, app, target, start)
+	} else if start {
 		err = node.Start(callCtx, target.ContainerID)
 	} else {
 		err = node.Stop(callCtx, target.ContainerID)

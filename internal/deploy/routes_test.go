@@ -83,12 +83,15 @@ type fakeDeployService struct {
 	seenUpdate      UpdateApplicationInput
 	seenEntries     []EnvEntry
 	seenStorages    []Storage
-	domains         []ApplicationDomain
-	domainsErr      error
-	domain          ApplicationDomain
-	domainErr       error
-	seenDomain      string
-	applicationErr  error
+	source          ApplicationSource
+	sourceErr       error
+
+	domains        []ApplicationDomain
+	domainsErr     error
+	domain         ApplicationDomain
+	domainErr      error
+	seenDomain     string
+	applicationErr error
 }
 
 var _ DeployService = (*fakeDeployService)(nil)
@@ -250,6 +253,11 @@ func (f *fakeDeployService) GetStorages(_ context.Context, userID, appID uuid.UU
 		return nil, f.storagesErr
 	}
 	return f.storages, nil
+}
+
+func (f *fakeDeployService) GetApplicationSource(_ context.Context, userID, appID uuid.UUID) (ApplicationSource, error) {
+	f.seenUser, f.seenApplication = userID, appID
+	return f.source, f.sourceErr
 }
 
 func (f *fakeDeployService) ListVolumes(_ context.Context, userID, appID uuid.UUID) (VolumeListing, error) {

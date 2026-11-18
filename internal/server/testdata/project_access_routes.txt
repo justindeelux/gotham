@@ -48,6 +48,7 @@ project GET /api/v1/applications/{id}/logs
 project GET /api/v1/applications/{id}/metrics
 project GET /api/v1/applications/{id}/previews
 project GET /api/v1/applications/{id}/runtime
+project GET /api/v1/applications/{id}/source
 owner GET /api/v1/applications/{id}/storages
 public GET /api/v1/applications/{id}/terminal/sessions/{sessionID}/ws
 owner GET /api/v1/applications/{id}/terminal/targets

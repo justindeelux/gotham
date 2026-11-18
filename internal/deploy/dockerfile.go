@@ -88,7 +88,20 @@ func normalizeBuildArgs(args map[string]string) map[string]string {
 	return out
 }
 
+// dockerfileDeployable is the Dockerfile handed to the builder: the saved
+// text unchanged. The deploy and the source view share it.
+func dockerfileDeployable(content string) (string, error) {
+	if err := ValidateDockerfileContent(content); err != nil {
+		return "", err
+	}
+	return content, nil
+}
+
 func writeDockerfileContext(dir, content string) error {
+	content, err := dockerfileDeployable(content)
+	if err != nil {
+		return err
+	}
 	if err := os.MkdirAll(dir, 0o755); err != nil {
 		return err
 	}

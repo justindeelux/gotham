@@ -42,6 +42,7 @@ type DeployService interface {
 	InstallHook(ctx context.Context, userID, appID uuid.UUID, r *http.Request) (attempted bool, err error)
 	ListApplications(ctx context.Context, userID uuid.UUID, filter ApplicationFilter) ([]Application, error)
 	GetApplication(ctx context.Context, userID, appID uuid.UUID) (Application, error)
+	GetApplicationSource(ctx context.Context, userID, appID uuid.UUID) (ApplicationSource, error)
 	UpdateApplication(ctx context.Context, userID, appID uuid.UUID, in UpdateApplicationInput) (Application, error)
 	ListDomains(ctx context.Context, userID, appID uuid.UUID) ([]ApplicationDomain, error)
 	AddDomain(ctx context.Context, userID, appID uuid.UUID, in DomainInput) (ApplicationDomain, error)

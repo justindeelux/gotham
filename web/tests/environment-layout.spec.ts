@@ -20,6 +20,7 @@ const mimeTypes: Record<string, string> = {
   ".json": "application/json",
   ".png": "image/png",
   ".svg": "image/svg+xml",
+  ".webp": "image/webp",
   ".woff2": "font/woff2",
 };
 
@@ -360,8 +361,8 @@ test("application rows show the source brand avatar", async ({ page }) => {
     .locator(".resource-table tbody tr", { hasText: "pg-orders" })
     .locator(".brand-icon");
   await expect(databaseIcon).toHaveCount(1);
-  await expect(databaseIcon).toHaveCSS("background-color", "rgb(65, 105, 225)");
-  await expect(databaseIcon.locator(".brand-icon__glyph")).toHaveCount(1);
+  await expect(databaseIcon).toHaveCSS("background-color", "rgb(30, 31, 34)");
+  await expect(databaseIcon.locator(".brand-icon__image")).toHaveCount(1);
   await page.locator(".preview-switch .n-switch").click();
   await expect(
     page.locator(".resource-table tr.preview-row .brand-icon"),

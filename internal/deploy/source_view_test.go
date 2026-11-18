@@ -8,6 +8,7 @@ import (
 	"testing"
 
 	"github.com/google/uuid"
+	"gopkg.in/yaml.v3"
 
 	"github.com/justindeelux/gotham/internal/providers"
 	agentv1 "github.com/justindeelux/gotham/proto/agent/v1"
@@ -88,7 +89,10 @@ func TestApplicationSourceComposeMatchesDeployedDocument(t *testing.T) {
 	if source.Raw != app.ComposeContent {
 		t.Errorf("raw = %q, want the stored content", source.Raw)
 	}
-	want := strings.ReplaceAll(deployed, "db-password-value", "<redacted>")
+	want, err := redactComposeDocument(deployed, map[string]string{"POSTGRES_PASSWORD": "db-password-value"})
+	if err != nil {
+		t.Fatalf("redact the deployed document: %v", err)
+	}
 	if source.Deployable != want {
 		t.Errorf("deployable =\n%s\nwant the deployed document with the secret masked:\n%s", source.Deployable, want)
 	}
@@ -97,6 +101,54 @@ func TestApplicationSourceComposeMatchesDeployedDocument(t *testing.T) {
 	}
 	if !strings.Contains(source.Deployable, "APP_URL") {
 		t.Errorf("deployable is missing the injected environment:\n%s", source.Deployable)
+	}
+}
+
+func TestApplicationSourceMasksReencodedSecrets(t *testing.T) {
+	userID := uuid.New()
+	app := testComposeApp(userID)
+	app.ComposeContent = `services:
+  web:
+    image: example.com/app:1.0
+`
+	pem := "-----BEGIN PRIVATE KEY-----\nMIIEvQIBADANBgkqhkiG9w0BAQEFAASCBKcwggSjAgEAAoIBAQC7\n-----END PRIVATE KEY-----"
+	quoted := "pa'ss$word"
+	sealedPEM, err := providers.SealSecret(testSecretKey, pem)
+	if err != nil {
+		t.Fatalf("seal PEM secret: %v", err)
+	}
+	sealedQuoted, err := providers.SealSecret(testSecretKey, quoted)
+	if err != nil {
+		t.Fatalf("seal quoted secret: %v", err)
+	}
+	repo := &fakeRepository{app: app}
+	repo.secrets = []Secret{
+		{Key: "TLS_KEY", Ciphertext: sealedPEM},
+		{Key: "QUOTED", Ciphertext: sealedQuoted},
+	}
+	s := &Service{Orchestrator: newTestOrchestrator(Config{Repository: repo, Source: &fakeSource{}})}
+	source, err := s.applicationSource(context.Background(), app)
+	if err != nil {
+		t.Fatalf("applicationSource = %v, want nil", err)
+	}
+	deployable := source.Deployable
+	if !strings.Contains(deployable, "<redacted>") {
+		t.Fatalf("deployable holds no mask:\n%s", deployable)
+	}
+	if strings.Contains(deployable, pem) {
+		t.Errorf("deployable holds the multi-line secret:\n%s", deployable)
+	}
+	for _, line := range strings.Split(pem, "\n") {
+		if line != "" && strings.Contains(deployable, line) {
+			t.Errorf("deployable holds a line of the multi-line secret %q:\n%s", line, deployable)
+		}
+	}
+	if strings.Contains(deployable, quoted) {
+		t.Errorf("deployable holds the quoted secret:\n%s", deployable)
+	}
+	var doc yaml.Node
+	if err := yaml.Unmarshal([]byte(deployable), &doc); err != nil {
+		t.Errorf("deployable is not valid YAML: %v", err)
 	}
 }
 

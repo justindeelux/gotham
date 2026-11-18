@@ -6,6 +6,7 @@ import (
 	"os"
 
 	"github.com/google/uuid"
+	"gopkg.in/yaml.v3"
 
 	"github.com/justindeelux/gotham/internal/providers"
 	"github.com/justindeelux/gotham/internal/services"
@@ -56,7 +57,42 @@ func (s *Service) applicationSource(ctx context.Context, app Application) (Appli
 	if err != nil {
 		return ApplicationSource{}, err
 	}
-	return ApplicationSource{Kind: SourceCompose, Raw: raw, Deployable: services.Redact(rendered, secrets)}, nil
+	deployable, err := redactComposeDocument(rendered, secrets)
+	if err != nil {
+		return ApplicationSource{}, err
+	}
+	return ApplicationSource{Kind: SourceCompose, Raw: raw, Deployable: deployable}, nil
+}
+
+// redactComposeDocument masks secret values in the rendered document. Redacting
+// the string alone misses values YAML re-encoded (a multi-line secret becomes a
+// block scalar, a quoted one changes escapes), so redact the parsed scalars and
+// marshal the same document back.
+func redactComposeDocument(rendered string, secrets map[string]string) (string, error) {
+	if len(secrets) == 0 {
+		return rendered, nil
+	}
+	var doc yaml.Node
+	if err := yaml.Unmarshal([]byte(rendered), &doc); err != nil {
+		return "", fmt.Errorf("%w: compose document is not valid YAML: %v", ErrValidation, err)
+	}
+	redactComposeNode(&doc, secrets)
+	out, err := yaml.Marshal(&doc)
+	if err != nil {
+		return "", fmt.Errorf("%w: render compose document: %v", ErrValidation, err)
+	}
+	return string(out), nil
+}
+
+func redactComposeNode(node *yaml.Node, secrets map[string]string) {
+	switch node.Kind {
+	case yaml.DocumentNode, yaml.SequenceNode, yaml.MappingNode:
+		for _, child := range node.Content {
+			redactComposeNode(child, secrets)
+		}
+	case yaml.ScalarNode:
+		node.Value = services.Redact(node.Value, secrets)
+	}
 }
 
 // composeSecretValues opens the sealed values the deploy renders into the

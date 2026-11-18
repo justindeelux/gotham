@@ -44,6 +44,9 @@ func TestBuiltinCatalog(t *testing.T) {
 		if template.Name == "" || template.Icon == "" || template.Description == "" || len(template.Fields) == 0 {
 			t.Errorf("template %s is missing metadata: %+v", template.Slug, template)
 		}
+		if template.Homepage == "" || len(template.Category) == 0 {
+			t.Errorf("template %s is missing its homepage or category: %+v", template.Slug, template)
+		}
 	}
 	want := "n8n,nextcloud,uptime-kuma,wordpress"
 	if got := strings.Join(slugs, ","); got != want {

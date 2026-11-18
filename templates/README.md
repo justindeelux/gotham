@@ -23,6 +23,9 @@ itself is not embedded and is not a template.
 name: WordPress                 # display name, 1-80 characters
 icon: wordpress                 # icon key the gallery resolves, [a-z0-9-]
 description: WordPress with a MySQL database and persistent volumes.
+homepage: https://wordpress.org # optional; https:// URL of the project, max 300 characters
+category:                       # optional; 1-3 lowercase slugs, used to group the gallery
+  - cms
 fields:                         # 1-32 fields
   - key: domain                 # [a-z][a-z0-9_]*; referenced as {{ .domain }}
     label: Domain               # optional, defaults to the key
@@ -59,6 +62,11 @@ Unknown keys are rejected, so a typo never drops configuration silently.
 Rules the loader enforces:
 
 - `name`, `icon`, `description` and at least one field are required.
+- `homepage` is optional; when present it must be an `https://` URL with a host
+  and at most 300 characters.
+- `category` is optional; when present it lists 1-3 unique lowercase slugs
+  (letters, digits and `-`, starting with a letter). An older template without
+  either key keeps loading unchanged.
 - A field that is not `required` must declare a `default`; every default must
   itself pass the field's type rules (so `default: 20` with `max: 10` fails at
   load).
@@ -156,14 +164,18 @@ operations.
 `GET /api/v1/templates` — the catalog, metadata only:
 
 ```json
-{ "templates": [ { "slug": "wordpress", "name": "WordPress", "icon": "wordpress", "description": "..." } ] }
+{ "templates": [ { "slug": "wordpress", "name": "WordPress", "icon": "wordpress", "description": "...",
+  "homepage": "https://wordpress.org", "category": ["cms"] } ] }
 ```
+
+`homepage` and `category` are omitted when a template does not declare them.
 
 `GET /api/v1/templates/{slug}` — metadata plus the form schema:
 
 ```json
 { "template": { "slug": "wordpress", "name": "WordPress", "icon": "wordpress",
-  "description": "...", "fields": [ { "key": "domain", "label": "Domain", "type": "text",
+  "description": "...", "homepage": "https://wordpress.org", "category": ["cms"],
+  "fields": [ { "key": "domain", "label": "Domain", "type": "text",
   "required": true, "placeholder": "blog.example.com", "pattern": "...", "max_length": 253 } ] } }
 ```
 

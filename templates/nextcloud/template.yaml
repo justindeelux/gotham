@@ -1,6 +1,9 @@
 name: Nextcloud
 icon: nextcloud
 description: Nextcloud with PostgreSQL and Redis, persistent named volumes and a routed domain.
+homepage: https://docs.nextcloud.com
+category:
+  - storage
 fields:
   - key: domain
     label: Domain

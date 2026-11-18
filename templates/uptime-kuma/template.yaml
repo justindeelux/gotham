@@ -1,6 +1,9 @@
 name: Uptime Kuma
 icon: uptime-kuma
 description: Uptime Kuma monitoring with a persistent named volume and an optional routed domain.
+homepage: https://github.com/louislam/uptime-kuma
+category:
+  - monitoring
 fields:
   - key: domain
     label: Domain

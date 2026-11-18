@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"io"
 	"math"
+	"net/url"
 	"regexp"
 	"strconv"
 	"strings"
@@ -18,8 +19,10 @@ const (
 	MaxTemplateYAML      = 64 << 10
 	MaxNameLength        = 80
 	MaxDescriptionLength = 280
+	MaxHomepageLength    = 300
 	MaxFields            = 32
 	MaxRoutes            = 32
+	MaxCategories        = 3
 	MaxFieldValue        = 1024
 	maxLabelLength       = 80
 	maxPlaceholderLength = 200
@@ -73,12 +76,14 @@ type Route struct {
 }
 
 type Template struct {
-	Slug        string  `json:"slug"`
-	Name        string  `json:"name"`
-	Icon        string  `json:"icon"`
-	Description string  `json:"description"`
-	Fields      []Field `json:"fields"`
-	Routes      []Route `json:"routes,omitempty"`
+	Slug        string   `json:"slug"`
+	Name        string   `json:"name"`
+	Icon        string   `json:"icon"`
+	Description string   `json:"description"`
+	Homepage    string   `json:"homepage,omitempty"`
+	Category    []string `json:"category,omitempty"`
+	Fields      []Field  `json:"fields"`
+	Routes      []Route  `json:"routes,omitempty"`
 
 	compose string
 }
@@ -87,6 +92,8 @@ type templateDocument struct {
 	Name        string          `yaml:"name"`
 	Icon        string          `yaml:"icon"`
 	Description string          `yaml:"description"`
+	Homepage    string          `yaml:"homepage"`
+	Category    []string        `yaml:"category"`
 	Fields      []fieldDocument `yaml:"fields"`
 	Routes      []routeDocument `yaml:"routes"`
 }
@@ -146,6 +153,14 @@ func parseTemplate(slug string, document []byte) (Template, error) {
 	if description == "" || utf8.RuneCountInString(description) > MaxDescriptionLength {
 		return Template{}, fmt.Errorf("%w: template %s: description must be 1-%d characters", ErrValidation, slug, MaxDescriptionLength)
 	}
+	homepage, err := parseHomepage(slug, raw.Homepage)
+	if err != nil {
+		return Template{}, err
+	}
+	category, err := parseCategory(slug, raw.Category)
+	if err != nil {
+		return Template{}, err
+	}
 	if len(raw.Fields) == 0 || len(raw.Fields) > MaxFields {
 		return Template{}, fmt.Errorf("%w: template %s: fields must declare 1-%d entries", ErrValidation, slug, MaxFields)
 	}
@@ -176,7 +191,44 @@ func parseTemplate(slug string, document []byte) (Template, error) {
 		seenRoutes[route.Service] = true
 		routes = append(routes, route)
 	}
-	return Template{Slug: slug, Name: name, Icon: icon, Description: description, Fields: fields, Routes: routes}, nil
+	return Template{Slug: slug, Name: name, Icon: icon, Description: description, Homepage: homepage, Category: category, Fields: fields, Routes: routes}, nil
+}
+
+func parseHomepage(slug, raw string) (string, error) {
+	homepage := strings.TrimSpace(raw)
+	if homepage == "" {
+		return "", nil
+	}
+	if utf8.RuneCountInString(homepage) > MaxHomepageLength {
+		return "", fmt.Errorf("%w: template %s: homepage is longer than %d characters", ErrValidation, slug, MaxHomepageLength)
+	}
+	parsed, err := url.Parse(homepage)
+	if err != nil || !strings.HasPrefix(homepage, "https://") || parsed.Host == "" {
+		return "", fmt.Errorf("%w: template %s: homepage must be an https:// URL", ErrValidation, slug)
+	}
+	return homepage, nil
+}
+
+func parseCategory(slug string, raw []string) ([]string, error) {
+	if len(raw) == 0 {
+		return nil, nil
+	}
+	if len(raw) > MaxCategories {
+		return nil, fmt.Errorf("%w: template %s: category must declare at most %d entries", ErrValidation, slug, MaxCategories)
+	}
+	category := make([]string, 0, len(raw))
+	seen := make(map[string]bool, len(raw))
+	for _, entry := range raw {
+		if !slugPattern.MatchString(entry) {
+			return nil, fmt.Errorf("%w: template %s: category %q must be a lowercase slug", ErrValidation, slug, entry)
+		}
+		if seen[entry] {
+			return nil, fmt.Errorf("%w: template %s: duplicate category %q", ErrValidation, slug, entry)
+		}
+		seen[entry] = true
+		category = append(category, entry)
+	}
+	return category, nil
 }
 
 func parseRoute(raw routeDocument, fields []Field, seen map[string]bool) (Route, error) {

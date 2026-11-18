@@ -13,6 +13,8 @@ import (
 const sampleTemplateYAML = `name: Demo
 icon: demo
 description: A demo template.
+homepage: https://demo.example.com
+category: [devtools, automation]
 fields:
   - key: domain
     label: Domain
@@ -101,6 +103,9 @@ func TestLoadSample(t *testing.T) {
 	if template.Name != "Demo" || template.Icon != "demo" || template.Description != "A demo template." {
 		t.Fatalf("metadata = %+v", template)
 	}
+	if template.Homepage != "https://demo.example.com" || strings.Join(template.Category, ",") != "devtools,automation" {
+		t.Errorf("homepage = %q, category = %v", template.Homepage, template.Category)
+	}
 	if len(template.Fields) != 6 {
 		t.Fatalf("fields = %d, want 6", len(template.Fields))
 	}
@@ -121,6 +126,19 @@ func TestLoadSample(t *testing.T) {
 	}
 	if _, ok := catalog.Get("nope"); ok {
 		t.Error("Get(nope) resolved")
+	}
+}
+
+func TestLoadWithoutHomepageAndCategory(t *testing.T) {
+	files := sampleFiles()
+	files["demo/template.yaml"] = strings.Replace(sampleTemplateYAML,
+		"homepage: https://demo.example.com\ncategory: [devtools, automation]\n", "", 1)
+	template, ok := mustCatalog(t, files).Get("demo")
+	if !ok {
+		t.Fatal("Get(demo) not found")
+	}
+	if template.Homepage != "" || template.Category != nil {
+		t.Errorf("homepage = %q, category = %v, want neither", template.Homepage, template.Category)
 	}
 }
 
@@ -238,6 +256,34 @@ func TestLoadRejectsBadDefinitions(t *testing.T) {
 		"missing description": {
 			files: map[string]string{"demo/template.yaml": strings.Replace(sampleTemplateYAML, "description: A demo template.\n", "", 1), "demo/compose.yaml": sampleComposeYAML},
 			want:  "description must be",
+		},
+		"http homepage": {
+			files: map[string]string{"demo/template.yaml": strings.Replace(sampleTemplateYAML, "homepage: https://demo.example.com", "homepage: http://demo.example.com", 1), "demo/compose.yaml": sampleComposeYAML},
+			want:  "homepage must be an https:// URL",
+		},
+		"homepage without a scheme": {
+			files: map[string]string{"demo/template.yaml": strings.Replace(sampleTemplateYAML, "homepage: https://demo.example.com", "homepage: demo.example.com", 1), "demo/compose.yaml": sampleComposeYAML},
+			want:  "homepage must be an https:// URL",
+		},
+		"homepage without a host": {
+			files: map[string]string{"demo/template.yaml": strings.Replace(sampleTemplateYAML, "homepage: https://demo.example.com", "homepage: https://", 1), "demo/compose.yaml": sampleComposeYAML},
+			want:  "homepage must be an https:// URL",
+		},
+		"long homepage": {
+			files: map[string]string{"demo/template.yaml": strings.Replace(sampleTemplateYAML, "homepage: https://demo.example.com", "homepage: https://demo.example.com/"+strings.Repeat("a", MaxHomepageLength), 1), "demo/compose.yaml": sampleComposeYAML},
+			want:  "homepage is longer than",
+		},
+		"bad category slug": {
+			files: map[string]string{"demo/template.yaml": strings.Replace(sampleTemplateYAML, "category: [devtools, automation]", "category: [Dev Tools]", 1), "demo/compose.yaml": sampleComposeYAML},
+			want:  "category \"Dev Tools\" must be a lowercase slug",
+		},
+		"too many categories": {
+			files: map[string]string{"demo/template.yaml": strings.Replace(sampleTemplateYAML, "category: [devtools, automation]", "category: [a, b, c, d]", 1), "demo/compose.yaml": sampleComposeYAML},
+			want:  "category must declare at most 3 entries",
+		},
+		"duplicate category": {
+			files: map[string]string{"demo/template.yaml": strings.Replace(sampleTemplateYAML, "category: [devtools, automation]", "category: [devtools, devtools]", 1), "demo/compose.yaml": sampleComposeYAML},
+			want:  "duplicate category",
 		},
 		"no fields": {
 			files: map[string]string{"demo/template.yaml": "name: Demo\nicon: demo\ndescription: A demo template.\nfields: []\n", "demo/compose.yaml": sampleComposeYAML},

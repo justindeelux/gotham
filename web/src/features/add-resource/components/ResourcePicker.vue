@@ -124,6 +124,86 @@ const filteredTemplates = computed<TemplateSummary[]>(() => {
   });
 });
 
+const CATEGORY_ORDER = [
+  "email",
+  "messaging",
+  "communication",
+  "helpdesk",
+  "networking",
+  "proxy",
+  "vpn",
+  "security",
+  "auth",
+  "ai",
+  "mcp",
+  "automation",
+  "devtools",
+  "development",
+  "git",
+  "ci",
+  "backend",
+  "api",
+  "database",
+  "storage",
+  "media",
+  "games",
+  "productivity",
+  "analytics",
+  "observability",
+  "monitoring",
+  "search",
+  "documentation",
+  "cms",
+  "finance",
+  "health",
+  "family",
+  "rss",
+];
+
+const OTHER_CATEGORY = "other";
+
+interface TemplateGroup {
+  key: string;
+  templates: TemplateSummary[];
+}
+
+// Unknown categories stay out of the gallery labels, so they share the Other group.
+function groupKey(category: string): string {
+  const translated = i18n.global.te(`add-resource.categories.${category}`);
+  return translated ? category : OTHER_CATEGORY;
+}
+
+function groupRank(key: string): number {
+  if (key === OTHER_CATEGORY) {
+    return CATEGORY_ORDER.length + 1;
+  }
+  const index = CATEGORY_ORDER.indexOf(key);
+  return index === -1 ? CATEGORY_ORDER.length : index;
+}
+
+const templateGroups = computed<TemplateGroup[]>(() => {
+  void i18n.global.locale.value;
+  const groups = new Map<string, TemplateSummary[]>();
+  for (const template of filteredTemplates.value) {
+    const keys =
+      template.category && template.category.length > 0
+        ? template.category.map(groupKey)
+        : [OTHER_CATEGORY];
+    for (const key of new Set(keys)) {
+      const group = groups.get(key) ?? [];
+      group.push(template);
+      groups.set(key, group);
+    }
+  }
+  return [...groups.entries()]
+    .map(([key, templates]) => ({ key, templates }))
+    .sort(
+      (left, right) =>
+        groupRank(left.key) - groupRank(right.key) ||
+        left.key.localeCompare(right.key),
+    );
+});
+
 const SOURCE_LABEL_KEYS: Record<string, string> = {
   git_public: "applications.wizard.sourceGitPublic",
   git_private: "applications.wizard.sourceGitPrivate",
@@ -323,32 +403,48 @@ onMounted(() => {
         </template>
         <div
           v-else-if="filteredTemplates.length > 0"
-          class="res-grid"
+          class="res-groups"
           @keydown="handleGroupKey"
         >
-          <div
-            v-for="template in filteredTemplates"
-            :key="template.slug"
-            class="res-card-tile"
+          <section
+            v-for="group in templateGroups"
+            :key="group.key"
+            class="res-group"
+            :data-category="group.key"
+            :aria-labelledby="`${tabsId}-category-${group.key}`"
           >
-            <button
-              type="button"
-              class="res-card"
-              :data-template="template.slug"
-              @click="openTemplate(template.slug)"
+            <h3
+              :id="`${tabsId}-category-${group.key}`"
+              class="res-group-title"
             >
-              <span class="res-head">
-                <BrandIcon v-bind="templateBrand(template.icon, template.name)" />
-                <span class="res-name">{{ template.name }}</span>
-              </span>
-              <span class="res-desc">{{ templateOverlayDescription(template) }}</span>
-            </button>
-            <HomepageLink
-              :href="template.homepage"
-              :name="template.name"
-              class="res-site"
-            />
-          </div>
+              {{ t(`add-resource.categories.${group.key}`) }}
+            </h3>
+            <div class="res-grid">
+              <div
+                v-for="template in group.templates"
+                :key="template.slug"
+                class="res-card-tile"
+              >
+                <button
+                  type="button"
+                  class="res-card"
+                  :data-template="template.slug"
+                  @click="openTemplate(template.slug)"
+                >
+                  <span class="res-head">
+                    <BrandIcon v-bind="templateBrand(template.icon, template.name)" />
+                    <span class="res-name">{{ template.name }}</span>
+                  </span>
+                  <span class="res-desc">{{ templateOverlayDescription(template) }}</span>
+                </button>
+                <HomepageLink
+                  :href="template.homepage"
+                  :name="template.name"
+                  class="res-site"
+                />
+              </div>
+            </div>
+          </section>
         </div>
         <NEmpty
           v-else
@@ -448,6 +544,28 @@ onMounted(() => {
 
 .search {
   max-width: calc(var(--space-8) * 10);
+}
+
+.res-groups {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-5);
+}
+
+.res-group {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-2);
+}
+
+.res-group-title {
+  margin: 0;
+  padding: 0 var(--space-1);
+  color: var(--meta);
+  font-size: var(--text-xs);
+  font-weight: 500;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
 }
 
 .res-grid {

@@ -279,12 +279,28 @@ describe("database wizard engine preselect", () => {
   });
 });
 
-const TEMPLATES = [
+interface TemplateFixture {
+  slug: string;
+  name: string;
+  icon: string;
+  description: string;
+  category?: string[];
+}
+
+const TEMPLATES: TemplateFixture[] = [
   { slug: "wordpress", name: "WordPress", icon: "wordpress", description: "wp" },
   { slug: "nextcloud", name: "Nextcloud", icon: "nextcloud", description: "nc" },
 ];
 
-async function mountPage(templates: typeof TEMPLATES, show = ref(true)) {
+const CATEGORIZED: TemplateFixture[] = [
+  { slug: "ghost", name: "Ghost", icon: "ghost", description: "publishing", category: ["cms"] },
+  { slug: "n8n", name: "n8n", icon: "n8n", description: "workflow automation", category: ["automation"] },
+  { slug: "nextcloud", name: "Nextcloud", icon: "nextcloud", description: "files", category: ["storage", "productivity"] },
+  { slug: "mystery", name: "Mystery", icon: "mystery", description: "no known category", category: ["quantum"] },
+  { slug: "plain", name: "Plain", icon: "plain", description: "no category at all" },
+];
+
+async function mountPage(templates: TemplateFixture[], show = ref(true)) {
   const templatesStore = useTemplatesStore();
   vi.spyOn(templatesStore, "fetchTemplates").mockResolvedValue(undefined);
   templatesStore.templates = templates as never;
@@ -457,6 +473,66 @@ describe("ResourcePicker", () => {
       "No service matches this filter.",
     );
     filtered.unmount();
+  });
+
+  it("groups services by category, repeating multi-category templates", async () => {
+    const wrapper = await mountPage(CATEGORIZED);
+    await selectTab(wrapper, "Service");
+    const groups = wrapper.findAll("section[data-category]");
+    expect(groups.map((group) => group.attributes("data-category"))).toEqual([
+      "automation",
+      "storage",
+      "productivity",
+      "cms",
+      "other",
+    ]);
+    expect(groups.map((group) => group.find(".res-group-title").text())).toEqual([
+      "Automation",
+      "Storage",
+      "Productivity",
+      "CMS",
+      "Other",
+    ]);
+    expect(wrapper.findAll('button[data-template="nextcloud"]')).toHaveLength(2);
+    expect(
+      groups[4].findAll("button[data-template]").map((card) => card.attributes("data-template")),
+    ).toEqual(["mystery", "plain"]);
+    wrapper.unmount();
+  });
+
+  it("keeps the search filtering across category sections", async () => {
+    const wrapper = await mountPage(CATEGORIZED);
+    await selectTab(wrapper, "Service");
+    await wrapper.find("input").setValue("nextcloud");
+    await nextTick();
+    expect(
+      wrapper.findAll("section[data-category]").map((group) => group.attributes("data-category")),
+    ).toEqual(["storage", "productivity"]);
+
+    await wrapper.find("input").setValue("no known category");
+    await nextTick();
+    expect(
+      wrapper.findAll("section[data-category]").map((group) => group.attributes("data-category")),
+    ).toEqual(["other"]);
+    expect(wrapper.find("button[data-template]").exists()).toBe(true);
+    wrapper.unmount();
+  });
+
+  it("labels the category sections in Vietnamese", async () => {
+    const wrapper = await mountPage(CATEGORIZED);
+    await selectTab(wrapper, "Service");
+    syncComposerLocale("vi");
+    await nextTick();
+    const titles = wrapper.findAll(".res-group-title").map((title) => title.text());
+    expect(titles).toEqual([
+      "Tự động hoá",
+      "Lưu trữ",
+      "Năng suất",
+      "CMS",
+      "Khác",
+    ]);
+    expect(wrapper.text()).not.toContain("add-resource.categories");
+    wrapper.unmount();
   });
 
   it("renders one card per application source type", async () => {

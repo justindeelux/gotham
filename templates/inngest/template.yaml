@@ -18,12 +18,14 @@ fields:
     label: Event key
     type: secret
     required: true
-    generate: true
+    pattern: ^[0-9a-f]{32}$
+    help: 32 hex characters, for example openssl rand -hex 16.
   - key: signing_key
     label: Signing key
     type: secret
     required: true
-    generate: true
+    pattern: ^[0-9a-f]{32}$
+    help: 32 hex characters, for example openssl rand -hex 16.
   - key: db_password
     label: Database password
     type: secret

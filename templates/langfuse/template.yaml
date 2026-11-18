@@ -48,7 +48,8 @@ fields:
     label: Encryption key
     type: secret
     required: true
-    generate: true
+    pattern: ^[0-9a-f]{64}$
+    help: 64 hex characters, for example openssl rand -hex 32.
   - key: nextauth_secret
     label: Session secret
     type: secret

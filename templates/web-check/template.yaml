@@ -1,0 +1,20 @@
+name: Web-Check
+icon: web-check
+description: "All-in-one OSINT tool for analysing any website, with an optional routed domain."
+homepage: https://github.com/lissy93/web-check
+category:
+  - monitoring
+fields:
+  - key: domain
+    label: Domain
+    type: text
+    required: false
+    default: ""
+    placeholder: check.example.com
+    help: Optional. Leave empty to add a domain later from the service page.
+    pattern: ^([A-Za-z0-9][A-Za-z0-9.-]*)?$
+    max_length: 253
+routes:
+  - service: web-check
+    port: 3000
+    domain_field: domain

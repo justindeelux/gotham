@@ -1,0 +1,6 @@
+services:
+  whoogle:
+    image: benbusby/whoogle-search:1.2.4
+    restart: unless-stopped
+    ports:
+      - "5000"

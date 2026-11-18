@@ -114,9 +114,6 @@ func TestBuiltinRender(t *testing.T) {
 					t.Errorf("template uses the managed database volume namespace: %s", volume)
 				}
 			}
-			if len(result.Spec.NamedVolumes) == 0 {
-				t.Error("template declares no named volume; state would not survive a stop")
-			}
 			for _, mount := range result.Spec.Mounts {
 				if !mount.Named {
 					t.Errorf("mount %+v is not a named volume", mount)

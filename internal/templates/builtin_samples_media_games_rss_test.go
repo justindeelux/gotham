@@ -19,6 +19,10 @@ func init() {
 		"redis_password":   "castopod-redis-secret",
 		"analytics_salt":   "castopodanalyticsalt0123456789abcdefghijklmnopqrstuvwxyzABCDEFGH",
 	}
+	builtinSamples["zipline"] = map[string]any{
+		"core_secret": "0123456789abcdef0123456789abcdef",
+		"db_password": "zipline-db-secret",
+	}
 	builtinSamples["ente-photos"] = map[string]any{
 		"photos_domain":  "photos.example.test",
 		"api_domain":     "api.photos.example.test",
@@ -27,7 +31,7 @@ func init() {
 		"db_password":    "ente-db-secret",
 		"encryption_key": "Z290aGFtLWVudGUtZW5jcnlwdGlvbi1rZXktMzJieXQ=",
 		"hash_key":       "Z290aGFtLWVudGUtaGFzaC1rZXktMzItYnl0ZXMtb2s=",
-		"jwt_secret":     "ente-jwt-secret-0123456789abcdefghijklmnopqrstuvwxyz",
+		"jwt_secret":     "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef",
 		"s3_access_key":  "ente-s3-access",
 		"s3_secret_key":  "ente-s3-secret",
 		"s3_endpoint":    "https://s3.example.test",

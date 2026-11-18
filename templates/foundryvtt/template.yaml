@@ -14,11 +14,21 @@ fields:
     help: Optional. Leave empty to add a domain later from the service page.
     pattern: ^([A-Za-z0-9][A-Za-z0-9.-]*)?$
     max_length: 253
+  - key: username
+    label: Foundry account user
+    type: text
+    required: true
+    help: Foundry VTT account user name; the container downloads the app with it.
+  - key: password
+    label: Foundry account password
+    type: secret
+    required: true
+    help: Foundry VTT account password, used once to download the app.
   - key: license_key
     label: License key
     type: secret
     required: true
-    help: Foundry Virtual Tabletop license key; the container downloads the app with it.
+    help: Foundry Virtual Tabletop license key; the container needs it at every start.
   - key: admin_key
     label: Admin access key
     type: secret

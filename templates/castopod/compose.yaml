@@ -9,6 +9,7 @@ services:
       MYSQL_USER: '{{ .db_user }}'
       MYSQL_PASSWORD: '{{ .db_password }}'
       CP_BASEURL: https://${GOTHAM_DOMAIN:-localhost}
+      CP_DISABLE_HTTPS: '1'
       CP_ANALYTICS_SALT: '{{ .analytics_salt }}'
       CP_CACHE_HANDLER: redis
       CP_REDIS_HOST: redis

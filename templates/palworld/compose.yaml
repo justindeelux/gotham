@@ -4,8 +4,8 @@ services:
     restart: unless-stopped
     stop_grace_period: 30s
     ports:
-      - '{{ .game_port }}:8211/udp'
-      - '{{ .query_port }}:27015/udp'
+      - '{{ .game_port }}:{{ .game_port }}/udp'
+      - '{{ .query_port }}:{{ .query_port }}/udp'
     environment:
       TZ: ${TZ:-UTC}
       PUID: '1000'

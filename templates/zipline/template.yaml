@@ -37,8 +37,8 @@ fields:
     label: Core secret
     type: secret
     required: true
-    help: Signs sessions and generated share links.
-    generate: true
+    help: At least 32 characters that sign sessions and share links; generate with openssl rand -hex 32.
+    pattern: ^[A-Za-z0-9]{32,}$
 routes:
   - service: zipline
     port: 3000

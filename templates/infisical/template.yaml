@@ -18,14 +18,16 @@ fields:
     label: Encryption key
     type: secret
     required: true
-    generate: true
-    help: Encrypts every secret Infisical stores; losing it makes the vault unreadable.
+    help: A 16-byte hex string; generate with "openssl rand -hex 16". Losing it makes every stored secret unreadable.
+    pattern: ^[0-9a-f]{32}$
+    max_length: 32
   - key: auth_secret
     label: Auth secret
     type: secret
     required: true
-    generate: true
-    help: Signs Infisical sessions and tokens.
+    help: A 32-byte base64 string; generate with "openssl rand -base64 32". Signs session tokens and JWTs.
+    pattern: ^[A-Za-z0-9+/]{43}=$
+    max_length: 44
   - key: db_user
     label: Database user
     type: text

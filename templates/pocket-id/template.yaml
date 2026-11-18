@@ -17,8 +17,9 @@ fields:
     label: Encryption key
     type: secret
     required: true
-    generate: true
-    help: Encrypts stored tokens and client secrets; losing it invalidates sessions.
+    help: A 32-byte base64 key; generate with "openssl rand -base64 32". Losing it makes stored tokens unreadable.
+    pattern: ^[A-Za-z0-9+/]{43}=$
+    max_length: 44
 routes:
   - service: pocket-id
     port: 1411

@@ -1,0 +1,18 @@
+services:
+  orbit:
+    image: ghcr.io/coollabsio/orbit:0.3.0
+    restart: unless-stopped
+    ports:
+      - "8080"
+    environment:
+      ORBIT_ENV: production
+      ORBIT_PUBLIC_ORIGIN: "https://${GOTHAM_DOMAIN:-localhost}"
+      ORBIT_TRUSTED_PROXIES: 127.0.0.1/32,10.0.0.0/8,172.16.0.0/12,192.168.0.0/16
+      ORBIT_APP_KEY: "{{ .app_key }}"
+    volumes:
+      - orbit_data:/var/lib/orbit
+      - orbit_backups:/var/backups/orbit
+    stop_grace_period: 40s
+volumes:
+  orbit_data:
+  orbit_backups:

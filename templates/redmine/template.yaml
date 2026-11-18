@@ -30,8 +30,8 @@ fields:
     label: Secret key base
     type: secret
     required: true
-    generate: true
-    help: Signs cookies and sessions; changing it logs every user out.
+    pattern: ^[0-9a-f]{64}$
+    help: Signs cookies and sessions; exactly 64 lowercase hex characters. Generate one with openssl rand -hex 32. Changing it logs every user out.
 routes:
   - service: redmine
     port: 3000

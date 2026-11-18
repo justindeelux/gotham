@@ -1,0 +1,26 @@
+name: Orbit
+icon: orbit
+description: Orbit is a self-hosted team workspace with tasks, docs, chat and an MCP server for AI clients, with persistent named volumes.
+homepage: https://github.com/coollabsio/orbit/blob/main/docs/operations.md
+category:
+  - productivity
+fields:
+  - key: domain
+    label: Domain
+    type: text
+    required: false
+    default: ""
+    placeholder: orbit.example.com
+    help: Optional. Leave empty to add a domain later from the service page.
+    pattern: ^([A-Za-z0-9][A-Za-z0-9.-]*)?$
+    max_length: 253
+  - key: app_key
+    label: App key
+    type: secret
+    required: true
+    pattern: ^[A-Za-z0-9+/]{43}=$
+    help: Orbit needs a base64-encoded 32-byte key. Generate one with openssl rand -base64 32. Keep it safe; Orbit cannot read its stored secrets without it.
+routes:
+  - service: orbit
+    port: 8080
+    domain_field: domain

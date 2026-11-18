@@ -18,8 +18,8 @@ fields:
     label: JWT secret
     type: secret
     required: true
-    generate: true
-    help: Signs API tokens; changing it logs every user out.
+    pattern: ^[A-Za-z0-9]{32,}$
+    help: Signs JWT sessions; at least 32 characters. Generate one with openssl rand -hex 32. Changing it logs every user out.
 routes:
   - service: vikunja
     port: 3456

@@ -36,14 +36,14 @@ fields:
     label: Authentication secret
     type: secret
     required: true
-    generate: true
-    help: Signs login sessions; changing it logs every user out.
+    pattern: ^[A-Za-z0-9]{32,}$
+    help: Signs login sessions with HS256; at least 32 characters. Generate one with openssl rand -hex 32. Changing it logs every user out.
   - key: encryption_secret
     label: Encryption secret
     type: secret
     required: true
-    generate: true
-    help: Encrypts stored data; losing it makes existing data unreadable.
+    pattern: ^[A-Za-z0-9]{32,}$
+    help: Encrypts stored data; at least 32 characters. Generate one with openssl rand -hex 32. Losing it makes existing data unreadable.
 routes:
   - service: reactive-resume
     port: 3000

@@ -1,0 +1,50 @@
+name: Snipe-IT
+icon: snipe-it
+description: Snipe-IT is an open source IT asset management platform, backed by MariaDB with persistent named volumes.
+homepage: https://snipe-it.readme.io/docs/introduction
+category:
+  - productivity
+fields:
+  - key: domain
+    label: Domain
+    type: text
+    required: false
+    default: ""
+    placeholder: assets.example.com
+    help: Optional. Leave empty to add a domain later from the service page.
+    pattern: ^([A-Za-z0-9][A-Za-z0-9.-]*)?$
+    max_length: 253
+  - key: app_key
+    label: App key
+    type: secret
+    required: true
+    pattern: ^base64:[A-Za-z0-9+/]{43}=$
+    help: 'A Laravel key: base64: followed by 32 base64-encoded bytes. Generate one with echo "base64:$(openssl rand -base64 32)".'
+  - key: db_name
+    label: Database name
+    type: text
+    default: snipeit
+    pattern: ^[A-Za-z0-9_]{1,64}$
+    max_length: 64
+  - key: db_user
+    label: Database user
+    type: text
+    default: snipeit
+    pattern: ^[A-Za-z0-9_]{1,32}$
+    max_length: 32
+  - key: db_password
+    label: Database password
+    type: secret
+    required: true
+    generate: true
+    help: Used by Snipe-IT and MariaDB; use Generate for a strong value.
+  - key: db_root_password
+    label: MariaDB root password
+    type: secret
+    required: true
+    generate: true
+    help: Used by MariaDB only; use Generate for a strong value.
+routes:
+  - service: app
+    port: 80
+    domain_field: domain

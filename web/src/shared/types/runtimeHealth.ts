@@ -28,6 +28,7 @@ export interface RuntimeHealth {
   observed_at?: string;
   enabled: boolean;
   grace_seconds: number;
+  desired_state?: "running" | "stopped";
   incident_id?: string;
   affected: RuntimeReplicaHealth[];
 }

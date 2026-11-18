@@ -6,6 +6,7 @@ export interface BrandMark {
   logo: string | null;
   letters: string;
   color: string;
+  glyph: boolean;
 }
 
 const BRAND_ACCENT = "#5865f2";
@@ -28,6 +29,17 @@ const MARKS: Record<string, { logo: string | null; color: string }> = {
   redis: { logo: "redis", color: "#ff4438" },
 };
 
+// Application source tiles draw a tinted glyph; catalog slugs use the service icon.
+const GLYPH_KEYS = new Set([
+  "git_public",
+  "git_private",
+  "github_app",
+  "gitlab_app",
+  "dockerfile",
+  "image",
+  "compose",
+]);
+
 export function initialsOf(name: string): string {
   const words = name.trim().split(/\s+/).filter(Boolean);
   if (words.length === 0) {
@@ -44,6 +56,7 @@ export function templateBrand(icon: string, name: string): BrandMark {
     logo: icon === "" ? null : icon,
     letters: cardMark(name),
     color: BRAND_ACCENT,
+    glyph: false,
   };
 }
 
@@ -53,6 +66,7 @@ export function brandFor(key: string, name: string): BrandMark {
     logo: brand?.logo ?? null,
     letters: initialsOf(name),
     color: brand?.color ?? BRAND_ACCENT,
+    glyph: GLYPH_KEYS.has(key),
   };
 }
 

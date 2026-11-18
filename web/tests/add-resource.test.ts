@@ -74,6 +74,7 @@ describe("templateBrand", () => {
       logo: "nextcloud",
       letters: "N",
       color: "#5865f2",
+      glyph: false,
     });
     expect(templateBrand("nextcloud", "Nextcloud").letters).toBe(cardMark("Nextcloud"));
     expect(templateBrand("uptime-kuma", "Uptime Kuma").logo).toBe("uptime-kuma");
@@ -84,6 +85,7 @@ describe("templateBrand", () => {
       logo: "future-tool",
       letters: "C",
       color: "#5865f2",
+      glyph: false,
     });
   });
 });
@@ -94,12 +96,20 @@ describe("brandFor", () => {
       logo: "postgres",
       letters: "PO",
       color: "#4169e1",
+      glyph: false,
     });
     expect(brandFor("application", "Application")).toEqual({
       logo: null,
       letters: "AP",
       color: "#5865f2",
+      glyph: false,
     });
+  });
+
+  it("marks application source keys as tinted glyphs", () => {
+    for (const key of ["git_public", "gitlab_app", "dockerfile"]) {
+      expect(brandFor(key, "Source").glyph, key).toBe(true);
+    }
   });
 
   it("falls back to initials on the accent hue for unknown keys", () => {
@@ -107,8 +117,14 @@ describe("brandFor", () => {
       logo: null,
       letters: "CT",
       color: "#5865f2",
+      glyph: false,
     });
-    expect(brandFor("", "")).toEqual({ logo: null, letters: "?", color: "#5865f2" });
+    expect(brandFor("", "")).toEqual({
+      logo: null,
+      letters: "?",
+      color: "#5865f2",
+      glyph: false,
+    });
   });
 });
 
@@ -126,6 +142,7 @@ describe("databaseBrand", () => {
       logo: null,
       letters: "OR",
       color: "#5865f2",
+      glyph: false,
     });
   });
 });
@@ -158,6 +175,7 @@ describe("serviceBrand", () => {
       logo: "docker",
       letters: "PL",
       color: "#2496ed",
+      glyph: true,
     });
   });
 });

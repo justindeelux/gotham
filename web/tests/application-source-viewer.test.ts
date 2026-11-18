@@ -21,6 +21,7 @@ import {
   i18n,
   registerDiscoveredCatalogs,
   resetLocaleState,
+  setLocale,
   syncComposerLocale,
 } from "@/shared/i18n";
 
@@ -102,6 +103,21 @@ describe("ApplicationSourceViewer", () => {
 
     expect(wrapper.find("textarea").exists()).toBe(false);
     expect(wrapper.find("[contenteditable]").exists()).toBe(false);
+  });
+
+  it("renders the Vietnamese labels from the catalog", async () => {
+    setLocale("vi", null);
+    const wrapper = mountViewer({
+      kind: "dockerfile",
+      raw: "FROM alpine:3.20\n",
+      deployable: "FROM alpine:3.20\n",
+    });
+    await flushPromises();
+
+    expect(wrapper.text()).toContain("Mã nguồn triển khai");
+    expect(wrapper.text()).toContain("Nguyên bản");
+    expect(wrapper.text()).toContain("Bản triển khai");
+    expect(wrapper.text()).not.toContain("applications.source.");
   });
 
   it("shows an empty state when the application has no Dockerfile or compose file", async () => {

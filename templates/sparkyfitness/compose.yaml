@@ -1,0 +1,54 @@
+services:
+  sparkyfitness-frontend:
+    image: codewithcj/sparkyfitness:v1.12.1
+    restart: unless-stopped
+    ports:
+      - "80"
+    environment:
+      SPARKY_FITNESS_FRONTEND_URL: "https://${GOTHAM_DOMAIN:-localhost}"
+      SPARKY_FITNESS_SERVER_HOST: sparkyfitness-server
+      SPARKY_FITNESS_SERVER_PORT: "3010"
+    depends_on:
+      - sparkyfitness-server
+  sparkyfitness-server:
+    image: codewithcj/sparkyfitness_server:v1.12.1
+    restart: unless-stopped
+    environment:
+      SPARKY_FITNESS_LOG_LEVEL: info
+      NODE_ENV: production
+      SPARKY_FITNESS_DB_USER: "{{ .db_user }}"
+      SPARKY_FITNESS_DB_HOST: sparkyfitness-db
+      SPARKY_FITNESS_DB_NAME: "{{ .db_name }}"
+      SPARKY_FITNESS_DB_PASSWORD: "{{ .db_password }}"
+      SPARKY_FITNESS_DB_PORT: "5432"
+      SPARKY_FITNESS_APP_DB_USER: "{{ .app_db_user }}"
+      SPARKY_FITNESS_APP_DB_PASSWORD: "{{ .app_db_password }}"
+      SPARKY_FITNESS_API_ENCRYPTION_KEY: "{{ .api_encryption_key }}"
+      BETTER_AUTH_SECRET: "{{ .auth_secret }}"
+      SPARKY_FITNESS_FRONTEND_URL: "https://${GOTHAM_DOMAIN:-localhost}"
+      SPARKY_FITNESS_ADMIN_EMAIL: "{{ .admin_email }}"
+      SPARKY_FITNESS_FORCE_EMAIL_LOGIN: "true"
+      SPARKY_FITNESS_DISABLE_SIGNUP: "false"
+    volumes:
+      - sparkyfitness_backup:/app/SparkyFitnessServer/backup
+      - sparkyfitness_uploads:/app/SparkyFitnessServer/uploads
+    depends_on:
+      - sparkyfitness-db
+  sparkyfitness-db:
+    image: postgres:18-alpine
+    restart: unless-stopped
+    environment:
+      POSTGRES_DB: "{{ .db_name }}"
+      POSTGRES_USER: "{{ .db_user }}"
+      POSTGRES_PASSWORD: "{{ .db_password }}"
+    volumes:
+      - sparkyfitness_db:/var/lib/postgresql
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U $${POSTGRES_USER} -d $${POSTGRES_DB}"]
+      interval: 5s
+      timeout: 20s
+      retries: 10
+volumes:
+  sparkyfitness_backup:
+  sparkyfitness_uploads:
+  sparkyfitness_db:

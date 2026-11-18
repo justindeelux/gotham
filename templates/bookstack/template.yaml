@@ -1,0 +1,49 @@
+name: BookStack
+icon: bookstack
+description: "BookStack wiki with MariaDB and persistent named volumes. First login is admin@admin.com with password \"password\"; change it after signing in."
+homepage: https://www.bookstackapp.com/docs/
+category:
+  - cms
+fields:
+  - key: domain
+    label: Domain
+    type: text
+    required: false
+    default: ""
+    placeholder: wiki.example.com
+    help: Optional. Leave empty to add a domain later from the service page.
+    pattern: ^([A-Za-z0-9][A-Za-z0-9.-]*)?$
+    max_length: 253
+  - key: app_key
+    label: Application key
+    type: secret
+    required: true
+    pattern: ^base64:[A-Za-z0-9+/]{43}=$
+    max_length: 51
+    help: Laravel needs a base64-encoded 32-byte key. Run `openssl rand -base64 32` and prefix the result with `base64:`.
+  - key: db_name
+    label: Database name
+    type: text
+    default: bookstack
+    pattern: ^[A-Za-z0-9_]{1,64}$
+    max_length: 64
+  - key: db_user
+    label: Database user
+    type: text
+    default: bookstack
+    pattern: ^[A-Za-z0-9_]{1,32}$
+    max_length: 32
+  - key: db_password
+    label: Database password
+    type: secret
+    required: true
+    generate: true
+  - key: db_root_password
+    label: MariaDB root password
+    type: secret
+    required: true
+    generate: true
+routes:
+  - service: bookstack
+    port: 80
+    domain_field: domain

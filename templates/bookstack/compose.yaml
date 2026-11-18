@@ -1,0 +1,46 @@
+services:
+  bookstack:
+    image: lscr.io/linuxserver/bookstack:26.09.3
+    restart: unless-stopped
+    ports:
+      - "80"
+    environment:
+      APP_URL: "https://${GOTHAM_DOMAIN:-localhost}"
+      APP_KEY: "{{ .app_key }}"
+      PUID: "1000"
+      PGID: "1000"
+      DB_HOST: mariadb
+      DB_PORT: "3306"
+      DB_USERNAME: "{{ .db_user }}"
+      DB_PASSWORD: "{{ .db_password }}"
+      DB_DATABASE: "{{ .db_name }}"
+    volumes:
+      - bookstack_data:/config
+    healthcheck:
+      test: ["CMD-SHELL", "curl -f http://127.0.0.1:80/"]
+      interval: 5s
+      timeout: 20s
+      retries: 10
+    depends_on:
+      mariadb:
+        condition: service_healthy
+  mariadb:
+    image: lscr.io/linuxserver/mariadb:11.8.9
+    restart: unless-stopped
+    environment:
+      PUID: "1000"
+      PGID: "1000"
+      MYSQL_ROOT_PASSWORD: "{{ .db_root_password }}"
+      MYSQL_DATABASE: "{{ .db_name }}"
+      MYSQL_USER: "{{ .db_user }}"
+      MYSQL_PASSWORD: "{{ .db_password }}"
+    volumes:
+      - bookstack_mariadb_data:/config
+    healthcheck:
+      test: ["CMD", "mysqladmin", "ping", "-h", "127.0.0.1"]
+      interval: 5s
+      timeout: 20s
+      retries: 10
+volumes:
+  bookstack_data:
+  bookstack_mariadb_data:

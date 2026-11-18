@@ -1,0 +1,31 @@
+name: Nitropage
+icon: nitropage
+description: Nitropage visual website builder on SQLite, with a persistent data volume and an optional routed domain.
+homepage: https://nitropage.org
+category:
+  - cms
+fields:
+  - key: domain
+    label: Domain
+    type: text
+    required: false
+    default: ""
+    placeholder: site.example.com
+    help: Optional. Leave empty to add a domain later from the service page.
+    pattern: ^([A-Za-z0-9][A-Za-z0-9.-]*)?$
+    max_length: 253
+  - key: auth_salt
+    label: Auth salt
+    type: secret
+    required: true
+    generate: true
+  - key: auth_password
+    label: Admin password
+    type: secret
+    required: true
+    generate: true
+    max_length: 64
+routes:
+  - service: nitropage
+    port: 3000
+    domain_field: domain

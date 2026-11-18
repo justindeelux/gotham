@@ -1,0 +1,32 @@
+services:
+  directus:
+    image: directus/directus:12
+    restart: unless-stopped
+    ports:
+      - "8055"
+    environment:
+      KEY: "{{ .app_key }}"
+      SECRET: "{{ .app_secret }}"
+      ADMIN_EMAIL: "{{ .admin_email }}"
+      ADMIN_PASSWORD: "{{ .admin_password }}"
+      DB_CLIENT: sqlite3
+      DB_FILENAME: /directus/database/data.db
+      WEBSOCKETS_ENABLED: "true"
+      IP_TRUST_PROXY: "true"
+      CORS_ENABLED: "true"
+      CORS_CREDENTIALS: "true"
+    volumes:
+      - directus_database:/directus/database
+      - directus_uploads:/directus/uploads
+      - directus_extensions:/directus/extensions
+      - directus_templates:/directus/templates
+    healthcheck:
+      test: ["CMD", "wget", "-q", "--spider", "http://127.0.0.1:8055/server/ping"]
+      interval: 5s
+      timeout: 20s
+      retries: 10
+volumes:
+  directus_database:
+  directus_uploads:
+  directus_extensions:
+  directus_templates:

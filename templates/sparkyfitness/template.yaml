@@ -1,0 +1,68 @@
+name: SparkyFitness
+icon: sparkyfitness
+description: SparkyFitness nutrition and exercise tracker with PostgreSQL, a server container on persistent volumes and an optional routed domain.
+homepage: https://codewithcj.github.io/SparkyFitness/
+category:
+  - health
+fields:
+  - key: domain
+    label: Domain
+    type: text
+    required: false
+    default: ""
+    placeholder: fitness.example.com
+    help: Optional. Leave empty to add a domain later from the service page.
+    pattern: ^([A-Za-z0-9][A-Za-z0-9.-]*)?$
+    max_length: 253
+  - key: db_name
+    label: Database name
+    type: text
+    default: sparkyfitness
+    pattern: ^[A-Za-z0-9_]{1,64}$
+    max_length: 64
+  - key: db_user
+    label: Database user
+    type: text
+    default: sparky
+    pattern: ^[A-Za-z0-9_]{1,32}$
+    max_length: 32
+  - key: db_password
+    label: Database password
+    type: secret
+    required: true
+    generate: true
+  - key: app_db_user
+    label: Application database user
+    type: text
+    default: sparkyapp
+    pattern: ^[A-Za-z0-9_]{1,32}$
+    max_length: 32
+  - key: app_db_password
+    label: Application database password
+    type: secret
+    required: true
+    generate: true
+  - key: api_encryption_key
+    label: API encryption key
+    type: secret
+    required: true
+    pattern: ^[a-f0-9]{64}$
+    max_length: 64
+    help: Must be 64 characters. Run `openssl rand -hex 32` and paste the result.
+  - key: auth_secret
+    label: Auth secret
+    type: secret
+    required: true
+    pattern: ^[A-Za-z0-9+/=]{32,}$
+    max_length: 128
+    help: Must be at least 32 characters. Run `openssl rand -base64 48` and paste the result.
+  - key: admin_email
+    label: Admin email
+    type: text
+    default: admin@example.com
+    pattern: ^[^@\s]+@[^@\s]+\.[^@\s]+$
+    max_length: 254
+routes:
+  - service: sparkyfitness-frontend
+    port: 80
+    domain_field: domain

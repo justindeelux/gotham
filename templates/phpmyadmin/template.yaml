@@ -1,0 +1,20 @@
+name: phpMyAdmin
+icon: phpmyadmin
+description: phpMyAdmin web console that can reach any MySQL or MariaDB server on the network, with a persistent volume.
+homepage: https://phpmyadmin.net
+category:
+  - database
+fields:
+  - key: domain
+    label: Domain
+    type: text
+    required: false
+    default: ""
+    placeholder: phpmyadmin.example.com
+    help: Optional. Leave empty to add a domain later from the service page.
+    pattern: ^([A-Za-z0-9][A-Za-z0-9.-]*)?$
+    max_length: 253
+routes:
+  - service: phpmyadmin
+    port: 80
+    domain_field: domain

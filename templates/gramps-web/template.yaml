@@ -1,0 +1,26 @@
+name: Gramps Web
+icon: gramps-web
+description: Gramps Web genealogy with the web app, a Celery worker and Redis, all on persistent named volumes and an optional routed domain.
+homepage: https://www.grampsweb.org/install_setup/setup/
+category:
+  - family
+fields:
+  - key: domain
+    label: Domain
+    type: text
+    required: false
+    default: ""
+    placeholder: family.example.com
+    help: Optional. Leave empty to add a domain later from the service page.
+    pattern: ^([A-Za-z0-9][A-Za-z0-9.-]*)?$
+    max_length: 253
+  - key: tree_name
+    label: Tree name
+    type: text
+    default: Gramps Web
+    help: The family tree created on first start if it does not exist yet.
+    max_length: 64
+routes:
+  - service: grampsweb
+    port: 5000
+    domain_field: domain

@@ -1,0 +1,18 @@
+services:
+  denokv:
+    image: ghcr.io/denoland/denokv:0.14.0
+    restart: unless-stopped
+    ports:
+      - "4512"
+    environment:
+      ACCESS_TOKEN: "{{ .access_token }}"
+    command: ["--sqlite-path", "/data/denokv.sqlite", "serve", "--access-token", "{{ .access_token }}"]
+    volumes:
+      - denokv_data:/data
+    healthcheck:
+      test: ["CMD", "nc", "-zv", "127.0.0.1", "4512"]
+      interval: 5s
+      timeout: 5s
+      retries: 3
+volumes:
+  denokv_data:

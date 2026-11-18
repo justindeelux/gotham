@@ -1,0 +1,18 @@
+services:
+  pgadmin:
+    image: dpage/pgadmin4:9.19.0
+    restart: unless-stopped
+    ports:
+      - "80"
+    environment:
+      PGADMIN_DEFAULT_EMAIL: "{{ .admin_email }}"
+      PGADMIN_DEFAULT_PASSWORD: "{{ .admin_password }}"
+    volumes:
+      - pgadmin_data:/var/lib/pgadmin
+    healthcheck:
+      test: ["CMD", "wget", "-qO-", "http://localhost:80/login"]
+      interval: 5s
+      timeout: 10s
+      retries: 5
+volumes:
+  pgadmin_data:

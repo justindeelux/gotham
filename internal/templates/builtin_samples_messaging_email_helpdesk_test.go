@@ -43,6 +43,10 @@ func init() {
 		"aws_access_key":  "AKIAIOSFODNN7EXAMPLE",
 		"aws_secret_key":  "wJalrXUtnFEMI/K7MDENG/bPxRfiCYEXAMPLEKEY",
 	}
+	builtinSamples["openwa"] = map[string]any{
+		"api_master_key": "0123456789abcdef0123456789abcdef",
+		"db_password":    "sample-secret",
+	}
 	builtinSamples["chatwoot"] = map[string]any{
 		"domain":          "app.example.test",
 		"db_password":     "sample-secret",

@@ -19,7 +19,7 @@ fields:
     default: admin
     pattern: ^[A-Za-z0-9_.=/-]{1,64}$
     max_length: 64
-    help: Registered on the first start; leave it as is to skip creating an admin.
+    help: The initial admin account registered on the first start. Set the password below.
   - key: admin_password
     label: Admin password
     type: secret

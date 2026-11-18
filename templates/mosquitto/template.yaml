@@ -20,5 +20,5 @@ fields:
   - key: allow_anonymous
     label: Allow anonymous clients
     type: bool
-    default: true
-    help: Turn off to require the MQTT user and password on every connection.
+    default: false
+    help: Anonymous clients are rejected by default because the MQTT port is published; turn on to allow them.

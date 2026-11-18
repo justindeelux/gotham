@@ -699,6 +699,7 @@ const vi: ApplicationsMessages = {
     controlReadOnly: "Chỉ chủ sở hữu mới có thể điều khiển ứng dụng này.",
     envSaved: "Đã lưu môi trường. Biến mới áp dụng từ đợt triển khai tiếp theo.",
     volumesSaved: "Đã lưu volume. Chúng tồn tại trên node sau các đợt triển khai.",
+    deployNow: "Triển khai ngay",
     deployQueued: "Đã xếp hàng triển khai",
     rollbackQueued: "Đã xếp hàng quay lui",
     stopSent: "Đã gửi tín hiệu dừng",

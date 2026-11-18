@@ -11,9 +11,12 @@ import GothamIcon from "@/shared/ui/GothamIcon.vue";
 
 interface Props {
   modelValue: EnvVar[];
+  masked?: boolean;
 }
 
-const props = defineProps<Props>();
+const props = withDefaults(defineProps<Props>(), {
+  masked: false,
+});
 const emit = defineEmits<{
   "update:modelValue": [value: EnvVar[]];
 }>();
@@ -66,6 +69,7 @@ function removeRow(index: number): void {
       <NInput
         :value="row.value"
         class="mono"
+        :type="props.masked ? 'password' : 'text'"
         placeholder="production or secret:db-url"
         :input-props="{ 'aria-label': t('applications.envEditor.valueAria'), autocomplete: 'off' }"
         @update:value="(value: string) => updateRow(index, { value })"

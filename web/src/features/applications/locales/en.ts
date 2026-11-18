@@ -138,6 +138,8 @@ const en = {
     origin: "Origin",
     secret: "secret",
     overridden: "overridden",
+    revealValues: "Show values",
+    hideValues: "Hide values",
     footer:
       "Saving replaces the whole collection. Sealed secrets stay sealed, and new variables apply to the next deploy.",
   },

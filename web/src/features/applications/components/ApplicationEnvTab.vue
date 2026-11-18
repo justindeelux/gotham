@@ -1,5 +1,6 @@
 <script setup lang="ts">
-import { NAlert, NButton, NCard, NSpace, NSpin, NTag, NText } from "naive-ui";
+import { NAlert, NButton, NCard, NIcon, NSpace, NSpin, NTag, NText } from "naive-ui";
+import { ref } from "vue";
 import { useI18n } from "vue-i18n";
 
 import type { EnvVar } from "@/features/applications/api/applications";
@@ -10,6 +11,8 @@ import {
   isShadowedByEnvironment,
 } from "@/features/projects/schemas/variables";
 import type { InheritedVariable } from "@/features/projects/schemas/variables";
+import AppTooltip from "@/shared/ui/AppTooltip.vue";
+import GothamIcon from "@/shared/ui/GothamIcon.vue";
 
 interface Props {
   envDraft: EnvVar[];
@@ -34,6 +37,8 @@ const emit = defineEmits<{
 
 const { t } = useI18n();
 
+const valuesVisible = ref(false);
+
 function isRowOverridden(row: InheritedVariable): boolean {
   if (isOverriddenBy(row.key, props.envDraft)) {
     return true;
@@ -48,15 +53,41 @@ function isRowOverridden(row: InheritedVariable): boolean {
 <template>
   <NCard style="margin-top: 16px" :title="t('applications.envTab.title')">
     <template #header-extra>
-      <NButton
-        type="primary"
-        size="small"
-        :loading="props.saving"
-        :disabled="props.saveDisabled"
-        @click="emit('save')"
-      >
-        {{ t("common.actions.save") }}
-      </NButton>
+      <NSpace align="center" :size="8">
+        <AppTooltip
+          :label="
+            valuesVisible
+              ? t('applications.envTab.hideValues')
+              : t('applications.envTab.revealValues')
+          "
+        >
+          <NButton
+            quaternary
+            size="small"
+            :aria-label="
+              valuesVisible
+                ? t('applications.envTab.hideValues')
+                : t('applications.envTab.revealValues')
+            "
+            @click="valuesVisible = !valuesVisible"
+          >
+            <template #icon>
+              <NIcon>
+                <GothamIcon :name="valuesVisible ? 'eye-off' : 'eye'" />
+              </NIcon>
+            </template>
+          </NButton>
+        </AppTooltip>
+        <NButton
+          type="primary"
+          size="small"
+          :loading="props.saving"
+          :disabled="props.saveDisabled"
+          @click="emit('save')"
+        >
+          {{ t("common.actions.save") }}
+        </NButton>
+      </NSpace>
     </template>
     <NSpace vertical :size="12">
       <NAlert
@@ -99,7 +130,7 @@ function isRowOverridden(row: InheritedVariable): boolean {
                     <NTag v-if="row.secret" size="small">{{ t("applications.envTab.secret") }}</NTag>
                   </td>
                   <td class="mono muted" :data-label="t('applications.envTab.value')">
-                    {{ row.secret ? "••••••••" : row.value }}
+                    {{ row.secret || !valuesVisible ? "••••••••" : row.value }}
                   </td>
                   <td :data-label="t('applications.envTab.origin')">
                     <NSpace :size="4" align="center" wrap>
@@ -118,7 +149,11 @@ function isRowOverridden(row: InheritedVariable): boolean {
             </table>
           </div>
         </div>
-        <EnvEditor :model-value="props.envDraft" @update:model-value="emit('update:draft', $event)" />
+        <EnvEditor
+          :model-value="props.envDraft"
+          :masked="!valuesVisible"
+          @update:model-value="emit('update:draft', $event)"
+        />
       </NSpin>
     </NSpace>
     <template #footer>

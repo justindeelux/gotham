@@ -6,6 +6,8 @@ import {
   Box,
   ChevronDown,
   Database,
+  Eye,
+  EyeOff,
   Folder,
   Globe,
   History,
@@ -50,7 +52,9 @@ export type IconName =
   | "history"
   | "play"
   | "stop"
-  | "terminal";
+  | "terminal"
+  | "eye"
+  | "eye-off";
 
 interface Props {
   name: IconName;
@@ -82,6 +86,8 @@ const components: Record<IconName, Component> = {
   play: Play,
   stop: Square,
   terminal: TerminalIcon,
+  eye: Eye,
+  "eye-off": EyeOff,
 };
 
 const component = computed<Component>(() => components[props.name]);

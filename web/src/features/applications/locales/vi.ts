@@ -140,6 +140,8 @@ const vi: ApplicationsMessages = {
     origin: "Nguồn",
     secret: "secret",
     overridden: "bị ghi đè",
+    revealValues: "Hiện giá trị",
+    hideValues: "Ẩn giá trị",
     footer:
       "Lưu sẽ thay thế toàn bộ tập hợp. Secret đã niêm phong vẫn giữ nguyên, biến mới áp dụng từ đợt triển khai tiếp theo.",
   },

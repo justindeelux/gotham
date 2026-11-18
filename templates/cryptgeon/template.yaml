@@ -1,0 +1,20 @@
+name: Cryptgeon
+icon: cryptgeon
+description: Cryptgeon self-destructing note and file sharing backed by ephemeral Redis.
+homepage: https://github.com/cupcakearmy/cryptgeon
+category:
+  - security
+fields:
+  - key: domain
+    label: Domain
+    type: text
+    required: false
+    default: ""
+    placeholder: notes.example.com
+    help: Optional. Leave empty to add a domain later from the service page.
+    pattern: ^([A-Za-z0-9][A-Za-z0-9.-]*)?$
+    max_length: 253
+routes:
+  - service: app
+    port: 8000
+    domain_field: domain

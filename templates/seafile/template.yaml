@@ -1,6 +1,6 @@
 name: Seafile
 icon: seafile
-description: Seafile file sync and share with MariaDB, memcached and the SeaDoc editor.
+description: Seafile file sync and share with MariaDB and memcached.
 homepage: https://manual.seafile.com
 category:
   - storage
@@ -42,12 +42,6 @@ fields:
     type: secret
     required: true
     generate: true
-  - key: jwt_private_key
-    label: JWT private key
-    type: secret
-    required: true
-    generate: true
-    help: Shared between Seafile and SeaDoc; must stay identical on both.
 routes:
   - service: seafile
     port: 80

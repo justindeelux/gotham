@@ -1,0 +1,26 @@
+name: ProxyScotch
+icon: proxyscotch
+description: ProxyScotch CORS proxy for Hoppscotch with a generated access token.
+homepage: https://github.com/hoppscotch/proxyscotch
+category:
+  - proxy
+fields:
+  - key: domain
+    label: Domain
+    type: text
+    required: false
+    default: ""
+    placeholder: proxy.example.com
+    help: Optional. Leave empty to add a domain later from the service page.
+    pattern: ^([A-Za-z0-9][A-Za-z0-9.-]*)?$
+    max_length: 253
+  - key: token
+    label: Access token
+    type: secret
+    required: true
+    generate: true
+    help: The client sends this token with every proxied request; use Generate for a strong value.
+routes:
+  - service: proxyscotch
+    port: 9159
+    domain_field: domain

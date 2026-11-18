@@ -1,0 +1,20 @@
+name: FileBrowser
+icon: filebrowser
+description: FileBrowser web file manager with named volumes for the database and files.
+homepage: https://filebrowser.org
+category:
+  - storage
+fields:
+  - key: domain
+    label: Domain
+    type: text
+    required: false
+    default: ""
+    placeholder: files.example.com
+    help: Optional. Leave empty to add a domain later from the service page.
+    pattern: ^([A-Za-z0-9][A-Za-z0-9.-]*)?$
+    max_length: 253
+routes:
+  - service: filebrowser
+    port: 80
+    domain_field: domain

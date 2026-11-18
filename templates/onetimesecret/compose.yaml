@@ -1,0 +1,32 @@
+services:
+  onetimesecret:
+    image: onetimesecret/onetimesecret:v0.26.19
+    restart: unless-stopped
+    ports:
+      - "3000"
+    environment:
+      AUTH_AUTOVERIFY: "true"
+      AUTH_SIGNUP: "true"
+      COLONEL: admin@example.com
+      HOST: "${GOTHAM_DOMAIN:-localhost}"
+      REDIS_URL: "redis://:{{ .redis_password }}@redis:6379/0"
+      SECRET: "{{ .secret }}"
+      SSL: "false"
+      RACK_ENV: production
+    depends_on:
+      redis:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "ruby", "-rnet/http", "-e", "exit(Net::HTTP.get_response(URI('http://localhost:3000')).is_a?(Net::HTTPSuccess) ? 0 : 1)"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+  redis:
+    image: redis:8-alpine
+    restart: unless-stopped
+    command: ["redis-server", "--requirepass", "{{ .redis_password }}"]
+    healthcheck:
+      test: ["CMD", "redis-cli", "-a", "{{ .redis_password }}", "ping"]
+      interval: 30s
+      timeout: 10s
+      retries: 3

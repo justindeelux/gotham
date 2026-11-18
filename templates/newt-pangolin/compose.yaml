@@ -1,0 +1,13 @@
+services:
+  newt:
+    image: fosrl/newt:1.20.0
+    restart: unless-stopped
+    environment:
+      PANGOLIN_ENDPOINT: "{{ .endpoint }}"
+      NEWT_ID: "{{ .newt_id }}"
+      NEWT_SECRET: "{{ .newt_secret }}"
+    healthcheck:
+      test: ["CMD", "newt", "--version"]
+      interval: 5s
+      timeout: 20s
+      retries: 10

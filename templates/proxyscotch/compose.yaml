@@ -1,0 +1,9 @@
+services:
+  proxyscotch:
+    image: hoppscotch/proxyscotch:v0.1.4
+    restart: unless-stopped
+    ports:
+      - "9159"
+    environment:
+      PROXYSCOTCH_TOKEN: "{{ .token }}"
+      PROXYSCOTCH_ALLOWED_ORIGINS: "*"

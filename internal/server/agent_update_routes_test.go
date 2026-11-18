@@ -1,10 +1,13 @@
 package server
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"errors"
+	"log/slog"
 	"net/http"
+	"strings"
 	"testing"
 	"time"
 
@@ -197,6 +200,55 @@ func TestAgentUpdateRoutesTargetError(t *testing.T) {
 	rec := doRequest(t, s, http.MethodPost, "/api/v1/servers/agents/update-all", "", ownerHeader)
 	if rec.Code != http.StatusBadGateway {
 		t.Fatalf("status = %d, want 502 (body %s)", rec.Code, rec.Body.String())
+	}
+}
+
+func TestAgentVersionsLookupFailureLogsOnce(t *testing.T) {
+	fake := &fakeAgentUpdateRegistry{
+		fakeServerService: newFakeServerService(),
+		versions:          []servers.AgentVersion{{NodeID: "node-a", Version: "v1.0.0", At: time.Now().UTC()}},
+		targetErr:         errors.New("updates: invalid signature"),
+	}
+	s := newServerRoutesTestServer(t, fake)
+	var logs bytes.Buffer
+	s.logger = slog.New(slog.NewTextHandler(&logs, nil))
+
+	poll := func() agentVersionsEnvelope {
+		t.Helper()
+		rec := doRequest(t, s, http.MethodGet, "/api/v1/servers/agents", "", ownerHeader)
+		if rec.Code != http.StatusOK {
+			t.Fatalf("list status = %d, want 200 (body %s)", rec.Code, rec.Body.String())
+		}
+		var list agentVersionsEnvelope
+		if err := json.Unmarshal(rec.Body.Bytes(), &list); err != nil {
+			t.Fatalf("decode: %v", err)
+		}
+		return list
+	}
+	warnings := func() int { return strings.Count(logs.String(), "agent target lookup failed") }
+
+	list := poll()
+	if list.LatestVersion != "" || len(list.Agents) != 1 {
+		t.Fatalf("list = %+v, want an empty latest version and the known agent", list)
+	}
+	poll()
+	poll()
+	if got := warnings(); got != 1 {
+		t.Fatalf("warnings after three identical failures = %d, want 1 (logs:\n%s)", got, logs.String())
+	}
+
+	fake.targetErr = errors.New("updates: connection refused")
+	poll()
+	if got := warnings(); got != 2 {
+		t.Fatalf("warnings after a different error = %d, want 2 (logs:\n%s)", got, logs.String())
+	}
+
+	fake.targetErr = nil
+	poll()
+	fake.targetErr = errors.New("updates: invalid signature")
+	poll()
+	if got := warnings(); got != 3 {
+		t.Fatalf("warnings after a failure behind a success = %d, want 3 (logs:\n%s)", got, logs.String())
 	}
 }
 

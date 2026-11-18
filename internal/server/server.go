@@ -119,6 +119,8 @@ type Server struct {
 	trustedProxies []netip.Prefix
 
 	oauthCodes *oauthCodeStore
+
+	agentTargetLog servers.LogOnce
 }
 
 func New(cfg *config.Config, logger *slog.Logger, authService AuthService, oauthService OAuthService, tokenService TokenService, serverService ServerService, st *store.Store) (*Server, error) {

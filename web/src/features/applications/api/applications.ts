@@ -38,6 +38,14 @@ export interface Application {
   updated_at: string;
 }
 
+export type ApplicationSourceKind = "dockerfile" | "compose" | "";
+
+export interface ApplicationSource {
+  kind: ApplicationSourceKind;
+  raw: string;
+  deployable: string;
+}
+
 export type DeploymentKind = "deploy" | "rollback";
 
 export type DeploymentState =
@@ -491,6 +499,19 @@ export async function listApplications(
 export async function getApplication(id: string): Promise<Application> {
   const response = await http.get<ApplicationEnvelope>(`/applications/${id}`);
   return response.data.application;
+}
+
+interface ApplicationSourceEnvelope {
+  source: ApplicationSource;
+}
+
+export async function getApplicationSource(
+  appId: string,
+): Promise<ApplicationSource> {
+  const response = await http.get<ApplicationSourceEnvelope>(
+    `/applications/${appId}/source`,
+  );
+  return response.data.source;
 }
 
 export async function createApplication(

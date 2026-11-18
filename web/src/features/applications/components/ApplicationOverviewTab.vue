@@ -12,6 +12,7 @@ import { computed } from "vue";
 import { useI18n } from "vue-i18n";
 
 import type { Application, Deployment } from "@/features/applications/api/applications";
+import ApplicationSourceViewer from "@/features/applications/components/ApplicationSourceViewer.vue";
 import ComposeEditor from "@/features/applications/components/ComposeEditor.vue";
 import DeploymentHistoryTable from "@/features/applications/components/DeploymentHistoryTable.vue";
 import DeploymentStatusTag from "@/features/applications/components/DeploymentStatusTag.vue";
@@ -118,6 +119,10 @@ const isCompose = computed<boolean>(() => props.application?.source_type === "co
       v-if="props.application && props.application.source_type === 'compose'"
       :application="props.application"
       :can-write="props.canWrite"
+    />
+    <ApplicationSourceViewer
+      v-if="props.application"
+      :application="props.application"
     />
     <NCard v-if="props.latest" :title="t('applications.overview.deployTitle', { id: props.latest.id.slice(0, 8) })">
       <template #header-extra>

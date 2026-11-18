@@ -39,6 +39,7 @@ var projectPolicies = map[string]projectPolicy{
 	"POST /api/v1/applications/{id}/containers/{containerID}/start":     {kind: "application"},
 	"POST /api/v1/applications/{id}/containers/{containerID}/stop":      {kind: "application"},
 	"POST /api/v1/applications/{id}/containers/{containerID}/restart":   {kind: "application"},
+	"GET /api/v1/applications/{id}/source":                              {kind: "application"},
 	"GET /api/v1/applications/{id}/metrics":                             {kind: "application"},
 	"GET /api/v1/applications/{id}/logs":                                {kind: "application"},
 	"POST /api/v1/applications/{id}/stop":                               {kind: "application"},

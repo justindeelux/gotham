@@ -107,6 +107,16 @@ type applicationEnvelope struct {
 	Webhook     *webhookOutcome       `json:"webhook,omitempty"`
 }
 
+type applicationSourceEnvelope struct {
+	Source applicationSourceResponse `json:"source"`
+}
+
+type applicationSourceResponse struct {
+	Kind       string `json:"kind"`
+	Raw        string `json:"raw"`
+	Deployable string `json:"deployable"`
+}
+
 type webhookOutcome struct {
 	Installed bool   `json:"installed"`
 	Error     string `json:"error,omitempty"`
@@ -320,6 +330,7 @@ func Mount(r chi.Router, auth func(http.Handler) http.Handler, userID UserIDFunc
 		protected.With(requestreplay.RequireStrict).Post("/v1/mcp/applications/{id}/deploy", h.deploy)
 		protected.Get("/v1/applications", h.listApplications)
 		protected.Get("/v1/applications/{id}", h.getApplication)
+		protected.Get("/v1/applications/{id}/source", h.getApplicationSource)
 		protected.Put("/v1/applications/{id}", h.updateApplication)
 		protected.Get("/v1/deployments", h.listRecentDeployments)
 		protected.Delete("/v1/applications/{id}", h.deleteApplication)
@@ -497,6 +508,19 @@ func (h *handler) getApplication(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	writeJSON(w, http.StatusOK, applicationEnvelope{Application: newApplicationResponse(application)})
+}
+
+func (h *handler) getApplicationSource(w http.ResponseWriter, r *http.Request) {
+	userID, appID, ok := h.requestTarget(w, r)
+	if !ok {
+		return
+	}
+	source, err := h.svc.GetApplicationSource(r.Context(), userID, appID)
+	if err != nil {
+		h.writeServiceError(w, err)
+		return
+	}
+	writeJSON(w, http.StatusOK, applicationSourceEnvelope{Source: applicationSourceResponse(source)})
 }
 
 func (h *handler) updateApplication(w http.ResponseWriter, r *http.Request) {

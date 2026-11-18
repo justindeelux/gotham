@@ -111,8 +111,9 @@ label is rejected at write time with `409`. See
 ## Create a service
 
 Use **Add resource → Service**, then either pick a template or **Import a
-compose file**. Importing asks for a name, a node and the document; the
-environment is edited afterwards on the detail page.
+compose file**. Templates are grouped by category; the filter searches names and
+descriptions across every category. Importing asks for a name, a node and the
+document; the environment is edited afterwards on the detail page.
 
 A service created from a template remembers its slug: the API returns it as
 `template` in the service JSON, and `POST /api/v1/services` accepts an optional

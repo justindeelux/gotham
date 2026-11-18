@@ -2,6 +2,7 @@ package deploy
 
 import (
 	"context"
+	"errors"
 	"testing"
 
 	"github.com/google/uuid"
@@ -101,6 +102,69 @@ func TestComposeStartWithoutDocumentKeepsListingOrder(t *testing.T) {
 		if node.started[index] != id {
 			t.Fatalf("started = %v, want %v", node.started, want)
 		}
+	}
+}
+
+func TestComposeStopThenStartRevivesEveryProjectContainer(t *testing.T) {
+	repo, node, app, _ := seededComposeProject(t)
+	svc := newNodeService(t, repo, node)
+
+	if _, err := svc.Stop(context.Background(), app.UserID, app.ID); err != nil {
+		t.Fatalf("stop: %v", err)
+	}
+	for _, container := range node.composeContainers {
+		if container.State != "exited" {
+			t.Fatalf("container %q = %s, want the whole project stopped", container.Service, container.State)
+		}
+	}
+	if _, err := svc.Start(context.Background(), app.UserID, app.ID); err != nil {
+		t.Fatalf("start after stop: %v", err)
+	}
+	for _, container := range node.composeContainers {
+		if container.State != "running" {
+			t.Errorf("container %q = %s, want every service back", container.Service, container.State)
+		}
+	}
+	want := []string{"db-id", "worker-id", "web-id"}
+	if len(node.started) != len(want) {
+		t.Fatalf("started = %v, want %v", node.started, want)
+	}
+	for index, id := range want {
+		if node.started[index] != id {
+			t.Fatalf("started = %v, want %v", node.started, want)
+		}
+	}
+}
+
+func TestComposeStopOnAStoppedProjectSucceeds(t *testing.T) {
+	repo, node, app, _ := seededComposeProject(t)
+	for index := range node.composeContainers {
+		node.composeContainers[index].State = "exited"
+	}
+	svc := newNodeService(t, repo, node)
+
+	stopped, err := svc.Stop(context.Background(), app.UserID, app.ID)
+	if err != nil {
+		t.Fatalf("stop of an already stopped project: %v", err)
+	}
+	if stopped.ID == uuid.Nil {
+		t.Error("stop returned no deployment")
+	}
+	if node.removeCalls != 0 {
+		t.Errorf("removed = %v, want a stop to keep every container", node.removed)
+	}
+}
+
+func TestComposeStopWithoutProjectContainersIsNotFound(t *testing.T) {
+	repo, node, app, _ := seededComposeProject(t)
+	node.composeContainers = nil
+	svc := newNodeService(t, repo, node)
+
+	if _, err := svc.Stop(context.Background(), app.UserID, app.ID); !errors.Is(err, ErrNotFound) {
+		t.Fatalf("err = %v, want ErrNotFound for a project with no container", err)
+	}
+	if node.stopCalls != 0 {
+		t.Errorf("stopped = %v, want no container touched", node.stopped)
 	}
 }
 

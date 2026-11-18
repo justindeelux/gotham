@@ -422,7 +422,9 @@ func (s *ComposeServer) ComposePs(ctx context.Context, req *agentv1.ComposePsReq
 	if err := s.requireProject(project); err != nil {
 		return nil, err
 	}
-	output, err := s.run(ctx, project, "ps", "--format", "json")
+	// --all keeps the stopped containers in the listing: start has to address
+	// them after a stop, and a stop of a stopped project stays a no-op.
+	output, err := s.run(ctx, project, "ps", "--all", "--format", "json")
 	if err != nil {
 		return nil, composeError("ps", err)
 	}

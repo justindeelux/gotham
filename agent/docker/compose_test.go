@@ -552,6 +552,41 @@ exit 0
 	}
 }
 
+func TestComposePsListsStoppedContainers(t *testing.T) {
+	logPath := fakeDockerCLI(t, `
+printf '%s\n' '{"ID":"abc123","Name":"proj-web-1","Service":"web","Image":"nginx:1.23","State":"exited","Status":"Exited (137) 1 second ago"}'
+printf '%s\n' '{"ID":"def456","Name":"proj-worker-1","Service":"worker","Image":"busybox:1.36","State":"exited","Status":"Exited (0) 1 second ago"}'
+exit 0
+`)
+	server := newTestComposeServer(t, ComposeServerConfig{})
+	if _, err := server.ComposeUp(context.Background(), &agentv1.ComposeUpRequest{
+		ProjectName: composeTestProject,
+		ComposeYaml: []byte(composeTestDocument),
+	}); err != nil {
+		t.Fatalf("seed project: %v", err)
+	}
+	response, err := server.ComposePs(context.Background(), &agentv1.ComposePsRequest{ProjectName: composeTestProject})
+	if err != nil {
+		t.Fatalf("ComposePs: %v", err)
+	}
+	containers := response.GetContainers()
+	if len(containers) != 2 {
+		t.Fatalf("containers = %+v, want the stopped services of the project", containers)
+	}
+	for _, container := range containers {
+		if container.GetState() != "exited" {
+			t.Errorf("container = %+v, want the stopped state kept", container)
+		}
+	}
+	calls := composeCalls(t, logPath)
+	if len(calls) == 0 {
+		t.Fatal("the fake docker CLI saw no call")
+	}
+	if last := calls[len(calls)-1]; !strings.Contains(last, "ps --all --format json") {
+		t.Errorf("ps call = %q, want --all so a stopped project still lists its containers", last)
+	}
+}
+
 func TestComposePsAcceptsJSONArray(t *testing.T) {
 	containers, err := parseComposePs([]byte(`[{"ID":"a","Service":"web","State":"running","Ports":"80/tcp"}]`))
 	if err != nil {

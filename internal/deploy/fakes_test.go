@@ -1339,6 +1339,9 @@ func (m *mockNode) Stop(_ context.Context, containerID string) error {
 	defer m.mu.Unlock()
 	m.stopCalls++
 	m.stopped = append(m.stopped, containerID)
+	if m.stopErr == nil {
+		m.setComposeState(containerID, "exited")
+	}
 	return m.stopErr
 }
 
@@ -1347,7 +1350,20 @@ func (m *mockNode) Start(_ context.Context, containerID string) error {
 	defer m.mu.Unlock()
 	m.startCalls++
 	m.started = append(m.started, containerID)
+	if m.startErr == nil {
+		m.setComposeState(containerID, "running")
+	}
 	return m.startErr
+}
+
+// setComposeState keeps the fake listing in step with stop and start, the way
+// docker compose ps --all reports the containers of a stopped project.
+func (m *mockNode) setComposeState(containerID, state string) {
+	for index := range m.composeContainers {
+		if m.composeContainers[index].ID == containerID {
+			m.composeContainers[index].State = state
+		}
+	}
 }
 
 func (m *mockNode) Remove(_ context.Context, containerID string) error {

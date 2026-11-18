@@ -698,6 +698,7 @@ const en = {
     controlReadOnly: "Only the owner can control this application.",
     envSaved: "Environment saved. New variables apply to the next deploy.",
     volumesSaved: "Volumes saved. They persist on the node across deploys.",
+    deployNow: "Deploy now",
     deployQueued: "Deploy queued",
     rollbackQueued: "Rollback queued",
     stopSent: "Stop signal sent",

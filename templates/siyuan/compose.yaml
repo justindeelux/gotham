@@ -1,0 +1,14 @@
+services:
+  siyuan:
+    image: b3log/siyuan:v3.8.10
+    restart: unless-stopped
+    ports:
+      - "6806"
+    environment:
+      PUID: "1000"
+      PGID: "1000"
+      SIYUAN_ACCESS_AUTH_CODE: "{{ .access_code }}"
+    volumes:
+      - siyuan_workspace:/siyuan/workspace
+volumes:
+  siyuan_workspace:

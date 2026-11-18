@@ -1,0 +1,20 @@
+name: Actual Budget
+icon: actualbudget
+description: Actual Budget personal finance app with a persistent data volume and an optional routed domain.
+homepage: https://actualbudget.org/docs/install/docker
+category:
+  - finance
+fields:
+  - key: domain
+    label: Domain
+    type: text
+    required: false
+    default: ""
+    placeholder: budget.example.com
+    help: Optional. Leave empty to add a domain later from the service page.
+    pattern: ^([A-Za-z0-9][A-Za-z0-9.-]*)?$
+    max_length: 253
+routes:
+  - service: actual_server
+    port: 5006
+    domain_field: domain

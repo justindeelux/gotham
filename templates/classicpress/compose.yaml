@@ -1,0 +1,28 @@
+services:
+  classicpress:
+    image: classicpress/classicpress:2.7.4-php8.5-apache
+    restart: unless-stopped
+    ports:
+      - "80"
+    environment:
+      CLASSICPRESS_DB_HOST: mariadb
+      CLASSICPRESS_DB_USER: "{{ .db_user }}"
+      CLASSICPRESS_DB_PASSWORD: "{{ .db_password }}"
+      CLASSICPRESS_DB_NAME: "{{ .db_name }}"
+    volumes:
+      - classicpress_files:/var/www/html
+    depends_on:
+      - mariadb
+  mariadb:
+    image: mariadb:11
+    restart: unless-stopped
+    environment:
+      MYSQL_ROOT_PASSWORD: "{{ .db_root_password }}"
+      MYSQL_DATABASE: "{{ .db_name }}"
+      MYSQL_USER: "{{ .db_user }}"
+      MYSQL_PASSWORD: "{{ .db_password }}"
+    volumes:
+      - classicpress_mariadb_data:/var/lib/mysql
+volumes:
+  classicpress_files:
+  classicpress_mariadb_data:

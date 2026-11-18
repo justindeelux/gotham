@@ -1,0 +1,59 @@
+services:
+  grampsweb:
+    image: ghcr.io/gramps-project/grampsweb:26.11.2
+    restart: unless-stopped
+    ports:
+      - "5000"
+    environment:
+      GRAMPSWEB_BASE_URL: "https://${GOTHAM_DOMAIN:-localhost}"
+      GRAMPSWEB_TREE: "{{ .tree_name }}"
+      GRAMPSWEB_CELERY_CONFIG__broker_url: redis://grampsweb_redis:6379/0
+      GRAMPSWEB_CELERY_CONFIG__result_backend: redis://grampsweb_redis:6379/0
+      GRAMPSWEB_RATELIMIT_STORAGE_URI: redis://grampsweb_redis:6379/1
+      GUNICORN_NUM_WORKERS: "2"
+    volumes:
+      - gramps_users:/app/users
+      - gramps_index:/app/indexdir
+      - gramps_thumb_cache:/app/thumbnail_cache
+      - gramps_cache:/app/cache
+      - gramps_secret:/app/secret
+      - gramps_db:/root/.gramps/grampsdb
+      - gramps_media:/app/media
+      - gramps_tmp:/tmp
+    depends_on:
+      - grampsweb_redis
+  grampsweb_celery:
+    image: ghcr.io/gramps-project/grampsweb:26.11.2
+    restart: unless-stopped
+    command: ["celery", "-A", "gramps_webapi.celery", "worker", "--loglevel=INFO", "--concurrency=2"]
+    environment:
+      GRAMPSWEB_TREE: "{{ .tree_name }}"
+      GRAMPSWEB_CELERY_CONFIG__broker_url: redis://grampsweb_redis:6379/0
+      GRAMPSWEB_CELERY_CONFIG__result_backend: redis://grampsweb_redis:6379/0
+      GRAMPSWEB_RATELIMIT_STORAGE_URI: redis://grampsweb_redis:6379/1
+    volumes:
+      - gramps_users:/app/users
+      - gramps_index:/app/indexdir
+      - gramps_thumb_cache:/app/thumbnail_cache
+      - gramps_cache:/app/cache
+      - gramps_secret:/app/secret
+      - gramps_db:/root/.gramps/grampsdb
+      - gramps_media:/app/media
+      - gramps_tmp:/tmp
+    depends_on:
+      - grampsweb_redis
+  grampsweb_redis:
+    image: redis:7.2.4-alpine
+    restart: unless-stopped
+    volumes:
+      - gramps_redis_data:/data
+volumes:
+  gramps_users:
+  gramps_index:
+  gramps_thumb_cache:
+  gramps_cache:
+  gramps_secret:
+  gramps_db:
+  gramps_media:
+  gramps_tmp:
+  gramps_redis_data:

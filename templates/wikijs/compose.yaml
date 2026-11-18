@@ -1,0 +1,27 @@
+services:
+  wikijs:
+    image: ghcr.io/requarks/wiki:3
+    restart: unless-stopped
+    ports:
+      - "3000"
+    environment:
+      ADMIN_EMAIL: "{{ .admin_email }}"
+      ADMIN_PASS: "{{ .admin_password }}"
+      DB_HOST: postgres
+      DB_PORT: "5432"
+      DB_USER: "{{ .db_user }}"
+      DB_PASS: "{{ .db_password }}"
+      DB_NAME: "{{ .db_name }}"
+    depends_on:
+      - postgres
+  postgres:
+    image: postgres:18-alpine
+    restart: unless-stopped
+    environment:
+      POSTGRES_DB: "{{ .db_name }}"
+      POSTGRES_USER: "{{ .db_user }}"
+      POSTGRES_PASSWORD: "{{ .db_password }}"
+    volumes:
+      - wikijs_postgres_data:/var/lib/postgresql
+volumes:
+  wikijs_postgres_data:

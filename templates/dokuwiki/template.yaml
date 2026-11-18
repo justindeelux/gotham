@@ -1,0 +1,20 @@
+name: DokuWiki
+icon: dokuwiki
+description: DokuWiki wiki with a persistent named volume and an optional routed domain.
+homepage: https://www.dokuwiki.org/
+category:
+  - cms
+fields:
+  - key: domain
+    label: Domain
+    type: text
+    required: false
+    default: ""
+    placeholder: wiki.example.com
+    help: Optional. Leave empty to add a domain later from the service page.
+    pattern: ^([A-Za-z0-9][A-Za-z0-9.-]*)?$
+    max_length: 253
+routes:
+  - service: dokuwiki
+    port: 80
+    domain_field: domain

@@ -1,0 +1,26 @@
+name: SiYuan
+icon: siyuan
+description: SiYuan personal knowledge base with a persistent workspace volume and an optional routed domain.
+homepage: https://github.com/siyuan-note/siyuan
+category:
+  - documentation
+fields:
+  - key: domain
+    label: Domain
+    type: text
+    required: false
+    default: ""
+    placeholder: notes.example.com
+    help: Optional. Leave empty to add a domain later from the service page.
+    pattern: ^([A-Za-z0-9][A-Za-z0-9.-]*)?$
+    max_length: 253
+  - key: access_code
+    label: Access auth code
+    type: secret
+    required: true
+    generate: true
+    help: Required to open the workspace from the browser.
+routes:
+  - service: siyuan
+    port: 6806
+    domain_field: domain

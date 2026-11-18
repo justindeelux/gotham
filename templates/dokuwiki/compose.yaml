@@ -1,0 +1,13 @@
+services:
+  dokuwiki:
+    image: lscr.io/linuxserver/dokuwiki:version-2026-07-14c
+    restart: unless-stopped
+    ports:
+      - "80"
+    environment:
+      PUID: "1000"
+      PGID: "1000"
+    volumes:
+      - dokuwiki_config:/config
+volumes:
+  dokuwiki_config:

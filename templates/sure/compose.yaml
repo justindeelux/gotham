@@ -1,0 +1,65 @@
+services:
+  web:
+    image: ghcr.io/we-promise/sure:0.7.6-hotfix.1
+    restart: unless-stopped
+    ports:
+      - "3000"
+    environment:
+      APP_DOMAIN: "${GOTHAM_DOMAIN:-localhost}"
+      SECRET_KEY_BASE: "{{ .secret_key_base }}"
+      POSTGRES_USER: "{{ .db_user }}"
+      POSTGRES_PASSWORD: "{{ .db_password }}"
+      POSTGRES_DB: "{{ .db_name }}"
+      REDIS_URL: redis://valkey:6379
+      DB_HOST: postgresql
+      DB_PORT: "5432"
+      SELF_HOSTED: "true"
+      RAILS_FORCE_SSL: "false"
+      RAILS_ASSUME_SSL: "false"
+      ONBOARDING_STATE: open
+    volumes:
+      - sure_app_storage:/rails/storage
+    depends_on:
+      - postgresql
+      - valkey
+  worker:
+    image: ghcr.io/we-promise/sure:0.7.6-hotfix.1
+    restart: unless-stopped
+    command: ["bundle", "exec", "sidekiq"]
+    environment:
+      APP_DOMAIN: "${GOTHAM_DOMAIN:-localhost}"
+      SECRET_KEY_BASE: "{{ .secret_key_base }}"
+      POSTGRES_USER: "{{ .db_user }}"
+      POSTGRES_PASSWORD: "{{ .db_password }}"
+      POSTGRES_DB: "{{ .db_name }}"
+      REDIS_URL: redis://valkey:6379
+      DB_HOST: postgresql
+      DB_PORT: "5432"
+      SELF_HOSTED: "true"
+      RAILS_FORCE_SSL: "false"
+      RAILS_ASSUME_SSL: "false"
+      ONBOARDING_STATE: open
+    volumes:
+      - sure_app_storage:/rails/storage
+    depends_on:
+      - postgresql
+      - valkey
+  postgresql:
+    image: postgres:16-alpine
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: "{{ .db_user }}"
+      POSTGRES_PASSWORD: "{{ .db_password }}"
+      POSTGRES_DB: "{{ .db_name }}"
+    volumes:
+      - sure_postgresql_data:/var/lib/postgresql/data
+  valkey:
+    image: valkey/valkey:8-alpine
+    restart: unless-stopped
+    command: ["valkey-server", "--appendonly", "yes"]
+    volumes:
+      - sure_valkey_data:/data
+volumes:
+  sure_app_storage:
+  sure_postgresql_data:
+  sure_valkey_data:

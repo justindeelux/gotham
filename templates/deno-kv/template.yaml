@@ -1,0 +1,25 @@
+name: Deno KV
+icon: deno-kv
+description: Deno KV key-value database with a SQLite file on a persistent volume, an access token and an optional routed domain.
+homepage: https://docs.deno.com/deploy/kv/manual/
+category:
+  - database
+fields:
+  - key: domain
+    label: Domain
+    type: text
+    required: false
+    default: ""
+    placeholder: kv.example.com
+    help: Optional. Leave empty to add a domain later from the service page.
+    pattern: ^([A-Za-z0-9][A-Za-z0-9.-]*)?$
+    max_length: 253
+  - key: access_token
+    label: Access token
+    type: secret
+    required: true
+    generate: true
+routes:
+  - service: denokv
+    port: 4512
+    domain_field: domain

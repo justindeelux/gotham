@@ -1,0 +1,30 @@
+services:
+  ghost:
+    image: ghost:6
+    restart: unless-stopped
+    ports:
+      - "2368"
+    environment:
+      url: "https://${GOTHAM_DOMAIN:-localhost}"
+      database__client: mysql
+      database__connection__host: mysql
+      database__connection__user: "{{ .db_user }}"
+      database__connection__password: "{{ .db_password }}"
+      database__connection__database: "{{ .db_name }}"
+    volumes:
+      - ghost_content:/var/lib/ghost/content
+    depends_on:
+      - mysql
+  mysql:
+    image: mysql:8.0
+    restart: unless-stopped
+    environment:
+      MYSQL_USER: "{{ .db_user }}"
+      MYSQL_PASSWORD: "{{ .db_password }}"
+      MYSQL_DATABASE: "{{ .db_name }}"
+      MYSQL_ROOT_PASSWORD: "{{ .db_root_password }}"
+    volumes:
+      - ghost_mysql_data:/var/lib/mysql
+volumes:
+  ghost_content:
+  ghost_mysql_data:

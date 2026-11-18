@@ -1,0 +1,14 @@
+services:
+  nitropage:
+    image: nitropage/nitropage:0.70.3-sqlite
+    restart: unless-stopped
+    ports:
+      - "3000"
+    environment:
+      NP_AUTH_SALT: "{{ .auth_salt }}"
+      NP_AUTH_PASSWORD: "{{ .auth_password }}"
+      DATABASE_URL: "file:../.data/dev.db"
+    volumes:
+      - nitropage_data:/app/.data
+volumes:
+  nitropage_data:

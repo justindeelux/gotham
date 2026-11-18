@@ -1,0 +1,35 @@
+services:
+  portabase:
+    image: portabase/portabase:1.36.2
+    restart: unless-stopped
+    ports:
+      - "80"
+    environment:
+      PROJECT_URL: "https://${GOTHAM_DOMAIN:-localhost}"
+      PROJECT_SECRET: "{{ .project_secret }}"
+      DATABASE_URL: "postgresql://{{ .db_user }}:{{ .db_password }}@postgres:5432/{{ .db_name }}?schema=public"
+      PROJECT_NAME: Portabase
+      LOG_LEVEL: info
+      RETENTION_CRON: "0 7 * * *"
+      STALE_BACKUP_THRESHOLD_HOURS: "6"
+      BACKUP_FOLDER_NAME: backups
+      SKIP_ONBOARDING: "false"
+      API_ENABLED: "false"
+      OPENAPI_ENABLED: "false"
+      MCP_ENABLED: "false"
+    volumes:
+      - portabase_data:/data
+    depends_on:
+      - postgres
+  postgres:
+    image: postgres:18-alpine
+    restart: unless-stopped
+    environment:
+      POSTGRES_DB: "{{ .db_name }}"
+      POSTGRES_USER: "{{ .db_user }}"
+      POSTGRES_PASSWORD: "{{ .db_password }}"
+    volumes:
+      - portabase_postgres_data:/var/lib/postgresql
+volumes:
+  portabase_data:
+  portabase_postgres_data:

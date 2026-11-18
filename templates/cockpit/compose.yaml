@@ -1,0 +1,14 @@
+services:
+  cockpit:
+    image: cockpithq/cockpit:core-2.14.1
+    restart: unless-stopped
+    ports:
+      - "80"
+    volumes:
+      - cockpit_config:/var/www/html/config
+      - cockpit_spaces:/var/www/html/.spaces
+      - cockpit_storage:/var/www/html/storage
+volumes:
+  cockpit_config:
+  cockpit_spaces:
+  cockpit_storage:

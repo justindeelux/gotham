@@ -1,0 +1,28 @@
+services:
+  joomla:
+    image: joomla:6.2.0
+    restart: unless-stopped
+    ports:
+      - "80"
+    environment:
+      JOOMLA_DB_HOST: mariadb
+      JOOMLA_DB_USER: "{{ .db_user }}"
+      JOOMLA_DB_PASSWORD: "{{ .db_password }}"
+      JOOMLA_DB_NAME: "{{ .db_name }}"
+    volumes:
+      - joomla_data:/var/www/html
+    depends_on:
+      - mariadb
+  mariadb:
+    image: mariadb:11
+    restart: unless-stopped
+    environment:
+      MYSQL_ROOT_PASSWORD: "{{ .db_root_password }}"
+      MYSQL_DATABASE: "{{ .db_name }}"
+      MYSQL_USER: "{{ .db_user }}"
+      MYSQL_PASSWORD: "{{ .db_password }}"
+    volumes:
+      - joomla_mariadb_data:/var/lib/mysql
+volumes:
+  joomla_data:
+  joomla_mariadb_data:

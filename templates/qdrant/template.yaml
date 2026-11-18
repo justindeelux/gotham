@@ -1,0 +1,26 @@
+name: Qdrant
+icon: qdrant
+description: Qdrant vector database with an API key, a persistent storage volume and an optional routed domain.
+homepage: https://qdrant.tech/documentation/
+category:
+  - database
+fields:
+  - key: domain
+    label: Domain
+    type: text
+    required: false
+    default: ""
+    placeholder: vectors.example.com
+    help: Optional. Leave empty to add a domain later from the service page.
+    pattern: ^([A-Za-z0-9][A-Za-z0-9.-]*)?$
+    max_length: 253
+  - key: api_key
+    label: API key
+    type: secret
+    required: true
+    generate: true
+    help: Required on every request when the HTTP API is reachable from the network.
+routes:
+  - service: qdrant
+    port: 6333
+    domain_field: domain

@@ -1,0 +1,34 @@
+services:
+  grimmory:
+    image: grimmory/grimmory:v3.5.0
+    restart: unless-stopped
+    ports:
+      - "80"
+    environment:
+      USER_ID: "0"
+      GROUP_ID: "0"
+      DATABASE_URL: "jdbc:mariadb://mariadb:3306/{{ .db_name }}"
+      DATABASE_USERNAME: "{{ .db_user }}"
+      DATABASE_PASSWORD: "{{ .db_password }}"
+      BOOKLORE_PORT: "80"
+    volumes:
+      - grimmory_data:/app/data
+      - grimmory_books:/books
+      - grimmory_bookdrop:/bookdrop
+    depends_on:
+      - mariadb
+  mariadb:
+    image: mariadb:12
+    restart: unless-stopped
+    environment:
+      MARIADB_USER: "{{ .db_user }}"
+      MARIADB_PASSWORD: "{{ .db_password }}"
+      MARIADB_ROOT_PASSWORD: "{{ .db_root_password }}"
+      MARIADB_DATABASE: "{{ .db_name }}"
+    volumes:
+      - grimmory_mariadb_data:/var/lib/mysql
+volumes:
+  grimmory_data:
+  grimmory_books:
+  grimmory_bookdrop:
+  grimmory_mariadb_data:

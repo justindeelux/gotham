@@ -1,0 +1,11 @@
+services:
+  mediawiki:
+    image: mediawiki:1.46.2
+    restart: unless-stopped
+    ports:
+      - "80"
+    volumes:
+      # The whole document root, so LocalSettings.php written by the installer survives a restart.
+      - mediawiki_html:/var/www/html
+volumes:
+  mediawiki_html:

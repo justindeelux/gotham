@@ -1,0 +1,12 @@
+services:
+  actual_server:
+    image: actualbudget/actual-server:26.11.0
+    restart: unless-stopped
+    ports:
+      - "5006"
+    environment:
+      ACTUAL_LOGIN_METHOD: password
+    volumes:
+      - actual_data:/data
+volumes:
+  actual_data:

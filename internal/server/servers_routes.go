@@ -752,7 +752,7 @@ func (s *Server) handleListAgentVersions(w http.ResponseWriter, r *http.Request)
 		RolloutVersion: controller.AgentRolloutVersion(),
 	}
 	target, err := controller.AgentUpdateTarget(r.Context())
-	if err != nil {
+	if s.agentTargetLog.Report(err) {
 		s.logger.Warn("servers: agent target lookup failed", "error", err)
 	}
 	response.LatestVersion = target

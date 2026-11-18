@@ -73,6 +73,8 @@ type Gateway struct {
 
 	registerLimiter  *peerRateLimiter
 	heartbeatLimiter *peerRateLimiter
+
+	updateOfferLog LogOnce
 }
 
 func NewGateway(cfg GatewayConfig) (*Gateway, error) {
@@ -520,10 +522,13 @@ func (g *Gateway) RequestUpdate(ctx context.Context, req *agentv1.UpdateRequest)
 		req.GetUpdateVersion())
 
 	release, rollout, retry, err := g.service.OfferAgentUpdate(ctx, nodeID, req.GetAgentVersion(), req.GetOs(), req.GetArch())
+	reportFailure := g.updateOfferLog.Report(err)
 	switch {
 	case err != nil:
-		g.logger.Warn("servers: agent update offer failed",
-			"node_id", nodeID, "arch", req.GetArch(), "error", err)
+		if reportFailure {
+			g.logger.Warn("servers: agent update offer failed",
+				"node_id", nodeID, "arch", req.GetArch(), "error", err)
+		}
 		return &agentv1.UpdateResponse{UpdateAvailable: false}, nil
 	case release == nil:
 		return &agentv1.UpdateResponse{UpdateAvailable: false}, nil

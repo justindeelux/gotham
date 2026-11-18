@@ -3,6 +3,7 @@ import type { ApplicationsMessages } from "./en";
 const vi: ApplicationsMessages = {
   tabs: {
     overview: "Tổng quan",
+    containers: "Container",
     deployments: "Đợt triển khai ({count})",
     logs: "Nhật ký",
     env: "Biến môi trường",
@@ -16,6 +17,25 @@ const vi: ApplicationsMessages = {
   page: {
     breadcrumb: "Điều hướng phân cấp",
     loadingApp: "Đang tải ứng dụng…",
+  },
+  containers: {
+    title: "Container",
+    refresh: "Làm mới",
+    emptyLoading: "Đang tải container…",
+    emptyNone: "Ứng dụng chưa có container nào. Hãy triển khai trước.",
+    tableName: "Tên",
+    tableService: "Service",
+    tableImage: "Image",
+    tableState: "Trạng thái",
+    tableUptime: "Thời gian chạy",
+    tableActions: "Thao tác",
+    start: "Khởi động",
+    stop: "Dừng",
+    restart: "Khởi động lại",
+    stopConfirm:
+      "Dừng {name}? Dữ liệu vẫn nằm trên node và bạn có thể khởi động lại.",
+    restartConfirm: "Khởi động lại {name}? Container được khởi động lại.",
+    actionRequested: "Đã yêu cầu {action} cho {name}",
   },
   terminal: {
     tab: "Terminal",

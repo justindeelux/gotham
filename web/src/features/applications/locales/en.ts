@@ -1,6 +1,7 @@
 const en = {
   tabs: {
     overview: "Overview",
+    containers: "Containers",
     deployments: "Deployments ({count})",
     logs: "Logs",
     env: "Environment",
@@ -14,6 +15,25 @@ const en = {
   page: {
     breadcrumb: "Breadcrumb",
     loadingApp: "Loading the application…",
+  },
+  containers: {
+    title: "Containers",
+    refresh: "Refresh",
+    emptyLoading: "Loading containers…",
+    emptyNone: "No container for this application yet. Deploy it first.",
+    tableName: "Name",
+    tableService: "Service",
+    tableImage: "Image",
+    tableState: "State",
+    tableUptime: "Uptime",
+    tableActions: "Actions",
+    start: "Start",
+    stop: "Stop",
+    restart: "Restart",
+    stopConfirm:
+      "Stop {name}? Its data stays on the node and you can start it again.",
+    restartConfirm: "Restart {name}? The same container restarts.",
+    actionRequested: "{action} requested for {name}",
   },
   terminal: {
     tab: "Terminal",

@@ -1,0 +1,19 @@
+name: VERT
+icon: vert
+description: VERT local file converter with a routed domain.
+homepage: https://github.com/VERT-sh/VERT
+category:
+  - devtools
+fields:
+  - key: domain
+    label: Domain
+    type: text
+    required: true
+    placeholder: app.example.com
+    help: The public host served by the node's Traefik proxy.
+    pattern: ^[A-Za-z0-9][A-Za-z0-9.-]*$
+    max_length: 253
+routes:
+  - service: vert
+    port: 80
+    domain_field: domain

@@ -1,0 +1,72 @@
+services:
+  strapi:
+    image: elestio/strapi-production:v5.62.0
+    restart: unless-stopped
+    ports:
+      - "1337"
+    entrypoint: /bin/sh
+    command:
+      - -c
+      - |
+        cat > /opt/app/src/admin/vite.config.js <<'EOFVITE'
+        const { mergeConfig } = require('vite');
+        module.exports = (config) => {
+          return mergeConfig(config, {
+            server: {
+              allowedHosts: ['{{ .domain }}'],
+            },
+          });
+        };
+        EOFVITE
+        exec npm run develop
+    environment:
+      DATABASE_CLIENT: postgres
+      DATABASE_HOST: postgresql
+      DATABASE_PORT: "5432"
+      DATABASE_NAME: "{{ .db_name }}"
+      DATABASE_USERNAME: "{{ .db_user }}"
+      DATABASE_PASSWORD: "{{ .db_password }}"
+      APP_KEYS: "{{ .app_keys }}"
+      JWT_SECRET: "{{ .jwt_secret }}"
+      ADMIN_JWT_SECRET: "{{ .admin_jwt_secret }}"
+      STRAPI_TELEMETRY_DISABLED: "true"
+      NODE_ENV: development
+    volumes:
+      - strapi_config:/opt/app/config
+      - strapi_src:/opt/app/src
+      - strapi_uploads:/opt/app/public/uploads
+    healthcheck:
+      test:
+        - CMD
+        - wget
+        - -q
+        - --spider
+        - http://127.0.0.1:1337/
+      interval: 5s
+      timeout: 20s
+      retries: 10
+    depends_on:
+      postgresql:
+        condition: service_healthy
+  postgresql:
+    image: elestio/postgres:16
+    restart: unless-stopped
+    environment:
+      POSTGRES_DB: "{{ .db_name }}"
+      POSTGRES_USER: "{{ .db_user }}"
+      POSTGRES_PASSWORD: "{{ .db_password }}"
+      PGDATA: /var/lib/postgresql/data
+    volumes:
+      - strapi_postgresql_data:/var/lib/postgresql/data
+    healthcheck:
+      test:
+        - CMD-SHELL
+        - pg_isready -U "{{ .db_user }}" -d "{{ .db_name }}"
+      interval: 5s
+      timeout: 20s
+      retries: 10
+volumes:
+  strapi_config:
+  strapi_src:
+  strapi_uploads:
+  strapi_postgresql_data:

@@ -1,0 +1,19 @@
+services:
+  databasus:
+    image: databasus/databasus:v3.70.1
+    restart: unless-stopped
+    ports:
+      - "4005"
+    volumes:
+      - databasus_data:/databasus-data
+    healthcheck:
+      test:
+        - CMD
+        - wget
+        - -qO-
+        - http://localhost:4005/api/v1/system/health
+      interval: 5s
+      timeout: 10s
+      retries: 5
+volumes:
+  databasus_data:

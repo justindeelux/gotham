@@ -1,0 +1,13 @@
+services:
+  termix:
+    image: ghcr.io/termix-ssh/termix:26.11.1
+    restart: unless-stopped
+    ports:
+      - "8080"
+    environment:
+      PORT: "8080"
+      LOG_LEVEL: info
+    volumes:
+      - termix_data:/app/data
+volumes:
+  termix_data:

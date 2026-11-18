@@ -1,0 +1,21 @@
+services:
+  gotenberg:
+    image: gotenberg/gotenberg:9.5.1
+    restart: unless-stopped
+    ports:
+      - "3000"
+    environment:
+      GOTENBERG_API_BASIC_AUTH_USERNAME: "{{ .api_user }}"
+      GOTENBERG_API_BASIC_AUTH_PASSWORD: "{{ .api_password }}"
+    command:
+      - gotenberg
+      - --api-enable-basic-auth
+    healthcheck:
+      test:
+        - CMD
+        - curl
+        - -f
+        - http://127.0.0.1:3000/health
+      interval: 5s
+      timeout: 20s
+      retries: 10

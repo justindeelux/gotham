@@ -1,0 +1,20 @@
+services:
+  trailbase:
+    image: trailbase/trailbase:0.35.12
+    restart: unless-stopped
+    ports:
+      - "4000"
+    volumes:
+      - trailbase_data:/app/traildepot
+    healthcheck:
+      test:
+        - CMD
+        - curl
+        - -f
+        - http://127.0.0.1:4000/api/healthcheck
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 10s
+volumes:
+  trailbase_data:

@@ -1,0 +1,42 @@
+services:
+  nocobase:
+    image: nocobase/nocobase:2.2.46
+    restart: unless-stopped
+    ports:
+      - "13000"
+    environment:
+      APP_KEY: "{{ .app_key }}"
+      DB_DIALECT: postgres
+      DB_HOST: postgres
+      DB_PORT: "5432"
+      DB_DATABASE: "{{ .db_name }}"
+      DB_USER: "{{ .db_user }}"
+      DB_PASSWORD: "{{ .db_password }}"
+    volumes:
+      - nocobase_storage:/app/nocobase/storage
+    depends_on:
+      postgres:
+        condition: service_healthy
+  postgres:
+    image: postgres:17-alpine
+    restart: unless-stopped
+    command:
+      - postgres
+      - -c
+      - wal_level=logical
+    environment:
+      POSTGRES_USER: "{{ .db_user }}"
+      POSTGRES_PASSWORD: "{{ .db_password }}"
+      POSTGRES_DB: "{{ .db_name }}"
+    volumes:
+      - nocobase_postgres_data:/var/lib/postgresql/data
+    healthcheck:
+      test:
+        - CMD-SHELL
+        - pg_isready -U "{{ .db_user }}" -d "{{ .db_name }}"
+      interval: 5s
+      timeout: 20s
+      retries: 10
+volumes:
+  nocobase_storage:
+  nocobase_postgres_data:

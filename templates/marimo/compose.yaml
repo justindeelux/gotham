@@ -1,0 +1,32 @@
+services:
+  marimo:
+    image: ghcr.io/marimo-team/marimo:0.25.2-sql
+    restart: unless-stopped
+    ports:
+      - "8080"
+    environment:
+      TOKEN_PASSWORD: "{{ .password }}"
+    command:
+      - marimo
+      - edit
+      - --token-password
+      - "{{ .password }}"
+      - --port
+      - "8080"
+      - --host
+      - 0.0.0.0
+    volumes:
+      - marimo_data:/app
+    healthcheck:
+      test:
+        - CMD
+        - uvx
+        - --with
+        - httpx[cli]
+        - httpx
+        - http://localhost:8080/health
+      interval: 5s
+      timeout: 5s
+      retries: 3
+volumes:
+  marimo_data:

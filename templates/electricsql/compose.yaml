@@ -1,0 +1,24 @@
+services:
+  electric:
+    image: electricsql/electric:1.8.1
+    restart: unless-stopped
+    ports:
+      - "3000"
+    environment:
+      DATABASE_URL: "{{ .database_url }}"
+      ELECTRIC_SECRET: "{{ .secret }}"
+      ELECTRIC_STORAGE_DIR: /app/persistent
+      ELECTRIC_USAGE_REPORTING: "false"
+    volumes:
+      - electric_data:/app/persistent
+    healthcheck:
+      test:
+        - CMD
+        - curl
+        - -f
+        - http://127.0.0.1:3000/v1/health
+      interval: 10s
+      timeout: 5s
+      retries: 5
+volumes:
+  electric_data:

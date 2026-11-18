@@ -1,0 +1,22 @@
+services:
+  browserless:
+    image: ghcr.io/browserless/chromium:v2.63.1
+    restart: unless-stopped
+    ports:
+      - "3000"
+    environment:
+      TOKEN: "{{ .token }}"
+      DOWNLOAD_DIR: /downloads
+    volumes:
+      - browserless_data:/downloads
+    healthcheck:
+      test:
+        - CMD
+        - curl
+        - -f
+        - http://127.0.0.1:3000/docs
+      interval: 2s
+      timeout: 10s
+      retries: 15
+volumes:
+  browserless_data:

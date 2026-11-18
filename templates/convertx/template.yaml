@@ -1,0 +1,31 @@
+name: ConvertX
+icon: convertx
+description: ConvertX self-hosted file converter with a persistent data volume and an optional routed domain.
+homepage: https://github.com/C4illin/ConvertX
+category:
+  - backend
+fields:
+  - key: domain
+    label: Domain
+    type: text
+    required: false
+    default: ""
+    placeholder: app.example.com
+    help: Optional. Leave empty to add a domain later from the service page.
+    pattern: ^([A-Za-z0-9][A-Za-z0-9.-]*)?$
+    max_length: 253
+  - key: jwt_secret
+    label: Session secret
+    type: secret
+    required: true
+    generate: true
+    help: Signs the login cookies; use Generate for a strong value.
+  - key: registration
+    label: Registration open
+    type: bool
+    default: false
+    help: Turn it on to create the first account, then turn it off.
+routes:
+  - service: convertx
+    port: 3000
+    domain_field: domain

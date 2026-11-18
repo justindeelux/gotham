@@ -1,0 +1,54 @@
+services:
+  new-api:
+    image: calciumion/new-api:v0.9.3.0
+    restart: unless-stopped
+    ports:
+      - "3000"
+    environment:
+      SQL_DSN: "postgres://{{ .db_user }}:{{ .db_password }}@postgresql:5432/{{ .db_name }}?sslmode=disable"
+      REDIS_CONN_STRING: redis://redis:6379
+      SESSION_SECRET: "{{ .session_secret }}"
+    healthcheck:
+      test:
+        - CMD-SHELL
+        - wget -q -O - http://localhost:3000/api/status | grep -q '"success":'
+      interval: 30s
+      timeout: 10s
+      retries: 3
+    depends_on:
+      postgresql:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+  postgresql:
+    image: postgres:16-alpine
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: "{{ .db_user }}"
+      POSTGRES_PASSWORD: "{{ .db_password }}"
+      POSTGRES_DB: "{{ .db_name }}"
+    volumes:
+      - newapi_postgres_data:/var/lib/postgresql/data
+    healthcheck:
+      test:
+        - CMD-SHELL
+        - pg_isready -U "{{ .db_user }}" -d "{{ .db_name }}"
+      interval: 5s
+      timeout: 10s
+      retries: 20
+  redis:
+    image: redis:8-alpine
+    restart: unless-stopped
+    volumes:
+      - newapi_redis_data:/data
+    healthcheck:
+      test:
+        - CMD
+        - redis-cli
+        - PING
+      interval: 5s
+      timeout: 10s
+      retries: 20
+volumes:
+  newapi_postgres_data:
+  newapi_redis_data:

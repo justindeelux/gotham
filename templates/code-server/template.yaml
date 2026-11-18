@@ -1,0 +1,39 @@
+name: code-server
+icon: code-server
+description: code-server browser IDE with a persistent config volume, password sign-in and an optional routed domain.
+homepage: https://coder.com/docs/code-server/latest
+category:
+  - devtools
+fields:
+  - key: domain
+    label: Domain
+    type: text
+    required: false
+    default: ""
+    placeholder: app.example.com
+    help: Optional. Leave empty to add a domain later from the service page.
+    pattern: ^([A-Za-z0-9][A-Za-z0-9.-]*)?$
+    max_length: 253
+  - key: password
+    label: Password
+    type: secret
+    required: true
+    generate: true
+    help: Sign-in password for the editor; use Generate for a strong value.
+  - key: sudo_password
+    label: Sudo password
+    type: secret
+    required: true
+    generate: true
+    help: Password for sudo inside the terminal; use Generate for a strong value.
+  - key: tz
+    label: Timezone
+    type: text
+    default: UTC
+    pattern: ^[A-Za-z0-9_/+-]+$
+    max_length: 64
+    help: IANA timezone name used by the container clock.
+routes:
+  - service: code-server
+    port: 8443
+    domain_field: domain

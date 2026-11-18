@@ -1,0 +1,58 @@
+name: Zero
+icon: zero
+description: Zero query-driven sync engine for Postgres with persistent named volumes and an optional routed domain.
+homepage: https://zero.rocicorp.dev/docs/deployment
+category:
+  - backend
+fields:
+  - key: domain
+    label: Domain
+    type: text
+    required: false
+    default: ""
+    placeholder: app.example.com
+    help: Optional. Leave empty to add a domain later from the service page.
+    pattern: ^([A-Za-z0-9][A-Za-z0-9.-]*)?$
+    max_length: 253
+  - key: query_url
+    label: Query URL
+    type: text
+    required: true
+    pattern: ^https?://[A-Za-z0-9.-]+(:[0-9]+)?(/[A-Za-z0-9._~/-]*)?$
+    max_length: 300
+    help: Your application's /query endpoint, read by the sync engine.
+  - key: mutate_url
+    label: Mutate URL
+    type: text
+    required: true
+    pattern: ^https?://[A-Za-z0-9.-]+(:[0-9]+)?(/[A-Za-z0-9._~/-]*)?$
+    max_length: 300
+    help: Your application's /mutate endpoint, read by the sync engine.
+  - key: db_name
+    label: Database name
+    type: text
+    default: zero
+    pattern: ^[A-Za-z0-9_]{1,64}$
+    max_length: 64
+  - key: db_user
+    label: Database user
+    type: text
+    default: zero
+    pattern: ^[A-Za-z0-9_]{1,32}$
+    max_length: 32
+  - key: db_password
+    label: Database password
+    type: secret
+    required: true
+    generate: true
+    help: Used by Zero and PostgreSQL; use Generate for a strong value.
+  - key: admin_password
+    label: Admin password
+    type: secret
+    required: true
+    generate: true
+    help: Guards the Zero admin API; use Generate for a strong value.
+routes:
+  - service: zero
+    port: 4848
+    domain_field: domain

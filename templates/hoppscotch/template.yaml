@@ -1,0 +1,43 @@
+name: Hoppscotch
+icon: hoppscotch
+description: Hoppscotch API development platform with PostgreSQL, persistent named volumes and a routed domain.
+homepage: https://docs.hoppscotch.io
+category:
+  - devtools
+fields:
+  - key: domain
+    label: Domain
+    type: text
+    required: true
+    placeholder: app.example.com
+    help: The public host served by the node's Traefik proxy.
+    pattern: ^[A-Za-z0-9][A-Za-z0-9.-]*$
+    max_length: 253
+  - key: data_key
+    label: Encryption key
+    type: secret
+    required: true
+    pattern: ^[A-Za-z0-9+/]{43}=$
+    help: "Run: openssl rand -base64 32. The API rejects any other format."
+  - key: db_name
+    label: Database name
+    type: text
+    default: hoppscotch
+    pattern: ^[A-Za-z0-9_]{1,64}$
+    max_length: 64
+  - key: db_user
+    label: Database user
+    type: text
+    default: hoppscotch
+    pattern: ^[A-Za-z0-9_]{1,32}$
+    max_length: 32
+  - key: db_password
+    label: Database password
+    type: secret
+    required: true
+    generate: true
+    help: Used by Hoppscotch and PostgreSQL; use Generate for a strong value.
+routes:
+  - service: backend
+    port: 80
+    domain_field: domain

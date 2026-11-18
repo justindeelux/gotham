@@ -1,0 +1,41 @@
+services:
+  onedev:
+    image: 1dev/server:17.2.0
+    restart: unless-stopped
+    ports:
+      - "6610"
+    environment:
+      hibernate_dialect: io.onedev.server.persistence.PostgreSQLDialect
+      hibernate_connection_driver_class: org.postgresql.Driver
+      hibernate_connection_url: jdbc:postgresql://postgres:5432/{{ .db_name }}
+      hibernate_connection_username: "{{ .db_user }}"
+      hibernate_connection_password: "{{ .db_password }}"
+      initial_user: "{{ .admin_user }}"
+      initial_password: "{{ .admin_password }}"
+      initial_email: "{{ .admin_email }}"
+      initial_server_url: "https://{{ .domain }}"
+      initial_ssh_root_url: "ssh://{{ .domain }}:22"
+    volumes:
+      - onedev_data:/opt/onedev
+    depends_on:
+      postgres:
+        condition: service_healthy
+  postgres:
+    image: postgres:16-alpine
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: "{{ .db_user }}"
+      POSTGRES_PASSWORD: "{{ .db_password }}"
+      POSTGRES_DB: "{{ .db_name }}"
+    volumes:
+      - onedev_postgres_data:/var/lib/postgresql/data
+    healthcheck:
+      test:
+        - CMD-SHELL
+        - pg_isready -U "{{ .db_user }}" -d "{{ .db_name }}"
+      interval: 5s
+      timeout: 20s
+      retries: 10
+volumes:
+  onedev_data:
+  onedev_postgres_data:

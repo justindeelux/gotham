@@ -110,7 +110,8 @@ người vận hành.
 ## Tạo dịch vụ
 
 Dùng **Thêm tài nguyên → Dịch vụ**, rồi chọn một template hoặc
-**Nhập tệp compose**. Việc nhập hỏi tên, node và tài liệu; môi trường được sửa sau
+**Nhập tệp compose**. Template được nhóm theo danh mục; bộ lọc tìm theo tên và mô
+tả trên mọi danh mục. Việc nhập hỏi tên, node và tài liệu; môi trường được sửa sau
 đó trên trang chi tiết.
 
 Một dịch vụ tạo từ template nhớ slug của nó: API trả về nó dưới dạng `template`

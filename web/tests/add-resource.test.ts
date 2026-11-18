@@ -518,6 +518,20 @@ describe("ResourcePicker", () => {
     wrapper.unmount();
   });
 
+  it("moves focus across category sections with the arrow keys", async () => {
+    const wrapper = await mountPage(CATEGORIZED);
+    await selectTab(wrapper, "Service");
+    const cards = wrapper.findAll("button[data-template]");
+    // Cards[3] is the last card of the CMS section, cards[4] the first of Other.
+    (cards[3].element as HTMLElement).focus();
+    const gallery = wrapper.find(".res-groups");
+    await gallery.trigger("keydown", { key: "ArrowRight" });
+    expect(document.activeElement).toBe(cards[4].element);
+    await gallery.trigger("keydown", { key: "End" });
+    expect(document.activeElement).toBe(cards[cards.length - 1].element);
+    wrapper.unmount();
+  });
+
   it("labels the category sections in Vietnamese", async () => {
     const wrapper = await mountPage(CATEGORIZED);
     await selectTab(wrapper, "Service");

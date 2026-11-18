@@ -54,6 +54,33 @@ export const ENGINES: EngineMeta[] = [
     port: 6379,
     homepage: "https://redis.io",
   },
+  {
+    value: "keydb",
+    label: "KeyDB",
+    repo: "eqalpha/keydb",
+    defaultVersion: "latest",
+    versions: ["latest"],
+    port: 6379,
+    homepage: "https://keydb.dev",
+  },
+  {
+    value: "dragonfly",
+    label: "Dragonfly",
+    repo: "docker.dragonflydb.io/dragonflydb/dragonfly",
+    defaultVersion: "latest",
+    versions: ["latest"],
+    port: 6379,
+    homepage: "https://www.dragonflydb.io",
+  },
+  {
+    value: "clickhouse",
+    label: "ClickHouse",
+    repo: "clickhouse/clickhouse-server",
+    defaultVersion: "26.3",
+    versions: ["26.3", "26.8", "26.9"],
+    port: 9000,
+    homepage: "https://clickhouse.com",
+  },
 ];
 
 export function engineByValue(value: string): EngineMeta {

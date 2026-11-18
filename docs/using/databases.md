@@ -17,7 +17,7 @@ stack.
 
 ## Engines
 
-Five engines are supported. The create form offers known-good image tags per
+Eight engines are supported. The create form offers known-good image tags per
 engine and falls back to the default below when none is chosen.
 
 | Engine | Default image | Container port |
@@ -27,16 +27,22 @@ engine and falls back to the default below when none is chosen.
 | MariaDB | `mariadb:11.4` | 3306 |
 | MongoDB | `mongo:7.0` | 27017 |
 | Redis | `redis:7.2-alpine` | 6379 |
+| KeyDB | `eqalpha/keydb:latest` | 6379 |
+| Dragonfly | `docker.dragonflydb.io/dragonflydb/dragonfly:latest` | 6379 |
+| ClickHouse | `clickhouse/clickhouse-server:26.3` | 9000 |
 
 All engines use their official images. Gotham adds the engine's initialisation
 environment, the data volume and a readiness healthcheck.
+
+SQLite is not offered: it is a single file rather than a server, so it has no
+login credentials, no port to publish and nothing to probe for readiness.
 
 ## Create a database
 
 Use **Add resource → Database** and follow the three steps: engine, configure,
 review.
 
-- **Engine and version** — pick one of the five engines, then an image tag.
+- **Engine and version** — pick one of the eight engines, then an image tag.
 - **Name** — 1–63 characters: letters, digits, `.`, `_` or `-`. It is used for
   the container and the generated credentials.
 - **Node** — the node the database runs on. It is pinned at creation: the
@@ -81,7 +87,8 @@ Start, stop and restart are available on the database page.
 
 The **Credentials** card shows the generated user, password and database name,
 with reveal/copy actions, and a connection string using the engine's URL scheme
-(`postgresql://`, `mysql://`, `mariadb://`, `mongodb://`, `redis://`). The
+(`postgresql://`, `mysql://`, `mariadb://`, `mongodb://`, `redis://` — KeyDB and
+Dragonfly included — and `clickhouse://`). The
 values are stored encrypted and readable to members with access to the project;
 they are not included in the database list responses.
 

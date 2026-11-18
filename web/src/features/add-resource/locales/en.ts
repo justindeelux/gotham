@@ -71,6 +71,9 @@ const en = {
     mariadb: "Community MySQL fork with a compatible wire protocol.",
     mongodb: "Document database for flexible JSON-like data.",
     redis: "In-memory cache and queue with optional persistence.",
+    keydb: "Multithreaded, Redis-compatible cache and queue.",
+    dragonfly: "Redis-compatible in-memory store built for throughput.",
+    clickhouse: "Column-oriented database for real-time analytics.",
   },
 };
 

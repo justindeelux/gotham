@@ -38,7 +38,7 @@ func generateCredentials(engine, name string) (Credentials, error) {
 		Database: deriveIdentifier(name),
 	}
 	switch engine {
-	case EngineRedis:
+	case EngineRedis, EngineKeyDB, EngineDragonfly:
 		credentials.Username = redisUsername
 		credentials.Database = "0"
 	case EngineMySQL, EngineMariaDB:

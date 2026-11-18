@@ -7,11 +7,14 @@ import (
 )
 
 const (
-	defaultPostgresVersion = "16-alpine"
-	defaultMySQLVersion    = "8.4"
-	defaultMariaDBVersion  = "11.4"
-	defaultMongoDBVersion  = "7.0"
-	defaultRedisVersion    = "7.2-alpine"
+	defaultPostgresVersion   = "16-alpine"
+	defaultMySQLVersion      = "8.4"
+	defaultMariaDBVersion    = "11.4"
+	defaultMongoDBVersion    = "7.0"
+	defaultRedisVersion      = "7.2-alpine"
+	defaultKeyDBVersion      = "latest"
+	defaultDragonflyVersion  = "latest"
+	defaultClickHouseVersion = "26.3"
 )
 
 type PostgresEngine struct{}

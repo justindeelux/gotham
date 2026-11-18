@@ -58,7 +58,7 @@ describe("databaseEngines", () => {
       label: "postgres:16-alpine",
       value: "16-alpine",
     });
-    expect(ENGINES.length).toBe(5);
+    expect(ENGINES.length).toBe(8);
   });
 });
 

@@ -1,0 +1,31 @@
+name: Wakapi
+icon: wakapi
+description: "Wakapi coding statistics with PostgreSQL, persistent named volumes and an optional routed domain."
+homepage: https://wakapi.dev/
+category:
+  - analytics
+fields:
+  - key: domain
+    label: Domain
+    type: text
+    required: false
+    default: ""
+    placeholder: wakapi.example.com
+    help: Optional. Leave empty to add a domain later from the service page.
+    pattern: ^([A-Za-z0-9][A-Za-z0-9.-]*)?$
+    max_length: 253
+  - key: db_password
+    label: Database password
+    type: secret
+    required: true
+    generate: true
+  - key: password_salt
+    label: Password salt
+    type: secret
+    required: true
+    generate: true
+    help: Salts the stored password hashes; use Generate for a strong value.
+routes:
+  - service: wakapi
+    port: 3000
+    domain_field: domain

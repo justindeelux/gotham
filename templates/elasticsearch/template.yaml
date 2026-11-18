@@ -1,0 +1,27 @@
+name: Elasticsearch
+icon: elasticsearch
+description: "Single-node Elasticsearch with a persistent named volume and an optional routed domain."
+homepage: https://www.elastic.co/products/elasticsearch
+category:
+  - search
+  - monitoring
+fields:
+  - key: domain
+    label: Domain
+    type: text
+    required: false
+    default: ""
+    placeholder: search.example.com
+    help: Optional. Leave empty to add a domain later from the service page.
+    pattern: ^([A-Za-z0-9][A-Za-z0-9.-]*)?$
+    max_length: 253
+  - key: elastic_password
+    label: Elasticsearch password
+    type: secret
+    required: true
+    generate: true
+    help: Password for the elastic superuser.
+routes:
+  - service: elasticsearch
+    port: 9200
+    domain_field: domain

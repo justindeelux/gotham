@@ -1,0 +1,36 @@
+name: Openpanel
+icon: openpanel
+description: "Openpanel product analytics with PostgreSQL, Redis, ClickHouse and an optional routed domain."
+homepage: https://openpanel.dev/docs
+category:
+  - analytics
+fields:
+  - key: domain
+    label: Domain
+    type: text
+    required: false
+    default: ""
+    placeholder: analytics.example.com
+    help: Optional. Leave empty to add a domain later from the service page.
+    pattern: ^([A-Za-z0-9][A-Za-z0-9.-]*)?$
+    max_length: 253
+  - key: db_password
+    label: PostgreSQL password
+    type: secret
+    required: true
+    generate: true
+  - key: redis_password
+    label: Redis password
+    type: secret
+    required: true
+    generate: true
+  - key: cookie_secret
+    label: Cookie secret
+    type: secret
+    required: true
+    generate: true
+    help: Signs dashboard cookies; use Generate for a strong value.
+routes:
+  - service: openpanel
+    port: 3000
+    domain_field: domain

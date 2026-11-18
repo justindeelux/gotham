@@ -1,0 +1,32 @@
+name: OpenObserve
+icon: openobserve
+description: "OpenObserve logs, metrics and traces with a persistent named volume and an optional routed domain."
+homepage: https://openobserve.ai/docs/
+category:
+  - monitoring
+fields:
+  - key: domain
+    label: Domain
+    type: text
+    required: false
+    default: ""
+    placeholder: observe.example.com
+    help: Optional. Leave empty to add a domain later from the service page.
+    pattern: ^([A-Za-z0-9][A-Za-z0-9.-]*)?$
+    max_length: 253
+  - key: root_email
+    label: Root user email
+    type: text
+    default: root@example.com
+    pattern: ^[^:@\s]+@[^:@\s]+$
+    max_length: 254
+  - key: root_password
+    label: Root user password
+    type: secret
+    required: true
+    generate: true
+    help: The built-in root account password; use Generate for a strong value.
+routes:
+  - service: openobserve
+    port: 5080
+    domain_field: domain

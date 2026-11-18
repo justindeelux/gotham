@@ -1,0 +1,31 @@
+name: Umami
+icon: umami
+description: "Umami web analytics with PostgreSQL, persistent named volumes and an optional routed domain."
+homepage: https://umami.is
+category:
+  - analytics
+fields:
+  - key: domain
+    label: Domain
+    type: text
+    required: false
+    default: ""
+    placeholder: umami.example.com
+    help: Optional. Leave empty to add a domain later from the service page.
+    pattern: ^([A-Za-z0-9][A-Za-z0-9.-]*)?$
+    max_length: 253
+  - key: db_password
+    label: Database password
+    type: secret
+    required: true
+    generate: true
+  - key: app_secret
+    label: Application secret
+    type: secret
+    required: true
+    generate: true
+    help: Signs sessions and tokens; use Generate for a strong value.
+routes:
+  - service: umami
+    port: 3000
+    domain_field: domain

@@ -1,0 +1,27 @@
+name: Redis Insight
+icon: redis-insight
+description: "Redis Insight GUI with a persistent named volume and an optional routed domain."
+homepage: https://redis.io/docs/latest/operate/redisinsight/
+category:
+  - observability
+  - devtools
+fields:
+  - key: domain
+    label: Domain
+    type: text
+    required: false
+    default: ""
+    placeholder: redis.example.com
+    help: Optional. Leave empty to add a domain later from the service page.
+    pattern: ^([A-Za-z0-9][A-Za-z0-9.-]*)?$
+    max_length: 253
+  - key: encryption_key
+    label: Encryption key
+    type: secret
+    required: true
+    generate: true
+    help: Encrypts the stored connections; use Generate for a strong value.
+routes:
+  - service: redis-insight
+    port: 5540
+    domain_field: domain

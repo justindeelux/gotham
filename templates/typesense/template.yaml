@@ -1,0 +1,26 @@
+name: Typesense
+icon: typesense
+description: "Typesense in-memory search with a persistent named volume and an optional routed domain."
+homepage: https://typesense.org/docs
+category:
+  - search
+fields:
+  - key: domain
+    label: Domain
+    type: text
+    required: false
+    default: ""
+    placeholder: search.example.com
+    help: Optional. Leave empty to add a domain later from the service page.
+    pattern: ^([A-Za-z0-9][A-Za-z0-9.-]*)?$
+    max_length: 253
+  - key: api_key
+    label: API key
+    type: secret
+    required: true
+    generate: true
+    help: Protects the search API; use Generate for a strong value.
+routes:
+  - service: typesense
+    port: 8108
+    domain_field: domain

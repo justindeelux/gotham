@@ -1,0 +1,10 @@
+services:
+  statusnook:
+    image: goksan/statusnook
+    restart: unless-stopped
+    ports:
+      - "8000"
+    volumes:
+      - statusnook_data:/app/statusnook-data
+volumes:
+  statusnook_data:

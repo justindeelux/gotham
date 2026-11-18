@@ -1,0 +1,20 @@
+name: changedetection.io
+icon: changedetection
+description: "Website change detection with notifications, a persistent named volume and an optional routed domain."
+homepage: https://github.com/dgtlmoon/changedetection.io/
+category:
+  - monitoring
+fields:
+  - key: domain
+    label: Domain
+    type: text
+    required: false
+    default: ""
+    placeholder: changes.example.com
+    help: Optional. Leave empty to add a domain later from the service page.
+    pattern: ^([A-Za-z0-9][A-Za-z0-9.-]*)?$
+    max_length: 253
+routes:
+  - service: changedetection
+    port: 5000
+    domain_field: domain

@@ -1,0 +1,22 @@
+services:
+  checkmate:
+    image: ghcr.io/bluewave-labs/checkmate-backend-mono-multiarch:v3.9.2
+    restart: unless-stopped
+    ports:
+      - "52345"
+    environment:
+      UPTIME_APP_API_BASE_URL: "https://${GOTHAM_DOMAIN:-localhost}/api/v1"
+      UPTIME_APP_CLIENT_HOST: "https://${GOTHAM_DOMAIN:-localhost}"
+      CLIENT_HOST: "https://${GOTHAM_DOMAIN:-localhost}"
+      DB_CONNECTION_STRING: mongodb://mongodb:27017/uptime_db
+      JWT_SECRET: "{{ .jwt_secret }}"
+    depends_on:
+      - mongodb
+  mongodb:
+    image: ghcr.io/bluewave-labs/checkmate-mongo:v3.9.2
+    restart: unless-stopped
+    command: ["mongod", "--quiet", "--bind_ip_all"]
+    volumes:
+      - checkmate_mongo:/data/db
+volumes:
+  checkmate_mongo:

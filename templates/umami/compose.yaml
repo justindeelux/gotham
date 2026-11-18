@@ -1,0 +1,23 @@
+services:
+  umami:
+    image: ghcr.io/umami-software/umami:3.5.0
+    restart: unless-stopped
+    ports:
+      - "3000"
+    environment:
+      DATABASE_URL: "postgres://umami:{{ .db_password }}@postgresql:5432/umami"
+      DATABASE_TYPE: postgres
+      APP_SECRET: "{{ .app_secret }}"
+    depends_on:
+      - postgresql
+  postgresql:
+    image: postgres:16-alpine
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: umami
+      POSTGRES_PASSWORD: "{{ .db_password }}"
+      POSTGRES_DB: umami
+    volumes:
+      - umami_postgres_data:/var/lib/postgresql/data
+volumes:
+  umami_postgres_data:

@@ -1,0 +1,19 @@
+services:
+  healthchecks:
+    image: healthchecks/healthchecks:v5.0.3
+    restart: unless-stopped
+    ports:
+      - "8000"
+    environment:
+      DB: sqlite
+      DB_NAME: /data/hc.sqlite
+      ALLOWED_HOSTS: "*"
+      REGISTRATION_OPEN: "True"
+      DEBUG: "False"
+      SECRET_KEY: "{{ .secret_key }}"
+      SITE_ROOT: "https://${GOTHAM_DOMAIN:-localhost}"
+      DEFAULT_FROM_EMAIL: healthchecks@example.com
+    volumes:
+      - healthchecks_data:/data
+volumes:
+  healthchecks_data:

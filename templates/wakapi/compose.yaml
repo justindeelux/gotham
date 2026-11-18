@@ -1,0 +1,35 @@
+services:
+  wakapi:
+    image: ghcr.io/muety/wakapi:2.18.2
+    restart: unless-stopped
+    ports:
+      - "3000"
+    environment:
+      TZ: UTC
+      WAKAPI_ENV: production
+      WAKAPI_SECURITY_PASSWORD_SALT: "{{ .password_salt }}"
+      WAKAPI_DB_TYPE: postgres
+      WAKAPI_DB_NAME: wakapi
+      WAKAPI_DB_USER: wakapi
+      WAKAPI_DB_PASSWORD: "{{ .db_password }}"
+      WAKAPI_DB_HOST: postgres
+      WAKAPI_DB_PORT: "5432"
+      WAKAPI_ALLOW_SIGNUP: "true"
+      WAKAPI_DISABLE_FRONTPAGE: "true"
+      WAKAPI_PUBLIC_URL: "https://${GOTHAM_DOMAIN:-localhost}"
+    volumes:
+      - wakapi_data:/data
+    depends_on:
+      - postgres
+  postgres:
+    image: postgres:17-alpine
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: wakapi
+      POSTGRES_PASSWORD: "{{ .db_password }}"
+      POSTGRES_DB: wakapi
+    volumes:
+      - wakapi_postgres_data:/var/lib/postgresql/data
+volumes:
+  wakapi_data:
+  wakapi_postgres_data:

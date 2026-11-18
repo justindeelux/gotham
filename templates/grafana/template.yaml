@@ -1,0 +1,26 @@
+name: Grafana
+icon: grafana
+description: "Grafana dashboards with a persistent named volume and an optional routed domain."
+homepage: https://grafana.com
+category:
+  - monitoring
+fields:
+  - key: domain
+    label: Domain
+    type: text
+    required: false
+    default: ""
+    placeholder: grafana.example.com
+    help: Optional. Leave empty to add a domain later from the service page.
+    pattern: ^([A-Za-z0-9][A-Za-z0-9.-]*)?$
+    max_length: 253
+  - key: admin_password
+    label: Admin password
+    type: secret
+    required: true
+    generate: true
+    help: The initial admin password; use Generate for a strong value.
+routes:
+  - service: grafana
+    port: 3000
+    domain_field: domain

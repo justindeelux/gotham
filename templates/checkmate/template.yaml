@@ -1,0 +1,26 @@
+name: Checkmate
+icon: checkmate
+description: "Server and website monitoring with MongoDB, persistent named volumes and an optional routed domain."
+homepage: https://docs.checkmate.so/
+category:
+  - monitoring
+fields:
+  - key: domain
+    label: Domain
+    type: text
+    required: false
+    default: ""
+    placeholder: status.example.com
+    help: Optional. Leave empty to add a domain later from the service page.
+    pattern: ^([A-Za-z0-9][A-Za-z0-9.-]*)?$
+    max_length: 253
+  - key: jwt_secret
+    label: JWT secret
+    type: secret
+    required: true
+    generate: true
+    help: Signs login sessions; use Generate for a strong value.
+routes:
+  - service: checkmate
+    port: 52345
+    domain_field: domain

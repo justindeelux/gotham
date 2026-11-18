@@ -1,0 +1,10 @@
+services:
+  goatcounter:
+    image: arp242/goatcounter:2.7
+    restart: unless-stopped
+    ports:
+      - "8080"
+    volumes:
+      - goatcounter_data:/home/goatcounter/goatcounter-data
+volumes:
+  goatcounter_data:

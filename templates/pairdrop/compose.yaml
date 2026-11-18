@@ -1,0 +1,11 @@
+services:
+  pairdrop:
+    image: lscr.io/linuxserver/pairdrop:1.11.2
+    restart: unless-stopped
+    ports:
+      - "3000"
+    environment:
+      PUID: "1000"
+      PGID: "1000"
+      TZ: "{{ .timezone }}"
+      DEBUG_MODE: "false"

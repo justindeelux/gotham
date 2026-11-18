@@ -1,0 +1,20 @@
+name: Redlib
+icon: redlib
+description: Redlib is a private front-end to Reddit with no ads, tracking or JavaScript, served under an optional routed domain.
+homepage: https://github.com/redlib-org/redlib
+category:
+  - productivity
+fields:
+  - key: domain
+    label: Domain
+    type: text
+    required: false
+    default: ""
+    placeholder: reddit.example.com
+    help: Optional. Leave empty to add a domain later from the service page.
+    pattern: ^([A-Za-z0-9][A-Za-z0-9.-]*)?$
+    max_length: 253
+routes:
+  - service: redlib
+    port: 8080
+    domain_field: domain

@@ -1,0 +1,64 @@
+services:
+  twenty:
+    image: twentycrm/twenty:v2.58
+    restart: unless-stopped
+    ports:
+      - "3000"
+    environment:
+      SERVER_URL: "https://${GOTHAM_DOMAIN:-localhost}"
+      FRONT_BASE_URL: "https://${GOTHAM_DOMAIN:-localhost}"
+      APP_SECRET: "{{ .app_secret }}"
+      ENCRYPTION_KEY: "{{ .encryption_key }}"
+      PG_DATABASE_URL: "postgres://{{ .db_user }}:{{ .db_password }}@postgres:5432/{{ .db_name }}"
+      POSTGRES_ADMIN_PASSWORD: "{{ .db_password }}"
+      REDIS_URL: redis://redis:6379
+      ENABLE_DB_MIGRATIONS: "true"
+      STORAGE_TYPE: local
+      EMAIL_DRIVER: logger
+      TELEMETRY_ENABLED: "false"
+      DEBUG_MODE: "false"
+    volumes:
+      - twenty_local_storage:/app/packages/twenty-server/.local-storage
+    depends_on:
+      - postgres
+      - redis
+  worker:
+    image: twentycrm/twenty:v2.58
+    restart: unless-stopped
+    command: ["yarn", "worker:prod"]
+    environment:
+      SERVER_URL: "https://${GOTHAM_DOMAIN:-localhost}"
+      FRONT_BASE_URL: "https://${GOTHAM_DOMAIN:-localhost}"
+      APP_SECRET: "{{ .app_secret }}"
+      ENCRYPTION_KEY: "{{ .encryption_key }}"
+      PG_DATABASE_URL: "postgres://{{ .db_user }}:{{ .db_password }}@postgres:5432/{{ .db_name }}"
+      POSTGRES_ADMIN_PASSWORD: "{{ .db_password }}"
+      REDIS_URL: redis://redis:6379
+      DISABLE_DB_MIGRATIONS: "true"
+      DISABLE_CRON_JOBS_REGISTRATION: "true"
+      STORAGE_TYPE: local
+      EMAIL_DRIVER: logger
+      TELEMETRY_ENABLED: "false"
+      DEBUG_MODE: "false"
+    volumes:
+      - twenty_local_storage:/app/packages/twenty-server/.local-storage
+    depends_on:
+      - twenty
+  postgres:
+    image: postgres:16-alpine
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: "{{ .db_user }}"
+      POSTGRES_PASSWORD: "{{ .db_password }}"
+      POSTGRES_DB: "{{ .db_name }}"
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+  redis:
+    image: redis:7-alpine
+    restart: unless-stopped
+    volumes:
+      - redis_data:/data
+volumes:
+  twenty_local_storage:
+  postgres_data:
+  redis_data:

@@ -1,0 +1,61 @@
+name: Plunk
+icon: plunk
+description: Plunk email platform with PostgreSQL, Redis, an API proxy, persistent named volumes and two routed domains.
+homepage: https://docs.useplunk.com/self-hosting/introduction
+category:
+  - email
+fields:
+  - key: dashboard_domain
+    label: Dashboard domain
+    type: text
+    required: true
+    placeholder: mail.example.com
+    help: Public host of the Plunk dashboard.
+    pattern: ^[A-Za-z0-9][A-Za-z0-9.-]*$
+    max_length: 253
+  - key: api_domain
+    label: API domain
+    type: text
+    required: true
+    placeholder: api.mail.example.com
+    help: Public host of the Plunk API, separate from the dashboard.
+    pattern: ^[A-Za-z0-9][A-Za-z0-9.-]*$
+    max_length: 253
+  - key: db_user
+    label: Database user
+    type: text
+    default: plunk
+    pattern: ^[A-Za-z0-9_]{1,32}$
+    max_length: 32
+  - key: db_password
+    label: Database password
+    type: secret
+    required: true
+    generate: true
+  - key: jwt_secret
+    label: JWT secret
+    type: secret
+    required: true
+    generate: true
+  - key: ses_region
+    label: AWS SES region
+    type: text
+    default: us-east-1
+    placeholder: us-east-1
+    pattern: ^[a-z]{2}-[a-z]+-[0-9]+$
+    max_length: 32
+  - key: ses_access_key_id
+    label: AWS SES access key
+    type: secret
+    required: true
+  - key: ses_secret_access_key
+    label: AWS SES secret key
+    type: secret
+    required: true
+routes:
+  - service: plunk
+    port: 3000
+    domain_field: dashboard_domain
+  - service: plunk-api
+    port: 8080
+    domain_field: api_domain

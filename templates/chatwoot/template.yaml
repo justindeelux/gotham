@@ -1,0 +1,45 @@
+name: Chatwoot
+icon: chatwoot
+description: Chatwoot customer support with PostgreSQL, Redis, a background worker, persistent named volumes and a routed domain.
+homepage: https://www.chatwoot.com/docs/self-hosted/
+category:
+  - helpdesk
+fields:
+  - key: domain
+    label: Domain
+    type: text
+    required: true
+    placeholder: support.example.com
+    help: Public host used in agent and customer links.
+    pattern: ^[A-Za-z0-9][A-Za-z0-9.-]*$
+    max_length: 253
+  - key: secret_key_base
+    label: Secret key base
+    type: secret
+    required: true
+    generate: true
+    help: Signs sessions; use Generate for a strong value.
+  - key: db_user
+    label: Database user
+    type: text
+    default: chatwoot
+    pattern: ^[A-Za-z0-9_]{1,32}$
+    max_length: 32
+  - key: db_password
+    label: Database password
+    type: secret
+    required: true
+    generate: true
+  - key: redis_password
+    label: Redis password
+    type: secret
+    required: true
+    generate: true
+  - key: enable_signup
+    label: Allow account signup
+    type: bool
+    default: false
+routes:
+  - service: chatwoot
+    port: 3000
+    domain_field: domain

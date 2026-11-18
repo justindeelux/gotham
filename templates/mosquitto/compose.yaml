@@ -1,0 +1,25 @@
+services:
+  mosquitto:
+    image: eclipse-mosquitto:2.1.2-alpine
+    restart: unless-stopped
+    ports:
+      - "1883:1883"
+    environment:
+      MQTT_USERNAME: "{{ .mqtt_user }}"
+      MQTT_PASSWORD: "{{ .mqtt_password }}"
+      ALLOW_ANONYMOUS: "{{ .allow_anonymous }}"
+    volumes:
+      - mosquitto_config:/mosquitto/config
+      - mosquitto_data:/mosquitto/data
+    entrypoint:
+      - /bin/sh
+      - -c
+      - |
+        rm -f /mosquitto/config/passwords
+        printf 'listener 1883\nallow_anonymous %s\npassword_file /mosquitto/config/passwords\n' "$${ALLOW_ANONYMOUS}" > /mosquitto/config/mosquitto.conf
+        mosquitto_passwd -b -c /mosquitto/config/passwords "$${MQTT_USERNAME}" "$${MQTT_PASSWORD}"
+        chown mosquitto:mosquitto /mosquitto/config/passwords
+        exec mosquitto -c /mosquitto/config/mosquitto.conf
+volumes:
+  mosquitto_config:
+  mosquitto_data:

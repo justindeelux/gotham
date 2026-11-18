@@ -1,0 +1,26 @@
+name: Once Campfire
+icon: once-campfire
+description: Once Campfire group chat with persistent storage and an optional routed domain.
+homepage: https://github.com/basecamp/once-campfire
+category:
+  - messaging
+fields:
+  - key: domain
+    label: Domain
+    type: text
+    required: false
+    default: ""
+    placeholder: chat.example.com
+    help: Optional. Leave empty to add a domain later from the service page.
+    pattern: ^([A-Za-z0-9][A-Za-z0-9.-]*)?$
+    max_length: 253
+  - key: secret_key_base
+    label: Secret key base
+    type: secret
+    required: true
+    generate: true
+    help: Signs cookies and sessions; use Generate for a strong value. Changing it signs every user out.
+routes:
+  - service: campfire
+    port: 80
+    domain_field: domain

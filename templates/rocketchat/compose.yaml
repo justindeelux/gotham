@@ -1,0 +1,42 @@
+services:
+  rocketchat:
+    image: registry.rocket.chat/rocketchat/rocket.chat:9.0.0
+    restart: unless-stopped
+    ports:
+      - "3000"
+    environment:
+      MONGO_URL: mongodb://mongodb:27017/rocketchat?replicaSet=rs0
+      MONGO_OPLOG_URL: mongodb://mongodb:27017/local?replicaSet=rs0
+      ROOT_URL: https://{{ .domain }}
+      DEPLOY_METHOD: docker
+    depends_on:
+      mongodb:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "node", "-e", "const http = require('http'); http.get('http://127.0.0.1:3000/health', (res) => process.exit(res.statusCode === 200 ? 0 : 1)).on('error', () => process.exit(1));"]
+      interval: 30s
+      timeout: 10s
+      retries: 15
+      start_period: 60s
+
+  mongodb:
+    image: mongo:8.0
+    restart: unless-stopped
+    volumes:
+      - mongodb_data:/data/db
+    command:
+      - sh
+      - -c
+      - |
+        mongod --replSet rs0 --bind_ip_all &
+        sleep 5
+        mongosh --eval 'rs.initiate({_id:"rs0", members:[{_id:0, host:"mongodb:27017"}]})' || true
+        wait
+    healthcheck:
+      test: ["CMD", "mongosh", "--quiet", "--eval", "db.adminCommand('ping')"]
+      interval: 10s
+      timeout: 10s
+      retries: 15
+      start_period: 20s
+volumes:
+  mongodb_data:

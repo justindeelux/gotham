@@ -1,0 +1,51 @@
+services:
+  freescout:
+    image: nfrastack/freescout:2.2.25
+    restart: unless-stopped
+    ports:
+      - "80"
+    environment:
+      DB_TYPE: mariadb
+      DB_HOST: mariadb
+      DB_PORT: "3306"
+      DB_NAME: freescout
+      DB_USER: "{{ .db_user }}"
+      DB_PASS: "{{ .db_password }}"
+      APP_URL: https://{{ .domain }}
+      ADMIN_EMAIL: "{{ .admin_email }}"
+      ADMIN_PASS: "{{ .admin_password }}"
+      FREESCOUT_APP_DEBUG: "false"
+      TIMEZONE: "{{ .timezone }}"
+    volumes:
+      - freescout_data:/data
+      - freescout_logs:/logs
+    depends_on:
+      mariadb:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD-SHELL", "busybox wget -qO /dev/null --header 'X-Forwarded-Proto: https' http://127.0.0.1/login || exit 1"]
+      start_period: 60s
+      interval: 10s
+      timeout: 10s
+      retries: 15
+
+  mariadb:
+    image: mariadb:13.0.2
+    restart: unless-stopped
+    environment:
+      MARIADB_ROOT_PASSWORD: "{{ .db_root_password }}"
+      MARIADB_DATABASE: freescout
+      MARIADB_USER: "{{ .db_user }}"
+      MARIADB_PASSWORD: "{{ .db_password }}"
+    volumes:
+      - freescout_mariadb_data:/var/lib/mysql
+    healthcheck:
+      test: ["CMD", "healthcheck.sh", "--connect", "--innodb_initialized"]
+      start_period: 10s
+      interval: 5s
+      timeout: 10s
+      retries: 15
+volumes:
+  freescout_data:
+  freescout_logs:
+  freescout_mariadb_data:

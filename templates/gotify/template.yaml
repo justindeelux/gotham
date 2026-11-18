@@ -1,0 +1,32 @@
+name: Gotify
+icon: gotify
+description: Gotify notification server with persistent SQLite storage and an optional routed domain.
+homepage: https://gotify.net/docs/install
+category:
+  - messaging
+fields:
+  - key: domain
+    label: Domain
+    type: text
+    required: false
+    default: ""
+    placeholder: push.example.com
+    help: Optional. Leave empty to add a domain later from the service page.
+    pattern: ^([A-Za-z0-9][A-Za-z0-9.-]*)?$
+    max_length: 253
+  - key: admin_user
+    label: Admin user
+    type: text
+    default: admin
+    pattern: ^[A-Za-z0-9_.@-]{1,64}$
+    max_length: 64
+  - key: admin_password
+    label: Admin password
+    type: secret
+    required: true
+    generate: true
+    help: The default Gotify user password, applied on the first start; use Generate for a strong value.
+routes:
+  - service: gotify
+    port: 80
+    domain_field: domain

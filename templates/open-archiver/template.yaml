@@ -1,0 +1,62 @@
+name: Open Archiver
+icon: open-archiver
+description: Open Archiver email archiving with PostgreSQL, Valkey and Meilisearch, persistent named volumes and an optional routed domain.
+homepage: https://docs.openarchiver.com/
+category:
+  - email
+fields:
+  - key: domain
+    label: Domain
+    type: text
+    required: false
+    default: ""
+    placeholder: archive.example.com
+    help: Optional. Leave empty to add a domain later from the service page.
+    pattern: ^([A-Za-z0-9][A-Za-z0-9.-]*)?$
+    max_length: 253
+  - key: db_name
+    label: Database name
+    type: text
+    default: open-archiver-db
+    pattern: ^[A-Za-z0-9_-]{1,63}$
+    max_length: 63
+  - key: db_user
+    label: Database user
+    type: text
+    default: openarchiver
+    pattern: ^[A-Za-z0-9_]{1,32}$
+    max_length: 32
+  - key: db_password
+    label: Database password
+    type: secret
+    required: true
+    generate: true
+  - key: encryption_key
+    label: Encryption key
+    type: secret
+    required: true
+    help: Encrypts archived mail. Keep it stable and backed up; losing it makes the archive unreadable.
+  - key: storage_encryption_key
+    label: Storage encryption key
+    type: secret
+    required: true
+    help: Encrypts stored attachments and message bodies.
+  - key: meili_master_key
+    label: Meilisearch master key
+    type: secret
+    required: true
+    generate: true
+  - key: valkey_password
+    label: Valkey password
+    type: secret
+    required: true
+    generate: true
+  - key: jwt_secret
+    label: JWT secret
+    type: secret
+    required: true
+    generate: true
+routes:
+  - service: open-archiver
+    port: 3000
+    domain_field: domain

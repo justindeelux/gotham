@@ -1,0 +1,56 @@
+services:
+  listmonk:
+    image: listmonk/listmonk:v6.2.0
+    restart: unless-stopped
+    ports:
+      - "9000"
+    environment:
+      LISTMONK_app__address: 0.0.0.0:9000
+      LISTMONK_db__host: postgres
+      LISTMONK_db__database: listmonk
+      LISTMONK_db__user: "{{ .db_user }}"
+      LISTMONK_db__password: "{{ .db_password }}"
+      LISTMONK_db__port: "5432"
+      TZ: Etc/UTC
+    volumes:
+      - listmonk_data:/listmonk/uploads
+    depends_on:
+      postgres:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "wget", "-q", "--spider", "http://127.0.0.1:9000"]
+      interval: 5s
+      timeout: 20s
+      retries: 10
+
+  listmonk-initial-database-setup:
+    image: listmonk/listmonk:v6.2.0
+    restart: "no"
+    command: ./listmonk --install --yes --idempotent
+    depends_on:
+      postgres:
+        condition: service_healthy
+    environment:
+      LISTMONK_db__host: postgres
+      LISTMONK_db__database: listmonk
+      LISTMONK_db__user: "{{ .db_user }}"
+      LISTMONK_db__password: "{{ .db_password }}"
+      LISTMONK_db__port: "5432"
+
+  postgres:
+    image: postgres:18-alpine
+    restart: unless-stopped
+    environment:
+      POSTGRES_DB: listmonk
+      POSTGRES_USER: "{{ .db_user }}"
+      POSTGRES_PASSWORD: "{{ .db_password }}"
+    volumes:
+      - listmonk_postgres_data:/var/lib/postgresql
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U $${POSTGRES_USER} -d $${POSTGRES_DB}"]
+      interval: 5s
+      timeout: 20s
+      retries: 10
+volumes:
+  listmonk_data:
+  listmonk_postgres_data:

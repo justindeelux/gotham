@@ -1,0 +1,22 @@
+services:
+  searxng:
+    image: searxng/searxng:2026.11.15-2d500cb6b
+    restart: unless-stopped
+    ports:
+      - "8080"
+    environment:
+      BASE_URL: "https://${GOTHAM_DOMAIN:-localhost}"
+      SEARXNG_URL: "https://${GOTHAM_DOMAIN:-localhost}"
+      SEARXNG_BIND_ADDRESS: 0.0.0.0
+      SEARXNG_SECRET: "{{ .secret_key }}"
+      SEARXNG_VALKEY_URL: valkey://valkey:6379/0
+    depends_on:
+      - valkey
+  valkey:
+    image: valkey/valkey:9-alpine
+    restart: unless-stopped
+    command: ["valkey-server", "--save", "300", "1", "--save", "60", "1000", "--loglevel", "warning"]
+    volumes:
+      - searxng_valkey_data:/data
+volumes:
+  searxng_valkey_data:

@@ -1,0 +1,28 @@
+services:
+  bugsink:
+    image: bugsink/bugsink:2
+    restart: unless-stopped
+    ports:
+      - "8000"
+    environment:
+      SECRET_KEY: "{{ .secret_key }}"
+      CREATE_SUPERUSER: "{{ .admin_email }}:{{ .admin_password }}"
+      BASE_URL: "https://${GOTHAM_DOMAIN:-localhost}"
+      DATABASE_URL: "postgresql://bugsink:{{ .db_password }}@postgres:5432/bugsink"
+      BEHIND_HTTPS_PROXY: "True"
+      SITE_TITLE: Bugsink
+      TIME_ZONE: UTC
+      PHONEHOME: "False"
+    depends_on:
+      - postgres
+  postgres:
+    image: postgres:17-alpine
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: bugsink
+      POSTGRES_PASSWORD: "{{ .db_password }}"
+      POSTGRES_DB: bugsink
+    volumes:
+      - bugsink_postgres_data:/var/lib/postgresql/data
+volumes:
+  bugsink_postgres_data:

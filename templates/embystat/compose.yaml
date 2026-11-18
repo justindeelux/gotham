@@ -1,0 +1,14 @@
+services:
+  embystat:
+    image: lscr.io/linuxserver/embystat:0.2.0
+    restart: unless-stopped
+    ports:
+      - "6555"
+    environment:
+      PUID: "1000"
+      PGID: "1000"
+      TZ: "{{ .tz }}"
+    volumes:
+      - embystat_config:/config
+volumes:
+  embystat_config:

@@ -1,0 +1,77 @@
+services:
+  postiz:
+    image: ghcr.io/gitroomhq/postiz-app:v2.26.0
+    restart: unless-stopped
+    ports:
+      - "5000"
+    environment:
+      MAIN_URL: "https://${GOTHAM_DOMAIN:-localhost}"
+      FRONTEND_URL: "https://${GOTHAM_DOMAIN:-localhost}"
+      NEXT_PUBLIC_BACKEND_URL: "https://${GOTHAM_DOMAIN:-localhost}/api"
+      JWT_SECRET: "{{ .jwt_secret }}"
+      DATABASE_URL: "postgresql://postgres:{{ .db_password }}@postgres:5432/postiz-db"
+      REDIS_URL: "redis://default:{{ .redis_password }}@redis:6379"
+      BACKEND_INTERNAL_URL: http://localhost:3000
+      TEMPORAL_ADDRESS: temporal:7233
+      STORAGE_PROVIDER: local
+      UPLOAD_DIRECTORY: /uploads
+      NEXT_PUBLIC_UPLOAD_DIRECTORY: /uploads
+      IS_GENERAL: "true"
+      NOT_SECURED: "false"
+    volumes:
+      - postiz_config:/config
+      - postiz_uploads:/uploads
+    depends_on:
+      - postgres
+      - redis
+      - temporal
+  postgres:
+    image: postgres:17-alpine
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: postgres
+      POSTGRES_PASSWORD: "{{ .db_password }}"
+      POSTGRES_DB: postiz-db
+    volumes:
+      - postiz_postgres_data:/var/lib/postgresql/data
+  temporal:
+    image: temporalio/auto-setup:1.28.1
+    restart: unless-stopped
+    environment:
+      DB: postgres12
+      DB_PORT: "5432"
+      POSTGRES_USER: postgres
+      POSTGRES_PWD: "{{ .db_password }}"
+      POSTGRES_SEEDS: postgres
+      ENABLE_ES: "true"
+      ES_SEEDS: temporal-elasticsearch
+      ES_VERSION: v7
+      TEMPORAL_NAMESPACE: default
+    depends_on:
+      - postgres
+      - temporal-elasticsearch
+  temporal-elasticsearch:
+    image: elasticsearch:7.17.27
+    restart: unless-stopped
+    environment:
+      cluster.routing.allocation.disk.threshold_enabled: "true"
+      cluster.routing.allocation.disk.watermark.low: 512mb
+      cluster.routing.allocation.disk.watermark.high: 256mb
+      cluster.routing.allocation.disk.watermark.flood_stage: 128mb
+      discovery.type: single-node
+      ES_JAVA_OPTS: "-Xms256m -Xmx256m"
+      xpack.security.enabled: "false"
+    volumes:
+      - temporal_elasticsearch_data:/usr/share/elasticsearch/data
+  redis:
+    image: redis:7.2
+    restart: unless-stopped
+    command: ["redis-server", "--requirepass", "{{ .redis_password }}"]
+    volumes:
+      - postiz_redis_data:/data
+volumes:
+  postiz_config:
+  postiz_uploads:
+  postiz_postgres_data:
+  postiz_redis_data:
+  temporal_elasticsearch_data:

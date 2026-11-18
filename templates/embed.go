@@ -2,5 +2,5 @@ package templates
 
 import "embed"
 
-//go:embed wordpress nextcloud n8n uptime-kuma
+//go:embed */template.yaml */compose.yaml
 var FS embed.FS

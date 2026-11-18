@@ -1,0 +1,84 @@
+services:
+  openpanel:
+    image: lindesvard/openpanel-dashboard:2
+    restart: unless-stopped
+    ports:
+      - "3000"
+    environment:
+      NODE_ENV: production
+      SELF_HOSTED: "true"
+      API_URL: "https://{{ .api_domain }}"
+      DASHBOARD_URL: "https://{{ .domain }}"
+      DATABASE_URL: "postgres://openpanel:{{ .db_password }}@postgres:5432/openpanel?schema=public"
+      REDIS_URL: "redis://default:{{ .redis_password }}@redis:6379"
+      CLICKHOUSE_URL: http://clickhouse:8123/openpanel
+    depends_on:
+      - openpanel-api
+      - openpanel-worker
+      - postgres
+      - redis
+      - clickhouse
+  openpanel-api:
+    image: lindesvard/openpanel-api:2
+    restart: unless-stopped
+    ports:
+      - "3000"
+    command: ["sh", "-c", "CI=true pnpm -r run migrate:deploy && pnpm start"]
+    environment:
+      NODE_ENV: production
+      SELF_HOSTED: "true"
+      API_URL: "https://{{ .api_domain }}"
+      DASHBOARD_URL: "https://{{ .domain }}"
+      DATABASE_URL: "postgres://openpanel:{{ .db_password }}@postgres:5432/openpanel?schema=public"
+      DATABASE_URL_DIRECT: "postgres://openpanel:{{ .db_password }}@postgres:5432/openpanel?schema=public"
+      REDIS_URL: "redis://default:{{ .redis_password }}@redis:6379"
+      CLICKHOUSE_URL: http://clickhouse:8123/openpanel
+      COOKIE_SECRET: "{{ .cookie_secret }}"
+      ALLOW_REGISTRATION: "false"
+    depends_on:
+      - postgres
+      - redis
+      - clickhouse
+  openpanel-worker:
+    image: lindesvard/openpanel-worker:2
+    restart: unless-stopped
+    environment:
+      DISABLE_BULLBOARD: "1"
+      NODE_ENV: production
+      SELF_HOSTED: "true"
+      API_URL: "https://{{ .api_domain }}"
+      DATABASE_URL: "postgres://openpanel:{{ .db_password }}@postgres:5432/openpanel?schema=public"
+      DATABASE_URL_DIRECT: "postgres://openpanel:{{ .db_password }}@postgres:5432/openpanel?schema=public"
+      REDIS_URL: "redis://default:{{ .redis_password }}@redis:6379"
+      CLICKHOUSE_URL: http://clickhouse:8123/openpanel
+    depends_on:
+      - openpanel-api
+      - postgres
+      - redis
+      - clickhouse
+  postgres:
+    image: postgres:16-alpine
+    restart: unless-stopped
+    environment:
+      POSTGRES_DB: openpanel
+      POSTGRES_USER: openpanel
+      POSTGRES_PASSWORD: "{{ .db_password }}"
+    volumes:
+      - openpanel_postgres_data:/var/lib/postgresql/data
+  redis:
+    image: redis:7-alpine
+    restart: unless-stopped
+    command: ["redis-server", "--requirepass", "{{ .redis_password }}", "--maxmemory-policy", "noeviction"]
+    volumes:
+      - openpanel_redis_data:/data
+  clickhouse:
+    image: clickhouse/clickhouse-server:25.10.2.65
+    restart: unless-stopped
+    environment:
+      CLICKHOUSE_DB: openpanel
+    volumes:
+      - openpanel_clickhouse_data:/var/lib/clickhouse
+volumes:
+  openpanel_postgres_data:
+  openpanel_redis_data:
+  openpanel_clickhouse_data:

@@ -1,0 +1,14 @@
+services:
+  sessy:
+    image: ghcr.io/marckohlbrugge/sessy:main
+    restart: unless-stopped
+    ports:
+      - "80"
+    environment:
+      SECRET_KEY_BASE: "{{ .secret_key }}"
+      HTTP_AUTH_USERNAME: "{{ .auth_user }}"
+      HTTP_AUTH_PASSWORD: "{{ .auth_password }}"
+    volumes:
+      - sessy_data:/rails/storage
+volumes:
+  sessy_data:

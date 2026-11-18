@@ -1,0 +1,32 @@
+services:
+  glitchtip:
+    image: glitchtip/glitchtip:7.0
+    restart: unless-stopped
+    ports:
+      - "8000"
+    environment:
+      DATABASE_URL: "postgres://glitchtip:{{ .db_password }}@postgres:5432/glitchtip"
+      SECRET_KEY: "{{ .secret_key }}"
+      EMAIL_URL: consolemail://
+      GLITCHTIP_DOMAIN: "https://${GOTHAM_DOMAIN:-localhost}"
+      DEFAULT_FROM_EMAIL: test@example.com
+    volumes:
+      - glitchtip_uploads:/code/uploads
+    depends_on:
+      - postgres
+      - redis
+  postgres:
+    image: postgres:16-alpine
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: glitchtip
+      POSTGRES_PASSWORD: "{{ .db_password }}"
+      POSTGRES_DB: glitchtip
+    volumes:
+      - glitchtip_postgres_data:/var/lib/postgresql/data
+  redis:
+    image: redis:7-alpine
+    restart: unless-stopped
+volumes:
+  glitchtip_uploads:
+  glitchtip_postgres_data:

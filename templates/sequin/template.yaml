@@ -1,0 +1,39 @@
+name: Sequin
+icon: sequin
+description: "Sequin Postgres change data capture with PostgreSQL, Redis and an optional routed domain."
+homepage: https://sequinstream.com/docs/
+category:
+  - analytics
+fields:
+  - key: domain
+    label: Domain
+    type: text
+    required: false
+    default: ""
+    placeholder: sequin.example.com
+    help: Optional. Leave empty to add a domain later from the service page.
+    pattern: ^([A-Za-z0-9][A-Za-z0-9.-]*)?$
+    max_length: 253
+  - key: db_password
+    label: PostgreSQL password
+    type: secret
+    required: true
+    generate: true
+  - key: secret_key
+    label: Application secret key
+    type: secret
+    required: true
+    pattern: "^[A-Za-z0-9+/=_-]{64,}$"
+    max_length: 256
+    help: "Phoenix refuses a secret_key_base shorter than 64 bytes. Generate one with: openssl rand -base64 64"
+  - key: vault_key
+    label: Vault key
+    type: secret
+    required: true
+    pattern: "^[A-Za-z0-9+/]{43}=$"
+    max_length: 64
+    help: "Base64 of exactly 32 bytes. Generate one with: openssl rand -base64 32"
+routes:
+  - service: sequin
+    port: 7376
+    domain_field: domain

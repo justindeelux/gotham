@@ -1,0 +1,20 @@
+name: Whoogle
+icon: whoogle
+description: "Privacy-focused search front-end for Google results, with an optional routed domain."
+homepage: https://github.com/benbusby/whoogle-search?tab=readme-ov-file
+category:
+  - search
+fields:
+  - key: domain
+    label: Domain
+    type: text
+    required: false
+    default: ""
+    placeholder: search.example.com
+    help: Optional. Leave empty to add a domain later from the service page.
+    pattern: ^([A-Za-z0-9][A-Za-z0-9.-]*)?$
+    max_length: 253
+routes:
+  - service: whoogle
+    port: 5000
+    domain_field: domain

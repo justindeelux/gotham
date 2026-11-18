@@ -1,0 +1,26 @@
+name: Healthchecks
+icon: healthchecks
+description: "Cron job and uptime monitoring backed by SQLite in a named volume, with an optional routed domain."
+homepage: https://healthchecks.io/docs
+category:
+  - monitoring
+fields:
+  - key: domain
+    label: Domain
+    type: text
+    required: false
+    default: ""
+    placeholder: checks.example.com
+    help: Optional. Leave empty to add a domain later from the service page.
+    pattern: ^([A-Za-z0-9][A-Za-z0-9.-]*)?$
+    max_length: 253
+  - key: secret_key
+    label: Application secret key
+    type: secret
+    required: true
+    generate: true
+    help: Signs sessions and tokens; use Generate for a strong value.
+routes:
+  - service: healthchecks
+    port: 8000
+    domain_field: domain

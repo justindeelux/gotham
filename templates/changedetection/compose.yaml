@@ -1,0 +1,17 @@
+services:
+  changedetection:
+    image: ghcr.io/dgtlmoon/changedetection.io:0.70.3
+    restart: unless-stopped
+    ports:
+      - "5000"
+    environment:
+      BASE_URL: "https://${GOTHAM_DOMAIN:-localhost}"
+      PUID: "1000"
+      PGID: "1000"
+      HIDE_REFERER: "true"
+      FETCH_WORKERS: "10"
+      TZ: UTC
+    volumes:
+      - changedetection_data:/datastore
+volumes:
+  changedetection_data:

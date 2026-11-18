@@ -1,0 +1,37 @@
+name: Postiz
+icon: postiz
+description: "Postiz social media scheduling with PostgreSQL, Redis, Temporal and an optional routed domain."
+homepage: https://docs.postiz.com
+category:
+  - analytics
+fields:
+  - key: domain
+    label: Domain
+    type: text
+    required: false
+    default: ""
+    placeholder: postiz.example.com
+    help: Optional. Leave empty to add a domain later from the service page.
+    pattern: ^([A-Za-z0-9][A-Za-z0-9.-]*)?$
+    max_length: 253
+  - key: db_password
+    label: PostgreSQL password
+    type: secret
+    required: true
+    generate: true
+  - key: redis_password
+    label: Redis password
+    type: secret
+    required: true
+    generate: true
+  - key: jwt_secret
+    label: JWT secret
+    type: secret
+    required: true
+    pattern: "^[A-Za-z0-9+/=_-]{32,}$"
+    max_length: 256
+    help: "At least 32 characters, the HS256 minimum key size. Generate one with: openssl rand -hex 32"
+routes:
+  - service: postiz
+    port: 5000
+    domain_field: domain

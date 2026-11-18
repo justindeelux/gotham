@@ -1,0 +1,26 @@
+name: Meilisearch
+icon: meilisearch
+description: "Meilisearch full-text search with a persistent named volume and an optional routed domain."
+homepage: https://www.meilisearch.com
+category:
+  - search
+fields:
+  - key: domain
+    label: Domain
+    type: text
+    required: false
+    default: ""
+    placeholder: search.example.com
+    help: Optional. Leave empty to add a domain later from the service page.
+    pattern: ^([A-Za-z0-9][A-Za-z0-9.-]*)?$
+    max_length: 253
+  - key: master_key
+    label: Master key
+    type: secret
+    required: true
+    generate: true
+    help: Protects the API; use Generate for a value of at least 16 bytes.
+routes:
+  - service: meilisearch
+    port: 7700
+    domain_field: domain

@@ -50,8 +50,14 @@ func TestTemplatesRoutesWiring(t *testing.T) {
 	if err := json.Unmarshal(recorder.Body.Bytes(), &catalog); err != nil {
 		t.Fatalf("decode catalog: %v", err)
 	}
-	if len(catalog.Templates) != 4 {
-		t.Fatalf("catalog = %+v, want the four built-in templates", catalog.Templates)
+	seen := make(map[string]bool, len(catalog.Templates))
+	for _, template := range catalog.Templates {
+		seen[template.Slug] = true
+	}
+	for _, slug := range []string{"n8n", "nextcloud", "uptime-kuma", "wordpress"} {
+		if !seen[slug] {
+			t.Fatalf("catalog = %+v, want the built-in template %s", catalog.Templates, slug)
+		}
 	}
 
 	recorder = doRequest(t, s, http.MethodPost, "/api/v1/templates/wordpress/render",

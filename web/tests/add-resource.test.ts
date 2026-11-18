@@ -69,19 +69,19 @@ function shell(child: object) {
 }
 
 describe("templateBrand", () => {
-  it("uses the vendored brand glyph on the brand hue", () => {
+  it("uses the catalog icon named after the template slug", () => {
     expect(templateBrand("nextcloud", "Nextcloud")).toEqual({
       logo: "nextcloud",
       letters: "N",
-      color: "#0082c9",
+      color: "#5865f2",
     });
     expect(templateBrand("nextcloud", "Nextcloud").letters).toBe(cardMark("Nextcloud"));
-    expect(templateBrand("uptime-kuma", "Uptime Kuma").logo).toBe("uptimekuma");
+    expect(templateBrand("uptime-kuma", "Uptime Kuma").logo).toBe("uptime-kuma");
   });
 
-  it("falls back to the accent hue for unknown template slugs", () => {
+  it("still names the icon key for an unknown template slug", () => {
     expect(templateBrand("future-tool", "Cool Tool")).toEqual({
-      logo: null,
+      logo: "future-tool",
       letters: "C",
       color: "#5865f2",
     });
@@ -91,7 +91,7 @@ describe("templateBrand", () => {
 describe("brandFor", () => {
   it("resolves known engine and application keys to their brand mark", () => {
     expect(brandFor("postgres", "PostgreSQL")).toEqual({
-      logo: "postgresql",
+      logo: "postgres",
       letters: "PO",
       color: "#4169e1",
     });
@@ -113,17 +113,10 @@ describe("brandFor", () => {
 });
 
 describe("databaseBrand", () => {
-  it("maps every engine to its vendored mark", () => {
-    const logos = {
-      postgres: "postgresql",
-      mysql: "mysql",
-      mariadb: "mariadb",
-      mongodb: "mongodb",
-      redis: "redis",
-    };
+  it("maps every engine to its catalog icon", () => {
     for (const engine of ENGINES) {
       expect(databaseBrand(engine.value, "orders").logo, engine.value).toBe(
-        logos[engine.value as keyof typeof logos],
+        engine.value,
       );
     }
   });
@@ -149,8 +142,8 @@ describe("serviceBrand", () => {
       },
     ];
     const mark = serviceBrand({ name: "status", template: "uptime-kuma" });
-    expect(mark.logo).toBe("uptimekuma");
-    expect(mark.color).toBe("#369b6b");
+    expect(mark.logo).toBe("uptime-kuma");
+    expect(mark.color).toBe("#5865f2");
   });
 
   it("falls back to the slug when the catalog is not loaded", () => {

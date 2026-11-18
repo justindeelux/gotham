@@ -9,7 +9,7 @@ import type { Page } from "@playwright/test";
 
 import { waitForLayoutSettled } from "./support";
 
-/* global URL, window, getComputedStyle:readonly */
+/* global URL, window, getComputedStyle, HTMLImageElement:readonly */
 
 const testsDir = dirname(fileURLToPath(import.meta.url));
 const webdistRoot = resolve(testsDir, "../../internal/server/webdist");
@@ -22,6 +22,7 @@ const mimeTypes: Record<string, string> = {
   ".json": "application/json",
   ".png": "image/png",
   ".svg": "image/svg+xml",
+  ".webp": "image/webp",
   ".woff2": "font/woff2",
 };
 
@@ -206,7 +207,7 @@ async function openPicker(page: Page) {
   return picker;
 }
 
-test("picker tiles render the approved monochrome brand glyphs", async ({ page }) => {
+test("picker tiles render local icons", async ({ page }) => {
   const picker = await openPicker(page);
   const expected: Record<string, { colors: string[]; glyphs: number }> = {
     Application: {
@@ -223,23 +224,23 @@ test("picker tiles render the approved monochrome brand glyphs", async ({ page }
     },
     Service: {
       colors: [
-        "rgb(33, 117, 155)",
-        "rgb(0, 130, 201)",
-        "rgb(234, 75, 113)",
-        "rgb(54, 155, 107)",
-        "rgb(88, 101, 242)",
+        "rgb(30, 31, 34)",
+        "rgb(30, 31, 34)",
+        "rgb(30, 31, 34)",
+        "rgb(30, 31, 34)",
+        "rgb(30, 31, 34)",
       ],
-      glyphs: 4,
+      glyphs: 0,
     },
     Database: {
       colors: [
-        "rgb(65, 105, 225)",
-        "rgb(68, 121, 161)",
-        "rgb(192, 118, 90)",
-        "rgb(71, 162, 72)",
-        "rgb(255, 68, 56)",
+        "rgb(30, 31, 34)",
+        "rgb(30, 31, 34)",
+        "rgb(30, 31, 34)",
+        "rgb(30, 31, 34)",
+        "rgb(30, 31, 34)",
       ],
-      glyphs: 5,
+      glyphs: 0,
     },
   };
   for (const [tab, { colors, glyphs }] of Object.entries(expected)) {
@@ -251,6 +252,14 @@ test("picker tiles render the approved monochrome brand glyphs", async ({ page }
     expect(await frames.evaluateAll((nodes) =>
       nodes.map((node) => getComputedStyle(node).backgroundColor),
     )).toEqual(colors);
+    const images = cards.locator(".brand-icon__image");
+    await expect(images).toHaveCount(colors.length - glyphs);
+    for (const image of await images.all()) {
+      expect(
+        await image.evaluate((node) => (node as HTMLImageElement).naturalWidth),
+        "icon loads from the bundle",
+      ).toBeGreaterThan(0);
+    }
     const glyphNodes = cards.locator(".brand-icon__glyph");
     await expect(glyphNodes).toHaveCount(glyphs);
     for (const glyph of await glyphNodes.all()) {
@@ -277,7 +286,14 @@ test("picker tiles render the approved monochrome brand glyphs", async ({ page }
   await picker.getByRole("tab", { name: "Service", exact: true }).click();
   const fallback = picker.locator('button.res-card[data-template="mystery"]');
   await expect(fallback.locator(".brand-icon__glyph")).toHaveCount(0);
-  await expect(fallback.locator(".brand-icon__letters")).toHaveText("M");
+  await expect(fallback.locator(".brand-icon__letters")).toHaveCount(0);
+  await expect(fallback.locator(".brand-icon__image")).toHaveCount(1);
+  expect(
+    await fallback
+      .locator(".brand-icon__image")
+      .evaluate((node) => (node as HTMLImageElement).naturalWidth),
+    "the default icon loads from the bundle",
+  ).toBeGreaterThan(0);
 });
 
 test("an open wizard hides the picker until Change closes it", async ({ page }) => {

@@ -1,7 +1,7 @@
 import { readFileSync } from "node:fs";
 
 import { mount } from "@vue/test-utils";
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 
 import BrandIcon from "@/features/add-resource/components/BrandIcon.vue";
 import { brandFor, templateBrand } from "@/features/add-resource/utils/brands";
@@ -9,8 +9,13 @@ import { ENGINES } from "@/features/databases/utils/databaseEngines";
 
 const tokensCss = readFileSync("src/shared/styles/tokens.css", "utf8");
 
-const brandFiles = import.meta.glob(
+const glyphFiles = import.meta.glob(
   "../src/features/add-resource/assets/brands/*.svg",
+  { eager: true },
+);
+
+const iconFiles = import.meta.glob(
+  "../src/features/add-resource/assets/icons/**/*.{svg,png,webp,jpeg,jpg,ico}",
   { eager: true },
 );
 
@@ -41,31 +46,67 @@ function contrastRatio(a: string, b: string): number {
   return (Math.max(first, second) + 0.05) / (Math.min(first, second) + 0.05);
 }
 
+async function mountIcon(
+  props: { letters: string; color: string; logo?: string | null },
+  expected: string,
+) {
+  const wrapper = mount(BrandIcon, { props });
+  await vi.waitFor(() => expect(wrapper.find(expected).exists()).toBe(true));
+  return wrapper;
+}
+
 describe("BrandIcon", () => {
-  it("renders the vendored glyph for a known slug", () => {
-    const wrapper = mount(BrandIcon, {
-      props: { logo: "github", letters: "GH", color: "#6e7681" },
-    });
+  it("renders the vendored glyph for a source mark", async () => {
+    const wrapper = await mountIcon(
+      { logo: "github", letters: "GH", color: "#6e7681" },
+      ".brand-icon__glyph",
+    );
     const glyph = wrapper.find(".brand-icon__glyph");
     expect(glyph.exists()).toBe(true);
-    expect(wrapper.find(".brand-icon__letters").exists()).toBe(false);
+    expect(wrapper.find(".brand-icon__image").exists()).toBe(false);
     expect(glyph.attributes("style")).toContain("--brand-icon-logo");
   });
 
-  it("falls back to letters when the slug has no vendored file", () => {
-    const wrapper = mount(BrandIcon, {
-      props: { logo: "future-brand", letters: "FB", color: "#5865f2" },
-    });
+  it("renders the bundled catalog icon for a template slug", async () => {
+    const wrapper = await mountIcon(
+      templateBrand("nextcloud", "Nextcloud"),
+      ".brand-icon__image",
+    );
+    const image = wrapper.find(".brand-icon__image");
+    expect(image.exists()).toBe(true);
+    expect(image.attributes("src")).toContain("nextcloud");
+    expect(wrapper.find(".brand-icon__glyph").exists()).toBe(false);
+    expect(wrapper.classes()).toContain("brand-icon--image");
+  });
+
+  it("shows the default icon when the slug has no vendored file", async () => {
+    const wrapper = await mountIcon(
+      { logo: "future-brand", letters: "FB", color: "#5865f2" },
+      ".brand-icon__image",
+    );
+    const image = wrapper.find(".brand-icon__image");
+    expect(image.exists()).toBe(true);
+    expect(image.attributes("src")).toContain("default");
+    expect(wrapper.find(".brand-icon__letters").exists()).toBe(false);
+  });
+
+  it("falls back to letters when there is no logo key", async () => {
+    const wrapper = await mountIcon(
+      { logo: null, letters: "FB", color: "#5865f2" },
+      ".brand-icon__letters",
+    );
+    expect(wrapper.find(".brand-icon__image").exists()).toBe(false);
     expect(wrapper.find(".brand-icon__glyph").exists()).toBe(false);
     const letters = wrapper.find(".brand-icon__letters");
     expect(letters.exists()).toBe(true);
     expect(letters.text()).toBe("FB");
   });
 
-  it("is decorative for assistive technology", () => {
-    const wrapper = mount(BrandIcon, {
-      props: { logo: "git", letters: "G", color: "#f05032" },
-    });
+  it("is decorative for assistive technology", async () => {
+    const wrapper = await mountIcon(
+      { logo: "git", letters: "G", color: "#f05032" },
+      ".brand-icon__glyph",
+    );
     expect(wrapper.attributes("aria-hidden")).toBe("true");
     expect(wrapper.classes()).toContain("brand-icon--md");
   });
@@ -80,25 +121,8 @@ describe("BrandIcon", () => {
     }
   });
 
-  it("keeps every resource brand mark readable on the dark surfaces", () => {
-    const marks = [
-      ...ENGINES.map((engine) => brandFor(engine.value, engine.label)),
-      ...["wordpress", "nextcloud", "n8n", "uptime-kuma"].map((icon) =>
-        templateBrand(icon, icon),
-      ),
-    ];
-    for (const mark of marks) {
-      for (const token of ["--surface-warm", "--surface", "--bg"]) {
-        expect(
-          contrastRatio(mark.color, tokenHex(token)),
-          `${mark.color} vs ${token}`,
-        ).toBeGreaterThanOrEqual(1.5);
-      }
-    }
-  });
-
-  it("ships a vendored file for every mapped slug", () => {
-    const keys = [
+  it("ships a vendored glyph for every source and an icon for every engine", () => {
+    const glyphKeys = [
       "git_public",
       "git_private",
       "github_app",
@@ -106,18 +130,30 @@ describe("BrandIcon", () => {
       "dockerfile",
       "image",
       "compose",
-      ...ENGINES.map((engine) => engine.value),
     ];
-    const logos = keys.map((key) => brandFor(key, "Resource").logo);
-    for (const icon of ["wordpress", "nextcloud", "n8n", "uptime-kuma"]) {
-      logos.push(templateBrand(icon, icon).logo);
-    }
-    expect(logos.every((logo) => logo !== null)).toBe(true);
-    for (const logo of logos) {
+    for (const key of glyphKeys) {
+      const logo = brandFor(key, "Resource").logo;
       expect(
-        brandFiles[`../src/features/add-resource/assets/brands/${logo}.svg`],
+        glyphFiles[`../src/features/add-resource/assets/brands/${logo}.svg`],
         `missing vendored glyph for ${logo}`,
       ).toBeDefined();
+    }
+    for (const engine of ENGINES) {
+      const logo = brandFor(engine.value, engine.label).logo;
+      expect(
+        Object.keys(iconFiles).some((path) =>
+          new RegExp(`/icons/databases/${logo}\\.[a-z]+$`).test(path),
+        ),
+        `missing catalog icon for ${logo}`,
+      ).toBe(true);
+    }
+    for (const slug of ["wordpress", "nextcloud", "n8n", "uptime-kuma"]) {
+      expect(
+        Object.keys(iconFiles).some((path) =>
+          new RegExp(`/icons/services/${slug}\\.[a-z]+$`).test(path),
+        ),
+        `missing catalog icon for ${slug}`,
+      ).toBe(true);
     }
   });
 });

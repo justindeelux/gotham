@@ -427,6 +427,22 @@ const vi: ApplicationsMessages = {
     secretsHint:
       "Không dán secret vào tài liệu. Hãy dùng biến môi trường hoặc secret đã niêm phong — chúng được thay thế làm môi trường project compose khi triển khai.",
   },
+  source: {
+    title: "Mã nguồn triển khai",
+    raw: "Nguyên bản",
+    deployable: "Bản triển khai",
+    rawHint: "Đúng nội dung bạn đã lưu.",
+    deployableHint:
+      "Tệp Gotham đưa cho Docker ở lần triển khai kế tiếp, sau khi áp dụng biến môi trường, nhãn và mạng của Gotham, với giá trị secret được che.",
+    dockerfileDeployableHint:
+      "Dockerfile Gotham build ở lần triển khai kế tiếp. Biến môi trường, nhãn và mạng được thêm khi container chạy, không nằm trong tệp này.",
+    copy: "Sao chép",
+    copied: "Đã sao chép",
+    empty:
+      "Ứng dụng này không có Dockerfile hay tệp compose: ứng dụng dùng image dựng sẵn hoặc được build bởi build pack.",
+    loadError: "Không đọc được mã nguồn triển khai.",
+    loading: "Đang tải mã nguồn…",
+  },
   wizard: {
     title: "Tạo ứng dụng",
     intro: "Nguồn, gói build và runtime sẽ cố định sau khi tạo.",

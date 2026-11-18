@@ -1,0 +1,20 @@
+name: Docling
+icon: docling
+description: Docling document converter with a cached model volume and an optional routed domain.
+homepage: https://github.com/DS4SD/docling-serve
+category:
+  - ai
+fields:
+  - key: domain
+    label: Domain
+    type: text
+    required: false
+    default: ""
+    placeholder: docling.example.com
+    help: Optional. Leave empty to add a domain later from the service page.
+    pattern: ^([A-Za-z0-9][A-Za-z0-9.-]*)?$
+    max_length: 253
+routes:
+  - service: docling-serve
+    port: 5001
+    domain_field: domain

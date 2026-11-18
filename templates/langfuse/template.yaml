@@ -1,0 +1,61 @@
+name: Langfuse
+icon: langfuse
+description: Langfuse LLM observability with PostgreSQL, Redis and ClickHouse, persistent named volumes and an optional routed domain.
+homepage: https://langfuse.com/docs
+category:
+  - ai
+fields:
+  - key: domain
+    label: Domain
+    type: text
+    required: false
+    default: ""
+    placeholder: langfuse.example.com
+    help: Optional. Leave empty to add a domain later from the service page.
+    pattern: ^([A-Za-z0-9][A-Za-z0-9.-]*)?$
+    max_length: 253
+  - key: admin_email
+    label: Admin email
+    type: text
+    default: admin@example.com
+    pattern: ^[A-Za-z0-9_.@+-]{1,254}$
+  - key: admin_password
+    label: Admin password
+    type: secret
+    required: true
+    generate: true
+  - key: db_password
+    label: Database password
+    type: secret
+    required: true
+    generate: true
+  - key: redis_password
+    label: Redis password
+    type: secret
+    required: true
+    generate: true
+  - key: clickhouse_password
+    label: ClickHouse password
+    type: secret
+    required: true
+    generate: true
+  - key: salt
+    label: Salt
+    type: secret
+    required: true
+    generate: true
+  - key: encryption_key
+    label: Encryption key
+    type: secret
+    required: true
+    pattern: ^[0-9a-f]{64}$
+    help: 64 hex characters, for example openssl rand -hex 32. Event ingestion also needs the LANGFUSE_S3_EVENT_UPLOAD_* credentials and endpoint, added from the service page after deploy.
+  - key: nextauth_secret
+    label: Session secret
+    type: secret
+    required: true
+    generate: true
+routes:
+  - service: langfuse
+    port: 3000
+    domain_field: domain

@@ -1,0 +1,35 @@
+name: Hermes Agent
+icon: hermes-agent
+description: Hermes Agent with its web dashboard, three generated secrets, a persistent named volume and an optional routed domain.
+homepage: https://github.com/NousResearch/hermes-agent
+category:
+  - ai
+fields:
+  - key: domain
+    label: Domain
+    type: text
+    required: false
+    default: ""
+    placeholder: hermes.example.com
+    help: Optional. Leave empty to add a domain later from the service page.
+    pattern: ^([A-Za-z0-9][A-Za-z0-9.-]*)?$
+    max_length: 253
+  - key: dashboard_user
+    label: Dashboard user
+    type: text
+    default: admin
+    pattern: ^[A-Za-z0-9_.@-]{1,64}$
+  - key: dashboard_password
+    label: Dashboard password
+    type: secret
+    required: true
+    generate: true
+  - key: dashboard_secret
+    label: Dashboard secret
+    type: secret
+    required: true
+    generate: true
+routes:
+  - service: hermes-agent
+    port: 9119
+    domain_field: domain

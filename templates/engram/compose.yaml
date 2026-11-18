@@ -1,0 +1,35 @@
+services:
+  engram:
+    image: ghcr.io/gentleman-programming/engram:3.7.2
+    restart: unless-stopped
+    command: ["cloud", "serve"]
+    ports:
+      - "8080"
+    environment:
+      ENGRAM_CLOUD_HOST: 0.0.0.0
+      ENGRAM_PORT: "8080"
+      ENGRAM_DATABASE_URL: "postgres://engram:{{ .db_password }}@postgresql:5432/engram?sslmode=disable"
+      ENGRAM_JWT_SECRET: "{{ .jwt_secret }}"
+      ENGRAM_CLOUD_TOKEN: "{{ .cloud_token }}"
+      ENGRAM_CLOUD_ADMIN: "{{ .admin_password }}"
+      ENGRAM_CLOUD_TOKEN_PEPPER: "{{ .token_pepper }}"
+      ENGRAM_CLOUD_ALLOWED_PROJECTS: "*"
+    depends_on:
+      postgresql:
+        condition: service_healthy
+  postgresql:
+    image: postgres:18-alpine
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: engram
+      POSTGRES_PASSWORD: "{{ .db_password }}"
+      POSTGRES_DB: engram
+    volumes:
+      - engram_postgres_data:/var/lib/postgresql
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U $${POSTGRES_USER} -d $${POSTGRES_DB}"]
+      interval: 5s
+      timeout: 20s
+      retries: 10
+volumes:
+  engram_postgres_data:

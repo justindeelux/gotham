@@ -1,0 +1,15 @@
+services:
+  mage-ai:
+    image: mageai/mageai:0.9.80
+    restart: unless-stopped
+    command: mage start default_project
+    ports:
+      - "6789"
+    environment:
+      PROJECT_NAME: default_project
+      USER_CODE_PATH: /home/src/default_project
+      ENV: production
+    volumes:
+      - mageai_data:/home/src
+volumes:
+  mageai_data:

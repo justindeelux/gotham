@@ -1,0 +1,16 @@
+services:
+  libretranslate:
+    image: libretranslate/libretranslate:v1.9.6
+    restart: unless-stopped
+    ports:
+      - "5000"
+    environment:
+      LT_SSL: "false"
+      LT_UPDATE_MODELS: "true"
+      LT_LOAD_ONLY: "{{ .languages }}"
+    volumes:
+      - libretranslate_db:/app/db
+      - libretranslate_models:/home/libretranslate/.local
+volumes:
+  libretranslate_db:
+  libretranslate_models:

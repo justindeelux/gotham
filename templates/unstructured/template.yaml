@@ -1,0 +1,26 @@
+name: Unstructured
+icon: unstructured
+description: Unstructured document ingestion API for RAG with an API key and an optional routed domain.
+homepage: https://github.com/Unstructured-IO/unstructured-api
+category:
+  - ai
+fields:
+  - key: domain
+    label: Domain
+    type: text
+    required: false
+    default: ""
+    placeholder: unstructured.example.com
+    help: Optional. Leave empty to add a domain later from the service page.
+    pattern: ^([A-Za-z0-9][A-Za-z0-9.-]*)?$
+    max_length: 253
+  - key: api_key
+    label: API key
+    type: secret
+    required: true
+    generate: true
+    help: Clients send it as the unstructured-api-key header.
+routes:
+  - service: unstructured
+    port: 8000
+    domain_field: domain

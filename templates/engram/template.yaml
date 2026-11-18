@@ -1,0 +1,46 @@
+name: Engram
+icon: engram
+description: Engram memory sync server for AI coding agents with PostgreSQL, persistent named volumes and an optional routed domain.
+homepage: https://github.com/Gentleman-Programming/engram
+category:
+  - ai
+fields:
+  - key: domain
+    label: Domain
+    type: text
+    required: false
+    default: ""
+    placeholder: engram.example.com
+    help: Optional. Leave empty to add a domain later from the service page.
+    pattern: ^([A-Za-z0-9][A-Za-z0-9.-]*)?$
+    max_length: 253
+  - key: db_password
+    label: Database password
+    type: secret
+    required: true
+    generate: true
+  - key: jwt_secret
+    label: JWT secret
+    type: secret
+    required: true
+    pattern: ^[0-9a-f]{64}$
+    help: 64 hex characters; generate with openssl rand -hex 32.
+  - key: cloud_token
+    label: Cloud token
+    type: secret
+    required: true
+    generate: true
+  - key: admin_password
+    label: Admin password
+    type: secret
+    required: true
+    generate: true
+  - key: token_pepper
+    label: Token pepper
+    type: secret
+    required: true
+    generate: true
+routes:
+  - service: engram
+    port: 8080
+    domain_field: domain

@@ -1,0 +1,27 @@
+services:
+  mindsdb:
+    image: mindsdb/mindsdb:v26.1.0
+    restart: unless-stopped
+    ports:
+      - "47334"
+    environment:
+      MINDSDB_DOCKER_ENV: "true"
+      MINDSDB_STORAGE_DIR: /mindsdb/var
+      FLASK_DEBUG: "0"
+      MINDSDB_DB_CON: "postgresql://mindsdb:{{ .db_password }}@postgresql/mindsdb"
+    volumes:
+      - mindsdb_data:/mindsdb/var
+    depends_on:
+      - postgresql
+  postgresql:
+    image: postgres:16-alpine
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: mindsdb
+      POSTGRES_PASSWORD: "{{ .db_password }}"
+      POSTGRES_DB: mindsdb
+    volumes:
+      - mindsdb_postgres_data:/var/lib/postgresql/data
+volumes:
+  mindsdb_data:
+  mindsdb_postgres_data:

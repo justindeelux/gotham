@@ -1,0 +1,16 @@
+services:
+  router:
+    image: decolua/9router:0.5.116
+    restart: unless-stopped
+    ports:
+      - "20128"
+    environment:
+      DATA_DIR: /app/data
+      INITIAL_PASSWORD: "{{ .initial_password }}"
+      JWT_SECRET: "{{ .jwt_secret }}"
+      API_KEY_SECRET: "{{ .api_key_secret }}"
+      MACHINE_ID_SALT: "{{ .machine_id_salt }}"
+    volumes:
+      - router_data:/app/data
+volumes:
+  router_data:

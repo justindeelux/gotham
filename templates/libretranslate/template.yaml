@@ -1,0 +1,28 @@
+name: LibreTranslate
+icon: libretranslate
+description: LibreTranslate machine translation API with model and key volumes and an optional routed domain.
+homepage: https://libretranslate.com/docs/
+category:
+  - ai
+fields:
+  - key: domain
+    label: Domain
+    type: text
+    required: false
+    default: ""
+    placeholder: translate.example.com
+    help: Optional. Leave empty to add a domain later from the service page.
+    pattern: ^([A-Za-z0-9][A-Za-z0-9.-]*)?$
+    max_length: 253
+  - key: languages
+    label: Languages
+    type: text
+    default: en,es,fr,de,ja
+    placeholder: en,es,fr
+    pattern: ^[A-Za-z,-]+$
+    max_length: 128
+    help: Comma-separated language codes to load; fewer languages use less memory.
+routes:
+  - service: libretranslate
+    port: 5000
+    domain_field: domain

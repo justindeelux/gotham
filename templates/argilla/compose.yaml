@@ -1,0 +1,86 @@
+services:
+  argilla:
+    image: argilla/argilla-server:v2.8.0
+    restart: unless-stopped
+    ports:
+      - "6900"
+    environment:
+      ARGILLA_HOME_PATH: /var/lib/argilla
+      ARGILLA_ELASTICSEARCH: "http://elasticsearch:9200"
+      ARGILLA_DATABASE_URL: "postgresql+asyncpg://argilla:{{ .db_password }}@postgres:5432/argilla"
+      ARGILLA_REDIS_URL: "redis://redis:6379/0"
+      ARGILLA_AUTH_SECRET_KEY: "{{ .auth_secret }}"
+      ARGILLA_ENABLE_TELEMETRY: "0"
+      HF_HUB_DISABLE_TELEMETRY: "1"
+      REINDEX_DATASETS: "1"
+      DEFAULT_USER_ENABLED: "true"
+      USERNAME: argilla
+      PASSWORD: "{{ .admin_password }}"
+      API_KEY: "{{ .api_key }}"
+      DEFAULT_USER_PASSWORD: "{{ .admin_password }}"
+      DEFAULT_USER_API_KEY: "{{ .api_key }}"
+      WORKSPACE: default
+    volumes:
+      - argilla_data:/var/lib/argilla
+    depends_on:
+      - elasticsearch
+      - redis
+      - postgres
+  worker:
+    image: argilla/argilla-server:v2.8.0
+    restart: unless-stopped
+    command: ["sh", "-c", "python -m argilla_server worker --num-workers 1"]
+    environment:
+      ARGILLA_HOME_PATH: /var/lib/argilla
+      ARGILLA_ELASTICSEARCH: "http://elasticsearch:9200"
+      ARGILLA_DATABASE_URL: "postgresql+asyncpg://argilla:{{ .db_password }}@postgres:5432/argilla"
+      ARGILLA_REDIS_URL: "redis://redis:6379/0"
+      ARGILLA_AUTH_SECRET_KEY: "{{ .auth_secret }}"
+      ARGILLA_ENABLE_TELEMETRY: "0"
+      HF_HUB_DISABLE_TELEMETRY: "1"
+      REINDEX_DATASETS: "1"
+      DEFAULT_USER_ENABLED: "true"
+      USERNAME: argilla
+      PASSWORD: "{{ .admin_password }}"
+      API_KEY: "{{ .api_key }}"
+      DEFAULT_USER_PASSWORD: "{{ .admin_password }}"
+      DEFAULT_USER_API_KEY: "{{ .api_key }}"
+      WORKSPACE: default
+      BACKGROUND_NUM_WORKERS: "1"
+    volumes:
+      - argilla_data:/var/lib/argilla
+    depends_on:
+      - elasticsearch
+      - redis
+      - postgres
+  postgres:
+    image: postgres:14
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: argilla
+      POSTGRES_PASSWORD: "{{ .db_password }}"
+      POSTGRES_DB: argilla
+    volumes:
+      - argilla_postgres_data:/var/lib/postgresql/data
+  redis:
+    image: redis:7
+    restart: unless-stopped
+    volumes:
+      - argilla_redis_data:/data
+  elasticsearch:
+    image: docker.elastic.co/elasticsearch/elasticsearch:8.12.2
+    restart: unless-stopped
+    environment:
+      node.name: elasticsearch
+      cluster.name: argilla
+      discovery.type: single-node
+      ES_JAVA_OPTS: "-Xms512m -Xmx512m"
+      cluster.routing.allocation.disk.threshold_enabled: "false"
+      xpack.security.enabled: "false"
+    volumes:
+      - argilla_elasticsearch_data:/usr/share/elasticsearch/data
+volumes:
+  argilla_data:
+  argilla_postgres_data:
+  argilla_redis_data:
+  argilla_elasticsearch_data:

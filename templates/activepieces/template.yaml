@@ -1,0 +1,41 @@
+name: Activepieces
+icon: activepieces
+description: Activepieces workflow automation with PostgreSQL and Redis, persistent named volumes and an optional routed domain.
+homepage: https://www.activepieces.com/docs/getting-started/introduction
+category:
+  - automation
+fields:
+  - key: domain
+    label: Domain
+    type: text
+    required: false
+    default: ""
+    placeholder: flows.example.com
+    help: Optional. Leave empty to add a domain later from the service page.
+    pattern: ^([A-Za-z0-9][A-Za-z0-9.-]*)?$
+    max_length: 253
+  - key: api_key
+    label: API key
+    type: secret
+    required: true
+    generate: true
+  - key: encryption_key
+    label: Encryption key
+    type: secret
+    required: true
+    pattern: ^[0-9a-f]{32}$
+    help: Exactly 32 hex characters; generate with openssl rand -hex 16.
+  - key: jwt_secret
+    label: JWT secret
+    type: secret
+    required: true
+    generate: true
+  - key: db_password
+    label: Database password
+    type: secret
+    required: true
+    generate: true
+routes:
+  - service: activepieces
+    port: 80
+    domain_field: domain

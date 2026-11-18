@@ -1,0 +1,20 @@
+name: Mage AI
+icon: mage-ai
+description: "Mage AI data pipelines with a persistent project volume and an optional routed domain. No built-in authentication: pipelines execute arbitrary code, so put it behind an authenticated proxy."
+homepage: https://docs.mage.ai
+category:
+  - automation
+fields:
+  - key: domain
+    label: Domain
+    type: text
+    required: false
+    default: ""
+    placeholder: mage.example.com
+    help: Optional. Leave empty to add a domain later from the service page.
+    pattern: ^([A-Za-z0-9][A-Za-z0-9.-]*)?$
+    max_length: 253
+routes:
+  - service: mage-ai
+    port: 6789
+    domain_field: domain

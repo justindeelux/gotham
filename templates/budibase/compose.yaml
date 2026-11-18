@@ -1,0 +1,95 @@
+services:
+  proxy-service:
+    image: budibase/proxy:v4.0.1
+    restart: unless-stopped
+    ports:
+      - "10000"
+    environment:
+      PROXY_RATE_LIMIT_WEBHOOKS_PER_SECOND: "10"
+      PROXY_RATE_LIMIT_API_PER_SECOND: "20"
+      APPS_UPSTREAM_URL: "http://app-service:4002"
+      WORKER_UPSTREAM_URL: "http://worker-service:4003"
+      MINIO_UPSTREAM_URL: "http://minio-service:9000"
+      COUCHDB_UPSTREAM_URL: "http://couchdb-service:5984"
+      RESOLVER: 127.0.0.11
+    depends_on:
+      - minio-service
+      - worker-service
+      - app-service
+      - couchdb-service
+  app-service:
+    image: budibase.docker.scarf.sh/budibase/apps:v4.0.1
+    restart: unless-stopped
+    environment:
+      SELF_HOSTED: "1"
+      PORT: "4002"
+      COUCH_DB_URL: "http://budibase:{{ .couchdb_password }}@couchdb-service:5984"
+      WORKER_URL: "http://worker-service:4003"
+      MINIO_URL: "http://minio-service:9000"
+      MINIO_ACCESS_KEY: budibase
+      MINIO_SECRET_KEY: "{{ .minio_password }}"
+      INTERNAL_API_KEY: "{{ .internal_api_key }}"
+      API_ENCRYPTION_KEY: "{{ .api_encryption_key }}"
+      ENCRYPTION_KEY: "{{ .encryption_key }}"
+      JWT_SECRET: "{{ .jwt_secret }}"
+      BUDIBASE_ENVIRONMENT: PRODUCTION
+      LOG_LEVEL: info
+      ENABLE_ANALYTICS: "false"
+      REDIS_URL: "redis-service:6379"
+      REDIS_PASSWORD: "{{ .redis_password }}"
+    depends_on:
+      - worker-service
+      - redis-service
+  worker-service:
+    image: budibase.docker.scarf.sh/budibase/worker:v4.0.1
+    restart: unless-stopped
+    environment:
+      SELF_HOSTED: "1"
+      PORT: "4003"
+      CLUSTER_PORT: "10000"
+      API_ENCRYPTION_KEY: "{{ .api_encryption_key }}"
+      JWT_SECRET: "{{ .jwt_secret }}"
+      MINIO_ACCESS_KEY: budibase
+      MINIO_SECRET_KEY: "{{ .minio_password }}"
+      MINIO_URL: "http://minio-service:9000"
+      APPS_URL: "http://app-service:4002"
+      COUCH_DB_USERNAME: budibase
+      COUCH_DB_PASSWORD: "{{ .couchdb_password }}"
+      COUCH_DB_URL: "http://budibase:{{ .couchdb_password }}@couchdb-service:5984"
+      INTERNAL_API_KEY: "{{ .internal_api_key }}"
+      REDIS_URL: "redis-service:6379"
+      REDIS_PASSWORD: "{{ .redis_password }}"
+    depends_on:
+      - redis-service
+      - minio-service
+  minio-service:
+    image: pgsty/silo:RELEASE.2026-10-15T00-00-00Z
+    restart: unless-stopped
+    command: server /data --console-address ":9001"
+    environment:
+      MINIO_ROOT_USER: budibase
+      MINIO_ROOT_PASSWORD: "{{ .minio_password }}"
+      MINIO_BROWSER: "off"
+    volumes:
+      - budibase_minio_data:/data
+  couchdb-service:
+    image: budibase/database:2.1.0
+    restart: unless-stopped
+    environment:
+      COUCHDB_USER: budibase
+      COUCHDB_PASSWORD: "{{ .couchdb_password }}"
+      TARGETBUILD: docker-compose
+    volumes:
+      - budibase_couchdb_data:/data
+  redis-service:
+    image: redis:8.10.3
+    restart: unless-stopped
+    command: ["sh", "-c", "exec redis-server --requirepass \"$$REDIS_PASSWORD\""]
+    environment:
+      REDIS_PASSWORD: "{{ .redis_password }}"
+    volumes:
+      - budibase_redis_data:/data
+volumes:
+  budibase_minio_data:
+  budibase_couchdb_data:
+  budibase_redis_data:

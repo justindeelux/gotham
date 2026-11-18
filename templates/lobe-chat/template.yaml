@@ -1,0 +1,53 @@
+name: LobeChat
+icon: lobe-chat
+description: "LobeChat with PostgreSQL, Redis and S3-compatible storage, persistent named volumes and an optional routed domain. File uploads need a second public host for the storage endpoint."
+homepage: https://lobehub.com/docs/self-hosting/platform/docker-compose
+category:
+  - ai
+fields:
+  - key: domain
+    label: Domain
+    type: text
+    required: false
+    default: ""
+    placeholder: chat.example.com
+    help: Optional. Leave empty to add a domain later from the service page.
+    pattern: ^([A-Za-z0-9][A-Za-z0-9.-]*)?$
+    max_length: 253
+  - key: storage_domain
+    label: Storage domain
+    type: text
+    required: true
+    placeholder: files.example.com
+    help: Public host for the S3 endpoint. Presigned upload and download URLs are opened by the browser, so they must reach this host, not the internal service name.
+    pattern: ^[A-Za-z0-9][A-Za-z0-9.-]*$
+    max_length: 253
+  - key: db_password
+    label: Database password
+    type: secret
+    required: true
+    generate: true
+  - key: rustfs_password
+    label: Storage secret key
+    type: secret
+    required: true
+    generate: true
+  - key: key_vaults_secret
+    label: Key vaults secret
+    type: secret
+    required: true
+    pattern: ^[A-Za-z0-9+/]{43}=$
+    help: Base64 of 32 bytes, for example openssl rand -base64 32.
+  - key: auth_secret
+    label: Auth secret
+    type: secret
+    required: true
+    pattern: ^[A-Za-z0-9+/]{43}=$
+    help: Base64 of 32 bytes, for example openssl rand -base64 32.
+routes:
+  - service: lobe-chat
+    port: 3210
+    domain_field: domain
+  - service: rustfs
+    port: 9000
+    domain_field: storage_domain

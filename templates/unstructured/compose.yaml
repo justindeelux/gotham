@@ -1,0 +1,8 @@
+services:
+  unstructured:
+    image: downloads.unstructured.io/unstructured-io/unstructured-api:0.1.16
+    restart: unless-stopped
+    ports:
+      - "8000"
+    environment:
+      UNSTRUCTURED_API_KEY: "{{ .api_key }}"

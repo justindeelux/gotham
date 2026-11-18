@@ -7,8 +7,8 @@ services:
     environment:
       NODE_ENV: production
       SELF_HOSTED: "true"
-      API_URL: "https://${GOTHAM_DOMAIN:-localhost}"
-      DASHBOARD_URL: "https://${GOTHAM_DOMAIN:-localhost}"
+      API_URL: "https://{{ .api_domain }}"
+      DASHBOARD_URL: "https://{{ .domain }}"
       DATABASE_URL: "postgres://openpanel:{{ .db_password }}@postgres:5432/openpanel?schema=public"
       REDIS_URL: "redis://default:{{ .redis_password }}@redis:6379"
       CLICKHOUSE_URL: http://clickhouse:8123/openpanel
@@ -21,12 +21,14 @@ services:
   openpanel-api:
     image: lindesvard/openpanel-api:2
     restart: unless-stopped
+    ports:
+      - "3000"
     command: ["sh", "-c", "CI=true pnpm -r run migrate:deploy && pnpm start"]
     environment:
       NODE_ENV: production
       SELF_HOSTED: "true"
-      API_URL: "https://${GOTHAM_DOMAIN:-localhost}"
-      DASHBOARD_URL: "https://${GOTHAM_DOMAIN:-localhost}"
+      API_URL: "https://{{ .api_domain }}"
+      DASHBOARD_URL: "https://{{ .domain }}"
       DATABASE_URL: "postgres://openpanel:{{ .db_password }}@postgres:5432/openpanel?schema=public"
       DATABASE_URL_DIRECT: "postgres://openpanel:{{ .db_password }}@postgres:5432/openpanel?schema=public"
       REDIS_URL: "redis://default:{{ .redis_password }}@redis:6379"
@@ -44,7 +46,7 @@ services:
       DISABLE_BULLBOARD: "1"
       NODE_ENV: production
       SELF_HOSTED: "true"
-      API_URL: "https://${GOTHAM_DOMAIN:-localhost}"
+      API_URL: "https://{{ .api_domain }}"
       DATABASE_URL: "postgres://openpanel:{{ .db_password }}@postgres:5432/openpanel?schema=public"
       DATABASE_URL_DIRECT: "postgres://openpanel:{{ .db_password }}@postgres:5432/openpanel?schema=public"
       REDIS_URL: "redis://default:{{ .redis_password }}@redis:6379"

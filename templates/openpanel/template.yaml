@@ -1,18 +1,25 @@
 name: Openpanel
 icon: openpanel
-description: "Openpanel product analytics with PostgreSQL, Redis, ClickHouse and an optional routed domain."
+description: "Openpanel product analytics with PostgreSQL, Redis and ClickHouse, routed on dashboard and API domains."
 homepage: https://openpanel.dev/docs
 category:
   - analytics
 fields:
   - key: domain
-    label: Domain
+    label: Dashboard domain
     type: text
-    required: false
-    default: ""
+    required: true
     placeholder: analytics.example.com
-    help: Optional. Leave empty to add a domain later from the service page.
-    pattern: ^([A-Za-z0-9][A-Za-z0-9.-]*)?$
+    help: Required; the dashboard reads its public URL at start.
+    pattern: ^[A-Za-z0-9][A-Za-z0-9.-]*$
+    max_length: 253
+  - key: api_domain
+    label: API domain
+    type: text
+    required: true
+    placeholder: api.analytics.example.com
+    help: Required; the dashboard and the browser reach the API on this host, so it must differ from the dashboard host.
+    pattern: ^[A-Za-z0-9][A-Za-z0-9.-]*$
     max_length: 253
   - key: db_password
     label: PostgreSQL password
@@ -34,3 +41,6 @@ routes:
   - service: openpanel
     port: 3000
     domain_field: domain
+  - service: openpanel-api
+    port: 3000
+    domain_field: api_domain

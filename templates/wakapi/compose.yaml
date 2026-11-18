@@ -7,6 +7,7 @@ services:
     environment:
       TZ: UTC
       WAKAPI_ENV: production
+      WAKAPI_SERVER_LISTEN_IPV6: "-"
       WAKAPI_SECURITY_PASSWORD_SALT: "{{ .password_salt }}"
       WAKAPI_DB_TYPE: postgres
       WAKAPI_DB_NAME: wakapi

@@ -23,14 +23,16 @@ fields:
     label: Application secret key
     type: secret
     required: true
-    generate: true
-    help: Signs sessions and tokens; use Generate for a strong value.
+    pattern: "^[A-Za-z0-9+/=_-]{64,}$"
+    max_length: 256
+    help: "Phoenix refuses a secret_key_base shorter than 64 bytes. Generate one with: openssl rand -base64 64"
   - key: vault_key
     label: Vault key
     type: secret
     required: true
-    generate: true
-    help: Encrypts the stored sink credentials; use Generate for a strong value.
+    pattern: "^[A-Za-z0-9+/]{43}=$"
+    max_length: 64
+    help: "Base64 of exactly 32 bytes. Generate one with: openssl rand -base64 32"
 routes:
   - service: sequin
     port: 7376

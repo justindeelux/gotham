@@ -29,8 +29,9 @@ fields:
     label: Application secret key
     type: secret
     required: true
-    generate: true
-    help: Signs sessions and tokens; use Generate for a strong value.
+    pattern: "^[A-Za-z0-9+/=_-]{30,}$"
+    max_length: 256
+    help: "Rails refuses a secret shorter than 30 characters. Generate one with: openssl rand -hex 32"
 routes:
   - service: sessy
     port: 80

@@ -32,6 +32,6 @@ func TestEmbedCoversEveryTemplateDirectory(t *testing.T) {
 	sort.Strings(want)
 	sort.Strings(got)
 	if strings.Join(want, ",") != strings.Join(got, ",") {
-		t.Fatalf("embedded template directories = %v, on disk = %v; add the new directory to the go:embed list in embed.go", got, want)
+		t.Fatalf("embedded template directories = %v, on disk = %v; the go:embed pattern in embed.go must cover every template directory", got, want)
 	}
 }

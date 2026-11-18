@@ -16,7 +16,7 @@ trong một stack compose.
 
 ## Engine
 
-Có năm engine được hỗ trợ. Biểu mẫu tạo đưa ra các thẻ image đã được kiểm chứng cho
+Có tám engine được hỗ trợ. Biểu mẫu tạo đưa ra các thẻ image đã được kiểm chứng cho
 từng engine và quay về mặc định bên dưới khi không chọn thẻ nào.
 
 | Engine | Image mặc định | Cổng container |
@@ -26,16 +26,22 @@ từng engine và quay về mặc định bên dưới khi không chọn thẻ n
 | MariaDB | `mariadb:11.4` | 3306 |
 | MongoDB | `mongo:7.0` | 27017 |
 | Redis | `redis:7.2-alpine` | 6379 |
+| KeyDB | `eqalpha/keydb:latest` | 6379 |
+| Dragonfly | `docker.dragonflydb.io/dragonflydb/dragonfly:latest` | 6379 |
+| ClickHouse | `clickhouse/clickhouse-server:26.3` | 9000 |
 
 Mọi engine đều dùng image chính thức của nó. Gotham thêm biến môi trường khởi tạo
 của engine, volume dữ liệu và một healthcheck kiểm tra sẵn sàng.
+
+SQLite không được cung cấp: nó là một tệp đơn chứ không phải một server, nên không
+có thông tin đăng nhập, không có cổng để công bố và không có gì để kiểm tra sẵn sàng.
 
 ## Tạo cơ sở dữ liệu
 
 Dùng **Thêm tài nguyên → Cơ sở dữ liệu** và làm theo ba bước: engine, cấu hình, xem
 lại.
 
-- **Engine và phiên bản** — chọn một trong năm engine, rồi chọn thẻ image.
+- **Engine và phiên bản** — chọn một trong tám engine, rồi chọn thẻ image.
 - **Tên** — 1–63 ký tự: chữ cái, chữ số, `.`, `_` hoặc `-`. Tên này được dùng cho
   container và thông tin đăng nhập được tạo.
 - **Node** — node mà cơ sở dữ liệu chạy trên đó. Nó được ghim lúc tạo: container và
@@ -76,7 +82,8 @@ Khởi động, dừng và khởi động lại có sẵn trên trang cơ sở d
 
 Thẻ **Thông tin đăng nhập** hiển thị người dùng, mật khẩu và tên cơ sở dữ liệu được
 tạo, với các thao tác hiện/sao chép, cùng một chuỗi kết nối dùng scheme URL của
-engine (`postgresql://`, `mysql://`, `mariadb://`, `mongodb://`, `redis://`). Các
+engine (`postgresql://`, `mysql://`, `mariadb://`, `mongodb://`, `redis://` — gồm cả
+KeyDB và Dragonfly — và `clickhouse://`). Các
 giá trị được lưu mã hóa và đọc được bởi thành viên có quyền truy cập dự án;
 chúng không nằm trong phản hồi danh sách cơ sở dữ liệu.
 

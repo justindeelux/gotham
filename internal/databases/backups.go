@@ -29,11 +29,14 @@ type BackupEngine interface {
 }
 
 var backupEngines = map[string]BackupEngine{
-	EnginePostgres: postgresBackupEngine{},
-	EngineMySQL:    mysqlBackupEngine{},
-	EngineMariaDB:  mysqlBackupEngine{mariadb: true},
-	EngineMongoDB:  mongoBackupEngine{},
-	EngineRedis:    redisBackupEngine{},
+	EnginePostgres:   postgresBackupEngine{},
+	EngineMySQL:      mysqlBackupEngine{},
+	EngineMariaDB:    mysqlBackupEngine{mariadb: true},
+	EngineMongoDB:    mongoBackupEngine{},
+	EngineRedis:      tarBackupEngine{name: EngineRedis, dir: "/data"},
+	EngineKeyDB:      tarBackupEngine{name: EngineKeyDB, dir: "/data"},
+	EngineDragonfly:  tarBackupEngine{name: EngineDragonfly, dir: "/data"},
+	EngineClickHouse: tarBackupEngine{name: EngineClickHouse, dir: "/var/lib/clickhouse"},
 }
 
 func LookupBackupEngine(name string) (BackupEngine, bool) {
@@ -322,27 +325,33 @@ fi
 exit "$status"`
 }
 
-type redisBackupEngine struct{}
+// tarBackupEngine copies an engine's data directory: the Redis family (KeyDB,
+// Dragonfly) and ClickHouse keep a self-contained directory that is consistent
+// while the server is stopped, which the backup core does before every run.
+type tarBackupEngine struct {
+	name string
+	dir  string
+}
 
-func (redisBackupEngine) Name() string          { return EngineRedis }
-func (redisBackupEngine) DumpExtension() string { return "tar" }
+func (e tarBackupEngine) Name() string        { return e.name }
+func (tarBackupEngine) DumpExtension() string { return "tar" }
 
-func (e redisBackupEngine) DumpOptions(db Database, c Credentials, runID string) (containers.RunOptions, error) {
+func (e tarBackupEngine) DumpOptions(db Database, c Credentials, runID string) (containers.RunOptions, error) {
 	return backupJobOptions(db, c, tempJobName(roleBackup, runID), roleBackup, runID, "", e.dumpScript())
 }
 
-func (e redisBackupEngine) RestoreOptions(db Database, c Credentials, runID, stagedPath string) (containers.RunOptions, error) {
+func (e tarBackupEngine) RestoreOptions(db Database, c Credentials, runID, stagedPath string) (containers.RunOptions, error) {
 	return backupJobOptions(db, c, tempJobName(roleRestore, runID), roleRestore, runID, stagedPath, e.restoreScript())
 }
 
-func (redisBackupEngine) dumpScript() string {
-	return `set -u
+func (e tarBackupEngine) dumpScript() string {
+	return strings.ReplaceAll(`set -u
 id="$GOTHAM_RUN_ID"
 log=/tmp/gotham-engine.log
 tmp=/tmp/gotham-payload
 status=1
 : >"$log"
-tar -cf - -C /data . >"$tmp" 2>>"$log"
+tar -cf - -C __DIR__ . >"$tmp" 2>>"$log"
 status=$?
 if [ "$status" -eq 0 ]; then
   raw=$(wc -c <"$tmp" | tr -d ' ')
@@ -354,11 +363,11 @@ else
   printf 'GOTHAM-BACKUP-START %s\nGOTHAM-BACKUP-END %s fail %s\n' "$id" "$id" "$status"
   tail -n 40 "$log"
 fi
-exit "$status"`
+exit "$status"`, "__DIR__", e.dir)
 }
 
-func (redisBackupEngine) restoreScript() string {
-	return `set -u
+func (e tarBackupEngine) restoreScript() string {
+	return strings.ReplaceAll(`set -u
 id="$GOTHAM_RUN_ID"
 staged="$GOTHAM_STAGED"
 log=/tmp/gotham-engine.log
@@ -375,7 +384,9 @@ else
 fi
 if [ "$status" -eq 0 ]; then
   if gunzip -c "$payload" >"$archive" 2>>"$log"; then
-    tar -xf "$archive" -C /data 2>>"$log"
+    # Clear the files written after the backup first: Dragonfly names its
+    # snapshots by time, so a newer one left in place would win on start.
+    find __DIR__ -mindepth 1 -delete 2>>"$log" && tar -xf "$archive" -C __DIR__ 2>>"$log"
     status=$?
   else
     status=5
@@ -387,7 +398,7 @@ else
   printf 'GOTHAM-BACKUP-START %s\nGOTHAM-BACKUP-END %s fail %s\n' "$id" "$id" "$status"
   tail -n 40 "$log"
 fi
-exit "$status"`
+exit "$status"`, "__DIR__", e.dir)
 }
 
 func backupJobOptions(

@@ -73,6 +73,9 @@ const vi: typeof en = {
     mariadb: "Bản fork cộng đồng của MySQL, tương thích giao thức.",
     mongodb: "Cơ sở dữ liệu tài liệu cho dữ liệu linh hoạt kiểu JSON.",
     redis: "Cache và hàng đợi trong bộ nhớ, có thể lưu bền vững.",
+    keydb: "Cache và hàng đợi đa luồng, tương thích Redis.",
+    dragonfly: "Kho dữ liệu trong bộ nhớ tương thích Redis, tối ưu thông lượng.",
+    clickhouse: "Cơ sở dữ liệu dạng cột cho phân tích thời gian thực.",
   },
 };
 

@@ -81,6 +81,39 @@ func TestEngineSpecs(t *testing.T) {
 			mount:        "/data",
 			probe:        "redis-cli",
 		},
+		{
+			name:         "keydb",
+			engine:       EngineKeyDB,
+			image:        "eqalpha/keydb:latest",
+			explicitTag:  "6.3.4",
+			explicit:     "eqalpha/keydb:6.3.4",
+			envKeys:      []string{"REDIS_PASSWORD"},
+			internalPort: 6379,
+			mount:        "/data",
+			probe:        "keydb-cli",
+		},
+		{
+			name:         "dragonfly",
+			engine:       EngineDragonfly,
+			image:        "docker.dragonflydb.io/dragonflydb/dragonfly:latest",
+			explicitTag:  "v1.27.1",
+			explicit:     "docker.dragonflydb.io/dragonflydb/dragonfly:v1.27.1",
+			envKeys:      []string{"REDIS_PASSWORD"},
+			internalPort: 6379,
+			mount:        "/data",
+			probe:        "redis-cli",
+		},
+		{
+			name:         "clickhouse",
+			engine:       EngineClickHouse,
+			image:        "clickhouse/clickhouse-server:26.3",
+			explicitTag:  "26.8",
+			explicit:     "clickhouse/clickhouse-server:26.8",
+			envKeys:      []string{"CLICKHOUSE_USER", "CLICKHOUSE_PASSWORD", "CLICKHOUSE_DB"},
+			internalPort: 9000,
+			mount:        "/var/lib/clickhouse",
+			probe:        "clickhouse-client",
+		},
 	}
 
 	for _, tt := range tests {
@@ -141,7 +174,10 @@ func TestEngineSpecs(t *testing.T) {
 }
 
 func TestRegistryCoversEveryEngine(t *testing.T) {
-	want := []string{EnginePostgres, EngineMySQL, EngineMariaDB, EngineMongoDB, EngineRedis}
+	want := []string{
+		EnginePostgres, EngineMySQL, EngineMariaDB, EngineMongoDB, EngineRedis,
+		EngineKeyDB, EngineDragonfly, EngineClickHouse,
+	}
 	got := EngineNames()
 	if !equalStrings(got, want) {
 		t.Fatalf("EngineNames() = %v, want %v", got, want)
@@ -246,21 +282,33 @@ func TestHealthcheckCommandFor(t *testing.T) {
 	}
 }
 
-func TestRedisNeedsCommandSpec(t *testing.T) {
-	engine, ok := LookupEngine(EngineRedis)
-	if !ok {
-		t.Fatal("redis is not registered")
+func TestRedisCompatibleEnginesNeedCommandSpec(t *testing.T) {
+	tests := []struct {
+		engine string
+		binary string
+	}{
+		{EngineRedis, "redis-server"},
+		{EngineKeyDB, "keydb-server"},
+		{EngineDragonfly, "dragonfly"},
 	}
-	commander, ok := engine.(CommandSpec)
-	if !ok {
-		t.Fatal("redis must implement CommandSpec: the image has no password environment variable")
-	}
-	command := strings.Join(commander.Command(sampleCredentials), " ")
-	if !strings.Contains(command, "redis-server") || !strings.Contains(command, "--requirepass") {
-		t.Errorf("redis command = %q, want redis-server --requirepass", command)
-	}
-	if !strings.Contains(command, "REDIS_PASSWORD") {
-		t.Errorf("redis command = %q, want it to read the sealed password from the environment", command)
+	for _, test := range tests {
+		t.Run(test.engine, func(t *testing.T) {
+			engine, ok := LookupEngine(test.engine)
+			if !ok {
+				t.Fatalf("%s is not registered", test.engine)
+			}
+			commander, ok := engine.(CommandSpec)
+			if !ok {
+				t.Fatalf("%s must implement CommandSpec: the image has no password environment variable", test.engine)
+			}
+			command := strings.Join(commander.Command(sampleCredentials), " ")
+			if !strings.Contains(command, test.binary) || !strings.Contains(command, "--requirepass") {
+				t.Errorf("%s command = %q, want %s --requirepass", test.engine, command, test.binary)
+			}
+			if !strings.Contains(command, "REDIS_PASSWORD") {
+				t.Errorf("%s command = %q, want it to read the sealed password from the environment", test.engine, command)
+			}
+		})
 	}
 	if _, isCommander := mustEngine(t, EnginePostgres).(CommandSpec); isCommander {
 		t.Error("postgres should run the image entrypoint, not declare CommandSpec")

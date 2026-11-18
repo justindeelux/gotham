@@ -4,6 +4,9 @@ export const enginePorts: Record<string, number> = {
   mariadb: 3306,
   mongodb: 27017,
   redis: 6379,
+  keydb: 6379,
+  dragonfly: 6379,
+  clickhouse: 9000,
 };
 
 export function connectionScheme(engine: string): string {
@@ -17,7 +20,11 @@ export function connectionScheme(engine: string): string {
     case "mongodb":
       return "mongodb";
     case "redis":
+    case "keydb":
+    case "dragonfly":
       return "redis";
+    case "clickhouse":
+      return "clickhouse";
     default:
       return engine;
   }

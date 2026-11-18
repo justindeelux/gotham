@@ -27,6 +27,9 @@ const MARKS: Record<string, { logo: string | null; color: string }> = {
   mariadb: { logo: "mariadb", color: "#c0765a" },
   mongodb: { logo: "mongodb", color: "#47a248" },
   redis: { logo: "redis", color: "#ff4438" },
+  keydb: { logo: "keydb", color: "#ffe100" },
+  dragonfly: { logo: "dragonfly", color: "#111827" },
+  clickhouse: { logo: "clickhouse", color: "#ffcc01" },
 };
 
 // Application source tiles draw a tinted glyph; catalog slugs use the service icon.

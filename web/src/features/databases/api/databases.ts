@@ -15,7 +15,10 @@ export type DatabaseEngineName =
   | "mysql"
   | "mariadb"
   | "mongodb"
-  | "redis";
+  | "redis"
+  | "keydb"
+  | "dragonfly"
+  | "clickhouse";
 
 export interface Database {
   id: string;

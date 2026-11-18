@@ -8,11 +8,14 @@ import (
 )
 
 const (
-	EnginePostgres = "postgres"
-	EngineMySQL    = "mysql"
-	EngineMariaDB  = "mariadb"
-	EngineMongoDB  = "mongodb"
-	EngineRedis    = "redis"
+	EnginePostgres   = "postgres"
+	EngineMySQL      = "mysql"
+	EngineMariaDB    = "mariadb"
+	EngineMongoDB    = "mongodb"
+	EngineRedis      = "redis"
+	EngineKeyDB      = "keydb"
+	EngineDragonfly  = "dragonfly"
+	EngineClickHouse = "clickhouse"
 )
 
 type Credentials struct {
@@ -83,14 +86,20 @@ type VersionedVolumeSpec interface {
 	VolumeSpecFor(version string) VolumeSpec
 }
 
-var engineOrder = []string{EnginePostgres, EngineMySQL, EngineMariaDB, EngineMongoDB, EngineRedis}
+var engineOrder = []string{
+	EnginePostgres, EngineMySQL, EngineMariaDB, EngineMongoDB, EngineRedis,
+	EngineKeyDB, EngineDragonfly, EngineClickHouse,
+}
 
 var engineRegistry = map[string]DatabaseEngine{
-	EnginePostgres: NewPostgresEngine(),
-	EngineMySQL:    NewMySQLEngine(),
-	EngineMariaDB:  NewMariaDBEngine(),
-	EngineMongoDB:  NewMongoDBEngine(),
-	EngineRedis:    NewRedisEngine(),
+	EnginePostgres:   NewPostgresEngine(),
+	EngineMySQL:      NewMySQLEngine(),
+	EngineMariaDB:    NewMariaDBEngine(),
+	EngineMongoDB:    NewMongoDBEngine(),
+	EngineRedis:      NewRedisEngine(),
+	EngineKeyDB:      NewKeyDBEngine(),
+	EngineDragonfly:  NewDragonflyEngine(),
+	EngineClickHouse: NewClickHouseEngine(),
 }
 
 func EngineNames() []string {

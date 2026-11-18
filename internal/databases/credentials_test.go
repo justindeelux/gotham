@@ -70,6 +70,20 @@ func TestGenerateCredentials(t *testing.T) {
 			username: "default",
 			database: "0",
 		},
+		{
+			name:     "keydb authenticates the built-in user",
+			engine:   EngineKeyDB,
+			dbName:   "cache",
+			username: "default",
+			database: "0",
+		},
+		{
+			name:     "dragonfly authenticates the built-in user",
+			engine:   EngineDragonfly,
+			dbName:   "cache",
+			username: "default",
+			database: "0",
+		},
 	}
 
 	for _, tt := range tests {

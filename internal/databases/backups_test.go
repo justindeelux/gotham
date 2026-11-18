@@ -59,6 +59,9 @@ func TestBackupEngineDumpOptions(t *testing.T) {
 		{EngineMariaDB, "", "mariadb:11.4", "/var/lib/mysql", "mariadb-dump", "MYSQL_ROOT_PASSWORD"},
 		{EngineMongoDB, "", "mongo:7.0", "/data/db", "mongodump", "MONGO_INITDB_ROOT_USERNAME"},
 		{EngineRedis, "", "redis:7.2-alpine", "/data", "tar -cf", "REDIS_PASSWORD"},
+		{EngineKeyDB, "", "eqalpha/keydb:latest", "/data", "tar -cf", "REDIS_PASSWORD"},
+		{EngineDragonfly, "", "docker.dragonflydb.io/dragonflydb/dragonfly:latest", "/data", "tar -cf", "REDIS_PASSWORD"},
+		{EngineClickHouse, "", "clickhouse/clickhouse-server:26.3", "/var/lib/clickhouse", "tar -cf", "CLICKHOUSE_USER"},
 	}
 	for _, test := range tests {
 		t.Run(test.engine, func(t *testing.T) {
@@ -120,6 +123,9 @@ func TestBackupEngineRestoreOptions(t *testing.T) {
 		{EngineMariaDB, "mariadb -h", "/var/lib/mysql/.gotham-restore/x.part"},
 		{EngineMongoDB, "mongorestore", "/data/db/.gotham-restore/x.part"},
 		{EngineRedis, "tar -xf", "/data/.gotham-restore/x.part"},
+		{EngineKeyDB, "tar -xf", "/data/.gotham-restore/x.part"},
+		{EngineDragonfly, "tar -xf", "/data/.gotham-restore/x.part"},
+		{EngineClickHouse, "tar -xf", "/var/lib/clickhouse/.gotham-restore/x.part"},
 	}
 	for _, test := range tests {
 		t.Run(test.engine, func(t *testing.T) {
@@ -165,6 +171,44 @@ func TestRestoreScriptsValidateDecompression(t *testing.T) {
 			}
 			if strings.Contains(script, `gunzip -c "$payload" 2>>"$log" |`) {
 				t.Errorf("%s: the decompressor status is discarded by a pipeline", name)
+			}
+		})
+	}
+}
+
+func TestTarBackupEngineTargetsItsDataDirectory(t *testing.T) {
+	tests := []struct {
+		engine string
+		dir    string
+	}{
+		{EngineRedis, "/data"},
+		{EngineKeyDB, "/data"},
+		{EngineDragonfly, "/data"},
+		{EngineClickHouse, "/var/lib/clickhouse"},
+	}
+	for _, test := range tests {
+		t.Run(test.engine, func(t *testing.T) {
+			engine, ok := LookupBackupEngine(test.engine)
+			if !ok {
+				t.Fatalf("no backup engine for %q", test.engine)
+			}
+			dump, err := engine.DumpOptions(testDatabase(test.engine, ""), testCredentials(), "run-1")
+			if err != nil {
+				t.Fatalf("DumpOptions: %v", err)
+			}
+			if !strings.Contains(dump.Command[2], "-C "+test.dir+" .") {
+				t.Errorf("dump does not archive %s:\n%s", test.dir, dump.Command[2])
+			}
+			restore, err := engine.RestoreOptions(testDatabase(test.engine, ""), testCredentials(),
+				"run-2", test.dir+"/.gotham-restore/x.part")
+			if err != nil {
+				t.Fatalf("RestoreOptions: %v", err)
+			}
+			if !strings.Contains(restore.Command[2], "-C "+test.dir) {
+				t.Errorf("restore does not extract into %s:\n%s", test.dir, restore.Command[2])
+			}
+			if !strings.Contains(restore.Command[2], "find "+test.dir+" -mindepth 1 -delete") {
+				t.Errorf("restore does not clear %s before extracting:\n%s", test.dir, restore.Command[2])
 			}
 		})
 	}

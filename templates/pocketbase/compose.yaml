@@ -1,0 +1,12 @@
+services:
+  pocketbase:
+    image: ghcr.io/coollabsio/pocketbase:0.42.2
+    restart: unless-stopped
+    ports:
+      - "8080"
+    volumes:
+      - pocketbase_data:/app/pb_data
+      - pocketbase_hooks:/app/pb_hooks
+volumes:
+  pocketbase_data:
+  pocketbase_hooks:

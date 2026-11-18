@@ -1,0 +1,10 @@
+services:
+  flipt:
+    image: docker.flipt.io/flipt/flipt:v1.62.0
+    restart: unless-stopped
+    ports:
+      - "8080"
+    volumes:
+      - flipt_data:/var/opt/flipt
+volumes:
+  flipt_data:

@@ -1,0 +1,15 @@
+services:
+  convertx:
+    image: ghcr.io/c4illin/convertx:v0.20.0
+    restart: unless-stopped
+    ports:
+      - "3000"
+    environment:
+      ACCOUNT_REGISTRATION: "{{ .registration }}"
+      JWT_SECRET: "{{ .jwt_secret }}"
+      HTTP_ALLOWED: "true"
+      AUTO_DELETE_EVERY_N_HOURS: "24"
+    volumes:
+      - convertx_data:/app/data
+volumes:
+  convertx_data:

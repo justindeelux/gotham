@@ -1,0 +1,49 @@
+services:
+  backend:
+    image: hoppscotch/hoppscotch:2026.10.1
+    restart: unless-stopped
+    ports:
+      - "80"
+    environment:
+      DATABASE_URL: "postgresql://{{ .db_user }}:{{ .db_password }}@hoppscotch-db:5432/{{ .db_name }}"
+      DATA_ENCRYPTION_KEY: "{{ .data_key }}"
+      VITE_ALLOWED_AUTH_PROVIDERS: EMAIL
+      VITE_BASE_URL: "https://{{ .domain }}"
+      VITE_SHORTCODE_BASE_URL: "https://{{ .domain }}"
+      VITE_ADMIN_URL: "https://{{ .domain }}/admin"
+      VITE_BACKEND_GQL_URL: "https://{{ .domain }}/backend/graphql"
+      VITE_BACKEND_WS_URL: "wss://{{ .domain }}/backend/graphql"
+      VITE_BACKEND_API_URL: "https://{{ .domain }}/backend/v1"
+      WHITELISTED_ORIGINS: "https://{{ .domain }}/backend,https://{{ .domain }},https://{{ .domain }}/admin"
+      MAILER_USE_CUSTOM_CONFIGS: "true"
+      ENABLE_SUBPATH_BASED_ACCESS: "true"
+    depends_on:
+      db-migration:
+        condition: service_completed_successfully
+  hoppscotch-db:
+    image: postgres:15
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: "{{ .db_user }}"
+      POSTGRES_PASSWORD: "{{ .db_password }}"
+      POSTGRES_DB: "{{ .db_name }}"
+    volumes:
+      - hoppscotch_postgres_data:/var/lib/postgresql/data
+    healthcheck:
+      test:
+        - CMD-SHELL
+        - pg_isready -U "{{ .db_user }}" -d "{{ .db_name }}"
+      interval: 5s
+      timeout: 10s
+      retries: 10
+  db-migration:
+    image: hoppscotch/hoppscotch:2026.10.1
+    restart: on-failure
+    command: pnpx prisma migrate deploy
+    environment:
+      DATABASE_URL: "postgres://{{ .db_user }}:{{ .db_password }}@hoppscotch-db:5432/{{ .db_name }}"
+    depends_on:
+      hoppscotch-db:
+        condition: service_healthy
+volumes:
+  hoppscotch_postgres_data:

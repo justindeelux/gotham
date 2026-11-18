@@ -1,0 +1,19 @@
+name: Bitcoin Core
+icon: bitcoin-core
+description: A self-hosted Bitcoin Core full node with a persistent blockchain volume and a local-only RPC endpoint.
+homepage: https://hub.docker.com/r/ruimarinho/bitcoin-core/
+category:
+  - backend
+fields:
+  - key: rpc_user
+    label: RPC user
+    type: text
+    default: bitcoin
+    pattern: ^[A-Za-z0-9_]{1,32}$
+    max_length: 32
+  - key: rpc_password
+    label: RPC password
+    type: secret
+    required: true
+    generate: true
+    help: The node's JSON-RPC password; use Generate for a strong value.

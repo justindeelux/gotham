@@ -1,0 +1,26 @@
+name: Jean
+icon: jean
+description: Jean headless server client for orchestrating AI coding agents, with a persistent data volume and a routed domain.
+homepage: https://github.com/coollabsio/jean/blob/main/docs/headless-server.md
+category:
+  - development
+fields:
+  - key: domain
+    label: Domain
+    type: text
+    required: false
+    default: ""
+    placeholder: app.example.com
+    help: Optional. Leave empty to add a domain later from the service page.
+    pattern: ^([A-Za-z0-9][A-Za-z0-9.-]*)?$
+    max_length: 253
+  - key: token
+    label: Access token
+    type: secret
+    required: true
+    generate: true
+    help: Guards the headless API; use Generate for a strong value.
+routes:
+  - service: jean
+    port: 3456
+    domain_field: domain

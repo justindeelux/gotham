@@ -1,0 +1,13 @@
+services:
+  drizzle-gateway:
+    image: ghcr.io/drizzle-team/gateway:1.7.0
+    restart: unless-stopped
+    ports:
+      - "4983"
+    environment:
+      STORE_PATH: /app
+      MASTERPASS: "{{ .masterpass }}"
+    volumes:
+      - drizzle_gateway_data:/app
+volumes:
+  drizzle_gateway_data:

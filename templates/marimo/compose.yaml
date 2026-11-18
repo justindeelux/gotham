@@ -1,0 +1,21 @@
+services:
+  marimo:
+    image: ghcr.io/marimo-team/marimo:0.25.2-sql
+    restart: unless-stopped
+    ports:
+      - "8080"
+    environment:
+      TOKEN_PASSWORD: "{{ .password }}"
+    command:
+      - marimo
+      - edit
+      - --token-password
+      - "{{ .password }}"
+      - --port
+      - "8080"
+      - --host
+      - 0.0.0.0
+    volumes:
+      - marimo_data:/app
+volumes:
+  marimo_data:

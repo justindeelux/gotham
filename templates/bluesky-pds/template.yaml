@@ -1,0 +1,44 @@
+name: Bluesky PDS
+icon: bluesky-pds
+description: A Bluesky personal data server with a persistent data volume and a routed domain.
+homepage: https://github.com/bluesky-social/pds
+category:
+  - backend
+fields:
+  - key: domain
+    label: Domain
+    type: text
+    required: true
+    placeholder: app.example.com
+    help: The public host served by the node's Traefik proxy.
+    pattern: ^[A-Za-z0-9][A-Za-z0-9.-]*$
+    max_length: 253
+  - key: admin_email
+    label: Admin email
+    type: text
+    required: true
+    pattern: ^[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Za-z]{2,}$
+    max_length: 254
+    help: Used for account recovery and moderation notices.
+  - key: admin_password
+    label: Admin password
+    type: secret
+    required: true
+    generate: true
+    help: The PDS admin password; use Generate for a strong value.
+  - key: jwt_secret
+    label: JWT secret
+    type: secret
+    required: true
+    generate: true
+    help: Signs the PDS session tokens; use Generate for a strong value.
+  - key: rotation_key
+    label: Rotation key
+    type: secret
+    required: true
+    pattern: ^[0-9a-f]{64}$
+    help: "Run: openssl rand -hex 32. The PDS rejects any other format."
+routes:
+  - service: pds
+    port: 3000
+    domain_field: domain

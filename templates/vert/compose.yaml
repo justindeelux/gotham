@@ -1,0 +1,11 @@
+services:
+  vert:
+    image: ghcr.io/vert-sh/vert:latest
+    restart: unless-stopped
+    ports:
+      - "80"
+    environment:
+      PUB_VERT_URL: "https://{{ .domain }}"
+      PUB_HOSTNAME: "{{ .domain }}"
+      PUB_PORT: "80"
+      PUB_ENV: production

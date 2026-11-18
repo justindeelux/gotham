@@ -1,0 +1,44 @@
+name: New API
+icon: newapi
+description: New API LLM gateway with PostgreSQL and Redis, persistent named volumes and an optional routed domain.
+homepage: https://docs.newapi.pro/en/getting-started/
+category:
+  - api
+fields:
+  - key: domain
+    label: Domain
+    type: text
+    required: false
+    default: ""
+    placeholder: app.example.com
+    help: Optional. Leave empty to add a domain later from the service page.
+    pattern: ^([A-Za-z0-9][A-Za-z0-9.-]*)?$
+    max_length: 253
+  - key: db_name
+    label: Database name
+    type: text
+    default: newapi
+    pattern: ^[A-Za-z0-9_]{1,64}$
+    max_length: 64
+  - key: db_user
+    label: Database user
+    type: text
+    default: newapi
+    pattern: ^[A-Za-z0-9_]{1,32}$
+    max_length: 32
+  - key: db_password
+    label: Database password
+    type: secret
+    required: true
+    generate: true
+    help: Used by New API and PostgreSQL; use Generate for a strong value.
+  - key: session_secret
+    label: Session secret
+    type: secret
+    required: true
+    generate: true
+    help: Signs the admin sessions; use Generate for a strong value.
+routes:
+  - service: new-api
+    port: 3000
+    domain_field: domain

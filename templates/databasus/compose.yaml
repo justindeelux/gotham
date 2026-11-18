@@ -1,0 +1,10 @@
+services:
+  databasus:
+    image: databasus/databasus:v3.70.1
+    restart: unless-stopped
+    ports:
+      - "4005"
+    volumes:
+      - databasus_data:/databasus-data
+volumes:
+  databasus_data:

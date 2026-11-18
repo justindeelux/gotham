@@ -1,0 +1,54 @@
+services:
+  zero:
+    image: rocicorp/zero:1.12.0
+    restart: unless-stopped
+    ports:
+      - "4848"
+    environment:
+      ZERO_UPSTREAM_DB: "postgres://{{ .db_user }}:{{ .db_password }}@postgres:5432/{{ .db_name }}"
+      ZERO_CVR_DB: "postgres://{{ .db_user }}:{{ .db_password }}@postgres:5432/{{ .db_name }}"
+      ZERO_CHANGE_DB: "postgres://{{ .db_user }}:{{ .db_password }}@postgres:5432/{{ .db_name }}"
+      ZERO_REPLICA_FILE: /data/replica.db
+      ZERO_ADMIN_PASSWORD: "{{ .admin_password }}"
+      ZERO_QUERY_URL: "{{ .query_url }}"
+      ZERO_MUTATE_URL: "{{ .mutate_url }}"
+      ZERO_APP_ID: zero
+      ZERO_NUM_SYNC_WORKERS: "1"
+    volumes:
+      - zero_data:/data
+    depends_on:
+      postgres:
+        condition: service_healthy
+    healthcheck:
+      test:
+        - CMD
+        - curl
+        - -f
+        - http://127.0.0.1:4848/keepalive
+      interval: 5s
+      timeout: 20s
+      retries: 10
+      start_period: 60s
+  postgres:
+    image: postgres:18-alpine
+    restart: unless-stopped
+    command:
+      - postgres
+      - -c
+      - wal_level=logical
+    environment:
+      POSTGRES_USER: "{{ .db_user }}"
+      POSTGRES_PASSWORD: "{{ .db_password }}"
+      POSTGRES_DB: "{{ .db_name }}"
+    volumes:
+      - zero_postgres_data:/var/lib/postgresql
+    healthcheck:
+      test:
+        - CMD-SHELL
+        - pg_isready -U "{{ .db_user }}" -d "{{ .db_name }}"
+      interval: 10s
+      timeout: 20s
+      retries: 10
+volumes:
+  zero_data:
+  zero_postgres_data:

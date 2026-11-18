@@ -1,0 +1,33 @@
+services:
+  pgbackweb:
+    image: eduardolat/pgbackweb:0.5.2
+    restart: unless-stopped
+    ports:
+      - "8085"
+    environment:
+      PBW_ENCRYPTION_KEY: "{{ .encryption_key }}"
+      PBW_POSTGRES_CONN_STRING: "postgresql://{{ .db_user }}:{{ .db_password }}@postgres:5432/{{ .db_name }}?sslmode=disable"
+    volumes:
+      - pgbackweb_backups:/backups
+    depends_on:
+      postgres:
+        condition: service_healthy
+  postgres:
+    image: postgres:18
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: "{{ .db_user }}"
+      POSTGRES_PASSWORD: "{{ .db_password }}"
+      POSTGRES_DB: "{{ .db_name }}"
+    volumes:
+      - pgbackweb_postgres_data:/var/lib/postgresql
+    healthcheck:
+      test:
+        - CMD-SHELL
+        - pg_isready -U "{{ .db_user }}" -d "{{ .db_name }}"
+      interval: 5s
+      timeout: 5s
+      retries: 5
+volumes:
+  pgbackweb_backups:
+  pgbackweb_postgres_data:

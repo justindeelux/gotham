@@ -1,0 +1,13 @@
+services:
+  jupyter-notebook-python:
+    image: quay.io/jupyter/base-notebook:2026-11-16
+    restart: unless-stopped
+    ports:
+      - "8888"
+    environment:
+      JUPYTER_TOKEN: "{{ .token }}"
+    command: start-notebook.sh
+    volumes:
+      - jupyter_data:/home/jovyan/work
+volumes:
+  jupyter_data:

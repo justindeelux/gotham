@@ -1,0 +1,26 @@
+name: Browserless
+icon: browserless
+description: A headless Chrome browser as a service, with a persistent download volume and an optional routed domain.
+homepage: https://docs.browserless.io/
+category:
+  - devtools
+fields:
+  - key: domain
+    label: Domain
+    type: text
+    required: false
+    default: ""
+    placeholder: app.example.com
+    help: Optional. Leave empty to add a domain later from the service page.
+    pattern: ^([A-Za-z0-9][A-Za-z0-9.-]*)?$
+    max_length: 253
+  - key: token
+    label: Access token
+    type: secret
+    required: true
+    generate: true
+    help: Required by every API call; use Generate for a strong value.
+routes:
+  - service: browserless
+    port: 3000
+    domain_field: domain

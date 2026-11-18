@@ -1,0 +1,10 @@
+services:
+  cloudbeaver:
+    image: dbeaver/cloudbeaver:26
+    restart: unless-stopped
+    ports:
+      - "8978"
+    volumes:
+      - cloudbeaver_data:/opt/cloudbeaver/workspace
+volumes:
+  cloudbeaver_data:

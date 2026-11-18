@@ -1,0 +1,16 @@
+services:
+  bitcoin-core:
+    image: ruimarinho/bitcoin-core:32
+    restart: unless-stopped
+    command:
+      - -datadir=/home/bitcoin/.bitcoin
+      - -rpcbind=127.0.0.1
+      - -rpcallowip=127.0.0.1
+      - -rpcuser={{ .rpc_user }}
+      - -rpcpassword={{ .rpc_password }}
+      - -server=1
+      - -txindex=1
+    volumes:
+      - bitcoin_data:/home/bitcoin/.bitcoin
+volumes:
+  bitcoin_data:

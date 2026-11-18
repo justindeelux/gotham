@@ -1,0 +1,19 @@
+name: Executor
+icon: executor
+description: Executor self-hosted AI integration and code execution server with a persistent data volume and a routed domain.
+homepage: https://executor.sh/docs/hosted/docker
+category:
+  - development
+fields:
+  - key: domain
+    label: Domain
+    type: text
+    required: true
+    placeholder: app.example.com
+    help: The public host served by the node's Traefik proxy.
+    pattern: ^[A-Za-z0-9][A-Za-z0-9.-]*$
+    max_length: 253
+routes:
+  - service: executor
+    port: 4788
+    domain_field: domain

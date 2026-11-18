@@ -1,0 +1,11 @@
+services:
+  librespeed:
+    image: ghcr.io/librespeed/speedtest:6.3.1
+    restart: unless-stopped
+    ports:
+      - "82"
+    environment:
+      MODE: standalone
+      TELEMETRY: "false"
+      DISTANCE: km
+      WEBPORT: "82"

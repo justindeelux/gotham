@@ -1,0 +1,16 @@
+services:
+  executor:
+    image: ghcr.io/rhyssullivan/executor-selfhost:1.6.10
+    restart: unless-stopped
+    ports:
+      - "4788"
+    environment:
+      EXECUTOR_WEB_BASE_URL: "https://{{ .domain }}"
+      EXECUTOR_HOST: 0.0.0.0
+      EXECUTOR_DATA_DIR: /data
+      EXECUTOR_DB_PATH: /data/data.db
+      EXECUTOR_ALLOW_LOCAL_NETWORK: "false"
+    volumes:
+      - executor_data:/data
+volumes:
+  executor_data:

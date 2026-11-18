@@ -1,0 +1,16 @@
+services:
+  gitea:
+    image: gitea/gitea:28.4.0
+    restart: unless-stopped
+    ports:
+      - "3000"
+    environment:
+      GITEA__server__ROOT_URL: "https://{{ .domain }}"
+      GITEA__server__DOMAIN: "{{ .domain }}"
+      GITEA__server__SSH_DOMAIN: "{{ .domain }}"
+      USER_UID: "1000"
+      USER_GID: "1000"
+    volumes:
+      - gitea_data:/data
+volumes:
+  gitea_data:

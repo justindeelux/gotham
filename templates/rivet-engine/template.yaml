@@ -1,0 +1,26 @@
+name: Rivet Engine
+icon: rivet-engine
+description: Rivet engine for stateful workloads with persistent log and object volumes and an optional routed domain.
+homepage: https://www.rivet.dev/docs
+category:
+  - development
+fields:
+  - key: domain
+    label: Domain
+    type: text
+    required: false
+    default: ""
+    placeholder: app.example.com
+    help: Optional. Leave empty to add a domain later from the service page.
+    pattern: ^([A-Za-z0-9][A-Za-z0-9.-]*)?$
+    max_length: 253
+  - key: admin_token
+    label: Admin token
+    type: secret
+    required: true
+    generate: true
+    help: Guards the engine admin API; use Generate for a strong value.
+routes:
+  - service: rivet-engine
+    port: 6420
+    domain_field: domain

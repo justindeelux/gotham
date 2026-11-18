@@ -1,0 +1,10 @@
+services:
+  trailbase:
+    image: trailbase/trailbase:0.35.12
+    restart: unless-stopped
+    ports:
+      - "4000"
+    volumes:
+      - trailbase_data:/app/traildepot
+volumes:
+  trailbase_data:

@@ -1,0 +1,55 @@
+name: Strapi
+icon: strapi
+description: Strapi headless CMS with PostgreSQL, persistent config, source and upload volumes and a routed domain.
+homepage: https://docs.strapi.io/
+category:
+  - backend
+fields:
+  - key: domain
+    label: Domain
+    type: text
+    required: true
+    placeholder: app.example.com
+    help: The public host served by the node's Traefik proxy.
+    pattern: ^[A-Za-z0-9][A-Za-z0-9.-]*$
+    max_length: 253
+  - key: app_keys
+    label: App keys
+    type: secret
+    required: true
+    generate: true
+    help: Signs the session cookies; use Generate for a strong value.
+  - key: jwt_secret
+    label: JWT secret
+    type: secret
+    required: true
+    generate: true
+    help: Signs user tokens; use Generate for a strong value.
+  - key: admin_jwt_secret
+    label: Admin JWT secret
+    type: secret
+    required: true
+    generate: true
+    help: Signs admin tokens; use Generate for a strong value.
+  - key: db_name
+    label: Database name
+    type: text
+    default: strapi
+    pattern: ^[A-Za-z0-9_]{1,64}$
+    max_length: 64
+  - key: db_user
+    label: Database user
+    type: text
+    default: strapi
+    pattern: ^[A-Za-z0-9_]{1,32}$
+    max_length: 32
+  - key: db_password
+    label: Database password
+    type: secret
+    required: true
+    generate: true
+    help: Used by Strapi and PostgreSQL; use Generate for a strong value.
+routes:
+  - service: strapi
+    port: 1337
+    domain_field: domain

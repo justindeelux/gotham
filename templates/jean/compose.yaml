@@ -1,0 +1,16 @@
+services:
+  jean:
+    image: ghcr.io/coollabsio/jean-server:v1.0.16
+    restart: unless-stopped
+    ports:
+      - "3456"
+    environment:
+      JEAN_HEADLESS: "1"
+      JEAN_HOST: 0.0.0.0
+      JEAN_PORT: "3456"
+      JEAN_TOKEN: "{{ .token }}"
+      JEAN_DATA_DIR: /home/jean/.local/share/com.jean.desktop
+    volumes:
+      - jean_data:/home/jean/.local/share/com.jean.desktop
+volumes:
+  jean_data:

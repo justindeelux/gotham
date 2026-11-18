@@ -1,0 +1,18 @@
+services:
+  rivet-engine:
+    image: rivetdev/engine:3.1.1
+    restart: unless-stopped
+    ports:
+      - "6420"
+    environment:
+      RIVET__STORAGE__LOG_DIRECTORY: /var/lib/rivet/log
+      RIVET__STORAGE__AUTO_PROVISION_PARTITIONS: "1"
+      RIVET__STORAGE__BALANCING__ENABLED: "false"
+      RIVET__OBJECT_STORAGE__PRIMARY__FILE_SYSTEM__PATH: /var/lib/rivet/objects
+      RIVET__AUTH__ADMIN_TOKEN: "{{ .admin_token }}"
+    volumes:
+      - rivet_log:/var/lib/rivet/log
+      - rivet_objects:/var/lib/rivet/objects
+volumes:
+  rivet_log:
+  rivet_objects:

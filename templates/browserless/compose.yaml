@@ -1,0 +1,13 @@
+services:
+  browserless:
+    image: ghcr.io/browserless/chromium:v2.63.1
+    restart: unless-stopped
+    ports:
+      - "3000"
+    environment:
+      TOKEN: "{{ .token }}"
+      DOWNLOAD_DIR: /downloads
+    volumes:
+      - browserless_data:/downloads
+volumes:
+  browserless_data:

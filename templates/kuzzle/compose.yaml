@@ -1,0 +1,32 @@
+services:
+  kuzzle:
+    image: kuzzleio/kuzzle:2.61.2
+    restart: unless-stopped
+    ports:
+      - "7512"
+    environment:
+      kuzzle_services__storageEngine__client__node: http://elasticsearch:9200
+      kuzzle_services__storageEngine__commonMapping__dynamic: "true"
+      kuzzle_services__internalCache__node__host: redis
+      kuzzle_services__memoryStorage__node__host: redis
+      NODE_ENV: production
+    depends_on:
+      - redis
+      - elasticsearch
+  redis:
+    image: redis:8-alpine
+    restart: unless-stopped
+    command:
+      - redis-server
+      - --appendonly
+      - "yes"
+    volumes:
+      - kuzzle_redis_data:/data
+  elasticsearch:
+    image: kuzzleio/elasticsearch:7
+    restart: unless-stopped
+    volumes:
+      - kuzzle_elasticsearch_data:/usr/share/elasticsearch/data
+volumes:
+  kuzzle_redis_data:
+  kuzzle_elasticsearch_data:

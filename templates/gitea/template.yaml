@@ -1,0 +1,19 @@
+name: Gitea
+icon: gitea
+description: Gitea lightweight Git service with a persistent data volume, SQLite storage and a routed domain.
+homepage: https://docs.gitea.com
+category:
+  - git
+fields:
+  - key: domain
+    label: Domain
+    type: text
+    required: true
+    placeholder: app.example.com
+    help: The public host served by the node's Traefik proxy.
+    pattern: ^[A-Za-z0-9][A-Za-z0-9.-]*$
+    max_length: 253
+routes:
+  - service: gitea
+    port: 3000
+    domain_field: domain

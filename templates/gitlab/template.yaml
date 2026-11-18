@@ -1,0 +1,25 @@
+name: GitLab
+icon: gitlab
+description: GitLab CE all-in-one with persistent config, logs and data volumes and a routed domain.
+homepage: https://docs.gitlab.com/ee/install/docker.html
+category:
+  - git
+fields:
+  - key: domain
+    label: Domain
+    type: text
+    required: true
+    placeholder: app.example.com
+    help: The public host served by the node's Traefik proxy.
+    pattern: ^[A-Za-z0-9][A-Za-z0-9.-]*$
+    max_length: 253
+  - key: root_password
+    label: Root password
+    type: secret
+    required: true
+    generate: true
+    help: The initial root password; use Generate for a strong value.
+routes:
+  - service: gitlab
+    port: 80
+    domain_field: domain

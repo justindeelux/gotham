@@ -1,0 +1,50 @@
+name: celld
+icon: celld
+description: celld distributed durable objects backed by an S3-compatible bucket, with a persistent state volume and an optional routed domain.
+homepage: https://celld.dev/docs
+category:
+  - backend
+fields:
+  - key: domain
+    label: Domain
+    type: text
+    required: false
+    default: ""
+    placeholder: app.example.com
+    help: Optional. Leave empty to add a domain later from the service page.
+    pattern: ^([A-Za-z0-9][A-Za-z0-9.-]*)?$
+    max_length: 253
+  - key: bucket
+    label: S3 bucket
+    type: text
+    required: true
+    pattern: ^[A-Za-z0-9][A-Za-z0-9._-]{1,62}$
+    max_length: 63
+    help: The existing bucket celld stores its objects in.
+  - key: s3_endpoint
+    label: S3 endpoint
+    type: text
+    default: ""
+    pattern: ^(https?://[A-Za-z0-9.-]+(:[0-9]+)?)?$
+    max_length: 200
+    help: Optional. Leave empty for AWS; set it for MinIO or another S3-compatible store.
+  - key: region
+    label: S3 region
+    type: text
+    default: us-east-1
+    pattern: ^[a-z0-9-]{1,32}$
+    max_length: 32
+  - key: access_key_id
+    label: S3 access key ID
+    type: secret
+    required: true
+    help: The access key for the bucket; the console cannot generate it.
+  - key: secret_access_key
+    label: S3 secret access key
+    type: secret
+    required: true
+    help: The secret key for the bucket; the console cannot generate it.
+routes:
+  - service: celld
+    port: 8080
+    domain_field: domain

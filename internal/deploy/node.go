@@ -360,6 +360,215 @@ func (n *agentNode) FileRoots(ctx context.Context) ([]*agentv1.FileRoot, error) 
 	return response.GetRoots(), nil
 }
 
+// ContainerFileNode is the slice of a node a container's file manager needs.
+// The concrete agentNode implements it; a node that predates the RPCs does not
+// answer them, so the control plane reports that the agent must be updated.
+type ContainerFileNode interface {
+	ContainerFileCapabilities(ctx context.Context, containerID string) (ContainerFileCapabilities, error)
+	ListContainerFiles(ctx context.Context, containerID, path, cursor string) (ContainerFileListing, error)
+	StatContainerFile(ctx context.Context, containerID, path string) (ContainerFileEntry, error)
+	ReadContainerFile(ctx context.Context, containerID, path string, archive bool, dst io.Writer) error
+	WriteContainerFile(ctx context.Context, containerID, path string, size int64, src io.Reader) error
+	ChangeContainerFile(ctx context.Context, containerID string, change ContainerFileChange) error
+}
+
+var _ ContainerFileNode = (*agentNode)(nil)
+
+func (n *agentNode) ContainerFileCapabilities(ctx context.Context, containerID string) (ContainerFileCapabilities, error) {
+	response, err := n.docker.GetContainerFileCapabilities(ctx, &agentv1.ContainerFilesCapabilitiesRequest{ContainerId: containerID})
+	if err != nil {
+		return ContainerFileCapabilities{}, containerFileRPCError(err)
+	}
+	return ContainerFileCapabilities{
+		Readable:      response.GetReadable(),
+		ExecAvailable: response.GetExecAvailable(),
+		ExecBlockedBy: response.GetExecBlockedBy(),
+		State:         response.GetState(),
+	}, nil
+}
+
+func (n *agentNode) ListContainerFiles(ctx context.Context, containerID, path, cursor string) (ContainerFileListing, error) {
+	response, err := n.docker.ListContainerFiles(ctx, &agentv1.ContainerFilesListRequest{
+		ContainerId: containerID,
+		Path:        path,
+		Cursor:      cursor,
+	})
+	if err != nil {
+		return ContainerFileListing{}, containerFileRPCError(err)
+	}
+	return ContainerFileListing{
+		Directory: containerFileEntryFromProto(response.GetDirectory()),
+		Entries:   containerFileEntriesFromProto(response.GetEntries()),
+		Truncated: response.GetTruncated(),
+		Cursor:    response.GetCursor(),
+	}, nil
+}
+
+func (n *agentNode) StatContainerFile(ctx context.Context, containerID, path string) (ContainerFileEntry, error) {
+	response, err := n.docker.StatContainerFile(ctx, &agentv1.ContainerFilesPathRequest{ContainerId: containerID, Path: path})
+	if err != nil {
+		return ContainerFileEntry{}, containerFileRPCError(err)
+	}
+	return containerFileEntryFromProto(response.GetEntry()), nil
+}
+
+func (n *agentNode) ReadContainerFile(ctx context.Context, containerID, path string, archive bool, dst io.Writer) error {
+	stream, err := n.docker.ReadContainerFile(ctx, &agentv1.ContainerFilesReadRequest{
+		ContainerId: containerID,
+		Path:        path,
+		Archive:     archive,
+	})
+	if err != nil {
+		return containerFileRPCError(err)
+	}
+	for {
+		chunk, recvErr := stream.Recv()
+		if errors.Is(recvErr, io.EOF) {
+			return nil
+		}
+		if recvErr != nil {
+			return containerFileRPCError(recvErr)
+		}
+		if data := chunk.GetData(); len(data) > 0 {
+			if _, writeErr := dst.Write(data); writeErr != nil {
+				return writeErr
+			}
+		}
+	}
+}
+
+func (n *agentNode) WriteContainerFile(ctx context.Context, containerID, path string, size int64, src io.Reader) error {
+	stream, err := n.docker.WriteContainerFile(ctx)
+	if err != nil {
+		return containerFileRPCError(err)
+	}
+	if err := stream.Send(&agentv1.ContainerFilesWriteRequest{
+		Part: &agentv1.ContainerFilesWriteRequest_Header{Header: &agentv1.ContainerFilesWriteHeader{
+			ContainerId: containerID,
+			Path:        path,
+			Size:        size,
+			Uid:         -1,
+			Gid:         -1,
+		}},
+	}); err != nil {
+		return containerFileRPCError(err)
+	}
+	buffer := make([]byte, buildChunkSize)
+	for {
+		n, readErr := src.Read(buffer)
+		if n > 0 {
+			if err := stream.Send(&agentv1.ContainerFilesWriteRequest{
+				Part: &agentv1.ContainerFilesWriteRequest_Data{Data: buffer[:n]},
+			}); err != nil {
+				return containerFileRPCError(err)
+			}
+		}
+		if errors.Is(readErr, io.EOF) {
+			break
+		}
+		if readErr != nil {
+			return fmt.Errorf("deploy: read the upload: %w", readErr)
+		}
+	}
+	if _, err := stream.CloseAndRecv(); err != nil {
+		return containerFileRPCError(err)
+	}
+	return nil
+}
+
+func (n *agentNode) ChangeContainerFile(ctx context.Context, containerID string, change ContainerFileChange) error {
+	action, ok := containerFileActionProto(change.Action)
+	if !ok {
+		return fmt.Errorf("%w: unknown file action %q", ErrValidation, change.Action)
+	}
+	_, err := n.docker.ChangeContainerFile(ctx, &agentv1.ContainerFilesChangeRequest{
+		ContainerId: containerID,
+		Action:      action,
+		Path:        change.Path,
+		Destination: change.Destination,
+		Mode:        change.Mode,
+		Overwrite:   change.Overwrite,
+	})
+	return containerFileRPCError(err)
+}
+
+func containerFileActionProto(action ContainerFileAction) (agentv1.ContainerFileAction, bool) {
+	switch action {
+	case ContainerFileActionMkdir:
+		return agentv1.ContainerFileAction_CONTAINER_FILE_ACTION_MKDIR, true
+	case ContainerFileActionRename:
+		return agentv1.ContainerFileAction_CONTAINER_FILE_ACTION_RENAME, true
+	case ContainerFileActionMove:
+		return agentv1.ContainerFileAction_CONTAINER_FILE_ACTION_MOVE, true
+	case ContainerFileActionCopy:
+		return agentv1.ContainerFileAction_CONTAINER_FILE_ACTION_COPY, true
+	case ContainerFileActionDelete:
+		return agentv1.ContainerFileAction_CONTAINER_FILE_ACTION_DELETE, true
+	case ContainerFileActionChmod:
+		return agentv1.ContainerFileAction_CONTAINER_FILE_ACTION_CHMOD, true
+	default:
+		return agentv1.ContainerFileAction_CONTAINER_FILE_ACTION_UNSPECIFIED, false
+	}
+}
+
+func containerFileEntryFromProto(entry *agentv1.ContainerFileEntry) ContainerFileEntry {
+	converted := ContainerFileEntry{
+		Path:          entry.GetPath(),
+		Name:          entry.GetName(),
+		Kind:          containerFileKind(entry.GetKind()),
+		Size:          entry.GetSize(),
+		Mode:          entry.GetMode(),
+		Uid:           entry.GetUid(),
+		Gid:           entry.GetGid(),
+		SymlinkTarget: entry.GetSymlinkTarget(),
+	}
+	if modified := entry.GetModifiedAt(); modified != nil {
+		at := modified.AsTime()
+		converted.ModifiedAt = &at
+	}
+	return converted
+}
+
+func containerFileEntriesFromProto(entries []*agentv1.ContainerFileEntry) []ContainerFileEntry {
+	converted := make([]ContainerFileEntry, 0, len(entries))
+	for _, entry := range entries {
+		converted = append(converted, containerFileEntryFromProto(entry))
+	}
+	return converted
+}
+
+func containerFileKind(kind agentv1.FileKind) string {
+	switch kind {
+	case agentv1.FileKind_FILE_KIND_DIRECTORY:
+		return "directory"
+	case agentv1.FileKind_FILE_KIND_SYMLINK:
+		return "symlink"
+	case agentv1.FileKind_FILE_KIND_SPECIAL:
+		return "special"
+	default:
+		return "file"
+	}
+}
+
+func containerFileRPCError(err error) error {
+	if err == nil {
+		return nil
+	}
+	message := status.Convert(err).Message()
+	switch status.Code(err) {
+	case codes.AlreadyExists, codes.FailedPrecondition:
+		return fmt.Errorf("%w: %s", ErrConflict, message)
+	case codes.PermissionDenied:
+		return fmt.Errorf("%w: %s", ErrValidation, message)
+	case codes.ResourceExhausted:
+		return fmt.Errorf("%w: %s", ErrTooLarge, message)
+	case codes.Unimplemented:
+		return fmt.Errorf("%w: this node agent does not support container files; update the node agent", ErrAgentUnavailable)
+	default:
+		return mapRPCError(err)
+	}
+}
+
 func (n *agentNode) Close() error { return n.docker.Close() }
 
 type nodeImageBuilder struct {

@@ -72,6 +72,18 @@ func (fakeBindDocker) VolumeMountpoint(context.Context, string) (string, error) 
 func (fakeBindDocker) ExportArchive(context.Context, string, string) (io.ReadCloser, error) {
 	return io.NopCloser(strings.NewReader("")), nil
 }
+func (fakeBindDocker) StatArchive(context.Context, string, string) (docker.ContainerPathStat, error) {
+	return docker.ContainerPathStat{}, nil
+}
+
+func (fakeBindDocker) ContainerShell(context.Context, string) (string, error) {
+	return "/bin/sh", nil
+}
+
+func (fakeBindDocker) RunContainerCommand(context.Context, string, []string) (string, int32, error) {
+	return "", 0, nil
+}
+
 func (fakeBindDocker) ImportArchive(context.Context, string, string, io.Reader) error {
 	return nil
 }

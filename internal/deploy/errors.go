@@ -21,4 +21,6 @@ var (
 	ErrContainerNotFound    = errors.New("deploy: container is not part of the running deployment")
 	ErrContainerNotRunning  = errors.New("deploy: container is not running")
 	ErrBackupInFlight       = errors.New("deploy: a backup or restore is in progress")
+	ErrForbidden            = errors.New("deploy: only the owner can do this")
+	ErrTooLarge             = errors.New("deploy: the file is too large")
 )

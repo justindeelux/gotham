@@ -110,9 +110,12 @@ func TestApplicationSourceComposeMatchesDeployedDocument(t *testing.T) {
 		if !strings.Contains(source.Deployable, key) {
 			t.Errorf("deployable is missing the injected key %s:\n%s", key, source.Deployable)
 		}
+		if !strings.Contains(source.Deployable, key+": <redacted>") {
+			t.Errorf("deployable does not show %s as masked:\n%s", key, source.Deployable)
+		}
 	}
-	if !strings.Contains(source.Deployable, "<redacted>") {
-		t.Errorf("deployable holds no mask:\n%s", source.Deployable)
+	if strings.Count(source.Deployable, "<redacted>") < len(injected) {
+		t.Errorf("deployable holds fewer masks than injected values:\n%s", source.Deployable)
 	}
 	if !strings.Contains(source.Deployable, "debug-literal") {
 		t.Errorf("deployable masked the literal the user wrote:\n%s", source.Deployable)

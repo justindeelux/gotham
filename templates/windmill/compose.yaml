@@ -11,7 +11,8 @@ services:
     volumes:
       - windmill_logs:/tmp/windmill/logs
     depends_on:
-      - db
+      db:
+        condition: service_healthy
   windmill-worker:
     image: ghcr.io/windmill-labs/windmill:1.875.0
     restart: unless-stopped
@@ -23,7 +24,22 @@ services:
       - windmill_cache:/tmp/windmill/cache
       - windmill_logs:/tmp/windmill/logs
     depends_on:
-      - db
+      db:
+        condition: service_healthy
+  windmill-worker-native:
+    image: ghcr.io/windmill-labs/windmill:1.875.0
+    restart: unless-stopped
+    environment:
+      DATABASE_URL: "postgres://windmill:{{ .db_password }}@db/windmill"
+      MODE: worker
+      WORKER_GROUP: native
+      NUM_WORKERS: "8"
+      SLEEP_QUEUE: "200"
+    volumes:
+      - windmill_logs:/tmp/windmill/logs
+    depends_on:
+      db:
+        condition: service_healthy
   db:
     image: postgres:18
     restart: unless-stopped
@@ -33,6 +49,11 @@ services:
       POSTGRES_DB: windmill
     volumes:
       - windmill_db_data:/var/lib/postgresql
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U $${POSTGRES_USER} -d $${POSTGRES_DB}"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
 volumes:
   windmill_db_data:
   windmill_cache:

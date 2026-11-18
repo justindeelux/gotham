@@ -15,7 +15,8 @@ services:
       ENGRAM_CLOUD_TOKEN_PEPPER: "{{ .token_pepper }}"
       ENGRAM_CLOUD_ALLOWED_PROJECTS: "*"
     depends_on:
-      - postgresql
+      postgresql:
+        condition: service_healthy
   postgresql:
     image: postgres:18-alpine
     restart: unless-stopped
@@ -25,5 +26,10 @@ services:
       POSTGRES_DB: engram
     volumes:
       - engram_postgres_data:/var/lib/postgresql
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U $${POSTGRES_USER} -d $${POSTGRES_DB}"]
+      interval: 5s
+      timeout: 20s
+      retries: 10
 volumes:
   engram_postgres_data:

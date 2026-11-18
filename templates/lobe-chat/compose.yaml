@@ -22,10 +22,14 @@ services:
       S3_SET_ACL: "0"
       LLM_VISION_IMAGE_USE_BASE64: "1"
     depends_on:
-      - postgresql
-      - redis
-      - rustfs
-      - rustfs-init
+      postgresql:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+      rustfs:
+        condition: service_healthy
+      rustfs-init:
+        condition: service_completed_successfully
   postgresql:
     image: paradedb/paradedb:0.26.7-pg17
     restart: unless-stopped
@@ -35,12 +39,23 @@ services:
       POSTGRES_PASSWORD: "{{ .db_password }}"
     volumes:
       - lobe_postgresql_data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U postgres -h 127.0.0.1"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+      start_period: 60s
   redis:
     image: redis:8.10.3-alpine
     restart: unless-stopped
     command: redis-server --save 60 1000 --appendonly yes
     volumes:
       - lobe_redis_data:/data
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
   rustfs:
     image: rustfs/rustfs:1.0.6
     restart: unless-stopped
@@ -68,6 +83,7 @@ services:
         rc alias set rustfs http://rustfs:9000 "$$RUSTFS_ACCESS_KEY" "$$RUSTFS_SECRET_KEY"
         rc mb "rustfs/$$S3_BUCKET" --ignore-existing
         rc anonymous set download "rustfs/$$S3_BUCKET"
+        printf '%s' '<CORSConfiguration><CORSRule><AllowedOrigin>*</AllowedOrigin><AllowedMethod>GET</AllowedMethod><AllowedMethod>PUT</AllowedMethod><AllowedMethod>HEAD</AllowedMethod><AllowedHeader>*</AllowedHeader><ExposeHeader>ETag</ExposeHeader><MaxAgeSeconds>3600</MaxAgeSeconds></CORSRule></CORSConfiguration>' | rc bucket cors set "rustfs/$$S3_BUCKET" -
     environment:
       RUSTFS_ACCESS_KEY: rustfs
       RUSTFS_SECRET_KEY: "{{ .rustfs_password }}"

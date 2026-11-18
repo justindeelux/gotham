@@ -33,9 +33,12 @@ services:
       LANGFUSE_INIT_USER_NAME: admin
       LANGFUSE_INIT_USER_PASSWORD: "{{ .admin_password }}"
     depends_on:
-      - postgres
-      - redis
-      - clickhouse
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+      clickhouse:
+        condition: service_healthy
   langfuse-worker:
     image: langfuse/langfuse-worker:4
     restart: unless-stopped
@@ -68,9 +71,12 @@ services:
       LANGFUSE_INIT_USER_NAME: admin
       LANGFUSE_INIT_USER_PASSWORD: "{{ .admin_password }}"
     depends_on:
-      - postgres
-      - redis
-      - clickhouse
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+      clickhouse:
+        condition: service_healthy
   postgres:
     image: postgres:17-alpine
     restart: unless-stopped
@@ -80,6 +86,11 @@ services:
       POSTGRES_PASSWORD: "{{ .db_password }}"
     volumes:
       - langfuse_postgres_data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -h localhost -U $${POSTGRES_USER} -d $${POSTGRES_DB}"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
   redis:
     image: redis:8
     restart: unless-stopped
@@ -88,6 +99,11 @@ services:
       REDIS_PASSWORD: "{{ .redis_password }}"
     volumes:
       - langfuse_redis_data:/data
+    healthcheck:
+      test: ["CMD", "redis-cli", "-a", "$${REDIS_PASSWORD}", "PING"]
+      interval: 3s
+      timeout: 10s
+      retries: 10
   clickhouse:
     image: clickhouse/clickhouse-server:26.10.4.207
     restart: unless-stopped
@@ -98,6 +114,11 @@ services:
       CLICKHOUSE_PASSWORD: "{{ .clickhouse_password }}"
     volumes:
       - langfuse_clickhouse_data:/var/lib/clickhouse
+    healthcheck:
+      test: ["CMD-SHELL", "wget --no-verbose --tries=1 --spider http://localhost:8123/ping || exit 1"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
 volumes:
   langfuse_postgres_data:
   langfuse_redis_data:

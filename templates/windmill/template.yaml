@@ -1,6 +1,6 @@
 name: Windmill
 icon: windmill
-description: "Windmill automation platform with PostgreSQL and a worker, persistent named volumes and an optional routed domain. The default admin is admin@windmill.dev / changeme; change it after the first login."
+description: "Windmill automation platform with PostgreSQL, one default and one native worker, persistent named volumes and an optional routed domain. Extra workers and the LSP sidecar are omitted. Default admin admin@windmill.dev / changeme; change it after login."
 homepage: https://www.windmill.dev/docs/
 category:
   - automation

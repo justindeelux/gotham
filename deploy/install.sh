@@ -126,6 +126,13 @@
 #                     [--file-manager | --no-file-manager] [--domain <host>]
 
 set -eu
+
+# Everything runs inside main() so the shell parses the whole file before the
+# first command runs: a piped run (`curl ... | sh`) then reads to EOF, so curl
+# keeps its pipe (no "curl: (23)") and a truncated download executes nothing.
+# Variables stay plain globals (POSIX sh has no locals, and the later steps rely
+# on them) and the body is not indented, so every heredoc keeps its bytes.
+main() {
 # A permissive base umask: shared directories (/etc/gotham, /usr/libexec/gotham,
 # /var/lib/gotham*) must be world-traversable and the service user must be able
 # to read the env/JWT files. A restrictive umask is applied only around the
@@ -2239,3 +2246,6 @@ fi
 if [ "${FINAL_RC}" -ne 0 ]; then
     exit "${FINAL_RC}"
 fi
+}
+
+main "$@"

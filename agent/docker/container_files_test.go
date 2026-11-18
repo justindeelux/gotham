@@ -37,6 +37,9 @@ type containerFileEngine struct {
 	state    string
 	mounts   []ContainerMount
 	commands []commandCall
+	// importErr makes ImportArchive fail without reading the body, the way the
+	// engine rejects a PUT on a read-only root or a missing parent directory.
+	importErr error
 }
 
 type commandCall struct {
@@ -194,6 +197,9 @@ func (e *containerFileEngine) children(directory string) []string {
 }
 
 func (e *containerFileEngine) ImportArchive(_ context.Context, _, destination string, body io.Reader) error {
+	if e.importErr != nil {
+		return e.importErr
+	}
 	reader := tar.NewReader(body)
 	for {
 		header, err := reader.Next()
@@ -573,6 +579,22 @@ func TestContainerFileWriteCreatesFileWithRequestedAttributes(t *testing.T) {
 	written := engine.files["/etc/new.conf"]
 	if written == nil || string(written.data) != "abc" || written.mode != 0o600 || written.uid != 1000 {
 		t.Fatalf("written = %+v", written)
+	}
+}
+
+func TestContainerFileWriteReportsTheEngineReasonForARejectedImport(t *testing.T) {
+	engine := newContainerFileEngine(sampleContainerFiles())
+	engine.importErr = fmt.Errorf("%w: /etc/missing", ErrDockerNotFound)
+	server := containerFileService(engine)
+	stream := newWriteStream(&agentv1.ContainerFilesWriteHeader{
+		ContainerId: "c1",
+		Path:        "/etc/app.conf",
+		Size:        10,
+		Uid:         -1,
+		Gid:         -1,
+	}, []string{"port=", "9090\n"})
+	if err := server.WriteContainerFile(stream); status.Code(err) != codes.NotFound {
+		t.Fatalf("write: %v, want NotFound from the engine, not an internal closed-pipe error", err)
 	}
 }
 

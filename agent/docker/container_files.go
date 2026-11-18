@@ -198,7 +198,9 @@ func (s *DockerServer) WriteContainerFile(stream grpc.ClientStreamingServer[agen
 	// Cancel after a failed import so a sender blocked in Recv returns promptly.
 	cancel()
 	sendErr := <-done
-	if sendErr != nil {
+	// A rejected import closes the pipe under the sender, so its closed-pipe
+	// error is a symptom: report the engine's reason instead.
+	if sendErr != nil && (putErr == nil || !errors.Is(sendErr, io.ErrClosedPipe)) {
 		return containerFileError(sendErr)
 	}
 	if putErr != nil {

@@ -1,0 +1,27 @@
+services:
+  reactive-resume:
+    image: amruthpillai/reactive-resume:v6
+    restart: unless-stopped
+    ports:
+      - "3000"
+    environment:
+      APP_URL: "https://${GOTHAM_DOMAIN:-localhost}"
+      DATABASE_URL: "postgresql://{{ .db_user }}:{{ .db_password }}@postgres:5432/{{ .db_name }}"
+      AUTH_SECRET: "{{ .auth_secret }}"
+      ENCRYPTION_SECRET: "{{ .encryption_secret }}"
+    volumes:
+      - reactive_resume_data:/app/data
+    depends_on:
+      - postgres
+  postgres:
+    image: postgres:18-alpine
+    restart: unless-stopped
+    environment:
+      POSTGRES_DB: "{{ .db_name }}"
+      POSTGRES_USER: "{{ .db_user }}"
+      POSTGRES_PASSWORD: "{{ .db_password }}"
+    volumes:
+      - postgres_data:/var/lib/postgresql
+volumes:
+  reactive_resume_data:
+  postgres_data:

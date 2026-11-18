@@ -1,0 +1,58 @@
+name: Teable
+icon: teable
+description: Teable is a visual database built on PostgreSQL, with Redis caching and persistent named volumes.
+homepage: https://help.teable.io/
+category:
+  - productivity
+fields:
+  - key: domain
+    label: Domain
+    type: text
+    required: false
+    default: ""
+    placeholder: base.example.com
+    help: Optional. Leave empty to add a domain later from the service page.
+    pattern: ^([A-Za-z0-9][A-Za-z0-9.-]*)?$
+    max_length: 253
+  - key: timezone
+    label: Timezone
+    type: text
+    default: UTC
+    placeholder: Europe/Berlin
+    pattern: ^[A-Za-z0-9_/+-]+$
+    max_length: 64
+    help: IANA timezone name used by the containers.
+  - key: db_name
+    label: Database name
+    type: text
+    default: teable
+    pattern: ^[A-Za-z0-9_]{1,64}$
+    max_length: 64
+  - key: db_user
+    label: Database user
+    type: text
+    default: teable
+    pattern: ^[A-Za-z0-9_]{1,32}$
+    max_length: 32
+  - key: db_password
+    label: Database password
+    type: secret
+    required: true
+    generate: true
+    help: Used by Teable and PostgreSQL; use Generate for a strong value.
+  - key: redis_password
+    label: Redis password
+    type: secret
+    required: true
+    generate: true
+    help: Protects the cache; use Generate for a strong value.
+  - key: secret_key
+    label: Secret key
+    type: secret
+    required: true
+    generate: true
+    help: Signs sessions; changing it logs every user out.
+routes:
+  - service: teable
+    port: 3000
+    domain_field: domain

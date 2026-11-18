@@ -1,0 +1,57 @@
+name: Weblate
+icon: weblate
+description: Weblate is a web-based continuous localization platform, backed by PostgreSQL and Valkey with persistent named volumes.
+homepage: https://weblate.org
+category:
+  - productivity
+fields:
+  - key: domain
+    label: Domain
+    type: text
+    required: false
+    default: ""
+    placeholder: translate.example.com
+    help: Optional. Leave empty to add a domain later from the service page.
+    pattern: ^([A-Za-z0-9][A-Za-z0-9.-]*)?$
+    max_length: 253
+  - key: admin_email
+    label: Admin email
+    type: text
+    default: admin@example.com
+    pattern: ^[^@\s]+@[^@\s]+$
+    max_length: 254
+    help: Created on first start only.
+  - key: admin_password
+    label: Admin password
+    type: secret
+    required: true
+    generate: true
+    help: Created on first start only; use Generate for a strong value.
+  - key: db_name
+    label: Database name
+    type: text
+    default: weblate
+    pattern: ^[A-Za-z0-9_]{1,64}$
+    max_length: 64
+  - key: db_user
+    label: Database user
+    type: text
+    default: weblate
+    pattern: ^[A-Za-z0-9_]{1,32}$
+    max_length: 32
+  - key: db_password
+    label: Database password
+    type: secret
+    required: true
+    generate: true
+    help: Used by Weblate and PostgreSQL; use Generate for a strong value.
+  - key: redis_password
+    label: Redis password
+    type: secret
+    required: true
+    generate: true
+    help: Protects the cache and queue; use Generate for a strong value.
+routes:
+  - service: weblate
+    port: 8080
+    domain_field: domain

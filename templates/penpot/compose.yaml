@@ -1,0 +1,62 @@
+services:
+  frontend:
+    image: penpotapp/frontend:2.19.1
+    restart: unless-stopped
+    ports:
+      - "8080"
+    environment:
+      PENPOT_FLAGS: enable-login-with-password
+    volumes:
+      - penpot_assets:/opt/data/assets
+    depends_on:
+      - penpot-backend
+      - penpot-exporter
+  penpot-backend:
+    image: penpotapp/backend:2.19.1
+    restart: unless-stopped
+    environment:
+      PENPOT_FLAGS: enable-login-with-password
+      PENPOT_HTTP_SERVER_PORT: "6060"
+      PENPOT_SECRET_KEY: "{{ .secret_key }}"
+      PENPOT_PUBLIC_URI: "https://${GOTHAM_DOMAIN:-localhost}"
+      PENPOT_BACKEND_URI: http://penpot-backend
+      PENPOT_EXPORTER_URI: http://penpot-exporter
+      PENPOT_DATABASE_URI: postgresql://postgres/penpot
+      PENPOT_DATABASE_USERNAME: "{{ .db_user }}"
+      PENPOT_DATABASE_PASSWORD: "{{ .db_password }}"
+      PENPOT_REDIS_URI: redis://penpot-valkey/0
+      PENPOT_OBJECTS_STORAGE_BACKEND: fs
+      PENPOT_OBJECTS_STORAGE_FS_DIRECTORY: /opt/data/assets
+      PENPOT_TELEMETRY_ENABLED: "false"
+    volumes:
+      - penpot_assets:/opt/data/assets
+    depends_on:
+      - postgres
+      - penpot-valkey
+  penpot-exporter:
+    image: penpotapp/exporter:2.19.1
+    restart: unless-stopped
+    environment:
+      PENPOT_PUBLIC_URI: "https://${GOTHAM_DOMAIN:-localhost}"
+      PENPOT_REDIS_URI: redis://penpot-valkey/0
+  postgres:
+    image: postgres:15
+    restart: unless-stopped
+    environment:
+      POSTGRES_INITDB_ARGS: --data-checksums
+      POSTGRES_USER: "{{ .db_user }}"
+      POSTGRES_PASSWORD: "{{ .db_password }}"
+      POSTGRES_DB: penpot
+    volumes:
+      - penpot_postgresql_data:/var/lib/postgresql/data
+  penpot-valkey:
+    image: valkey/valkey:8.1
+    restart: unless-stopped
+    environment:
+      VALKEY_EXTRA_FLAGS: --maxmemory 128mb --maxmemory-policy volatile-lfu
+    volumes:
+      - penpot_valkey_data:/data
+volumes:
+  penpot_assets:
+  penpot_postgresql_data:
+  penpot_valkey_data:

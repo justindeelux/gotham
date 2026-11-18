@@ -1,0 +1,32 @@
+name: SilverBullet
+icon: silverbullet
+description: SilverBullet is a markdown knowledge base served from a persistent named space, protected by a username and password.
+homepage: https://v2.silverbullet.md/Install/Configuration
+category:
+  - productivity
+fields:
+  - key: domain
+    label: Domain
+    type: text
+    required: false
+    default: ""
+    placeholder: notes.example.com
+    help: Optional. Leave empty to add a domain later from the service page.
+    pattern: ^([A-Za-z0-9][A-Za-z0-9.-]*)?$
+    max_length: 253
+  - key: admin_user
+    label: Username
+    type: text
+    default: admin
+    pattern: ^[A-Za-z0-9_.-]{1,64}$
+    max_length: 64
+  - key: admin_password
+    label: Password
+    type: secret
+    required: true
+    generate: true
+    help: Asked once by the browser; use Generate for a strong value.
+routes:
+  - service: silverbullet
+    port: 3000
+    domain_field: domain

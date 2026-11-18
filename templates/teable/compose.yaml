@@ -1,0 +1,42 @@
+services:
+  teable:
+    image: ghcr.io/teableio/teable:release.2026-11-13T02-21-01Z.3890
+    restart: unless-stopped
+    ports:
+      - "3000"
+    environment:
+      PUBLIC_ORIGIN: "https://${GOTHAM_DOMAIN:-localhost}"
+      POSTGRES_PASSWORD: "{{ .db_password }}"
+      SECRET_KEY: "{{ .secret_key }}"
+      TZ: "{{ .timezone }}"
+      PRISMA_DATABASE_URL: "postgresql://{{ .db_user }}:{{ .db_password }}@teable-db:5432/{{ .db_name }}"
+      NEXT_ENV_IMAGES_ALL_REMOTE: "true"
+      PORT: "3000"
+      REDIS_PASSWORD: "{{ .redis_password }}"
+      BACKEND_CACHE_PROVIDER: redis
+      BACKEND_CACHE_REDIS_URI: "redis://default:{{ .redis_password }}@teable-cache:6379/0"
+    volumes:
+      - teable_data:/app/.assets
+    depends_on:
+      - teable-db
+      - teable-cache
+  teable-db:
+    image: postgres:15.4
+    restart: unless-stopped
+    environment:
+      TZ: "{{ .timezone }}"
+      POSTGRES_DB: "{{ .db_name }}"
+      POSTGRES_USER: "{{ .db_user }}"
+      POSTGRES_PASSWORD: "{{ .db_password }}"
+    volumes:
+      - teable_db_data:/var/lib/postgresql/data
+  teable-cache:
+    image: redis:7.2.4
+    restart: unless-stopped
+    command: ["redis-server", "--appendonly", "yes", "--requirepass", "{{ .redis_password }}"]
+    volumes:
+      - teable_cache_data:/data
+volumes:
+  teable_data:
+  teable_db_data:
+  teable_cache_data:

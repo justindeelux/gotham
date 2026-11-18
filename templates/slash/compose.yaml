@@ -1,0 +1,10 @@
+services:
+  slash:
+    image: yourselfhosted/slash:0.5.3
+    restart: unless-stopped
+    ports:
+      - "5231"
+    volumes:
+      - slash_data:/var/opt/slash
+volumes:
+  slash_data:

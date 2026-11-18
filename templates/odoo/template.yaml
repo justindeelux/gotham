@@ -1,0 +1,32 @@
+name: Odoo
+icon: odoo
+description: Odoo business apps (CRM, accounting, inventory, projects) backed by PostgreSQL, with persistent named volumes.
+homepage: https://www.odoo.com/
+category:
+  - productivity
+fields:
+  - key: domain
+    label: Domain
+    type: text
+    required: false
+    default: ""
+    placeholder: erp.example.com
+    help: Optional. Leave empty to add a domain later from the service page.
+    pattern: ^([A-Za-z0-9][A-Za-z0-9.-]*)?$
+    max_length: 253
+  - key: db_user
+    label: Database user
+    type: text
+    default: odoo
+    pattern: ^[A-Za-z0-9_]{1,32}$
+    max_length: 32
+  - key: db_password
+    label: Database password
+    type: secret
+    required: true
+    generate: true
+    help: Used by Odoo and PostgreSQL; use Generate for a strong value.
+routes:
+  - service: odoo
+    port: 8069
+    domain_field: domain

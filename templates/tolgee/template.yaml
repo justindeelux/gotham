@@ -1,0 +1,50 @@
+name: Tolgee
+icon: tolgee
+description: Tolgee is a localization platform for developers and translators, backed by PostgreSQL with persistent named volumes.
+homepage: https://tolgee.io/
+category:
+  - productivity
+fields:
+  - key: domain
+    label: Domain
+    type: text
+    required: false
+    default: ""
+    placeholder: translate.example.com
+    help: Optional. Leave empty to add a domain later from the service page.
+    pattern: ^([A-Za-z0-9][A-Za-z0-9.-]*)?$
+    max_length: 253
+  - key: admin_password
+    label: Admin password
+    type: secret
+    required: true
+    generate: true
+    help: Initial password of the admin account; use Generate for a strong value.
+  - key: jwt_secret
+    label: JWT secret
+    type: secret
+    required: true
+    generate: true
+    help: Signs API tokens; changing it logs every user out.
+  - key: db_name
+    label: Database name
+    type: text
+    default: tolgee
+    pattern: ^[A-Za-z0-9_]{1,64}$
+    max_length: 64
+  - key: db_user
+    label: Database user
+    type: text
+    default: tolgee
+    pattern: ^[A-Za-z0-9_]{1,32}$
+    max_length: 32
+  - key: db_password
+    label: Database password
+    type: secret
+    required: true
+    generate: true
+    help: Used by Tolgee and PostgreSQL; use Generate for a strong value.
+routes:
+  - service: tolgee
+    port: 8080
+    domain_field: domain

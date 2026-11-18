@@ -1,0 +1,29 @@
+services:
+  odoo:
+    image: odoo:20
+    restart: unless-stopped
+    command: --proxy-mode
+    ports:
+      - "8069"
+    environment:
+      HOST: postgresql
+      USER: "{{ .db_user }}"
+      PASSWORD: "{{ .db_password }}"
+    volumes:
+      - odoo_web_data:/var/lib/odoo
+      - odoo_extra_addons:/mnt/extra-addons
+    depends_on:
+      - postgresql
+  postgresql:
+    image: postgres:16-alpine
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: "{{ .db_user }}"
+      POSTGRES_PASSWORD: "{{ .db_password }}"
+      POSTGRES_DB: postgres
+    volumes:
+      - postgresql_data:/var/lib/postgresql/data
+volumes:
+  odoo_web_data:
+  odoo_extra_addons:
+  postgresql_data:

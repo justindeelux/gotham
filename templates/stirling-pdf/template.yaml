@@ -1,0 +1,20 @@
+name: Stirling PDF
+icon: stirling-pdf
+description: Stirling PDF is a web based PDF toolbox for merging, splitting, converting and editing documents, with persistent named volumes.
+homepage: https://github.com/Stirling-Tools/Stirling-PDF
+category:
+  - productivity
+fields:
+  - key: domain
+    label: Domain
+    type: text
+    required: false
+    default: ""
+    placeholder: pdf.example.com
+    help: Optional. Leave empty to add a domain later from the service page.
+    pattern: ^([A-Za-z0-9][A-Za-z0-9.-]*)?$
+    max_length: 253
+routes:
+  - service: stirling-pdf
+    port: 8080
+    domain_field: domain

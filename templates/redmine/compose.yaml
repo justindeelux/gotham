@@ -1,0 +1,35 @@
+services:
+  redmine:
+    image: redmine:7-alpine
+    restart: unless-stopped
+    ports:
+      - "3000"
+    environment:
+      SECRET_KEY_BASE: "{{ .secret_key_base }}"
+      REDMINE_DB_POSTGRES: postgresql
+      REDMINE_DB_PORT: "5432"
+      REDMINE_DB_USERNAME: "{{ .db_user }}"
+      REDMINE_DB_PASSWORD: "{{ .db_password }}"
+      REDMINE_DB_DATABASE: redmine
+    volumes:
+      - redmine_config:/usr/src/redmine/config
+      - redmine_files:/usr/src/redmine/files
+      - redmine_themes:/usr/src/redmine/themes
+      - redmine_plugins:/usr/src/redmine/plugins
+    depends_on:
+      - postgresql
+  postgresql:
+    image: postgres:17-alpine
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: "{{ .db_user }}"
+      POSTGRES_PASSWORD: "{{ .db_password }}"
+      POSTGRES_DB: redmine
+    volumes:
+      - postgresql_data:/var/lib/postgresql/data
+volumes:
+  redmine_config:
+  redmine_files:
+  redmine_themes:
+  redmine_plugins:
+  postgresql_data:

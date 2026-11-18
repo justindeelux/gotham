@@ -1,0 +1,50 @@
+name: Reactive Resume
+icon: reactive-resume
+description: Reactive Resume is a privacy-first resume builder backed by PostgreSQL, with persistent named volumes and an optional routed domain.
+homepage: https://docs.rxresu.me/self-hosting/docker
+category:
+  - productivity
+fields:
+  - key: domain
+    label: Domain
+    type: text
+    required: false
+    default: ""
+    placeholder: resume.example.com
+    help: Optional. Leave empty to add a domain later from the service page.
+    pattern: ^([A-Za-z0-9][A-Za-z0-9.-]*)?$
+    max_length: 253
+  - key: db_name
+    label: Database name
+    type: text
+    default: reactive_resume
+    pattern: ^[A-Za-z0-9_]{1,64}$
+    max_length: 64
+  - key: db_user
+    label: Database user
+    type: text
+    default: reactive_resume
+    pattern: ^[A-Za-z0-9_]{1,32}$
+    max_length: 32
+  - key: db_password
+    label: Database password
+    type: secret
+    required: true
+    generate: true
+    help: Used by the app and PostgreSQL; use Generate for a strong value.
+  - key: auth_secret
+    label: Authentication secret
+    type: secret
+    required: true
+    generate: true
+    help: Signs login sessions; changing it logs every user out.
+  - key: encryption_secret
+    label: Encryption secret
+    type: secret
+    required: true
+    generate: true
+    help: Encrypts stored data; losing it makes existing data unreadable.
+routes:
+  - service: reactive-resume
+    port: 3000
+    domain_field: domain

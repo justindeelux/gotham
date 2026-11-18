@@ -1,0 +1,44 @@
+name: Ryot
+icon: ryot
+description: Ryot tracks media, fitness and other parts of life, backed by PostgreSQL with persistent named volumes.
+homepage: https://github.com/ignisda/ryot
+category:
+  - productivity
+fields:
+  - key: domain
+    label: Domain
+    type: text
+    required: false
+    default: ""
+    placeholder: track.example.com
+    help: Optional. Leave empty to add a domain later from the service page.
+    pattern: ^([A-Za-z0-9][A-Za-z0-9.-]*)?$
+    max_length: 253
+  - key: db_name
+    label: Database name
+    type: text
+    default: ryot
+    pattern: ^[A-Za-z0-9_]{1,64}$
+    max_length: 64
+  - key: db_user
+    label: Database user
+    type: text
+    default: ryot
+    pattern: ^[A-Za-z0-9_]{1,32}$
+    max_length: 32
+  - key: db_password
+    label: Database password
+    type: secret
+    required: true
+    generate: true
+    help: Used by Ryot and PostgreSQL; use Generate for a strong value.
+  - key: admin_token
+    label: Admin access token
+    type: secret
+    required: true
+    generate: true
+    help: Elevates API requests to administrator; use Generate for a strong value.
+routes:
+  - service: ryot
+    port: 8000
+    domain_field: domain

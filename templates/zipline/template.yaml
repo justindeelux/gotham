@@ -1,0 +1,45 @@
+name: zipline
+icon: zipline
+description: A ShareX/file upload server that is easy to use, packed with features, and with an easy setup!
+homepage: https://zipline.diced.sh/docs/config
+category:
+  - media
+fields:
+  - key: domain
+    label: Domain
+    type: text
+    required: false
+    default: ""
+    placeholder: app.example.com
+    help: Optional. Leave empty to add a domain later from the service page.
+    pattern: ^([A-Za-z0-9][A-Za-z0-9.-]*)?$
+    max_length: 253
+  - key: db_user
+    label: Database user
+    type: text
+    required: false
+    default: zipline
+    pattern: ^[A-Za-z0-9_]{1,32}$
+    max_length: 32
+  - key: db_password
+    label: Database password
+    type: secret
+    required: true
+    generate: true
+  - key: db_name
+    label: Database name
+    type: text
+    required: false
+    default: zipline-db
+    pattern: ^[A-Za-z0-9_-]{1,64}$
+    max_length: 64
+  - key: core_secret
+    label: Core secret
+    type: secret
+    required: true
+    help: Signs sessions and generated share links.
+    generate: true
+routes:
+  - service: zipline
+    port: 3000
+    domain_field: domain

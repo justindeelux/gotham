@@ -1,0 +1,15 @@
+services:
+  prowlarr:
+    image: lscr.io/linuxserver/prowlarr:2.7.0.5723-ls168
+    restart: unless-stopped
+    ports:
+      - '9696'
+    environment:
+      _APP_URL: https://${GOTHAM_DOMAIN:-localhost}
+      PUID: '1000'
+      PGID: '1000'
+      TZ: ${TZ:-Etc/UTC}
+    volumes:
+      - prowlarr_config:/config
+volumes:
+  prowlarr_config:

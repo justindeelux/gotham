@@ -1,0 +1,44 @@
+name: peertube
+icon: peertube
+description: Free, open-source and decentralized video platform.
+homepage: https://docs.joinpeertube.org/install/docker
+category:
+  - media
+fields:
+  - key: domain
+    label: Domain
+    type: text
+    required: false
+    default: ""
+    placeholder: app.example.com
+    help: Optional. Leave empty to add a domain later from the service page.
+    pattern: ^([A-Za-z0-9][A-Za-z0-9.-]*)?$
+    max_length: 253
+  - key: admin_email
+    label: Admin email
+    type: text
+    required: true
+    placeholder: admin@example.com
+    help: Address of the first administrator account; PeerTube refuses to start without it.
+  - key: db_user
+    label: Database user
+    type: text
+    required: false
+    default: peertube
+    pattern: ^[A-Za-z0-9_]{1,32}$
+    max_length: 32
+  - key: db_password
+    label: Database password
+    type: secret
+    required: true
+    generate: true
+  - key: peertube_secret
+    label: Instance secret
+    type: secret
+    required: true
+    help: Signs sessions and tokens; rotating it logs everyone out.
+    generate: true
+routes:
+  - service: peertube
+    port: 9000
+    domain_field: domain

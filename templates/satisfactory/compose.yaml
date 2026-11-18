@@ -1,0 +1,18 @@
+services:
+  satisfactory:
+    image: wolveix/satisfactory-server:v1.9.11
+    restart: unless-stopped
+    ports:
+      - '{{ .game_port }}:7777/tcp'
+      - '{{ .game_port }}:7777/udp'
+      - '{{ .messaging_port }}:8888/tcp'
+    environment:
+      MAXPLAYERS: '{{ .max_players }}'
+      SERVERGAMEPORT: '{{ .game_port }}'
+      SERVERMESSAGINGPORT: '{{ .messaging_port }}'
+      PUID: '1000'
+      PGID: '1000'
+    volumes:
+      - satisfactory_config:/config
+volumes:
+  satisfactory_config:

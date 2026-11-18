@@ -1,0 +1,60 @@
+services:
+  museum:
+    image: ghcr.io/ente/server:latest
+    restart: unless-stopped
+    ports:
+      - '8080'
+    environment:
+      ENTE_HTTP_USE_TLS: 'false'
+      ENTE_PHOTOS_ORIGIN: https://{{ .photos_domain }}
+      ENTE_APPS_PUBLIC_ALBUMS: https://{{ .albums_domain }}
+      ENTE_DB_HOST: postgres
+      ENTE_DB_PORT: '5432'
+      ENTE_DB_NAME: ente_db
+      ENTE_DB_USER: '{{ .db_user }}'
+      ENTE_DB_PASSWORD: '{{ .db_password }}'
+      ENTE_KEY_ENCRYPTION: '{{ .encryption_key }}'
+      ENTE_KEY_HASH: '{{ .hash_key }}'
+      ENTE_JWT_SECRET: '{{ .jwt_secret }}'
+      ENTE_S3_B2_EU_CEN_ARE_LOCAL_BUCKETS: 'false'
+      ENTE_S3_B2_EU_CEN_USE_PATH_STYLE_URLS: 'true'
+      ENTE_S3_B2_EU_CEN_KEY: '{{ .s3_access_key }}'
+      ENTE_S3_B2_EU_CEN_SECRET: '{{ .s3_secret_key }}'
+      ENTE_S3_B2_EU_CEN_ENDPOINT: '{{ .s3_endpoint }}'
+      ENTE_S3_B2_EU_CEN_REGION: '{{ .s3_region }}'
+      ENTE_S3_B2_EU_CEN_BUCKET: '{{ .s3_bucket }}'
+    volumes:
+      - ente_museum_data:/data
+      - ente_museum_config:/config
+    depends_on:
+      - postgres
+  web:
+    image: ghcr.io/ente/web:latest
+    restart: unless-stopped
+    ports:
+      - '3000'
+    environment:
+      ENTE_API_ORIGIN: https://{{ .api_domain }}
+      ENTE_ALBUMS_ORIGIN: https://{{ .albums_domain }}
+  albums:
+    image: ghcr.io/ente/web:latest
+    restart: unless-stopped
+    ports:
+      - '3002'
+    environment:
+      ENTE_API_ORIGIN: https://{{ .api_domain }}
+      ENTE_ALBUMS_ORIGIN: https://{{ .albums_domain }}
+      ENTE_PHOTOS_ORIGIN: https://{{ .photos_domain }}
+  postgres:
+    image: postgres:15
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: '{{ .db_user }}'
+      POSTGRES_PASSWORD: '{{ .db_password }}'
+      POSTGRES_DB: ente_db
+    volumes:
+      - ente_postgres_data:/var/lib/postgresql/data
+volumes:
+  ente_museum_data:
+  ente_museum_config:
+  ente_postgres_data:

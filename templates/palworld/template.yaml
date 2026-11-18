@@ -1,0 +1,46 @@
+name: palworld
+icon: palworld
+description: Palworld dedicated game server with save persistence and automatic updates on boot.
+homepage: https://github.com/thijsvanloef/palworld-server-docker
+category:
+  - games
+fields:
+  - key: server_name
+    label: Server name
+    type: text
+    required: false
+    default: Palworld Server
+    max_length: 64
+  - key: players
+    label: Max players
+    type: number
+    required: false
+    default: 16
+    min: 1
+    max: 32
+  - key: game_port
+    label: Game port
+    type: number
+    required: false
+    default: 8211
+    min: 1024
+    max: 65535
+  - key: query_port
+    label: Query port
+    type: number
+    required: false
+    default: 27015
+    min: 1024
+    max: 65535
+  - key: server_password
+    label: Server password
+    type: secret
+    required: true
+    help: Password players need to join.
+    generate: true
+  - key: admin_password
+    label: Admin password
+    type: secret
+    required: true
+    help: Password for the in-game admin commands.
+    generate: true

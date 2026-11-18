@@ -1,0 +1,9 @@
+services:
+  imgcompress:
+    image: karimz1/imgcompress:1.0.0
+    restart: unless-stopped
+    ports:
+      - '5000'
+    environment:
+      DISABLE_LOGO: ${DISABLE_LOGO:-false}
+      DISABLE_STORAGE_MANAGEMENT: ${DISABLE_STORAGE_MANAGEMENT:-false}

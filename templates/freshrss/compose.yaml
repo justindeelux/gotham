@@ -1,0 +1,14 @@
+services:
+  freshrss:
+    image: freshrss/freshrss:1.30.4
+    restart: unless-stopped
+    ports:
+      - '80'
+    environment:
+      CRON_MIN: '{{ .cron_min }}'
+    volumes:
+      - freshrss_data:/var/www/FreshRSS/data
+      - freshrss_extensions:/var/www/FreshRSS/extensions
+volumes:
+  freshrss_data:
+  freshrss_extensions:

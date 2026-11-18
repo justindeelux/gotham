@@ -1,0 +1,19 @@
+services:
+  jellyfin:
+    image: lscr.io/linuxserver/jellyfin:10.11.8
+    restart: unless-stopped
+    ports:
+      - '8096'
+    environment:
+      PUID: '1000'
+      PGID: '1000'
+      TZ: ${TZ:-Etc/UTC}
+      JELLYFIN_PublishedServerUrl: https://${GOTHAM_DOMAIN:-localhost}
+    volumes:
+      - jellyfin_config:/config
+      - jellyfin_tvshows:/data/tvshows
+      - jellyfin_movies:/data/movies
+volumes:
+  jellyfin_config:
+  jellyfin_tvshows:
+  jellyfin_movies:

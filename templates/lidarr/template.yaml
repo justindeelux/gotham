@@ -1,0 +1,20 @@
+name: lidarr
+icon: lidarr
+description: Lidarr - a music collection manager for Usenet and BitTorrent users
+homepage: https://hub.docker.com/r/linuxserver/lidarr
+category:
+  - media
+fields:
+  - key: domain
+    label: Domain
+    type: text
+    required: false
+    default: ""
+    placeholder: app.example.com
+    help: Optional. Leave empty to add a domain later from the service page.
+    pattern: ^([A-Za-z0-9][A-Za-z0-9.-]*)?$
+    max_length: 253
+routes:
+  - service: lidarr
+    port: 8686
+    domain_field: domain

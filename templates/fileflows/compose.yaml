@@ -1,0 +1,21 @@
+services:
+  fileflows:
+    image: revenz/fileflows:26.10
+    restart: unless-stopped
+    ports:
+      - '5000'
+    environment:
+      _APP_URL: https://${GOTHAM_DOMAIN:-localhost}
+      PUID: '1000'
+      PGID: '1000'
+      TZ: ${TZ:-Etc/UTC}
+    volumes:
+      - fileflows_temp:/temp
+      - fileflows_configs:/app/Data
+      - fileflows_logs:/app/Logs
+      - fileflows_common:/app/common
+volumes:
+  fileflows_temp:
+  fileflows_configs:
+  fileflows_logs:
+  fileflows_common:

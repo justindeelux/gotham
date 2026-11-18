@@ -1,0 +1,28 @@
+services:
+  zipline:
+    image: ghcr.io/diced/zipline:4.8.3
+    restart: unless-stopped
+    ports:
+      - '3000'
+    environment:
+      CORE_RETURN_HTTPS: 'true'
+      CORE_SECRET: '{{ .core_secret }}'
+      DATABASE_URL: postgres://{{ .db_user }}:{{ .db_password }}@postgres/{{ .db_name }}
+    volumes:
+      - zipline_uploads:/zipline/uploads
+      - zipline_public:/zipline/public
+    depends_on:
+      - postgres
+  postgres:
+    image: postgres:16-alpine
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: '{{ .db_user }}'
+      POSTGRES_PASSWORD: '{{ .db_password }}'
+      POSTGRES_DB: '{{ .db_name }}'
+    volumes:
+      - zipline_postgres_data:/var/lib/postgresql/data
+volumes:
+  zipline_uploads:
+  zipline_public:
+  zipline_postgres_data:

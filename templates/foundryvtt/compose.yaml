@@ -1,0 +1,18 @@
+services:
+  foundryvtt:
+    image: felddy/foundryvtt:14.370.0
+    restart: unless-stopped
+    ports:
+      - '30000'
+    environment:
+      FOUNDRY_LICENSE_KEY: '{{ .license_key }}'
+      FOUNDRY_ADMIN_KEY: '{{ .admin_key }}'
+      FOUNDRY_HOSTNAME: ${GOTHAM_DOMAIN:-localhost}
+      FOUNDRY_PROXY_PORT: '443'
+      FOUNDRY_PROXY_SSL: 'true'
+      FOUNDRY_MINIFY_STATIC_FILES: 'true'
+      TIMEZONE: UTC
+    volumes:
+      - foundryvtt_data:/data
+volumes:
+  foundryvtt_data:

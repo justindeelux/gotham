@@ -1,0 +1,26 @@
+services:
+  palworld:
+    image: thijsvanloef/palworld-server-docker:v2.8.1
+    restart: unless-stopped
+    stop_grace_period: 30s
+    ports:
+      - '{{ .game_port }}:8211/udp'
+      - '{{ .query_port }}:27015/udp'
+    environment:
+      TZ: ${TZ:-UTC}
+      PUID: '1000'
+      PGID: '1000'
+      SERVER_NAME: '{{ .server_name }}'
+      PLAYERS: '{{ .players }}'
+      SERVER_PASSWORD: '{{ .server_password }}'
+      ADMIN_PASSWORD: '{{ .admin_password }}'
+      PORT: '{{ .game_port }}'
+      PUBLIC_PORT: '{{ .game_port }}'
+      QUERY_PORT: '{{ .query_port }}'
+      UPDATE_ON_BOOT: 'true'
+      BACKUP_ENABLED: 'true'
+      REST_API_ENABLED: 'true'
+    volumes:
+      - palworld_data:/palworld
+volumes:
+  palworld_data:

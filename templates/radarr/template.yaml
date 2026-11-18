@@ -1,0 +1,20 @@
+name: radarr
+icon: radarr
+description: Radarr⁠ - A fork of Sonarr to work with movies à la Couchpotato.
+homepage: https://hub.docker.com/r/linuxserver/radarr
+category:
+  - media
+fields:
+  - key: domain
+    label: Domain
+    type: text
+    required: false
+    default: ""
+    placeholder: app.example.com
+    help: Optional. Leave empty to add a domain later from the service page.
+    pattern: ^([A-Za-z0-9][A-Za-z0-9.-]*)?$
+    max_length: 253
+routes:
+  - service: radarr
+    port: 7878
+    domain_field: domain

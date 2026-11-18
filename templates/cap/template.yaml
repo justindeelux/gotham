@@ -1,0 +1,98 @@
+name: cap
+icon: cap
+description: Cap is the open source alternative to Loom. Lightweight, powerful, and cross-platform. Record and share in seconds.
+homepage: https://cap.so
+category:
+  - media
+fields:
+  - key: domain
+    label: Domain
+    type: text
+    required: false
+    default: ""
+    placeholder: app.example.com
+    help: Optional. Leave empty to add a domain later from the service page.
+    pattern: ^([A-Za-z0-9][A-Za-z0-9.-]*)?$
+    max_length: 253
+  - key: db_name
+    label: Database name
+    type: text
+    required: false
+    default: planetscale
+    pattern: ^[A-Za-z0-9_-]{1,64}$
+    max_length: 64
+  - key: db_user
+    label: Database user
+    type: text
+    required: false
+    default: cap
+    pattern: ^[A-Za-z0-9_]{1,32}$
+    max_length: 32
+  - key: db_password
+    label: Database password
+    type: secret
+    required: true
+    generate: true
+  - key: db_root_password
+    label: MySQL root password
+    type: secret
+    required: true
+    generate: true
+  - key: database_encryption_key
+    label: Database encryption key
+    type: secret
+    required: true
+    help: 64 hex characters; generate with openssl rand -hex 32. Losing it makes encrypted fields unreadable.
+    pattern: ^[0-9a-f]{64}$
+    max_length: 64
+  - key: nextauth_secret
+    label: Session secret
+    type: secret
+    required: true
+    help: 64 hex characters that sign login sessions; generate with openssl rand -hex 32.
+    pattern: ^[0-9a-f]{64}$
+    max_length: 64
+  - key: aws_access_key
+    label: S3 access key
+    type: secret
+    required: true
+    help: Access key of the S3-compatible bucket that stores recordings.
+  - key: aws_secret_key
+    label: S3 secret key
+    type: secret
+    required: true
+    help: Secret key of the S3-compatible bucket that stores recordings.
+  - key: aws_bucket
+    label: S3 bucket
+    type: text
+    required: true
+    help: Bucket name; create it before deploying.
+  - key: aws_region
+    label: S3 region
+    type: text
+    required: false
+    default: us-east-1
+    pattern: ^[A-Za-z0-9-]{1,64}$
+    max_length: 64
+  - key: aws_endpoint
+    label: S3 endpoint
+    type: text
+    required: true
+    placeholder: https://s3.example.com
+    help: S3 API endpoint the server calls; use the internal address when it runs on this node.
+  - key: s3_internal_endpoint
+    label: S3 internal endpoint
+    type: text
+    required: true
+    placeholder: https://s3.example.com
+    help: Endpoint the browser uses to upload recordings.
+  - key: s3_public_endpoint
+    label: S3 public endpoint
+    type: text
+    required: true
+    placeholder: https://media.example.com
+    help: Public address recordings are served from; web playback needs it.
+routes:
+  - service: cap-web
+    port: 3000
+    domain_field: domain

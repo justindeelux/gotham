@@ -1,0 +1,18 @@
+services:
+  emby:
+    image: lscr.io/linuxserver/emby:4.10.2
+    restart: unless-stopped
+    ports:
+      - '8096'
+    environment:
+      PUID: '1000'
+      PGID: '1000'
+      TZ: ${TZ:-Etc/UTC}
+    volumes:
+      - emby_config:/config
+      - emby_tvshows:/tvshows
+      - emby_movies:/movies
+volumes:
+  emby_config:
+  emby_tvshows:
+  emby_movies:

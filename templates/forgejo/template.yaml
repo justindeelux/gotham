@@ -13,6 +13,13 @@ fields:
     help: The public host served by the node's Traefik proxy.
     pattern: ^[A-Za-z0-9][A-Za-z0-9.-]*$
     max_length: 253
+  - key: ssh_port
+    label: SSH port
+    type: number
+    default: 22222
+    min: 1024
+    max: 65535
+    help: Host port published for git over SSH; the container listens on 22.
 routes:
   - service: forgejo
     port: 3000

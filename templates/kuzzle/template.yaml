@@ -1,6 +1,6 @@
 name: Kuzzle
 icon: kuzzle
-description: Kuzzle backend with Redis and Elasticsearch, persistent named volumes and an optional routed domain.
+description: Kuzzle backend with Redis and Elasticsearch, persistent named volumes and an optional routed domain. The API has no authentication of its own.
 homepage: https://kuzzle.io
 category:
   - backend

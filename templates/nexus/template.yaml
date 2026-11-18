@@ -1,6 +1,6 @@
 name: Nexus Repository
 icon: nexus
-description: Sonatype Nexus Repository Manager with a persistent data volume and an optional routed domain.
+description: Sonatype Nexus Repository Manager with a persistent data volume and an optional routed domain. The default sign-in is admin / admin123 until you change it.
 homepage: https://help.sonatype.com/en/sonatype-nexus-repository.html
 category:
   - devtools

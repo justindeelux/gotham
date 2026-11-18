@@ -20,6 +20,13 @@ services:
     depends_on:
       db-migration:
         condition: service_completed_successfully
+    healthcheck:
+      test:
+        - CMD-SHELL
+        - wget -qO- http://127.0.0.1:80/
+      interval: 5s
+      timeout: 20s
+      retries: 10
   hoppscotch-db:
     image: postgres:15
     restart: unless-stopped

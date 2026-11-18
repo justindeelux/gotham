@@ -4,13 +4,24 @@ services:
     restart: unless-stopped
     ports:
       - "3000"
+      - "{{ .ssh_port }}:22"
     environment:
       GITEA__server__ROOT_URL: "https://{{ .domain }}"
       GITEA__server__DOMAIN: "{{ .domain }}"
       GITEA__server__SSH_DOMAIN: "{{ .domain }}"
+      GITEA__server__SSH_PORT: "{{ .ssh_port }}"
       USER_UID: "1000"
       USER_GID: "1000"
     volumes:
       - gitea_data:/data
+    healthcheck:
+      test:
+        - CMD
+        - curl
+        - -f
+        - http://127.0.0.1:3000
+      interval: 2s
+      timeout: 10s
+      retries: 15
 volumes:
   gitea_data:

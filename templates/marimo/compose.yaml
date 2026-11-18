@@ -17,5 +17,16 @@ services:
       - 0.0.0.0
     volumes:
       - marimo_data:/app
+    healthcheck:
+      test:
+        - CMD
+        - uvx
+        - --with
+        - httpx[cli]
+        - httpx
+        - http://localhost:8080/health
+      interval: 5s
+      timeout: 5s
+      retries: 3
 volumes:
   marimo_data:

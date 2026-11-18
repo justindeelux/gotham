@@ -35,6 +35,16 @@ services:
       - strapi_config:/opt/app/config
       - strapi_src:/opt/app/src
       - strapi_uploads:/opt/app/public/uploads
+    healthcheck:
+      test:
+        - CMD
+        - wget
+        - -q
+        - --spider
+        - http://127.0.0.1:1337/
+      interval: 5s
+      timeout: 20s
+      retries: 10
     depends_on:
       postgresql:
         condition: service_healthy

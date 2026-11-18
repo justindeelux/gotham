@@ -8,6 +8,13 @@ services:
       SQL_DSN: "postgres://{{ .db_user }}:{{ .db_password }}@postgresql:5432/{{ .db_name }}?sslmode=disable"
       REDIS_CONN_STRING: redis://redis:6379
       SESSION_SECRET: "{{ .session_secret }}"
+    healthcheck:
+      test:
+        - CMD-SHELL
+        - wget -q -O - http://localhost:3000/api/status | grep -q '"success":'
+      interval: 30s
+      timeout: 10s
+      retries: 3
     depends_on:
       postgresql:
         condition: service_healthy

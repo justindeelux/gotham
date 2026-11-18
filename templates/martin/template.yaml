@@ -1,6 +1,6 @@
 name: Martin
 icon: martin
-description: Martin vector tile server with PostGIS, persistent named volumes and an optional routed domain.
+description: Martin vector tile server with PostGIS, persistent named volumes and an optional routed domain. No authentication by default.
 homepage: https://maplibre.org/martin/introduction.html/
 category:
   - backend

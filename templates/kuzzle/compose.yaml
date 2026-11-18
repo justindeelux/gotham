@@ -11,8 +11,19 @@ services:
       kuzzle_services__memoryStorage__node__host: redis
       NODE_ENV: production
     depends_on:
-      - redis
-      - elasticsearch
+      redis:
+        condition: service_healthy
+      elasticsearch:
+        condition: service_healthy
+    healthcheck:
+      test:
+        - CMD
+        - curl
+        - -f
+        - http://127.0.0.1:7512/_healthcheck
+      interval: 2s
+      timeout: 1s
+      retries: 30
   redis:
     image: redis:8-alpine
     restart: unless-stopped
@@ -22,11 +33,28 @@ services:
       - "yes"
     volumes:
       - kuzzle_redis_data:/data
+    healthcheck:
+      test:
+        - CMD
+        - redis-cli
+        - ping
+      interval: 5s
+      timeout: 20s
+      retries: 10
   elasticsearch:
     image: kuzzleio/elasticsearch:7
     restart: unless-stopped
     volumes:
       - kuzzle_elasticsearch_data:/usr/share/elasticsearch/data
+    healthcheck:
+      test:
+        - CMD
+        - curl
+        - -f
+        - http://127.0.0.1:9200
+      interval: 2s
+      timeout: 2s
+      retries: 10
 volumes:
   kuzzle_redis_data:
   kuzzle_elasticsearch_data:

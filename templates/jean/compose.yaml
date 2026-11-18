@@ -12,5 +12,13 @@ services:
       JEAN_DATA_DIR: /home/jean/.local/share/com.jean.desktop
     volumes:
       - jean_data:/home/jean/.local/share/com.jean.desktop
+    healthcheck:
+      test:
+        - CMD-SHELL
+        - curl -fsS http://127.0.0.1:3456/readyz >/dev/null || exit 1
+      interval: 10s
+      timeout: 5s
+      retries: 12
+      start_period: 15s
 volumes:
   jean_data:

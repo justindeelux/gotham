@@ -13,6 +13,16 @@ services:
     volumes:
       - rivet_log:/var/lib/rivet/log
       - rivet_objects:/var/lib/rivet/objects
+    healthcheck:
+      test:
+        - CMD
+        - curl
+        - -f
+        - http://127.0.0.1:6420/health
+      interval: 2s
+      timeout: 10s
+      retries: 10
+      start_period: 30s
 volumes:
   rivet_log:
   rivet_objects:

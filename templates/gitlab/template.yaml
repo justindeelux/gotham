@@ -19,6 +19,13 @@ fields:
     required: true
     generate: true
     help: The initial root password; use Generate for a strong value.
+  - key: ssh_port
+    label: SSH port
+    type: number
+    default: 2222
+    min: 1024
+    max: 65535
+    help: Host port published for git over SSH; the container listens on 22.
 routes:
   - service: gitlab
     port: 80

@@ -11,5 +11,14 @@ services:
       ELECTRIC_USAGE_REPORTING: "false"
     volumes:
       - electric_data:/app/persistent
+    healthcheck:
+      test:
+        - CMD
+        - curl
+        - -f
+        - http://127.0.0.1:3000/v1/health
+      interval: 10s
+      timeout: 5s
+      retries: 5
 volumes:
   electric_data:

@@ -1,6 +1,6 @@
 name: Flipt
 icon: flipt
-description: Flipt feature flag server with a persistent storage volume and an optional routed domain.
+description: Flipt feature flag server with a persistent storage volume and an optional routed domain. No authentication by default.
 homepage: https://docs.flipt.io/cloud/overview
 category:
   - backend

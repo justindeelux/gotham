@@ -13,5 +13,14 @@ services:
       DEFAULT_WORKSPACE: /config/workspace
     volumes:
       - code_server_config:/config
+    healthcheck:
+      test:
+        - CMD
+        - curl
+        - -f
+        - http://127.0.0.1:8443
+      interval: 2s
+      timeout: 10s
+      retries: 15
 volumes:
   code_server_config:

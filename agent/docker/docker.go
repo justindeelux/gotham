@@ -4,6 +4,7 @@ import (
 	"bufio"
 	"bytes"
 	"context"
+	"encoding/base64"
 	"encoding/binary"
 	"encoding/json"
 	"errors"
@@ -146,6 +147,7 @@ type ContainerDetails struct {
 	CreatedAt     time.Time
 	StartedAt     time.Time
 	FinishedAt    time.Time
+	Mounts        []ContainerMount
 }
 
 func (c *DockerClient) InspectContainer(ctx context.Context, id string) (ContainerDetails, error) {
@@ -166,7 +168,13 @@ func (c *DockerClient) InspectContainer(ctx context.Context, id string) (Contain
 			} `json:"Health"`
 		} `json:"State"`
 		RestartCount int64 `json:"RestartCount"`
-		HostConfig   struct {
+		Mounts       []struct {
+			Type        string `json:"Type"`
+			Source      string `json:"Source"`
+			Destination string `json:"Destination"`
+			RW          bool   `json:"RW"`
+		} `json:"Mounts"`
+		HostConfig struct {
 			RestartPolicy struct {
 				Name string `json:"Name"`
 			} `json:"RestartPolicy"`
@@ -180,7 +188,7 @@ func (c *DockerClient) InspectContainer(ctx context.Context, id string) (Contain
 	if out.State.Health != nil {
 		health = out.State.Health.Status
 	}
-	return ContainerDetails{
+	details := ContainerDetails{
 		State:         out.State.Status,
 		Health:        health,
 		RestartCount:  out.RestartCount,
@@ -190,7 +198,16 @@ func (c *DockerClient) InspectContainer(ctx context.Context, id string) (Contain
 		CreatedAt:     out.Created,
 		StartedAt:     out.State.StartedAt,
 		FinishedAt:    out.State.FinishedAt,
-	}, nil
+	}
+	for _, mount := range out.Mounts {
+		details.Mounts = append(details.Mounts, ContainerMount{
+			Type:        mount.Type,
+			Source:      mount.Source,
+			Destination: mount.Destination,
+			ReadOnly:    !mount.RW,
+		})
+	}
+	return details, nil
 }
 
 func (c *DockerClient) ListContainers(ctx context.Context, all bool, labels map[string]string, resolveDevices bool) ([]*agentv1.ContainerInfo, error) {
@@ -486,6 +503,129 @@ func (c *DockerClient) ImportArchive(ctx context.Context, containerID, destinati
 	return nil
 }
 
+// ContainerMount is one mount the engine reports for a container. The file
+// manager refuses a mounted Docker socket, so it needs the destinations.
+type ContainerMount struct {
+	Type        string
+	Source      string
+	Destination string
+	ReadOnly    bool
+}
+
+// ContainerPathStat is the stat of one path inside a container. Mode uses Go's
+// os.FileMode type bits because that is what the engine sends.
+type ContainerPathStat struct {
+	Name       string
+	Size       int64
+	Mode       uint32
+	Mtime      time.Time
+	LinkTarget string
+}
+
+// StatArchive reports one container path without extracting it. It works on
+// stopped containers because it only asks the engine to stat the path.
+func (c *DockerClient) StatArchive(ctx context.Context, containerID, source string) (ContainerPathStat, error) {
+	if strings.TrimSpace(containerID) == "" {
+		return ContainerPathStat{}, errors.New("docker: container id is required")
+	}
+	query := url.Values{}
+	query.Set("path", source)
+	path := "/containers/" + url.PathEscape(containerID) + "/archive?" + query.Encode()
+	response, err := c.doRaw(ctx, http.MethodHead, path, nil, "")
+	if err != nil {
+		return ContainerPathStat{}, err
+	}
+	if !dockerOK(response.StatusCode) {
+		return ContainerPathStat{}, statusError(http.MethodHead, path, response)
+	}
+	defer func() { _ = response.Body.Close() }()
+	raw, err := base64.StdEncoding.DecodeString(response.Header.Get("X-Docker-Container-Path-Stat"))
+	if err != nil {
+		return ContainerPathStat{}, fmt.Errorf("docker: %s %s: bad path stat header: %w", http.MethodHead, path, err)
+	}
+	var out struct {
+		Name       string `json:"name"`
+		Size       int64  `json:"size"`
+		Mode       uint32 `json:"mode"`
+		Mtime      string `json:"mtime"`
+		LinkTarget string `json:"linkTarget"`
+	}
+	if err := json.Unmarshal(raw, &out); err != nil {
+		return ContainerPathStat{}, fmt.Errorf("docker: %s %s: bad path stat body: %w", http.MethodHead, path, err)
+	}
+	stat := ContainerPathStat{
+		Name:       out.Name,
+		Size:       out.Size,
+		Mode:       out.Mode,
+		LinkTarget: out.LinkTarget,
+	}
+	if modified, err := time.Parse(time.RFC3339Nano, out.Mtime); err == nil {
+		stat.Mtime = modified
+	}
+	return stat, nil
+}
+
+// ContainerShell reports the shell the container's image exposes. It probes an
+// interactive shell once, so the caller learns a stopped or distroless
+// container cannot run exec actions before it tries one.
+func (c *DockerClient) ContainerShell(ctx context.Context, containerID string) (string, error) {
+	if strings.TrimSpace(containerID) == "" {
+		return "", errors.New("docker: container id is required")
+	}
+	inspect, err := c.inspectContainer(ctx, containerID)
+	if err != nil {
+		return "", err
+	}
+	if !inspect.State.Running {
+		state := strings.TrimSpace(inspect.State.Status)
+		if state == "" {
+			state = "stopped"
+		}
+		return "", fmt.Errorf("%w: %s", ErrDockerContainerNotRunning, state)
+	}
+	return c.probeShell(ctx, containerID,
+		strings.TrimSpace(inspect.Config.User),
+		strings.TrimSpace(inspect.Config.WorkingDir),
+		inspect.Config.Env)
+}
+
+// RunContainerCommand runs one command through exec and returns its combined
+// output and exit code. The container must be running.
+func (c *DockerClient) RunContainerCommand(ctx context.Context, containerID string, command []string) (string, int32, error) {
+	if strings.TrimSpace(containerID) == "" {
+		return "", -1, errors.New("docker: container id is required")
+	}
+	if len(command) == 0 {
+		return "", -1, errors.New("docker: a command is required")
+	}
+	execID, err := c.createExec(ctx, containerID, command, "", "", nil)
+	if err != nil {
+		return "", -1, err
+	}
+	stream, err := c.startExec(ctx, execID)
+	if err != nil {
+		return "", -1, err
+	}
+	var output bytes.Buffer
+	readDone := make(chan error, 1)
+	go func() {
+		_, readErr := io.Copy(&output, io.LimitReader(stream, execProbeMaxBytes))
+		readDone <- readErr
+	}()
+	select {
+	case <-readDone:
+	case <-ctx.Done():
+		_ = stream.Close()
+		<-readDone
+	}
+	_ = stream.Close()
+	code, _, exitErr := c.execExitCodeWithin(ctx, execID, containerCommandTimeout)
+	if exitErr != nil {
+		return output.String(), -1, exitErr
+	}
+	return output.String(), code, nil
+}
+
 func (c *DockerClient) PullImage(ctx context.Context, image, username, password string) (string, error) {
 	if strings.TrimSpace(image) == "" {
 		return "", errors.New("docker: image is required")
@@ -699,6 +839,10 @@ const execExitTimeout = 2 * time.Second
 const execExitPoll = 50 * time.Millisecond
 
 const execProbeMaxBytes = 4 << 10
+
+// containerCommandTimeout bounds one non-interactive exec command (a file
+// action such as mv or chmod) that runs to completion.
+const containerCommandTimeout = 60 * time.Second
 
 const execKillTimeout = 8 * time.Second
 
@@ -958,11 +1102,11 @@ func (c *DockerClient) Exec(ctx context.Context, containerID string, opts ExecOp
 	env := append([]string(nil), opts.Env...)
 	env = append(env, "GOTHAM_TERMINAL_ID="+marker)
 	env = TerminalEnvDescription(env, inspect.Config.Env)
-	execID, err := c.createExec(ctx, containerID, wrapped, user, workdir, env, true)
+	execID, err := c.createExec(ctx, containerID, wrapped, user, workdir, env)
 	if err != nil {
 		return nil, err
 	}
-	stream, err := c.startExec(ctx, execID, true)
+	stream, err := c.startExec(ctx, execID)
 	if err != nil {
 		return nil, err
 	}
@@ -1034,7 +1178,7 @@ func (c *DockerClient) inspectContainer(ctx context.Context, containerID string)
 
 func (c *DockerClient) probeShell(ctx context.Context, containerID, user, workdir string, imageEnv []string) (string, error) {
 	env := append(append([]string(nil), imageEnv...), "TERM=xterm-256color")
-	execID, err := c.createExec(ctx, containerID, []string{"/bin/sh", "-c", ShellProbeCommand}, user, workdir, env, true)
+	execID, err := c.createExec(ctx, containerID, []string{"/bin/sh", "-c", ShellProbeCommand}, user, workdir, env)
 	if err != nil {
 		if errors.Is(err, ErrDockerNotFound) || errors.Is(err, ErrDockerUnavailable) {
 			return "", err
@@ -1043,7 +1187,7 @@ func (c *DockerClient) probeShell(ctx context.Context, containerID, user, workdi
 	}
 	probeCtx, cancel := context.WithTimeout(ctx, execProbeTimeout)
 	defer cancel()
-	stream, err := c.startExec(probeCtx, execID, true)
+	stream, err := c.startExec(probeCtx, execID)
 	if err != nil {
 		if errors.Is(err, ErrDockerNotFound) || errors.Is(err, ErrDockerUnavailable) {
 			return "", err
@@ -1108,12 +1252,14 @@ func DisplayContainerUser(user string) string {
 	return user
 }
 
-func (c *DockerClient) createExec(ctx context.Context, containerID string, command []string, user, workdir string, env []string, tty bool) (string, error) {
+// createExec creates a TTY-attached exec: one raw stream for output, which
+// every caller here reads as a whole.
+func (c *DockerClient) createExec(ctx context.Context, containerID string, command []string, user, workdir string, env []string) (string, error) {
 	body := map[string]any{
 		"AttachStdin":  true,
 		"AttachStdout": true,
 		"AttachStderr": true,
-		"Tty":          tty,
+		"Tty":          true,
 		"Cmd":          command,
 	}
 	if len(env) > 0 {
@@ -1138,8 +1284,8 @@ func (c *DockerClient) createExec(ctx context.Context, containerID string, comma
 	return out.ID, nil
 }
 
-func (c *DockerClient) startExec(ctx context.Context, execID string, tty bool) (io.ReadWriteCloser, error) {
-	encoded, err := json.Marshal(map[string]any{"Detach": false, "Tty": tty})
+func (c *DockerClient) startExec(ctx context.Context, execID string) (io.ReadWriteCloser, error) {
+	encoded, err := json.Marshal(map[string]any{"Detach": false, "Tty": true})
 	if err != nil {
 		return nil, fmt.Errorf("docker: marshal exec start: %w", err)
 	}
@@ -1169,10 +1315,14 @@ func (c *DockerClient) startExec(ctx context.Context, execID string, tty bool) (
 }
 
 func (c *DockerClient) execExitCode(ctx context.Context, execID string) (int32, string, error) {
+	return c.execExitCodeWithin(ctx, execID, execExitTimeout)
+}
+
+func (c *DockerClient) execExitCodeWithin(ctx context.Context, execID string, timeout time.Duration) (int32, string, error) {
 	if strings.TrimSpace(execID) == "" {
 		return -1, "", errors.New("docker: exec id is required")
 	}
-	waitCtx, cancel := context.WithTimeout(ctx, execExitTimeout)
+	waitCtx, cancel := context.WithTimeout(ctx, timeout)
 	defer cancel()
 	path := "/exec/" + url.PathEscape(execID) + "/json"
 	for {
@@ -1321,11 +1471,11 @@ func (c *DockerClient) killExecMarker(ctx context.Context, containerID, user, wo
 
 func (c *DockerClient) runKillHelper(ctx context.Context, containerID string, command []string, user, workdir string) (string, error) {
 	env := []string{"PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin"}
-	execID, err := c.createExec(ctx, containerID, command, user, workdir, env, true)
+	execID, err := c.createExec(ctx, containerID, command, user, workdir, env)
 	if err != nil {
 		return "", err
 	}
-	stream, err := c.startExec(ctx, execID, true)
+	stream, err := c.startExec(ctx, execID)
 	if err != nil {
 		return "", err
 	}

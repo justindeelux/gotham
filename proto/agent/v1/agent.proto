@@ -89,6 +89,29 @@ service DockerService {
   // the agent touches a target. The caller cancels the stream to stop the
   // restore.
   rpc RestoreVolumes(stream RestoreVolumesRequest) returns (RestoreVolumesResponse);
+  // GetContainerFileCapabilities reports what the container's filesystem
+  // allows right now: reading works on running and stopped containers, the
+  // other actions need a running container with a shell. A node that predates
+  // these RPCs answers codes.Unimplemented.
+  rpc GetContainerFileCapabilities(ContainerFilesCapabilitiesRequest) returns (ContainerFilesCapabilitiesResponse);
+  // ListContainerFiles lists one directory through the Docker archive API, so
+  // it also serves stopped containers. The listing is one page; a page that
+  // stopped early carries a cursor to resume with.
+  rpc ListContainerFiles(ContainerFilesListRequest) returns (ContainerFilesListResponse);
+  // StatContainerFile reports one path through the Docker archive API.
+  rpc StatContainerFile(ContainerFilesPathRequest) returns (ContainerFilesStatResponse);
+  // ReadContainerFile streams one file's bytes. With archive set it streams
+  // the Docker archive of path instead (a single entry for a file, the
+  // recursive tar for a directory), which is what a download serves.
+  rpc ReadContainerFile(ContainerFilesReadRequest) returns (stream ContainerFileChunk);
+  // WriteContainerFile writes one file at path, keeping the existing owner and
+  // permission bits unless the header overrides them. The stream carries the
+  // exact size declared in the header and is capped.
+  rpc WriteContainerFile(stream ContainerFilesWriteRequest) returns (ContainerFilesWriteResponse);
+  // ChangeContainerFile runs one exec-based action (mkdir, rename, move, copy,
+  // delete, chmod) with paths as separate argv items, never through a shell
+  // string. It needs a running container with a shell.
+  rpc ChangeContainerFile(ContainerFilesChangeRequest) returns (ContainerFilesChangeResponse);
 }
 
 // BuildService runs on the node agent. The control plane dials it to build
@@ -1675,6 +1698,140 @@ message RestoreVolumesRequest {
 message RestoreVolumesResponse {
   int32 restored_sources = 1;
 }
+
+// ContainerFilesCapabilitiesRequest asks about one container.
+message ContainerFilesCapabilitiesRequest {
+  string container_id = 1;
+}
+
+// ContainerFilesCapabilitiesResponse reports what a container's filesystem
+// allows. Reading goes through the archive API and works on stopped
+// containers; the exec-based actions need a running container with a shell.
+message ContainerFilesCapabilitiesResponse {
+  bool readable = 1;
+  bool exec_available = 2;
+  // exec_blocked_by is a stable code the caller renders in its own language:
+  // "" (available), "not_running", "no_shell" or "unsupported".
+  string exec_blocked_by = 3;
+  // state is the container's Docker state ("running", "exited", ...).
+  string state = 4;
+}
+
+// ContainerFileEntry describes one path inside a container.
+message ContainerFileEntry {
+  // path is the absolute path inside the container.
+  string path = 1;
+  string name = 2;
+  FileKind kind = 3;
+  int64 size = 4;
+  // mode carries the permission bits only (0o7777 mask).
+  uint32 mode = 5;
+  uint32 uid = 6;
+  uint32 gid = 7;
+  google.protobuf.Timestamp modified_at = 8;
+  string symlink_target = 9;
+}
+
+// ContainerFilesListRequest lists one container directory.
+message ContainerFilesListRequest {
+  string container_id = 1;
+  // path is absolute; empty or "/" lists the container root.
+  string path = 2;
+  // cursor resumes a truncated page; empty starts at the beginning. It is the
+  // opaque token from a previous response and a malformed token is rejected
+  // with InvalidArgument.
+  string cursor = 3;
+}
+
+// ContainerFilesListResponse is one page of a directory listing.
+message ContainerFilesListResponse {
+  // directory is the stat of the listed directory itself.
+  ContainerFileEntry directory = 1;
+  repeated ContainerFileEntry entries = 2;
+  // truncated is true when the page stopped at the entry or byte cap.
+  bool truncated = 3;
+  // cursor resumes a truncated page; empty when no further page can make
+  // progress.
+  string cursor = 4;
+}
+
+// ContainerFilesPathRequest names one path in one container.
+message ContainerFilesPathRequest {
+  string container_id = 1;
+  string path = 2;
+}
+
+// ContainerFilesStatResponse carries the stat of one path.
+message ContainerFilesStatResponse {
+  ContainerFileEntry entry = 1;
+}
+
+// ContainerFilesReadRequest reads one file or its archive.
+message ContainerFilesReadRequest {
+  string container_id = 1;
+  string path = 2;
+  // archive streams the Docker tar stream for path instead of the file body.
+  bool archive = 3;
+}
+
+// ContainerFileChunk is one chunk of a file or archive stream.
+message ContainerFileChunk {
+  bytes data = 1;
+}
+
+// ContainerFilesWriteRequest is one message of a WriteContainerFile stream.
+message ContainerFilesWriteRequest {
+  oneof part {
+    ContainerFilesWriteHeader header = 1;
+    bytes data = 2;
+  }
+}
+
+// ContainerFilesWriteHeader binds a write stream to its destination.
+message ContainerFilesWriteHeader {
+  string container_id = 1;
+  // path is the absolute destination file.
+  string path = 2;
+  // size is the exact number of data bytes that follow.
+  int64 size = 3;
+  // mode, uid and gid apply to the written file. mode 0 keeps an existing
+  // file's permission bits (or 0644 for a new file); a negative uid/gid keeps
+  // the existing owner (or 0/0 for a new file).
+  uint32 mode = 4;
+  int32 uid = 5;
+  int32 gid = 6;
+}
+
+// ContainerFilesWriteResponse reports a completed write.
+message ContainerFilesWriteResponse {}
+
+// ContainerFileAction is one exec-based file action.
+enum ContainerFileAction {
+  CONTAINER_FILE_ACTION_UNSPECIFIED = 0;
+  CONTAINER_FILE_ACTION_MKDIR = 1;
+  CONTAINER_FILE_ACTION_RENAME = 2;
+  CONTAINER_FILE_ACTION_MOVE = 3;
+  CONTAINER_FILE_ACTION_COPY = 4;
+  CONTAINER_FILE_ACTION_DELETE = 5;
+  CONTAINER_FILE_ACTION_CHMOD = 6;
+}
+
+// ContainerFilesChangeRequest runs one exec-based action.
+message ContainerFilesChangeRequest {
+  string container_id = 1;
+  ContainerFileAction action = 2;
+  string path = 3;
+  // destination is the target of rename, move and copy.
+  string destination = 4;
+  // mode is the permission bits for chmod.
+  uint32 mode = 5;
+  // overwrite lets move and copy replace an existing destination; without it
+  // an existing destination fails instead of being replaced.
+  bool overwrite = 6;
+}
+
+// ContainerFilesChangeResponse reports a completed action.
+message ContainerFilesChangeResponse {}
 
 // PullImageRequest pulls an image from a registry. username/password carry
 // one private-registry credential for this pull only: the agent builds the

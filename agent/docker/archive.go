@@ -213,7 +213,7 @@ func (s *DockerServer) readContainerFile(ctx context.Context, containerID, sourc
 		return nil, dockerError("read "+source, err)
 	}
 	defer func() { _ = body.Close() }()
-	reader, err := archiveTarEntry(body, source)
+	reader, err := archiveTarEntry(body, source, "archive volumes")
 	if err != nil {
 		return nil, err
 	}
@@ -236,7 +236,7 @@ func (s *DockerServer) streamContainerFile(ctx context.Context, containerID, sou
 		return 0, "", dockerError("archive volumes", err)
 	}
 	defer func() { _ = body.Close() }()
-	reader, err := archiveTarEntry(body, source)
+	reader, err := archiveTarEntry(body, source, "archive volumes")
 	if err != nil {
 		return 0, "", err
 	}
@@ -268,14 +268,14 @@ func (s *DockerServer) streamContainerFile(ctx context.Context, containerID, sou
 	}
 }
 
-func archiveTarEntry(body io.Reader, source string) (io.Reader, error) {
+func archiveTarEntry(body io.Reader, source, action string) (io.Reader, error) {
 	reader := tar.NewReader(body)
 	header, err := reader.Next()
 	if err != nil {
-		return nil, status.Errorf(codes.Internal, "archive volumes: read %s: %v", path.Base(source), err)
+		return nil, status.Errorf(codes.Internal, "%s: read %s: %v", action, path.Base(source), err)
 	}
 	if header.Name != path.Base(source) || header.Typeflag != tar.TypeReg {
-		return nil, status.Errorf(codes.Internal, "archive volumes: unexpected archive entry %q", header.Name)
+		return nil, status.Errorf(codes.Internal, "%s: unexpected archive entry %q", action, header.Name)
 	}
 	return reader, nil
 }

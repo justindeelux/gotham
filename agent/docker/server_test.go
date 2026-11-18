@@ -45,6 +45,13 @@ type fakeDockerClient struct {
 	mountpointErr      error
 	exports            map[string][]byte
 	exportErr          error
+	stats              map[string]ContainerPathStat
+	shell              string
+	shellErr           error
+	commands           [][]string
+	commandOutput      string
+	commandExit        int32
+	commandErr         error
 	cleanupItems       []*agentv1.CleanupItem
 	cleanupResults     []*agentv1.CleanupItemResult
 	cleanedIDs         []string
@@ -231,6 +238,34 @@ func (f *fakeDockerClient) ExportArchive(_ context.Context, _ string, source str
 		return nil, fmt.Errorf("no export for %s", source)
 	}
 	return io.NopCloser(bytes.NewReader(wrapArchiveFile(path.Base(source), data))), nil
+}
+
+func (f *fakeDockerClient) StatArchive(_ context.Context, _ string, source string) (ContainerPathStat, error) {
+	if f.err != nil {
+		return ContainerPathStat{}, f.err
+	}
+	if stat, ok := f.stats[source]; ok {
+		return stat, nil
+	}
+	if data, ok := f.exports[source]; ok {
+		return ContainerPathStat{Name: path.Base(source), Size: int64(len(data)), Mode: 0o644}, nil
+	}
+	return ContainerPathStat{}, fmt.Errorf("%w: %s", ErrDockerNotFound, source)
+}
+
+func (f *fakeDockerClient) ContainerShell(context.Context, string) (string, error) {
+	if f.shellErr != nil {
+		return "", f.shellErr
+	}
+	if f.shell != "" {
+		return f.shell, nil
+	}
+	return "/bin/sh", nil
+}
+
+func (f *fakeDockerClient) RunContainerCommand(_ context.Context, _ string, command []string) (string, int32, error) {
+	f.commands = append(f.commands, command)
+	return f.commandOutput, f.commandExit, f.commandErr
 }
 
 func wrapArchiveFile(name string, data []byte) []byte {

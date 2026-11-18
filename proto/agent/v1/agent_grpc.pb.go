@@ -320,22 +320,28 @@ var UpdateService_ServiceDesc = grpc.ServiceDesc{
 }
 
 const (
-	DockerService_ListContainers_FullMethodName            = "/agent.v1.DockerService/ListContainers"
-	DockerService_ListVolumes_FullMethodName               = "/agent.v1.DockerService/ListVolumes"
-	DockerService_ScanCleanup_FullMethodName               = "/agent.v1.DockerService/ScanCleanup"
-	DockerService_Clean_FullMethodName                     = "/agent.v1.DockerService/Clean"
-	DockerService_StartContainer_FullMethodName            = "/agent.v1.DockerService/StartContainer"
-	DockerService_StopContainer_FullMethodName             = "/agent.v1.DockerService/StopContainer"
-	DockerService_RestartContainer_FullMethodName          = "/agent.v1.DockerService/RestartContainer"
-	DockerService_RemoveContainer_FullMethodName           = "/agent.v1.DockerService/RemoveContainer"
-	DockerService_RemoveVolume_FullMethodName              = "/agent.v1.DockerService/RemoveVolume"
-	DockerService_PullImage_FullMethodName                 = "/agent.v1.DockerService/PullImage"
-	DockerService_CreateContainer_FullMethodName           = "/agent.v1.DockerService/CreateContainer"
-	DockerService_RunImage_FullMethodName                  = "/agent.v1.DockerService/RunImage"
-	DockerService_StreamLogs_FullMethodName                = "/agent.v1.DockerService/StreamLogs"
-	DockerService_VolumeArchiveCapabilities_FullMethodName = "/agent.v1.DockerService/VolumeArchiveCapabilities"
-	DockerService_ArchiveVolumes_FullMethodName            = "/agent.v1.DockerService/ArchiveVolumes"
-	DockerService_RestoreVolumes_FullMethodName            = "/agent.v1.DockerService/RestoreVolumes"
+	DockerService_ListContainers_FullMethodName               = "/agent.v1.DockerService/ListContainers"
+	DockerService_ListVolumes_FullMethodName                  = "/agent.v1.DockerService/ListVolumes"
+	DockerService_ScanCleanup_FullMethodName                  = "/agent.v1.DockerService/ScanCleanup"
+	DockerService_Clean_FullMethodName                        = "/agent.v1.DockerService/Clean"
+	DockerService_StartContainer_FullMethodName               = "/agent.v1.DockerService/StartContainer"
+	DockerService_StopContainer_FullMethodName                = "/agent.v1.DockerService/StopContainer"
+	DockerService_RestartContainer_FullMethodName             = "/agent.v1.DockerService/RestartContainer"
+	DockerService_RemoveContainer_FullMethodName              = "/agent.v1.DockerService/RemoveContainer"
+	DockerService_RemoveVolume_FullMethodName                 = "/agent.v1.DockerService/RemoveVolume"
+	DockerService_PullImage_FullMethodName                    = "/agent.v1.DockerService/PullImage"
+	DockerService_CreateContainer_FullMethodName              = "/agent.v1.DockerService/CreateContainer"
+	DockerService_RunImage_FullMethodName                     = "/agent.v1.DockerService/RunImage"
+	DockerService_StreamLogs_FullMethodName                   = "/agent.v1.DockerService/StreamLogs"
+	DockerService_VolumeArchiveCapabilities_FullMethodName    = "/agent.v1.DockerService/VolumeArchiveCapabilities"
+	DockerService_ArchiveVolumes_FullMethodName               = "/agent.v1.DockerService/ArchiveVolumes"
+	DockerService_RestoreVolumes_FullMethodName               = "/agent.v1.DockerService/RestoreVolumes"
+	DockerService_GetContainerFileCapabilities_FullMethodName = "/agent.v1.DockerService/GetContainerFileCapabilities"
+	DockerService_ListContainerFiles_FullMethodName           = "/agent.v1.DockerService/ListContainerFiles"
+	DockerService_StatContainerFile_FullMethodName            = "/agent.v1.DockerService/StatContainerFile"
+	DockerService_ReadContainerFile_FullMethodName            = "/agent.v1.DockerService/ReadContainerFile"
+	DockerService_WriteContainerFile_FullMethodName           = "/agent.v1.DockerService/WriteContainerFile"
+	DockerService_ChangeContainerFile_FullMethodName          = "/agent.v1.DockerService/ChangeContainerFile"
 )
 
 // DockerServiceClient is the client API for DockerService service.
@@ -400,6 +406,29 @@ type DockerServiceClient interface {
 	// the agent touches a target. The caller cancels the stream to stop the
 	// restore.
 	RestoreVolumes(ctx context.Context, opts ...grpc.CallOption) (grpc.ClientStreamingClient[RestoreVolumesRequest, RestoreVolumesResponse], error)
+	// GetContainerFileCapabilities reports what the container's filesystem
+	// allows right now: reading works on running and stopped containers, the
+	// other actions need a running container with a shell. A node that predates
+	// these RPCs answers codes.Unimplemented.
+	GetContainerFileCapabilities(ctx context.Context, in *ContainerFilesCapabilitiesRequest, opts ...grpc.CallOption) (*ContainerFilesCapabilitiesResponse, error)
+	// ListContainerFiles lists one directory through the Docker archive API, so
+	// it also serves stopped containers. The listing is one page; a page that
+	// stopped early carries a cursor to resume with.
+	ListContainerFiles(ctx context.Context, in *ContainerFilesListRequest, opts ...grpc.CallOption) (*ContainerFilesListResponse, error)
+	// StatContainerFile reports one path through the Docker archive API.
+	StatContainerFile(ctx context.Context, in *ContainerFilesPathRequest, opts ...grpc.CallOption) (*ContainerFilesStatResponse, error)
+	// ReadContainerFile streams one file's bytes. With archive set it streams
+	// the Docker archive of path instead (a single entry for a file, the
+	// recursive tar for a directory), which is what a download serves.
+	ReadContainerFile(ctx context.Context, in *ContainerFilesReadRequest, opts ...grpc.CallOption) (grpc.ServerStreamingClient[ContainerFileChunk], error)
+	// WriteContainerFile writes one file at path, keeping the existing owner and
+	// permission bits unless the header overrides them. The stream carries the
+	// exact size declared in the header and is capped.
+	WriteContainerFile(ctx context.Context, opts ...grpc.CallOption) (grpc.ClientStreamingClient[ContainerFilesWriteRequest, ContainerFilesWriteResponse], error)
+	// ChangeContainerFile runs one exec-based action (mkdir, rename, move, copy,
+	// delete, chmod) with paths as separate argv items, never through a shell
+	// string. It needs a running container with a shell.
+	ChangeContainerFile(ctx context.Context, in *ContainerFilesChangeRequest, opts ...grpc.CallOption) (*ContainerFilesChangeResponse, error)
 }
 
 type dockerServiceClient struct {
@@ -591,6 +620,78 @@ func (c *dockerServiceClient) RestoreVolumes(ctx context.Context, opts ...grpc.C
 // This type alias is provided for backwards compatibility with existing code that references the prior non-generic stream type by name.
 type DockerService_RestoreVolumesClient = grpc.ClientStreamingClient[RestoreVolumesRequest, RestoreVolumesResponse]
 
+func (c *dockerServiceClient) GetContainerFileCapabilities(ctx context.Context, in *ContainerFilesCapabilitiesRequest, opts ...grpc.CallOption) (*ContainerFilesCapabilitiesResponse, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	out := new(ContainerFilesCapabilitiesResponse)
+	err := c.cc.Invoke(ctx, DockerService_GetContainerFileCapabilities_FullMethodName, in, out, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
+func (c *dockerServiceClient) ListContainerFiles(ctx context.Context, in *ContainerFilesListRequest, opts ...grpc.CallOption) (*ContainerFilesListResponse, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	out := new(ContainerFilesListResponse)
+	err := c.cc.Invoke(ctx, DockerService_ListContainerFiles_FullMethodName, in, out, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
+func (c *dockerServiceClient) StatContainerFile(ctx context.Context, in *ContainerFilesPathRequest, opts ...grpc.CallOption) (*ContainerFilesStatResponse, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	out := new(ContainerFilesStatResponse)
+	err := c.cc.Invoke(ctx, DockerService_StatContainerFile_FullMethodName, in, out, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
+func (c *dockerServiceClient) ReadContainerFile(ctx context.Context, in *ContainerFilesReadRequest, opts ...grpc.CallOption) (grpc.ServerStreamingClient[ContainerFileChunk], error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	stream, err := c.cc.NewStream(ctx, &DockerService_ServiceDesc.Streams[3], DockerService_ReadContainerFile_FullMethodName, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	x := &grpc.GenericClientStream[ContainerFilesReadRequest, ContainerFileChunk]{ClientStream: stream}
+	if err := x.ClientStream.SendMsg(in); err != nil {
+		return nil, err
+	}
+	if err := x.ClientStream.CloseSend(); err != nil {
+		return nil, err
+	}
+	return x, nil
+}
+
+// This type alias is provided for backwards compatibility with existing code that references the prior non-generic stream type by name.
+type DockerService_ReadContainerFileClient = grpc.ServerStreamingClient[ContainerFileChunk]
+
+func (c *dockerServiceClient) WriteContainerFile(ctx context.Context, opts ...grpc.CallOption) (grpc.ClientStreamingClient[ContainerFilesWriteRequest, ContainerFilesWriteResponse], error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	stream, err := c.cc.NewStream(ctx, &DockerService_ServiceDesc.Streams[4], DockerService_WriteContainerFile_FullMethodName, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	x := &grpc.GenericClientStream[ContainerFilesWriteRequest, ContainerFilesWriteResponse]{ClientStream: stream}
+	return x, nil
+}
+
+// This type alias is provided for backwards compatibility with existing code that references the prior non-generic stream type by name.
+type DockerService_WriteContainerFileClient = grpc.ClientStreamingClient[ContainerFilesWriteRequest, ContainerFilesWriteResponse]
+
+func (c *dockerServiceClient) ChangeContainerFile(ctx context.Context, in *ContainerFilesChangeRequest, opts ...grpc.CallOption) (*ContainerFilesChangeResponse, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	out := new(ContainerFilesChangeResponse)
+	err := c.cc.Invoke(ctx, DockerService_ChangeContainerFile_FullMethodName, in, out, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
 // DockerServiceServer is the server API for DockerService service.
 // All implementations must embed UnimplementedDockerServiceServer
 // for forward compatibility.
@@ -653,6 +754,29 @@ type DockerServiceServer interface {
 	// the agent touches a target. The caller cancels the stream to stop the
 	// restore.
 	RestoreVolumes(grpc.ClientStreamingServer[RestoreVolumesRequest, RestoreVolumesResponse]) error
+	// GetContainerFileCapabilities reports what the container's filesystem
+	// allows right now: reading works on running and stopped containers, the
+	// other actions need a running container with a shell. A node that predates
+	// these RPCs answers codes.Unimplemented.
+	GetContainerFileCapabilities(context.Context, *ContainerFilesCapabilitiesRequest) (*ContainerFilesCapabilitiesResponse, error)
+	// ListContainerFiles lists one directory through the Docker archive API, so
+	// it also serves stopped containers. The listing is one page; a page that
+	// stopped early carries a cursor to resume with.
+	ListContainerFiles(context.Context, *ContainerFilesListRequest) (*ContainerFilesListResponse, error)
+	// StatContainerFile reports one path through the Docker archive API.
+	StatContainerFile(context.Context, *ContainerFilesPathRequest) (*ContainerFilesStatResponse, error)
+	// ReadContainerFile streams one file's bytes. With archive set it streams
+	// the Docker archive of path instead (a single entry for a file, the
+	// recursive tar for a directory), which is what a download serves.
+	ReadContainerFile(*ContainerFilesReadRequest, grpc.ServerStreamingServer[ContainerFileChunk]) error
+	// WriteContainerFile writes one file at path, keeping the existing owner and
+	// permission bits unless the header overrides them. The stream carries the
+	// exact size declared in the header and is capped.
+	WriteContainerFile(grpc.ClientStreamingServer[ContainerFilesWriteRequest, ContainerFilesWriteResponse]) error
+	// ChangeContainerFile runs one exec-based action (mkdir, rename, move, copy,
+	// delete, chmod) with paths as separate argv items, never through a shell
+	// string. It needs a running container with a shell.
+	ChangeContainerFile(context.Context, *ContainerFilesChangeRequest) (*ContainerFilesChangeResponse, error)
 	mustEmbedUnimplementedDockerServiceServer()
 }
 
@@ -710,6 +834,24 @@ func (UnimplementedDockerServiceServer) ArchiveVolumes(*ArchiveVolumesRequest, g
 }
 func (UnimplementedDockerServiceServer) RestoreVolumes(grpc.ClientStreamingServer[RestoreVolumesRequest, RestoreVolumesResponse]) error {
 	return status.Error(codes.Unimplemented, "method RestoreVolumes not implemented")
+}
+func (UnimplementedDockerServiceServer) GetContainerFileCapabilities(context.Context, *ContainerFilesCapabilitiesRequest) (*ContainerFilesCapabilitiesResponse, error) {
+	return nil, status.Error(codes.Unimplemented, "method GetContainerFileCapabilities not implemented")
+}
+func (UnimplementedDockerServiceServer) ListContainerFiles(context.Context, *ContainerFilesListRequest) (*ContainerFilesListResponse, error) {
+	return nil, status.Error(codes.Unimplemented, "method ListContainerFiles not implemented")
+}
+func (UnimplementedDockerServiceServer) StatContainerFile(context.Context, *ContainerFilesPathRequest) (*ContainerFilesStatResponse, error) {
+	return nil, status.Error(codes.Unimplemented, "method StatContainerFile not implemented")
+}
+func (UnimplementedDockerServiceServer) ReadContainerFile(*ContainerFilesReadRequest, grpc.ServerStreamingServer[ContainerFileChunk]) error {
+	return status.Error(codes.Unimplemented, "method ReadContainerFile not implemented")
+}
+func (UnimplementedDockerServiceServer) WriteContainerFile(grpc.ClientStreamingServer[ContainerFilesWriteRequest, ContainerFilesWriteResponse]) error {
+	return status.Error(codes.Unimplemented, "method WriteContainerFile not implemented")
+}
+func (UnimplementedDockerServiceServer) ChangeContainerFile(context.Context, *ContainerFilesChangeRequest) (*ContainerFilesChangeResponse, error) {
+	return nil, status.Error(codes.Unimplemented, "method ChangeContainerFile not implemented")
 }
 func (UnimplementedDockerServiceServer) mustEmbedUnimplementedDockerServiceServer() {}
 func (UnimplementedDockerServiceServer) testEmbeddedByValue()                       {}
@@ -995,6 +1137,96 @@ func _DockerService_RestoreVolumes_Handler(srv interface{}, stream grpc.ServerSt
 // This type alias is provided for backwards compatibility with existing code that references the prior non-generic stream type by name.
 type DockerService_RestoreVolumesServer = grpc.ClientStreamingServer[RestoreVolumesRequest, RestoreVolumesResponse]
 
+func _DockerService_GetContainerFileCapabilities_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(ContainerFilesCapabilitiesRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(DockerServiceServer).GetContainerFileCapabilities(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: DockerService_GetContainerFileCapabilities_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(DockerServiceServer).GetContainerFileCapabilities(ctx, req.(*ContainerFilesCapabilitiesRequest))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
+func _DockerService_ListContainerFiles_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(ContainerFilesListRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(DockerServiceServer).ListContainerFiles(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: DockerService_ListContainerFiles_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(DockerServiceServer).ListContainerFiles(ctx, req.(*ContainerFilesListRequest))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
+func _DockerService_StatContainerFile_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(ContainerFilesPathRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(DockerServiceServer).StatContainerFile(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: DockerService_StatContainerFile_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(DockerServiceServer).StatContainerFile(ctx, req.(*ContainerFilesPathRequest))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
+func _DockerService_ReadContainerFile_Handler(srv interface{}, stream grpc.ServerStream) error {
+	m := new(ContainerFilesReadRequest)
+	if err := stream.RecvMsg(m); err != nil {
+		return err
+	}
+	return srv.(DockerServiceServer).ReadContainerFile(m, &grpc.GenericServerStream[ContainerFilesReadRequest, ContainerFileChunk]{ServerStream: stream})
+}
+
+// This type alias is provided for backwards compatibility with existing code that references the prior non-generic stream type by name.
+type DockerService_ReadContainerFileServer = grpc.ServerStreamingServer[ContainerFileChunk]
+
+func _DockerService_WriteContainerFile_Handler(srv interface{}, stream grpc.ServerStream) error {
+	return srv.(DockerServiceServer).WriteContainerFile(&grpc.GenericServerStream[ContainerFilesWriteRequest, ContainerFilesWriteResponse]{ServerStream: stream})
+}
+
+// This type alias is provided for backwards compatibility with existing code that references the prior non-generic stream type by name.
+type DockerService_WriteContainerFileServer = grpc.ClientStreamingServer[ContainerFilesWriteRequest, ContainerFilesWriteResponse]
+
+func _DockerService_ChangeContainerFile_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(ContainerFilesChangeRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(DockerServiceServer).ChangeContainerFile(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: DockerService_ChangeContainerFile_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(DockerServiceServer).ChangeContainerFile(ctx, req.(*ContainerFilesChangeRequest))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
 // DockerService_ServiceDesc is the grpc.ServiceDesc for DockerService service.
 // It's only intended for direct use with grpc.RegisterService,
 // and not to be introspected or modified (even as a copy)
@@ -1054,6 +1286,22 @@ var DockerService_ServiceDesc = grpc.ServiceDesc{
 			MethodName: "VolumeArchiveCapabilities",
 			Handler:    _DockerService_VolumeArchiveCapabilities_Handler,
 		},
+		{
+			MethodName: "GetContainerFileCapabilities",
+			Handler:    _DockerService_GetContainerFileCapabilities_Handler,
+		},
+		{
+			MethodName: "ListContainerFiles",
+			Handler:    _DockerService_ListContainerFiles_Handler,
+		},
+		{
+			MethodName: "StatContainerFile",
+			Handler:    _DockerService_StatContainerFile_Handler,
+		},
+		{
+			MethodName: "ChangeContainerFile",
+			Handler:    _DockerService_ChangeContainerFile_Handler,
+		},
 	},
 	Streams: []grpc.StreamDesc{
 		{
@@ -1069,6 +1317,16 @@ var DockerService_ServiceDesc = grpc.ServiceDesc{
 		{
 			StreamName:    "RestoreVolumes",
 			Handler:       _DockerService_RestoreVolumes_Handler,
+			ClientStreams: true,
+		},
+		{
+			StreamName:    "ReadContainerFile",
+			Handler:       _DockerService_ReadContainerFile_Handler,
+			ServerStreams: true,
+		},
+		{
+			StreamName:    "WriteContainerFile",
+			Handler:       _DockerService_WriteContainerFile_Handler,
 			ClientStreams: true,
 		},
 	},

@@ -9,10 +9,124 @@ import (
 	"strings"
 
 	"github.com/google/uuid"
+	"gopkg.in/yaml.v3"
 
 	"github.com/justindeelux/gotham/composeguard"
 	"github.com/justindeelux/gotham/internal/services"
 )
+
+// controlComposeProject stops or starts every container of the application's
+// compose project. A deployment records only the web service container, so
+// acting on that id alone leaves the other services running.
+func controlComposeProject(ctx context.Context, node Node, app Application, target Deployment, start bool) error {
+	containers, err := node.ComposePs(ctx, services.ProjectName(app.ID))
+	if err != nil {
+		return err
+	}
+	if len(containers) == 0 {
+		return fmt.Errorf("%w: the compose project has no container", ErrNotFound)
+	}
+	if start {
+		containers = composeStartOrder(containers, target.ComposeDocument)
+	}
+	for _, container := range containers {
+		if strings.TrimSpace(container.ID) == "" {
+			continue
+		}
+		if start {
+			err = node.Start(ctx, container.ID)
+		} else {
+			err = node.Stop(ctx, container.ID)
+		}
+		if err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+// composeStartOrder starts a service after the services it depends on. A
+// document that cannot be read, or a dependency cycle, keeps the listing order.
+func composeStartOrder(containers []ComposeContainer, document string) []ComposeContainer {
+	dependencies := composeDependencies(document)
+	if len(dependencies) == 0 {
+		return containers
+	}
+	byService := make(map[string][]ComposeContainer, len(containers))
+	services := make([]string, 0, len(containers))
+	for _, container := range containers {
+		if _, seen := byService[container.Service]; !seen {
+			services = append(services, container.Service)
+		}
+		byService[container.Service] = append(byService[container.Service], container)
+	}
+	ordered := make([]ComposeContainer, 0, len(containers))
+	placed := make(map[string]bool, len(services))
+	for len(ordered) < len(containers) {
+		progress := false
+		for _, service := range services {
+			if placed[service] || !dependenciesPlaced(dependencies[service], placed, byService) {
+				continue
+			}
+			ordered = append(ordered, byService[service]...)
+			placed[service] = true
+			progress = true
+		}
+		if !progress {
+			for _, service := range services {
+				if !placed[service] {
+					ordered = append(ordered, byService[service]...)
+				}
+			}
+			break
+		}
+	}
+	return ordered
+}
+
+func dependenciesPlaced(dependencies []string, placed map[string]bool, byService map[string][]ComposeContainer) bool {
+	for _, dependency := range dependencies {
+		if _, inProject := byService[dependency]; !inProject {
+			continue
+		}
+		if !placed[dependency] {
+			return false
+		}
+	}
+	return true
+}
+
+// composeDependencies reads the depends_on edges of a compose document, in the
+// list form and the mapping form.
+func composeDependencies(document string) map[string][]string {
+	if strings.TrimSpace(document) == "" {
+		return nil
+	}
+	var doc struct {
+		Services map[string]struct {
+			DependsOn any `yaml:"depends_on"`
+		} `yaml:"services"`
+	}
+	if err := yaml.Unmarshal([]byte(document), &doc); err != nil {
+		return nil
+	}
+	dependencies := make(map[string][]string, len(doc.Services))
+	for name, service := range doc.Services {
+		switch value := service.DependsOn.(type) {
+		case []any:
+			for _, entry := range value {
+				if dependency, ok := entry.(string); ok {
+					dependencies[name] = append(dependencies[name], dependency)
+				}
+			}
+		case map[string]any:
+			for dependency := range value {
+				dependencies[name] = append(dependencies[name], dependency)
+			}
+		}
+	}
+	return dependencies
+}
 
 func guardOptions(appID uuid.UUID) composeguard.Options {
 	return composeguard.Options{AppID: appID.String(), ManagedRoot: managedVolumeRoot()}

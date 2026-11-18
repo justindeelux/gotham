@@ -1,0 +1,45 @@
+name: GoWA
+icon: gowa
+description: GoWA WhatsApp API gateway with a bundled dashboard, a persistent named volume and an optional routed domain.
+homepage: https://github.com/aldinokemal/go-whatsapp-web-multidevice
+category:
+  - messaging
+fields:
+  - key: domain
+    label: Domain
+    type: text
+    required: false
+    default: ""
+    placeholder: whatsapp.example.com
+    help: Optional. Leave empty to add a domain later from the service page.
+    pattern: ^([A-Za-z0-9][A-Za-z0-9.-]*)?$
+    max_length: 253
+  - key: username
+    label: Dashboard user
+    type: text
+    default: admin
+    pattern: ^[A-Za-z0-9_.@-]{1,64}$
+    max_length: 64
+  - key: password
+    label: Dashboard password
+    type: secret
+    required: true
+    generate: true
+    help: HTTP basic auth password for the dashboard and API; use Generate for a strong value.
+  - key: webhook_url
+    label: Webhook URL
+    type: text
+    required: false
+    default: ""
+    placeholder: https://example.com/webhook
+    help: Optional. Receives incoming message events.
+  - key: webhook_secret
+    label: Webhook secret
+    type: secret
+    required: true
+    generate: true
+    help: Signs webhook deliveries so your endpoint can trust them.
+routes:
+  - service: gowa
+    port: 3000
+    domain_field: domain

@@ -1,0 +1,24 @@
+name: Mosquitto
+icon: mosquitto
+description: Eclipse Mosquitto MQTT broker with persistent config and data volumes, optional credentials and a published MQTT port.
+homepage: https://mosquitto.org/documentation/
+category:
+  - messaging
+fields:
+  - key: mqtt_user
+    label: MQTT user
+    type: text
+    default: mosquitto
+    pattern: ^[A-Za-z0-9_.@-]{1,64}$
+    max_length: 64
+  - key: mqtt_password
+    label: MQTT password
+    type: secret
+    required: true
+    generate: true
+    help: Password for the MQTT user; use Generate for a strong value.
+  - key: allow_anonymous
+    label: Allow anonymous clients
+    type: bool
+    default: false
+    help: Anonymous clients are rejected by default because the MQTT port is published; turn on to allow them.

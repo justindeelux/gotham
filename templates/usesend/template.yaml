@@ -1,0 +1,66 @@
+name: UseSend
+icon: usesend
+description: UseSend transactional email platform with PostgreSQL, Redis, persistent named volumes and a routed domain.
+homepage: https://docs.usesend.com/self-hosting/overview
+category:
+  - email
+fields:
+  - key: domain
+    label: Domain
+    type: text
+    required: true
+    placeholder: send.example.com
+    help: Public host used for login callbacks and dashboard links.
+    pattern: ^[A-Za-z0-9][A-Za-z0-9.-]*$
+    max_length: 253
+  - key: db_user
+    label: Database user
+    type: text
+    default: usesend
+    pattern: ^[A-Za-z0-9_]{1,32}$
+    max_length: 32
+  - key: db_password
+    label: Database password
+    type: secret
+    required: true
+    generate: true
+  - key: nextauth_secret
+    label: NextAuth secret
+    type: secret
+    required: true
+    pattern: ^[A-Za-z0-9+/=_-]{32,128}$
+    help: At least 32 characters, for example from openssl rand -hex 32.
+  - key: aws_access_key
+    label: AWS access key
+    type: secret
+    required: true
+    pattern: ^[A-Za-z0-9/+=]{16,128}$
+    help: Access key ID of an IAM user allowed to send mail through Amazon SES.
+  - key: aws_secret_key
+    label: AWS secret key
+    type: secret
+    required: true
+    pattern: ^[A-Za-z0-9/+=]{32,128}$
+    help: Secret access key that belongs to the SES access key ID.
+  - key: aws_region
+    label: AWS region
+    type: text
+    default: us-east-1
+    placeholder: us-east-1
+    pattern: ^[a-z]{2}-[a-z]+-[0-9]+$
+    max_length: 32
+  - key: github_id
+    label: GitHub OAuth client ID
+    type: text
+    required: true
+    placeholder: Iv1.0123456789abcdef
+    max_length: 128
+  - key: github_secret
+    label: GitHub OAuth client secret
+    type: secret
+    required: true
+    help: Client secret of the GitHub OAuth app that matches the client ID.
+routes:
+  - service: usesend
+    port: 3000
+    domain_field: domain

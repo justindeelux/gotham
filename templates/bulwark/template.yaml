@@ -1,0 +1,32 @@
+name: Bulwark
+icon: bulwark
+description: Bulwark webmail with persistent config and state volumes and an optional routed domain.
+homepage: https://bulwarkmail.org/docs
+category:
+  - email
+fields:
+  - key: domain
+    label: Domain
+    type: text
+    required: false
+    default: ""
+    placeholder: mail.example.com
+    help: Optional. Leave empty to add a domain later from the service page.
+    pattern: ^([A-Za-z0-9][A-Za-z0-9.-]*)?$
+    max_length: 253
+  - key: jmap_server_url
+    label: JMAP server URL
+    type: text
+    required: true
+    placeholder: https://jmap.example.com
+    help: Base URL of the JMAP mail server this webmail connects to.
+  - key: session_secret
+    label: Session secret
+    type: secret
+    required: true
+    pattern: ^[A-Za-z0-9+/=_-]{32,128}$
+    help: At least 32 characters, for example from openssl rand -hex 32. Signs webmail sessions.
+routes:
+  - service: bulwark
+    port: 3000
+    domain_field: domain

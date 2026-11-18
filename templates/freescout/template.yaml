@@ -1,0 +1,54 @@
+name: FreeScout
+icon: freescout
+description: FreeScout help desk with MariaDB, persistent named volumes and a routed domain.
+homepage: https://github.com/freescout-help-desk/freescout/wiki/
+category:
+  - helpdesk
+fields:
+  - key: domain
+    label: Domain
+    type: text
+    required: true
+    placeholder: help.example.com
+    help: Public host used in mailbox links and notifications.
+    pattern: ^[A-Za-z0-9][A-Za-z0-9.-]*$
+    max_length: 253
+  - key: admin_email
+    label: Admin email
+    type: text
+    default: admin@example.com
+    pattern: ^[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+$
+    max_length: 254
+  - key: admin_password
+    label: Admin password
+    type: secret
+    required: true
+    generate: true
+    help: The initial administrator password; use Generate for a strong value.
+  - key: db_user
+    label: Database user
+    type: text
+    default: freescout
+    pattern: ^[A-Za-z0-9_]{1,32}$
+    max_length: 32
+  - key: db_password
+    label: Database password
+    type: secret
+    required: true
+    generate: true
+  - key: db_root_password
+    label: Database root password
+    type: secret
+    required: true
+    generate: true
+  - key: timezone
+    label: Timezone
+    type: text
+    default: UTC
+    placeholder: Europe/Berlin
+    pattern: ^[A-Za-z0-9_/+-]+$
+    max_length: 64
+routes:
+  - service: freescout
+    port: 80
+    domain_field: domain

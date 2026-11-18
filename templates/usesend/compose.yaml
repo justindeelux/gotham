@@ -1,0 +1,60 @@
+services:
+  usesend:
+    image: usesend/usesend:v1.10.3
+    restart: unless-stopped
+    ports:
+      - "3000"
+    environment:
+      DATABASE_URL: postgresql://{{ .db_user }}:{{ .db_password }}@postgres:5432/usesend
+      NEXTAUTH_URL: https://{{ .domain }}
+      NEXTAUTH_SECRET: "{{ .nextauth_secret }}"
+      AWS_ACCESS_KEY: "{{ .aws_access_key }}"
+      AWS_SECRET_KEY: "{{ .aws_secret_key }}"
+      AWS_DEFAULT_REGION: "{{ .aws_region }}"
+      GITHUB_ID: "{{ .github_id }}"
+      GITHUB_SECRET: "{{ .github_secret }}"
+      REDIS_URL: redis://redis:6379
+      NEXT_PUBLIC_IS_CLOUD: "false"
+      API_RATE_LIMIT: "1"
+      HOSTNAME: 0.0.0.0
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD-SHELL", "wget -qO- http://127.0.0.1:3000 || exit 1"]
+      interval: 10s
+      timeout: 5s
+      retries: 10
+      start_period: 30s
+
+  postgres:
+    image: postgres:16
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: "{{ .db_user }}"
+      POSTGRES_PASSWORD: "{{ .db_password }}"
+      POSTGRES_DB: usesend
+    volumes:
+      - usesend_postgres_data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U $${POSTGRES_USER} -d $${POSTGRES_DB}"]
+      interval: 5s
+      timeout: 20s
+      retries: 10
+
+  redis:
+    image: redis:7
+    restart: unless-stopped
+    command: ["redis-server", "--maxmemory-policy", "noeviction"]
+    volumes:
+      - usesend_redis_data:/data
+    healthcheck:
+      test: ["CMD", "redis-cli", "PING"]
+      interval: 5s
+      timeout: 10s
+      retries: 20
+volumes:
+  usesend_postgres_data:
+  usesend_redis_data:

@@ -1,0 +1,76 @@
+services:
+  plunk:
+    image: ghcr.io/useplunk/plunk:0.18.0
+    restart: unless-stopped
+    ports:
+      - "3000"
+    environment:
+      SERVICE: all
+      NODE_ENV: production
+      DATABASE_URL: postgresql://{{ .db_user }}:{{ .db_password }}@postgresql:5432/plunk
+      DIRECT_DATABASE_URL: postgresql://{{ .db_user }}:{{ .db_password }}@postgresql:5432/plunk
+      REDIS_URL: redis://redis:6379
+      JWT_SECRET: "{{ .jwt_secret }}"
+      API_DOMAIN: "{{ .api_domain }}"
+      API_URI: https://{{ .api_domain }}
+      DASHBOARD_DOMAIN: "{{ .dashboard_domain }}"
+      DASHBOARD_URI: https://{{ .dashboard_domain }}
+      AWS_SES_REGION: "{{ .ses_region }}"
+      AWS_SES_ACCESS_KEY_ID: "{{ .ses_access_key_id }}"
+      AWS_SES_SECRET_ACCESS_KEY: "{{ .ses_secret_access_key }}"
+      SES_CONFIGURATION_SET: plunk-configuration-set
+      DISABLE_SIGNUPS: "false"
+      AUTO_PROJECT_DISABLE: "false"
+    volumes:
+      - plunk_data:/app/data
+    depends_on:
+      postgresql:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD-SHELL", "curl -fsS http://127.0.0.1:8080/health && curl -fsS -o /dev/null http://127.0.0.1:3000"]
+      interval: 10s
+      timeout: 10s
+      retries: 10
+      start_period: 60s
+
+  plunk-api:
+    image: alpine/socat:1.8.1.3
+    restart: unless-stopped
+    ports:
+      - "8080"
+    command: tcp-listen:8080,fork,reuseaddr tcp-connect:plunk:8080
+    depends_on:
+      - plunk
+
+  postgresql:
+    image: postgres:16-alpine
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: "{{ .db_user }}"
+      POSTGRES_PASSWORD: "{{ .db_password }}"
+      POSTGRES_DB: plunk
+    volumes:
+      - plunk_postgres_data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U $${POSTGRES_USER} -d $${POSTGRES_DB}"]
+      interval: 5s
+      timeout: 20s
+      retries: 10
+
+  redis:
+    image: redis:7.4-alpine
+    restart: unless-stopped
+    command: redis-server --appendonly yes
+    volumes:
+      - plunk_redis_data:/data
+    healthcheck:
+      test: ["CMD", "redis-cli", "PING"]
+      interval: 5s
+      timeout: 10s
+      retries: 20
+volumes:
+  plunk_data:
+  plunk_postgres_data:
+  plunk_redis_data:

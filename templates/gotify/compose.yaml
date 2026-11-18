@@ -1,0 +1,15 @@
+services:
+  gotify:
+    image: gotify/server:3.1.1
+    restart: unless-stopped
+    ports:
+      - "80"
+    environment:
+      GOTIFY_DEFAULTUSER_NAME: "{{ .admin_user }}"
+      GOTIFY_DEFAULTUSER_PASS: "{{ .admin_password }}"
+      GOTIFY_REGISTRATION: "false"
+      TZ: UTC
+    volumes:
+      - gotify_data:/app/data
+volumes:
+  gotify_data:

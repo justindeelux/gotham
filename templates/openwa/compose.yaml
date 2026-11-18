@@ -1,0 +1,80 @@
+services:
+  openwa:
+    image: ghcr.io/rmyndharis/openwa:0.30.3
+    restart: unless-stopped
+    stop_grace_period: 75s
+    ports:
+      - "2785"
+    mem_limit: 2g
+    environment:
+      NODE_ENV: production
+      PORT: "2785"
+      LOG_LEVEL: info
+      BASE_URL: https://${GOTHAM_DOMAIN:-localhost}
+      DASHBOARD_URL: https://${GOTHAM_DOMAIN:-localhost}
+      API_MASTER_KEY: "{{ .api_master_key }}"
+      DATABASE_TYPE: postgres
+      DATABASE_HOST: postgresql
+      DATABASE_PORT: "5432"
+      DATABASE_USERNAME: "{{ .db_user }}"
+      DATABASE_PASSWORD: "{{ .db_password }}"
+      DATABASE_NAME: openwa
+      DATABASE_SYNCHRONIZE: "false"
+      POSTGRES_SCHEMA: public
+      ENGINE_TYPE: whatsapp-web.js
+      SESSION_DATA_PATH: ./data/sessions
+      PUPPETEER_HEADLESS: "true"
+      PUPPETEER_ARGS: --no-sandbox,--disable-setuid-sandbox,--disable-dev-shm-usage
+      PUPPETEER_EXECUTABLE_PATH: /usr/local/bin/puppeteer-chrome
+      STORAGE_TYPE: local
+      STORAGE_LOCAL_PATH: ./data/media
+      REDIS_ENABLED: "true"
+      REDIS_HOST: openwa_redis
+      REDIS_PORT: "6379"
+      QUEUE_ENABLED: "true"
+      CACHE_ENABLED: "true"
+      AUTO_START_SESSIONS: "false"
+    volumes:
+      - openwa_data:/app/data
+    depends_on:
+      postgresql:
+        condition: service_healthy
+      openwa_redis:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "node", "-e", "require('http').get('http://localhost:2785/api/health/ready', (r) => process.exit(r.statusCode === 200 ? 0 : 1))"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 45s
+
+  postgresql:
+    image: postgres:16-alpine
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: "{{ .db_user }}"
+      POSTGRES_PASSWORD: "{{ .db_password }}"
+      POSTGRES_DB: openwa
+    volumes:
+      - openwa_postgres_data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U $${POSTGRES_USER} -d $${POSTGRES_DB}"]
+      interval: 5s
+      timeout: 3s
+      retries: 5
+
+  openwa_redis:
+    image: redis:7-alpine
+    restart: unless-stopped
+    command: ["redis-server", "--appendonly", "yes", "--maxmemory-policy", "noeviction"]
+    volumes:
+      - openwa_redis_data:/data
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 3s
+      retries: 5
+volumes:
+  openwa_data:
+  openwa_postgres_data:
+  openwa_redis_data:

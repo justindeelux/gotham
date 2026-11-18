@@ -1,0 +1,21 @@
+services:
+  bulwark:
+    image: ghcr.io/bulwarkmail/webmail:v1.21.2
+    restart: unless-stopped
+    ports:
+      - "3000"
+    environment:
+      JMAP_SERVER_URL: "{{ .jmap_server_url }}"
+      SESSION_SECRET: "{{ .session_secret }}"
+    volumes:
+      - bulwark_config:/app/data/admin
+      - bulwark_state:/app/data/admin-state
+    healthcheck:
+      test: ["CMD", "wget", "--no-verbose", "--tries=1", "--spider", "http://127.0.0.1:3000/api/health"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 10s
+volumes:
+  bulwark_config:
+  bulwark_state:

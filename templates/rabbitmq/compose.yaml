@@ -1,0 +1,21 @@
+services:
+  rabbitmq:
+    image: rabbitmq:4-management
+    restart: unless-stopped
+    ports:
+      - "5672:5672"
+      - "15672"
+    environment:
+      RABBITMQ_DEFAULT_USER: "{{ .admin_user }}"
+      RABBITMQ_DEFAULT_PASS: "{{ .admin_password }}"
+      RABBITMQ_NODENAME: rabbit@localhost
+    volumes:
+      - rabbitmq_data:/var/lib/rabbitmq
+    healthcheck:
+      test: ["CMD", "rabbitmq-diagnostics", "-q", "check_port_connectivity"]
+      interval: 10s
+      timeout: 30s
+      retries: 20
+      start_period: 60s
+volumes:
+  rabbitmq_data:

@@ -1,0 +1,38 @@
+name: Mattermost
+icon: mattermost
+description: Mattermost team chat with PostgreSQL, persistent named volumes and a routed domain.
+homepage: https://docs.mattermost.com
+category:
+  - messaging
+fields:
+  - key: domain
+    label: Domain
+    type: text
+    required: true
+    placeholder: chat.example.com
+    help: Public host used in invitation and notification links.
+    pattern: ^[A-Za-z0-9][A-Za-z0-9.-]*$
+    max_length: 253
+  - key: db_user
+    label: Database user
+    type: text
+    default: mattermost
+    pattern: ^[A-Za-z0-9_]{1,32}$
+    max_length: 32
+  - key: db_password
+    label: Database password
+    type: secret
+    required: true
+    generate: true
+  - key: timezone
+    label: Timezone
+    type: text
+    default: UTC
+    placeholder: Europe/Berlin
+    pattern: ^[A-Za-z0-9_/+-]+$
+    max_length: 64
+    help: IANA timezone name used by the container clock and notifications.
+routes:
+  - service: mattermost
+    port: 8065
+    domain_field: domain

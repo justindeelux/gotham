@@ -1,0 +1,38 @@
+name: Soketi
+icon: soketi
+description: Soketi WebSocket server with credentials for a Pusher-compatible app and an optional routed domain.
+homepage: https://docs.soketi.app
+category:
+  - messaging
+fields:
+  - key: domain
+    label: Domain
+    type: text
+    required: false
+    default: ""
+    placeholder: ws.example.com
+    help: Optional. Leave empty to add a domain later from the service page.
+    pattern: ^([A-Za-z0-9][A-Za-z0-9.-]*)?$
+    max_length: 253
+  - key: app_id
+    label: App ID
+    type: text
+    default: soketi
+    pattern: ^[A-Za-z0-9_-]{1,64}$
+    max_length: 64
+  - key: app_key
+    label: App key
+    type: secret
+    required: true
+    generate: true
+    help: Pusher-compatible app key given to clients; use Generate for a strong value.
+  - key: app_secret
+    label: App secret
+    type: secret
+    required: true
+    generate: true
+    help: Server-side secret used to sign broadcasts; use Generate for a strong value.
+routes:
+  - service: soketi
+    port: 6001
+    domain_field: domain

@@ -1,0 +1,44 @@
+name: Matrix Synapse
+icon: matrix-synapse
+description: Matrix Synapse homeserver with SQLite storage, a persistent named volume and a routed domain used as the server name.
+homepage: https://element-hq.github.io/synapse/latest/welcome_and_overview.html
+category:
+  - messaging
+fields:
+  - key: domain
+    label: Server name
+    type: text
+    required: true
+    placeholder: matrix.example.com
+    help: "Permanent after the first start: it is part of every user ID. Changing it requires a fresh install."
+    pattern: ^[A-Za-z0-9][A-Za-z0-9.-]*$
+    max_length: 253
+  - key: admin_user
+    label: Admin user
+    type: text
+    default: admin
+    pattern: ^[A-Za-z0-9_.=/-]{1,64}$
+    max_length: 64
+    help: The initial admin account registered on the first start. Set the password below.
+  - key: admin_password
+    label: Admin password
+    type: secret
+    required: true
+    generate: true
+    help: The initial admin password; use Generate for a strong value.
+  - key: enable_registration
+    label: Allow registration
+    type: bool
+    default: false
+    help: Let anyone create an account after the homeserver is running.
+  - key: report_stats
+    label: Report anonymised stats
+    type: select
+    default: "no"
+    options:
+      - "no"
+      - "yes"
+routes:
+  - service: synapse
+    port: 8008
+    domain_field: domain

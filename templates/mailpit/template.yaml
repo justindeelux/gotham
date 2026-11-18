@@ -1,0 +1,27 @@
+name: Mailpit
+icon: mailpit
+description: Mailpit SMTP and email testing tool with a web UI, a persistent named volume and an optional routed domain.
+homepage: https://mailpit.axllent.org/docs/
+category:
+  - email
+fields:
+  - key: domain
+    label: Domain
+    type: text
+    required: false
+    default: ""
+    placeholder: mailpit.example.com
+    help: Optional. Leave empty to add a domain later from the service page.
+    pattern: ^([A-Za-z0-9][A-Za-z0-9.-]*)?$
+    max_length: 253
+  - key: max_messages
+    label: Maximum messages
+    type: number
+    default: 5000
+    min: 100
+    max: 100000
+    help: Older messages are pruned once the inbox holds more than this.
+routes:
+  - service: mailpit
+    port: 8025
+    domain_field: domain

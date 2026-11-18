@@ -1,0 +1,37 @@
+name: ntfy
+icon: ntfy
+description: ntfy HTTP push notification service with persistent cache and auth volumes and an optional routed domain.
+homepage: https://docs.ntfy.sh/
+category:
+  - messaging
+fields:
+  - key: domain
+    label: Domain
+    type: text
+    required: false
+    default: ""
+    placeholder: ntfy.example.com
+    help: Optional. Leave empty to add a domain later from the service page. Topic URLs embed the domain.
+    pattern: ^([A-Za-z0-9][A-Za-z0-9.-]*)?$
+    max_length: 253
+  - key: timezone
+    label: Timezone
+    type: text
+    default: UTC
+    placeholder: Europe/Berlin
+    pattern: ^[A-Za-z0-9_/+-]+$
+    max_length: 64
+    help: IANA timezone name used for message timestamps.
+  - key: enable_signup
+    label: Allow signup
+    type: bool
+    default: true
+    help: Let new users create an account on this server.
+  - key: enable_login
+    label: Allow login
+    type: bool
+    default: true
+routes:
+  - service: ntfy
+    port: 80
+    domain_field: domain

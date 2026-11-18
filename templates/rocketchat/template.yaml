@@ -1,0 +1,19 @@
+name: Rocket.Chat
+icon: rocketchat
+description: Rocket.Chat team messaging with MongoDB replica set, persistent named volumes and a routed domain.
+homepage: https://github.com/RocketChat/Rocket.Chat
+category:
+  - messaging
+fields:
+  - key: domain
+    label: Domain
+    type: text
+    required: true
+    placeholder: chat.example.com
+    help: Public host used in links, invitations and websocket URLs.
+    pattern: ^[A-Za-z0-9][A-Za-z0-9.-]*$
+    max_length: 253
+routes:
+  - service: rocketchat
+    port: 3000
+    domain_field: domain

@@ -1,0 +1,21 @@
+services:
+  mailpit:
+    image: axllent/mailpit:v1.33.1
+    restart: unless-stopped
+    ports:
+      - "1025:1025"
+      - "8025"
+    environment:
+      MP_MAX_MESSAGES: "{{ .max_messages }}"
+      MP_DATABASE: /data/mailpit.db
+      MP_SMTP_AUTH_ACCEPT_ANY: "1"
+      MP_SMTP_AUTH_ALLOW_INSECURE: "1"
+    volumes:
+      - mailpit_data:/data
+    healthcheck:
+      test: ["CMD", "/mailpit", "readyz"]
+      interval: 5s
+      timeout: 20s
+      retries: 10
+volumes:
+  mailpit_data:

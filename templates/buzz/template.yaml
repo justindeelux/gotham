@@ -1,0 +1,72 @@
+name: Buzz
+icon: buzz
+description: Self-hostable Nostr workspace where humans and AI agents collaborate, with PostgreSQL, Redis, object storage and an optional routed domain.
+homepage: https://github.com/block/buzz
+category:
+  - messaging
+fields:
+  - key: domain
+    label: Domain
+    type: text
+    required: false
+    default: ""
+    placeholder: buzz.example.com
+    help: Optional. Leave empty to add a domain later from the service page. Relay URLs are derived from it.
+    pattern: ^([A-Za-z0-9][A-Za-z0-9.-]*)?$
+    max_length: 253
+  - key: postgres_user
+    label: PostgreSQL user
+    type: text
+    default: buzz
+    pattern: ^[A-Za-z0-9_]{1,32}$
+    max_length: 32
+  - key: postgres_password
+    label: PostgreSQL password
+    type: secret
+    required: true
+    generate: true
+  - key: redis_password
+    label: Redis password
+    type: secret
+    required: true
+    generate: true
+  - key: minio_user
+    label: Object storage user
+    type: text
+    default: buzz
+    pattern: ^[A-Za-z0-9_]{1,32}$
+    max_length: 32
+  - key: minio_password
+    label: Object storage password
+    type: secret
+    required: true
+    generate: true
+  - key: relay_private_key
+    label: Relay private key
+    type: secret
+    required: true
+    pattern: ^[0-9a-f]{64}$
+    help: 64 lowercase hex characters, for example from openssl rand -hex 32. Keep it stable; changing it changes the relay's public key.
+  - key: git_hmac_secret
+    label: Git hook HMAC secret
+    type: secret
+    required: true
+    pattern: ^[0-9a-f]{64}$
+    help: 64 lowercase hex characters, for example from openssl rand -hex 32. Signs git hook callbacks between the relay and the git service.
+  - key: s3_bucket
+    label: Media bucket
+    type: text
+    default: buzz-media
+    pattern: ^[A-Za-z0-9._-]{1,63}$
+    max_length: 63
+  - key: relay_owner_pubkey
+    label: Relay owner public key
+    type: text
+    required: false
+    default: ""
+    placeholder: npub or hex public key
+    help: Optional. Nostr public key of the relay owner; leave empty to set it in the app.
+routes:
+  - service: buzz
+    port: 3000
+    domain_field: domain

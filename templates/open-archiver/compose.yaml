@@ -1,0 +1,81 @@
+services:
+  open-archiver:
+    image: logiclabshq/open-archiver:v0.6.2
+    restart: unless-stopped
+    ports:
+      - "3000"
+    environment:
+      PORT_BACKEND: "4000"
+      PORT_FRONTEND: "3000"
+      NODE_ENV: production
+      ENCRYPTION_KEY: "{{ .encryption_key }}"
+      STORAGE_ENCRYPTION_KEY: "{{ .storage_encryption_key }}"
+      POSTGRES_DB: "{{ .db_name }}"
+      POSTGRES_USER: "{{ .db_user }}"
+      POSTGRES_PASSWORD: "{{ .db_password }}"
+      DATABASE_URL: postgresql://{{ .db_user }}:{{ .db_password }}@postgres:5432/{{ .db_name }}
+      MEILI_MASTER_KEY: "{{ .meili_master_key }}"
+      MEILI_HOST: http://meilisearch:7700
+      REDIS_HOST: valkey
+      REDIS_PORT: "6379"
+      REDIS_PASSWORD: "{{ .valkey_password }}"
+      REDIS_TLS_ENABLED: "false"
+      STORAGE_TYPE: local
+      STORAGE_LOCAL_ROOT_PATH: /var/data/open-archiver
+      JWT_SECRET: "{{ .jwt_secret }}"
+      SYNC_FREQUENCY: "* * * * *"
+    volumes:
+      - archiver_data:/var/data/open-archiver
+    depends_on:
+      postgres:
+        condition: service_healthy
+      valkey:
+        condition: service_healthy
+      meilisearch:
+        condition: service_healthy
+
+  postgres:
+    image: postgres:17-alpine
+    restart: unless-stopped
+    environment:
+      POSTGRES_DB: "{{ .db_name }}"
+      POSTGRES_USER: "{{ .db_user }}"
+      POSTGRES_PASSWORD: "{{ .db_password }}"
+      LC_ALL: C
+    volumes:
+      - archiver_postgres_data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U $${POSTGRES_USER} -d $${POSTGRES_DB}"]
+      interval: 10s
+      timeout: 20s
+      retries: 10
+
+  valkey:
+    image: valkey/valkey:8-alpine
+    restart: unless-stopped
+    command: ["valkey-server", "--requirepass", "{{ .valkey_password }}"]
+    volumes:
+      - archiver_valkey_data:/data
+    healthcheck:
+      test: ["CMD", "redis-cli", "-a", "{{ .valkey_password }}", "ping"]
+      interval: 10s
+      timeout: 5s
+      retries: 3
+
+  meilisearch:
+    image: getmeili/meilisearch:v1.38
+    restart: unless-stopped
+    environment:
+      MEILI_MASTER_KEY: "{{ .meili_master_key }}"
+    volumes:
+      - archiver_meili_data:/meili_data
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://127.0.0.1:7700/health"]
+      interval: 5s
+      timeout: 10s
+      retries: 15
+volumes:
+  archiver_data:
+  archiver_postgres_data:
+  archiver_valkey_data:
+  archiver_meili_data:

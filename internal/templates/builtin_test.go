@@ -1,6 +1,7 @@
 package templates
 
 import (
+	"strconv"
 	"strings"
 	"testing"
 
@@ -12,6 +13,10 @@ import (
 	"github.com/justindeelux/gotham/internal/services"
 )
 
+// builtinSamples holds render values that the generated ones below cannot
+// satisfy. A template that needs such a value gets its own per-batch test
+// file (builtin_samples_<batch>_test.go) adding an entry here from func init(),
+// so adding a template never edits this file.
 var builtinSamples = map[string]map[string]any{
 	"wordpress": {
 		"domain":           "blog.example.test",
@@ -38,9 +43,12 @@ func TestBuiltinCatalog(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Load(builtin.FS): %v", err)
 	}
-	slugs := make([]string, 0, len(catalog.List()))
+	seen := make(map[string]bool, len(catalog.List()))
 	for _, template := range catalog.List() {
-		slugs = append(slugs, template.Slug)
+		if seen[template.Slug] {
+			t.Errorf("duplicate template slug %q", template.Slug)
+		}
+		seen[template.Slug] = true
 		if template.Name == "" || template.Icon == "" || template.Description == "" || len(template.Fields) == 0 {
 			t.Errorf("template %s is missing metadata: %+v", template.Slug, template)
 		}
@@ -48,9 +56,10 @@ func TestBuiltinCatalog(t *testing.T) {
 			t.Errorf("template %s is missing its homepage or category: %+v", template.Slug, template)
 		}
 	}
-	want := "n8n,nextcloud,uptime-kuma,wordpress"
-	if got := strings.Join(slugs, ","); got != want {
-		t.Fatalf("catalog = %s, want %s", got, want)
+	for _, slug := range []string{"n8n", "nextcloud", "uptime-kuma", "wordpress"} {
+		if !seen[slug] {
+			t.Errorf("template %s missing from the catalog", slug)
+		}
 	}
 	for slug := range builtinSamples {
 		if _, ok := catalog.Get(slug); !ok {
@@ -64,24 +73,41 @@ func TestBuiltinRender(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Load(builtin.FS): %v", err)
 	}
-	for slug, values := range builtinSamples {
-		t.Run(slug, func(t *testing.T) {
-			result, err := catalog.Render(slug, values)
+	for _, template := range catalog.List() {
+		t.Run(template.Slug, func(t *testing.T) {
+			values := builtinValues(template)
+			result, err := catalog.Render(template.Slug, values)
 			if err != nil {
 				t.Fatalf("Render: %v", err)
-			}
-			if len(result.Domains) != 1 {
-				t.Fatalf("domains = %+v, want exactly one route", result.Domains)
 			}
 			if len(result.Spec.Domains) != 0 {
 				t.Errorf("compose labels still declare domains: %+v", result.Spec.Domains)
 			}
-			route := result.Domains[0]
-			if route.Domain != values["domain"] {
-				t.Errorf("route domain = %q, want %v", route.Domain, values["domain"])
+			routes := make(map[string]services.DomainRoute, len(result.Domains))
+			for _, route := range result.Domains {
+				if route.Port == 0 {
+					t.Errorf("route = %+v, want a container port", route)
+				}
+				routes[route.Service] = route
 			}
-			if route.Port == 0 {
-				t.Errorf("route = %+v, want a container port", route)
+			wantRoutes := 0
+			for _, route := range template.Routes {
+				domain, _ := values[route.DomainField].(string)
+				if domain == "" {
+					continue
+				}
+				wantRoutes++
+				got, ok := routes[route.Service]
+				if !ok {
+					t.Errorf("route for %s is missing, want domain %q", route.Service, domain)
+					continue
+				}
+				if got.Domain != domain {
+					t.Errorf("route domain = %q, want %q", got.Domain, domain)
+				}
+			}
+			if len(result.Domains) != wantRoutes {
+				t.Errorf("domains = %+v, want %d routes", result.Domains, wantRoutes)
 			}
 			for _, volume := range result.Spec.NamedVolumes {
 				if strings.HasPrefix(volume, services.ReservedVolumePrefix) {
@@ -109,6 +135,54 @@ func TestBuiltinRender(t *testing.T) {
 			}
 		})
 	}
+}
+
+// builtinValues returns the render values for a template: a sample entry wins,
+// otherwise the field default, otherwise a value derived from the field
+// metadata. Sample keys are passed through so a typo fails Render.
+func builtinValues(template Template) map[string]any {
+	sample := builtinSamples[template.Slug]
+	values := make(map[string]any, len(template.Fields)+len(sample))
+	for key, value := range sample {
+		values[key] = value
+	}
+	for _, field := range template.Fields {
+		if _, ok := values[field.Key]; ok {
+			continue
+		}
+		if field.Default != nil {
+			values[field.Key] = *field.Default
+			continue
+		}
+		values[field.Key] = generatedValue(field)
+	}
+	return values
+}
+
+func generatedValue(field Field) string {
+	switch field.Type {
+	case FieldText, FieldSecret:
+		fixed := "app.example.test"
+		if field.Type == FieldSecret {
+			fixed = "sample-secret"
+		}
+		for _, candidate := range []string{fixed, "app", "a"} {
+			if _, err := field.check(candidate); err == nil {
+				return candidate
+			}
+		}
+		return fixed
+	case FieldNumber:
+		if field.Min != nil {
+			return strconv.FormatInt(*field.Min, 10)
+		}
+		return "0"
+	case FieldSelect:
+		return field.Options[0]
+	case FieldBool:
+		return "true"
+	}
+	return ""
 }
 
 func TestBuiltinExpectedValues(t *testing.T) {
@@ -305,8 +379,12 @@ func TestNewDefaultService(t *testing.T) {
 	if svc == nil {
 		t.Fatal("NewDefaultService = nil")
 	}
-	if len(svc.List()) != 4 {
-		t.Fatalf("catalog = %d templates, want 4", len(svc.List()))
+	catalog, err := Load(builtin.FS)
+	if err != nil {
+		t.Fatalf("Load(builtin.FS): %v", err)
+	}
+	if got, want := len(svc.List()), len(catalog.List()); got != want {
+		t.Fatalf("catalog = %d templates, want %d", got, want)
 	}
 	if _, err := svc.Render("wordpress", builtinSamples["wordpress"]); err != nil {
 		t.Fatalf("Render(wordpress): %v", err)

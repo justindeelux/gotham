@@ -1,0 +1,42 @@
+services:
+  litellm:
+    image: ghcr.io/berriai/litellm-database:1.109.1
+    restart: unless-stopped
+    ports:
+      - "4000"
+    command: ["--port", "4000", "--num_workers", "2", "--run_gunicorn"]
+    environment:
+      LITELLM_LOG: ERROR
+      LITELLM_MODE: PRODUCTION
+      LITELLM_MASTER_KEY: "sk-{{ .master_key }}"
+      LITELLM_SALT_KEY: "{{ .salt_key }}"
+      UI_USERNAME: "{{ .admin_user }}"
+      UI_PASSWORD: "{{ .admin_password }}"
+      DATABASE_URL: "postgresql://litellm:{{ .db_password }}@postgres:5432/litellm"
+      POSTGRES_USER: litellm
+      POSTGRES_PASSWORD: "{{ .db_password }}"
+      POSTGRES_DB: litellm
+      REDIS_HOST: redis
+      REDIS_PORT: "6379"
+      STORE_MODEL_IN_DB: "True"
+    depends_on:
+      - postgres
+      - redis
+  postgres:
+    image: postgres:16-alpine
+    restart: unless-stopped
+    environment:
+      POSTGRES_DB: litellm
+      POSTGRES_USER: litellm
+      POSTGRES_PASSWORD: "{{ .db_password }}"
+    volumes:
+      - litellm_postgres_data:/var/lib/postgresql/data
+  redis:
+    image: redis:7-alpine
+    restart: unless-stopped
+    command: redis-server --appendonly yes
+    volumes:
+      - litellm_redis_data:/data
+volumes:
+  litellm_postgres_data:
+  litellm_redis_data:

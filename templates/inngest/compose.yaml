@@ -1,0 +1,33 @@
+services:
+  inngest:
+    image: inngest/inngest:v1.53.0
+    restart: unless-stopped
+    command: inngest start --host 0.0.0.0
+    ports:
+      - "8288"
+    environment:
+      INNGEST_EVENT_KEY: "{{ .event_key }}"
+      INNGEST_SIGNING_KEY: "{{ .signing_key }}"
+      INNGEST_POSTGRES_URI: "postgres://inngest:{{ .db_password }}@postgres:5432/inngest"
+      INNGEST_REDIS_URI: "redis://redis:6379"
+    depends_on:
+      - postgres
+      - redis
+  postgres:
+    image: postgres:17
+    restart: unless-stopped
+    environment:
+      POSTGRES_DB: inngest
+      POSTGRES_USER: inngest
+      POSTGRES_PASSWORD: "{{ .db_password }}"
+    volumes:
+      - inngest_postgres_data:/var/lib/postgresql/data
+  redis:
+    image: redis:7-alpine
+    restart: unless-stopped
+    command: redis-server --appendonly yes
+    volumes:
+      - inngest_redis_data:/data
+volumes:
+  inngest_postgres_data:
+  inngest_redis_data:

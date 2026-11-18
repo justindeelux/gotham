@@ -1,0 +1,25 @@
+name: MindsDB
+icon: mindsdb
+description: MindsDB AI platform with PostgreSQL, persistent named volumes and an optional routed domain.
+homepage: https://docs.mindsdb.com/what-is-mindsdb
+category:
+  - ai
+fields:
+  - key: domain
+    label: Domain
+    type: text
+    required: false
+    default: ""
+    placeholder: mindsdb.example.com
+    help: Optional. Leave empty to add a domain later from the service page.
+    pattern: ^([A-Za-z0-9][A-Za-z0-9.-]*)?$
+    max_length: 253
+  - key: db_password
+    label: Database password
+    type: secret
+    required: true
+    generate: true
+routes:
+  - service: mindsdb
+    port: 47334
+    domain_field: domain

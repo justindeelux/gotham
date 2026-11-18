@@ -1,0 +1,84 @@
+services:
+  hatchet-dashboard:
+    image: ghcr.io/hatchet-dev/hatchet/hatchet-dashboard:v0.120.6
+    restart: unless-stopped
+    command: sh ./entrypoint.sh --config /hatchet/config
+    ports:
+      - "80"
+    environment:
+      DATABASE_URL: "postgres://hatchet:{{ .postgres_password }}@postgres:5432/hatchet"
+      SERVER_AUTH_SET_EMAIL_VERIFIED: "true"
+      SERVER_AUTH_COOKIE_DOMAIN: "${GOTHAM_DOMAIN:-localhost}"
+    volumes:
+      - hatchet_certs:/hatchet/certs
+      - hatchet_config:/hatchet/config
+    depends_on:
+      - postgres
+      - rabbitmq
+      - setup-config
+      - migration
+  hatchet-engine:
+    image: ghcr.io/hatchet-dev/hatchet/hatchet-engine:v0.120.6
+    restart: on-failure
+    command: /hatchet/hatchet-engine --config /hatchet/config
+    environment:
+      DATABASE_URL: "postgres://hatchet:{{ .postgres_password }}@postgres:5432/hatchet"
+      SERVER_GRPC_BIND_ADDRESS: 0.0.0.0
+      SERVER_GRPC_INSECURE: t
+    volumes:
+      - hatchet_certs:/hatchet/certs
+      - hatchet_config:/hatchet/config
+    depends_on:
+      - postgres
+      - rabbitmq
+      - setup-config
+      - migration
+  migration:
+    image: ghcr.io/hatchet-dev/hatchet/hatchet-migrate:v0.120.6
+    restart: "no"
+    command: /hatchet/hatchet-migrate
+    environment:
+      DATABASE_URL: "postgres://hatchet:{{ .postgres_password }}@postgres:5432/hatchet"
+    depends_on:
+      - postgres
+  setup-config:
+    image: ghcr.io/hatchet-dev/hatchet/hatchet-admin:v0.120.6
+    restart: "no"
+    command: /hatchet/hatchet-admin quickstart --skip certs --generated-config-dir /hatchet/config --overwrite=false
+    environment:
+      DATABASE_URL: "postgres://hatchet:{{ .postgres_password }}@postgres:5432/hatchet"
+      SERVER_TASKQUEUE_RABBITMQ_URL: "amqp://hatchet:{{ .rabbitmq_password }}@rabbitmq:5672/"
+      SERVER_AUTH_COOKIE_DOMAIN: "${GOTHAM_DOMAIN:-localhost}"
+      SERVER_AUTH_COOKIE_INSECURE: t
+      SERVER_GRPC_BIND_ADDRESS: 0.0.0.0
+      SERVER_GRPC_INSECURE: t
+      SERVER_GRPC_BROADCAST_ADDRESS: hatchet-engine:7077
+      SERVER_DEFAULT_ENGINE_VERSION: V1
+    volumes:
+      - hatchet_certs:/hatchet/certs
+      - hatchet_config:/hatchet/config
+    depends_on:
+      - postgres
+      - rabbitmq
+  postgres:
+    image: postgres:16-alpine
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: hatchet
+      POSTGRES_PASSWORD: "{{ .postgres_password }}"
+      POSTGRES_DB: hatchet
+    volumes:
+      - hatchet_postgres_data:/var/lib/postgresql/data
+  rabbitmq:
+    image: rabbitmq:3-management
+    restart: unless-stopped
+    environment:
+      RABBITMQ_DEFAULT_USER: hatchet
+      RABBITMQ_DEFAULT_PASS: "{{ .rabbitmq_password }}"
+    volumes:
+      - hatchet_rabbitmq_data:/var/lib/rabbitmq
+volumes:
+  hatchet_certs:
+  hatchet_config:
+  hatchet_postgres_data:
+  hatchet_rabbitmq_data:

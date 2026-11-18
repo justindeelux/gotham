@@ -1,0 +1,39 @@
+services:
+  windmill-server:
+    image: ghcr.io/windmill-labs/windmill:1.875.0
+    restart: unless-stopped
+    ports:
+      - "8000"
+    environment:
+      DATABASE_URL: "postgres://windmill:{{ .db_password }}@db/windmill"
+      MODE: server
+      BASE_URL: "https://${GOTHAM_DOMAIN:-localhost}"
+    volumes:
+      - windmill_logs:/tmp/windmill/logs
+    depends_on:
+      - db
+  windmill-worker:
+    image: ghcr.io/windmill-labs/windmill:1.875.0
+    restart: unless-stopped
+    environment:
+      DATABASE_URL: "postgres://windmill:{{ .db_password }}@db/windmill"
+      MODE: worker
+      WORKER_GROUP: default
+    volumes:
+      - windmill_cache:/tmp/windmill/cache
+      - windmill_logs:/tmp/windmill/logs
+    depends_on:
+      - db
+  db:
+    image: postgres:18
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: windmill
+      POSTGRES_PASSWORD: "{{ .db_password }}"
+      POSTGRES_DB: windmill
+    volumes:
+      - windmill_db_data:/var/lib/postgresql
+volumes:
+  windmill_db_data:
+  windmill_cache:
+  windmill_logs:

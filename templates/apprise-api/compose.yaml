@@ -1,0 +1,14 @@
+services:
+  apprise-api:
+    image: linuxserver/apprise-api:2.1.0
+    restart: unless-stopped
+    ports:
+      - "8000"
+    environment:
+      PUID: "1000"
+      PGID: "1000"
+      TZ: "{{ .timezone }}"
+    volumes:
+      - apprise_config:/config
+volumes:
+  apprise_config:

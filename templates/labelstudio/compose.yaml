@@ -1,0 +1,35 @@
+services:
+  labelstudio:
+    image: heartexlabs/label-studio:1.23.2
+    restart: unless-stopped
+    ports:
+      - "8080"
+    environment:
+      CSRF_TRUSTED_ORIGINS: "https://${GOTHAM_DOMAIN:-localhost}"
+      LABEL_STUDIO_HOST: "https://${GOTHAM_DOMAIN:-localhost}"
+      DJANGO_DB: default
+      POSTGRE_NAME: labelstudio
+      POSTGRE_USER: labelstudio
+      POSTGRE_PASSWORD: "{{ .db_password }}"
+      POSTGRE_HOST: postgres
+      POSTGRE_PORT: "5432"
+      LABEL_STUDIO_USERNAME: "{{ .admin_email }}"
+      LABEL_STUDIO_PASSWORD: "{{ .admin_password }}"
+      LABEL_STUDIO_DISABLE_SIGNUP_WITHOUT_LINK: "true"
+      SSRF_PROTECTION_ENABLED: "true"
+    volumes:
+      - labelstudio_data:/label-studio/data
+    depends_on:
+      - postgres
+  postgres:
+    image: postgres:17-alpine
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: labelstudio
+      POSTGRES_PASSWORD: "{{ .db_password }}"
+      POSTGRES_DB: labelstudio
+    volumes:
+      - labelstudio_postgres_data:/var/lib/postgresql/data
+volumes:
+  labelstudio_data:
+  labelstudio_postgres_data:

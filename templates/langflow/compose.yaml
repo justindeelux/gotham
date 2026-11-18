@@ -1,0 +1,30 @@
+services:
+  langflow:
+    image: langflowai/langflow:1.13.2
+    restart: unless-stopped
+    ports:
+      - "7860"
+    environment:
+      LANGFLOW_AUTO_LOGIN: "false"
+      LANGFLOW_SUPERUSER: "{{ .superuser }}"
+      LANGFLOW_SUPERUSER_PASSWORD: "{{ .superuser_password }}"
+      LANGFLOW_DATABASE_URL: "postgresql://langflow:{{ .db_password }}@postgres:5432/langflow"
+      LANGFLOW_CONFIG_DIR: app/langflow
+      LANGFLOW_HOST: 0.0.0.0
+      PORT: "7860"
+    volumes:
+      - langflow_data:/app/langflow
+    depends_on:
+      - postgres
+  postgres:
+    image: postgres:18-alpine
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: langflow
+      POSTGRES_PASSWORD: "{{ .db_password }}"
+      POSTGRES_DB: langflow
+    volumes:
+      - langflow_postgres_data:/var/lib/postgresql/data
+volumes:
+  langflow_data:
+  langflow_postgres_data:

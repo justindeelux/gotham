@@ -1,0 +1,30 @@
+services:
+  app:
+    image: ghcr.io/metatool-ai/metamcp:2.4
+    restart: unless-stopped
+    ports:
+      - "12008"
+    environment:
+      POSTGRES_HOST: postgres
+      POSTGRES_PORT: "5432"
+      POSTGRES_USER: metamcp
+      POSTGRES_PASSWORD: "{{ .db_password }}"
+      POSTGRES_DB: metamcp_db
+      DATABASE_URL: "postgresql://metamcp:{{ .db_password }}@postgres:5432/metamcp_db"
+      APP_URL: "https://${GOTHAM_DOMAIN:-localhost}"
+      NEXT_PUBLIC_APP_URL: "https://${GOTHAM_DOMAIN:-localhost}"
+      BETTER_AUTH_SECRET: "{{ .auth_secret }}"
+      TRANSFORM_LOCALHOST_TO_DOCKER_INTERNAL: "true"
+    depends_on:
+      - postgres
+  postgres:
+    image: postgres:16-alpine
+    restart: unless-stopped
+    environment:
+      POSTGRES_DB: metamcp_db
+      POSTGRES_USER: metamcp
+      POSTGRES_PASSWORD: "{{ .db_password }}"
+    volumes:
+      - metamcp_postgres_data:/var/lib/postgresql/data
+volumes:
+  metamcp_postgres_data:

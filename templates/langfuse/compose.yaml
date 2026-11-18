@@ -1,0 +1,96 @@
+services:
+  langfuse:
+    image: langfuse/langfuse:4
+    restart: unless-stopped
+    ports:
+      - "3000"
+    environment:
+      NEXTAUTH_URL: "https://${GOTHAM_DOMAIN:-localhost}"
+      DATABASE_URL: "postgresql://langfuse:{{ .db_password }}@postgres:5432/langfuse"
+      SALT: "{{ .salt }}"
+      ENCRYPTION_KEY: "{{ .encryption_key }}"
+      NEXTAUTH_SECRET: "{{ .nextauth_secret }}"
+      TELEMETRY_ENABLED: "false"
+      CLICKHOUSE_MIGRATION_URL: "clickhouse://clickhouse:9000"
+      CLICKHOUSE_URL: "http://clickhouse:8123"
+      CLICKHOUSE_USER: clickhouse
+      CLICKHOUSE_PASSWORD: "{{ .clickhouse_password }}"
+      CLICKHOUSE_CLUSTER_ENABLED: "false"
+      REDIS_HOST: redis
+      REDIS_PORT: "6379"
+      REDIS_AUTH: "{{ .redis_password }}"
+      AUTH_DISABLE_SIGNUP: "true"
+      HOSTNAME: 0.0.0.0
+      LANGFUSE_INIT_ORG_ID: my-org
+      LANGFUSE_INIT_ORG_NAME: My Org
+      LANGFUSE_INIT_PROJECT_ID: my-project
+      LANGFUSE_INIT_PROJECT_NAME: My Project
+      LANGFUSE_INIT_USER_EMAIL: "{{ .admin_email }}"
+      LANGFUSE_INIT_USER_NAME: admin
+      LANGFUSE_INIT_USER_PASSWORD: "{{ .admin_password }}"
+    depends_on:
+      - postgres
+      - redis
+      - clickhouse
+  langfuse-worker:
+    image: langfuse/langfuse-worker:4
+    restart: unless-stopped
+    environment:
+      NEXTAUTH_URL: "https://${GOTHAM_DOMAIN:-localhost}"
+      DATABASE_URL: "postgresql://langfuse:{{ .db_password }}@postgres:5432/langfuse"
+      SALT: "{{ .salt }}"
+      ENCRYPTION_KEY: "{{ .encryption_key }}"
+      NEXTAUTH_SECRET: "{{ .nextauth_secret }}"
+      TELEMETRY_ENABLED: "false"
+      CLICKHOUSE_MIGRATION_URL: "clickhouse://clickhouse:9000"
+      CLICKHOUSE_URL: "http://clickhouse:8123"
+      CLICKHOUSE_USER: clickhouse
+      CLICKHOUSE_PASSWORD: "{{ .clickhouse_password }}"
+      CLICKHOUSE_CLUSTER_ENABLED: "false"
+      REDIS_HOST: redis
+      REDIS_PORT: "6379"
+      REDIS_AUTH: "{{ .redis_password }}"
+      AUTH_DISABLE_SIGNUP: "true"
+      HOSTNAME: 0.0.0.0
+      LANGFUSE_INIT_ORG_ID: my-org
+      LANGFUSE_INIT_ORG_NAME: My Org
+      LANGFUSE_INIT_PROJECT_ID: my-project
+      LANGFUSE_INIT_PROJECT_NAME: My Project
+      LANGFUSE_INIT_USER_EMAIL: "{{ .admin_email }}"
+      LANGFUSE_INIT_USER_NAME: admin
+      LANGFUSE_INIT_USER_PASSWORD: "{{ .admin_password }}"
+    depends_on:
+      - postgres
+      - redis
+      - clickhouse
+  postgres:
+    image: postgres:17-alpine
+    restart: unless-stopped
+    environment:
+      POSTGRES_DB: langfuse
+      POSTGRES_USER: langfuse
+      POSTGRES_PASSWORD: "{{ .db_password }}"
+    volumes:
+      - langfuse_postgres_data:/var/lib/postgresql/data
+  redis:
+    image: redis:8
+    restart: unless-stopped
+    command: ["sh", "-c", "redis-server --requirepass $${REDIS_PASSWORD}"]
+    environment:
+      REDIS_PASSWORD: "{{ .redis_password }}"
+    volumes:
+      - langfuse_redis_data:/data
+  clickhouse:
+    image: clickhouse/clickhouse-server:26.10.4.207
+    restart: unless-stopped
+    user: "101:101"
+    environment:
+      CLICKHOUSE_DB: default
+      CLICKHOUSE_USER: clickhouse
+      CLICKHOUSE_PASSWORD: "{{ .clickhouse_password }}"
+    volumes:
+      - langfuse_clickhouse_data:/var/lib/clickhouse
+volumes:
+  langfuse_postgres_data:
+  langfuse_redis_data:
+  langfuse_clickhouse_data:

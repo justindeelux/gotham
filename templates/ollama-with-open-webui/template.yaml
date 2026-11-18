@@ -1,0 +1,20 @@
+name: Ollama with Open WebUI
+icon: ollama-with-open-webui
+description: Ollama with the Open WebUI chat interface, persistent named volumes and an optional routed domain.
+homepage: https://docs.openwebui.com
+category:
+  - ai
+fields:
+  - key: domain
+    label: Domain
+    type: text
+    required: false
+    default: ""
+    placeholder: chat.example.com
+    help: Optional. Leave empty to add a domain later from the service page.
+    pattern: ^([A-Za-z0-9][A-Za-z0-9.-]*)?$
+    max_length: 253
+routes:
+  - service: open-webui
+    port: 8080
+    domain_field: domain

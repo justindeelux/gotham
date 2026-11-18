@@ -1,0 +1,20 @@
+name: Chroma
+icon: chroma
+description: Chroma vector database for AI applications with a persistent named volume and an optional routed domain.
+homepage: https://cookbook.chromadb.dev/
+category:
+  - ai
+fields:
+  - key: domain
+    label: Domain
+    type: text
+    required: false
+    default: ""
+    placeholder: chroma.example.com
+    help: Optional. Leave empty to add a domain later from the service page.
+    pattern: ^([A-Za-z0-9][A-Za-z0-9.-]*)?$
+    max_length: 253
+routes:
+  - service: chromadb
+    port: 8000
+    domain_field: domain

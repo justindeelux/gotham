@@ -1,0 +1,43 @@
+services:
+  activepieces:
+    image: ghcr.io/activepieces/activepieces:0.93.0
+    restart: unless-stopped
+    ports:
+      - "80"
+    environment:
+      AP_FRONTEND_URL: "https://${GOTHAM_DOMAIN:-localhost}"
+      AP_API_KEY: "{{ .api_key }}"
+      AP_ENCRYPTION_KEY: "{{ .encryption_key }}"
+      AP_JWT_SECRET: "{{ .jwt_secret }}"
+      AP_ENVIRONMENT: prod
+      AP_EXECUTION_MODE: UNSANDBOXED
+      AP_ENGINE_EXECUTABLE_PATH: dist/packages/engine/main.js
+      AP_POSTGRES_HOST: postgres
+      AP_POSTGRES_PORT: "5432"
+      AP_POSTGRES_DATABASE: activepieces
+      AP_POSTGRES_USERNAME: activepieces
+      AP_POSTGRES_PASSWORD: "{{ .db_password }}"
+      AP_REDIS_HOST: redis
+      AP_REDIS_PORT: "6379"
+      AP_SIGN_UP_ENABLED: "true"
+      AP_TELEMETRY_ENABLED: "false"
+    depends_on:
+      - postgres
+      - redis
+  postgres:
+    image: postgres:18-alpine
+    restart: unless-stopped
+    environment:
+      POSTGRES_DB: activepieces
+      POSTGRES_USER: activepieces
+      POSTGRES_PASSWORD: "{{ .db_password }}"
+    volumes:
+      - activepieces_postgres_data:/var/lib/postgresql
+  redis:
+    image: redis:7-alpine
+    restart: unless-stopped
+    volumes:
+      - activepieces_redis_data:/data
+volumes:
+  activepieces_postgres_data:
+  activepieces_redis_data:

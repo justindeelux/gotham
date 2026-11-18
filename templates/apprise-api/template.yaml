@@ -1,0 +1,25 @@
+name: Apprise API
+icon: apprise-api
+description: Apprise push notification API with a persistent named volume and an optional routed domain.
+homepage: https://docs.linuxserver.io/images/docker-apprise-api/
+category:
+  - automation
+fields:
+  - key: domain
+    label: Domain
+    type: text
+    required: false
+    default: ""
+    placeholder: apprise.example.com
+    help: Optional. Leave empty to add a domain later from the service page.
+    pattern: ^([A-Za-z0-9][A-Za-z0-9.-]*)?$
+    max_length: 253
+  - key: timezone
+    label: Timezone
+    type: text
+    default: UTC
+    pattern: ^[A-Za-z0-9_/+-]+$
+routes:
+  - service: apprise-api
+    port: 8000
+    domain_field: domain

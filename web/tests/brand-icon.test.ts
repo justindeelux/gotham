@@ -4,6 +4,7 @@ import { mount } from "@vue/test-utils";
 import { describe, expect, it, vi } from "vitest";
 
 import BrandIcon from "@/features/add-resource/components/BrandIcon.vue";
+import { createAssetResolver } from "@/features/add-resource/utils/brandAssets";
 import { brandFor, templateBrand } from "@/features/add-resource/utils/brands";
 import { ENGINES } from "@/features/databases/utils/databaseEngines";
 
@@ -58,7 +59,7 @@ async function mountIcon(
 describe("BrandIcon", () => {
   it("renders the vendored glyph for a source mark", async () => {
     const wrapper = await mountIcon(
-      { logo: "github", letters: "GH", color: "#6e7681" },
+      brandFor("github_app", "GitHub"),
       ".brand-icon__glyph",
     );
     const glyph = wrapper.find(".brand-icon__glyph");
@@ -77,6 +78,48 @@ describe("BrandIcon", () => {
     expect(image.attributes("src")).toContain("nextcloud");
     expect(wrapper.find(".brand-icon__glyph").exists()).toBe(false);
     expect(wrapper.classes()).toContain("brand-icon--image");
+  });
+
+  it("prefers the service icon over a source glyph with the same name", async () => {
+    const template = await mountIcon(
+      templateBrand("gitlab", "GitLab"),
+      ".brand-icon__image",
+    );
+    expect(template.find(".brand-icon__image").exists()).toBe(true);
+    expect(template.find(".brand-icon__glyph").exists()).toBe(false);
+    expect(template.classes()).toContain("brand-icon--image");
+
+    const source = await mountIcon(brandFor("gitlab_app", "GitLab"), ".brand-icon__glyph");
+    expect(source.find(".brand-icon__glyph").exists()).toBe(true);
+    expect(source.find(".brand-icon__image").exists()).toBe(false);
+  });
+
+  it("evicts a failed import and falls back to the default icon", async () => {
+    let attempts = 0;
+    const icons = new Map<string, () => Promise<string>>([
+      ["default", async () => "default.webp"],
+      [
+        "flaky",
+        async () => {
+          attempts += 1;
+          if (attempts === 1) {
+            throw new Error("stale chunk");
+          }
+          return "flaky.svg";
+        },
+      ],
+    ]);
+    const { assetFor } = createAssetResolver(icons, new Map());
+
+    await expect(assetFor("flaky", false)).resolves.toEqual({
+      url: "default.webp",
+      tinted: false,
+    });
+    await expect(assetFor("flaky", false)).resolves.toEqual({
+      url: "flaky.svg",
+      tinted: false,
+    });
+    expect(attempts).toBe(2);
   });
 
   it("shows the default icon when the slug has no vendored file", async () => {
@@ -103,10 +146,7 @@ describe("BrandIcon", () => {
   });
 
   it("is decorative for assistive technology", async () => {
-    const wrapper = await mountIcon(
-      { logo: "git", letters: "G", color: "#f05032" },
-      ".brand-icon__glyph",
-    );
+    const wrapper = await mountIcon(brandFor("git_public", "Repository"), ".brand-icon__glyph");
     expect(wrapper.attributes("aria-hidden")).toBe("true");
     expect(wrapper.classes()).toContain("brand-icon--md");
   });

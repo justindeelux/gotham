@@ -2,80 +2,31 @@
 import { computed, ref, watch } from "vue";
 import type { CSSProperties } from "vue";
 
+import { assetFor } from "../utils/brandAssets";
+import type { BrandAsset } from "../utils/brandAssets";
 import type { BrandIconSize } from "../utils/brands";
 
 interface Props {
   letters: string;
   color: string;
   logo?: string | null;
+  glyph?: boolean;
   size?: BrandIconSize;
-}
-
-interface BrandAsset {
-  url: string;
-  tinted: boolean;
 }
 
 const props = withDefaults(defineProps<Props>(), {
   logo: null,
+  glyph: false,
   size: "md",
 });
-
-// Lazy loaders keep the icons out of the main chunk; the gallery has hundreds.
-const iconLoaders = import.meta.glob<string>(
-  "../assets/icons/**/*.{svg,png,webp,jpeg,jpg,ico}",
-  { query: "?url", import: "default" },
-);
-const glyphLoaders = import.meta.glob<string>("../assets/brands/*.svg", {
-  query: "?url",
-  import: "default",
-});
-
-type Loader = () => Promise<string>;
-
-function keyed(loaders: Record<string, Loader>): Map<string, Loader> {
-  return new Map(
-    Object.entries(loaders).map(([path, load]) => [
-      path.slice(path.lastIndexOf("/") + 1).replace(/\.[^.]+$/, ""),
-      load,
-    ]),
-  );
-}
-
-const icons = keyed(iconLoaders);
-const glyphs = keyed(glyphLoaders);
-// shortcut: one key namespace for both icon folders, no service/database name collides today
-const cache = new Map<string, Promise<BrandAsset>>();
-
-async function loadAsset(logo: string): Promise<BrandAsset> {
-  const glyph = glyphs.get(logo);
-  if (glyph !== undefined) {
-    return { url: await glyph(), tinted: true };
-  }
-  const icon = icons.get(logo);
-  if (icon !== undefined) {
-    return { url: await icon(), tinted: false };
-  }
-  const fallback = icons.get("default");
-  return { url: fallback === undefined ? "" : await fallback(), tinted: false };
-}
-
-function assetFor(logo: string): Promise<BrandAsset> {
-  let pending = cache.get(logo);
-  if (pending === undefined) {
-    pending = loadAsset(logo);
-    cache.set(logo, pending);
-  }
-  return pending;
-}
 
 const asset = ref<BrandAsset | null>(null);
 
 watch(
-  () => props.logo,
-  async (logo) => {
-    const next = logo === null ? null : await assetFor(logo);
-    if (props.logo === logo) {
+  () => [props.logo, props.glyph] as const,
+  async ([logo, glyph]) => {
+    const next = logo === null ? null : await assetFor(logo, glyph);
+    if (props.logo === logo && props.glyph === glyph) {
       asset.value = next;
     }
   },

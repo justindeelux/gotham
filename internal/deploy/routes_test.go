@@ -72,6 +72,11 @@ type fakeDeployService struct {
 	seenLimit       int
 	seenRollback    uuid.UUID
 	seenRollbackSet bool
+	containers      []ApplicationContainer
+	containersErr   error
+	containerErr    error
+	seenContainer   string
+	seenAction      string
 	buildLog        string
 	buildLogErr     error
 	seenCreate      CreateApplicationInput
@@ -118,6 +123,29 @@ func (f *fakeDeployService) GetApplication(_ context.Context, userID, appID uuid
 		return Application{}, f.getErr
 	}
 	return f.application, nil
+}
+
+func (f *fakeDeployService) ListApplicationContainers(_ context.Context, userID, appID uuid.UUID) ([]ApplicationContainer, error) {
+	f.seenUser, f.seenApplication = userID, appID
+	if f.containersErr != nil {
+		return nil, f.containersErr
+	}
+	return f.containers, nil
+}
+
+func (f *fakeDeployService) StartApplicationContainer(_ context.Context, userID, appID uuid.UUID, containerID string) error {
+	f.seenUser, f.seenApplication, f.seenContainer, f.seenAction = userID, appID, containerID, "start"
+	return f.containerErr
+}
+
+func (f *fakeDeployService) StopApplicationContainer(_ context.Context, userID, appID uuid.UUID, containerID string) error {
+	f.seenUser, f.seenApplication, f.seenContainer, f.seenAction = userID, appID, containerID, "stop"
+	return f.containerErr
+}
+
+func (f *fakeDeployService) RestartApplicationContainer(_ context.Context, userID, appID uuid.UUID, containerID string) error {
+	f.seenUser, f.seenApplication, f.seenContainer, f.seenAction = userID, appID, containerID, "restart"
+	return f.containerErr
 }
 
 func (f *fakeDeployService) UpdateApplication(_ context.Context, userID, appID uuid.UUID, in UpdateApplicationInput) (Application, error) {

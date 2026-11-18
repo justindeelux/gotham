@@ -511,7 +511,7 @@ func (s *Server) routes() (http.Handler, error) {
 		githubAppSvc := githubapp.NewDefaultService(s.persistence, s.secretKey, s.logger)
 		githubapp.MountWithControlPlaneURL(api, s.resourceAuth(), UserIDFromContext, githubAppSvc, s.controlPlaneURLSource())
 
-		s.deploy = s.deployService(providerSvc, s.proxy, githubAppSvc)
+		s.deploy = s.deployService(containerService, providerSvc, s.proxy, githubAppSvc)
 		deploy.Mount(api, s.resourceAuth(), UserIDFromContext, s.deploy)
 		if s.terminal != nil && s.deploy != nil {
 			if resolver, ok := s.deploy.(deploy.TerminalResolver); ok {
@@ -603,7 +603,7 @@ func (s *Server) defaultDomainTLS(ctx context.Context) bool {
 	return len(hosts) > 0
 }
 
-func (s *Server) deployService(providerSvc providers.ProviderService, proxySvc proxy.ProxyService, githubAppSvc *githubapp.Service) deploy.DeployService {
+func (s *Server) deployService(containerService containers.ContainerService, providerSvc providers.ProviderService, proxySvc proxy.ProxyService, githubAppSvc *githubapp.Service) deploy.DeployService {
 	if s.persistence == nil {
 		return nil
 	}
@@ -617,6 +617,9 @@ func (s *Server) deployService(providerSvc providers.ProviderService, proxySvc p
 		RuntimeMonitor:       s.runtime,
 		RuntimeHealth:        runtimewatch.NewReader(s.persistence),
 		BackupActive:         s.backupJobActive,
+	}
+	if containerSvc, ok := containerService.(deploy.ApplicationContainerService); ok {
+		cfg.Containers = containerSvc
 	}
 	cfg.TLSForDomains = s.defaultDomainTLS
 	if githubAppSvc != nil {

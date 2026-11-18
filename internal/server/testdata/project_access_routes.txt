@@ -35,6 +35,7 @@ personal DELETE /mcp
 project GET /api/v1/applications
 project GET /api/v1/applications/{id}
 project GET /api/v1/applications/{id}/backup-protection
+project GET /api/v1/applications/{id}/containers
 owner GET /api/v1/applications/{id}/deploy-key
 project GET /api/v1/applications/{id}/deployments
 project GET /api/v1/applications/{id}/deployments/{deployment_id}
@@ -169,6 +170,9 @@ owner PATCH /api/v1/servers/{id}
 project PATCH /api/v1/services/{id}
 project POST /api/v1/applications
 owner POST /api/v1/applications/scan
+project POST /api/v1/applications/{id}/containers/{containerID}/restart
+project POST /api/v1/applications/{id}/containers/{containerID}/start
+project POST /api/v1/applications/{id}/containers/{containerID}/stop
 project POST /api/v1/applications/{id}/deploy
 owner POST /api/v1/applications/{id}/deploy-key
 project POST /api/v1/applications/{id}/domains

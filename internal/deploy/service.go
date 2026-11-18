@@ -34,6 +34,10 @@ type DeployService interface {
 	GetApplicationLogs(context.Context, uuid.UUID, uuid.UUID, LogOptions) (ApplicationLogs, error)
 	GetDeploymentLogs(context.Context, uuid.UUID, uuid.UUID, uuid.UUID, LogOptions) (DeploymentLogs, error)
 	GetApplicationRuntime(ctx context.Context, userID, appID uuid.UUID) (ApplicationRuntime, error)
+	ListApplicationContainers(ctx context.Context, userID, appID uuid.UUID) ([]ApplicationContainer, error)
+	StartApplicationContainer(ctx context.Context, userID, appID uuid.UUID, containerID string) error
+	StopApplicationContainer(ctx context.Context, userID, appID uuid.UUID, containerID string) error
+	RestartApplicationContainer(ctx context.Context, userID, appID uuid.UUID, containerID string) error
 	CreateApplication(ctx context.Context, userID uuid.UUID, in CreateApplicationInput) (Application, error)
 	InstallHook(ctx context.Context, userID, appID uuid.UUID, r *http.Request) (attempted bool, err error)
 	ListApplications(ctx context.Context, userID uuid.UUID, filter ApplicationFilter) ([]Application, error)
@@ -115,6 +119,9 @@ type Config struct {
 	ToolStatus     ToolStatus
 	RuntimeMonitor RuntimeMonitor
 	RuntimeHealth  *runtimewatch.Reader
+	// Containers is the node container service shared with the server
+	// containers page; it stays the only Docker client path.
+	Containers ApplicationContainerService
 }
 
 func (c Config) repository() Repository {
@@ -138,6 +145,7 @@ type Service struct {
 	controlTimeout time.Duration
 	runtimeMonitor RuntimeMonitor
 	runtimeHealth  *runtimewatch.Reader
+	containers     ApplicationContainerService
 	backupActive   jobguard.Active
 	locks          appLocks
 	probeMu        sync.Mutex
@@ -188,6 +196,7 @@ func NewService(cfg Config) *Service {
 		controlTimeout: controlTimeout,
 		runtimeMonitor: cfg.RuntimeMonitor,
 		runtimeHealth:  cfg.RuntimeHealth,
+		containers:     cfg.Containers,
 		backupActive:   cfg.BackupActive,
 	}
 }

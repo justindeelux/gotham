@@ -329,6 +329,10 @@ func Mount(r chi.Router, auth func(http.Handler) http.Handler, userID UserIDFunc
 		protected.Put("/v1/applications/{id}/storages", h.putStorages)
 		protected.Get("/v1/applications/{id}/volumes", h.getVolumes)
 		protected.Get("/v1/applications/{id}/runtime", h.getRuntime)
+		protected.Get("/v1/applications/{id}/containers", h.listApplicationContainers)
+		protected.Post("/v1/applications/{id}/containers/{containerID}/start", h.startApplicationContainer)
+		protected.Post("/v1/applications/{id}/containers/{containerID}/stop", h.stopApplicationContainer)
+		protected.Post("/v1/applications/{id}/containers/{containerID}/restart", h.restartApplicationContainer)
 		protected.Get("/v1/applications/{id}/logs", h.getApplicationLogs)
 		protected.Post("/v1/applications/{id}/stop", h.stop)
 		protected.Post("/v1/applications/{id}/start", h.start)
@@ -1162,7 +1166,7 @@ func (h *handler) currentUser(w http.ResponseWriter, r *http.Request) (uuid.UUID
 
 func (h *handler) writeServiceError(w http.ResponseWriter, err error) {
 	switch {
-	case errors.Is(err, ErrNotFound), errors.Is(err, ErrServerNotFound):
+	case errors.Is(err, ErrNotFound), errors.Is(err, ErrServerNotFound), errors.Is(err, ErrContainerNotFound):
 		writeJSON(w, http.StatusNotFound, errorBody{Message: "not found"})
 	case errors.Is(err, ErrValidation):
 		writeJSON(w, http.StatusBadRequest, errorBody{Message: err.Error()})

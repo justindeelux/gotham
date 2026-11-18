@@ -1,0 +1,43 @@
+services:
+  castopod:
+    image: castopod/castopod:1.15.6
+    restart: unless-stopped
+    ports:
+      - '8080'
+    environment:
+      MYSQL_DATABASE: castopod
+      MYSQL_USER: '{{ .db_user }}'
+      MYSQL_PASSWORD: '{{ .db_password }}'
+      CP_BASEURL: https://${GOTHAM_DOMAIN:-localhost}
+      CP_DISABLE_HTTPS: '1'
+      CP_ANALYTICS_SALT: '{{ .analytics_salt }}'
+      CP_CACHE_HANDLER: redis
+      CP_REDIS_HOST: redis
+      CP_REDIS_PASSWORD: '{{ .redis_password }}'
+    volumes:
+      - castopod_media:/var/www/castopod/public/media
+    depends_on:
+      - mariadb
+      - redis
+  mariadb:
+    image: mariadb:12.1
+    restart: unless-stopped
+    environment:
+      MYSQL_ROOT_PASSWORD: '{{ .db_root_password }}'
+      MYSQL_DATABASE: castopod
+      MYSQL_USER: '{{ .db_user }}'
+      MYSQL_PASSWORD: '{{ .db_password }}'
+    volumes:
+      - castopod_db:/var/lib/mysql
+  redis:
+    image: redis:8.4-alpine
+    restart: unless-stopped
+    command:
+      - --requirepass
+      - '{{ .redis_password }}'
+    volumes:
+      - castopod_cache:/data
+volumes:
+  castopod_media:
+  castopod_db:
+  castopod_cache:

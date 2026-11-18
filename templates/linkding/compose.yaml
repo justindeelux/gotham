@@ -1,0 +1,13 @@
+services:
+  linkding:
+    image: sissbruecker/linkding:1.47.0
+    restart: unless-stopped
+    ports:
+      - '9090'
+    environment:
+      LD_SUPERUSER_NAME: '{{ .superuser_name }}'
+      LD_SUPERUSER_PASSWORD: '{{ .superuser_password }}'
+    volumes:
+      - linkding_data:/etc/linkding/data
+volumes:
+  linkding_data:

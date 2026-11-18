@@ -1,0 +1,28 @@
+name: satisfactory
+icon: satisfactory
+description: Satisfactory Dedicated Server for hosting your own Satisfactory game sessions.
+homepage: https://github.com/wolveix/satisfactory-server
+category:
+  - games
+fields:
+  - key: game_port
+    label: Game port
+    type: number
+    required: false
+    default: 7777
+    min: 1024
+    max: 65535
+  - key: messaging_port
+    label: Messaging port
+    type: number
+    required: false
+    default: 8888
+    min: 1024
+    max: 65535
+  - key: max_players
+    label: Max players
+    type: number
+    required: false
+    default: 4
+    min: 1
+    max: 16

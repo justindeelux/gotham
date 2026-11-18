@@ -1,0 +1,29 @@
+services:
+  qbittorrent:
+    image: lscr.io/linuxserver/qbittorrent:5.3.0
+    restart: unless-stopped
+    environment:
+      WEBUI_PORT: '8080'
+      PUID: '1000'
+      PGID: '1000'
+    volumes:
+      - qbittorrent_config:/config
+      - qbittorrent_downloads:/downloads
+      - qbittorrent_torrents:/torrents
+  vuetorrent-backend:
+    image: ghcr.io/vuetorrent/vuetorrent-backend:2.7.4
+    restart: unless-stopped
+    ports:
+      - '8080'
+    environment:
+      PORT: '8080'
+      QBIT_BASE: http://qbittorrent:8080
+      RELEASE_TYPE: stable
+      UPDATE_VT_CRON: 0 * * * *
+    volumes:
+      - vuetorrent_config:/config
+volumes:
+  qbittorrent_config:
+  qbittorrent_downloads:
+  qbittorrent_torrents:
+  vuetorrent_config:

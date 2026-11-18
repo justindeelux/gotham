@@ -1,0 +1,38 @@
+services:
+  cap-web:
+    image: ghcr.io/capsoftware/cap-web:latest
+    restart: unless-stopped
+    ports:
+      - '3000'
+    environment:
+      DATABASE_URL: mysql://{{ .db_user }}:{{ .db_password }}@cap-db:3306/{{ .db_name }}
+      WEB_URL: https://${GOTHAM_DOMAIN:-localhost}
+      NEXTAUTH_URL: https://${GOTHAM_DOMAIN:-localhost}
+      DATABASE_ENCRYPTION_KEY: '{{ .database_encryption_key }}'
+      NEXTAUTH_SECRET: '{{ .nextauth_secret }}'
+      CAP_AWS_ACCESS_KEY: '{{ .aws_access_key }}'
+      CAP_AWS_SECRET_KEY: '{{ .aws_secret_key }}'
+      CAP_AWS_BUCKET: '{{ .aws_bucket }}'
+      CAP_AWS_REGION: '{{ .aws_region }}'
+      CAP_AWS_ENDPOINT: '{{ .aws_endpoint }}'
+      S3_INTERNAL_ENDPOINT: '{{ .s3_internal_endpoint }}'
+      S3_PUBLIC_ENDPOINT: '{{ .s3_public_endpoint }}'
+      NEXT_RUNTIME: nodejs
+      S3_PATH_STYLE: 'true'
+    depends_on:
+      - cap-db
+  cap-db:
+    image: mysql:8.0
+    restart: unless-stopped
+    environment:
+      MYSQL_USER: '{{ .db_user }}'
+      MYSQL_PASSWORD: '{{ .db_password }}'
+      MYSQL_DATABASE: '{{ .db_name }}'
+      MYSQL_ROOT_PASSWORD: '{{ .db_root_password }}'
+    command:
+      - --max_connections=1000
+      - --default-authentication-plugin=mysql_native_password
+    volumes:
+      - cap_db:/var/lib/mysql
+volumes:
+  cap_db:

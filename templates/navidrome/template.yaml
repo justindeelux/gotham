@@ -1,0 +1,20 @@
+name: navidrome
+icon: navidrome
+description: Standalone server, that allows you to browse and listen to your music collection using a web browser or any Subsonic-compatible client.
+homepage: https://www.navidrome.org/docs/
+category:
+  - media
+fields:
+  - key: domain
+    label: Domain
+    type: text
+    required: false
+    default: ""
+    placeholder: app.example.com
+    help: Optional. Leave empty to add a domain later from the service page.
+    pattern: ^([A-Za-z0-9][A-Za-z0-9.-]*)?$
+    max_length: 253
+routes:
+  - service: navidrome
+    port: 4533
+    domain_field: domain

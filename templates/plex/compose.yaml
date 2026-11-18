@@ -1,0 +1,18 @@
+services:
+  plex:
+    image: lscr.io/linuxserver/plex:1.43.5.11079-b3b13e506-ls332
+    restart: unless-stopped
+    ports:
+      - '32400'
+    environment:
+      PUID: '1000'
+      PGID: '1000'
+      TZ: ${TZ:-Etc/UTC}
+    volumes:
+      - plex_config:/config
+      - plex_tv:/tv
+      - plex_movies:/movies
+volumes:
+  plex_config:
+  plex_tv:
+  plex_movies:

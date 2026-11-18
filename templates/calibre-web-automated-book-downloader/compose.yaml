@@ -1,0 +1,39 @@
+services:
+  calibre-web-automated:
+    image: crocodilestick/calibre-web-automated:v4.0.8
+    restart: unless-stopped
+    ports:
+      - '8083'
+    environment:
+      PUID: '1000'
+      PGID: '1000'
+      TZ: ${TZ:-Etc/UTC}
+      NETWORK_SHARE_MODE: ${NETWORK_SHARE_MODE:-false}
+    volumes:
+      - cwa_config:/config
+      - cwa_book_ingest:/cwa-book-ingest
+      - calibre_library:/calibre-library
+      - calibre_plugins:/config/.config/calibre/plugins
+  calibre-web-downloader:
+    image: ghcr.io/calibrain/calibre-web-automated-book-downloader:1.7.0
+    restart: unless-stopped
+    ports:
+      - '8084'
+    environment:
+      FLASK_PORT: '8084'
+      LOG_LEVEL: ${LOG_LEVEL:-info}
+      BOOK_LANGUAGE: ${BOOK_LANGUAGE:-en}
+      USE_BOOK_TITLE: ${USE_BOOK_TITLE:-true}
+      TZ: ${TZ:-Etc/UTC}
+      APP_ENV: prod
+      UID: '1000'
+      GID: '1000'
+      CWA_DB_PATH: /cwa-config/app.db
+    volumes:
+      - cwa_book_ingest:/cwa-book-ingest
+      - cwa_config:/cwa-config
+volumes:
+  cwa_config:
+  cwa_book_ingest:
+  calibre_library:
+  calibre_plugins:

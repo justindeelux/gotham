@@ -1,0 +1,102 @@
+name: ente-photos
+icon: ente-photos
+description: Ente Photos is a fully open source, End to End Encrypted alternative to Google Photos and Apple Photos.
+homepage: https://help.ente.io/self-hosting/installation/compose
+category:
+  - media
+fields:
+  - key: photos_domain
+    label: Photos domain
+    type: text
+    required: true
+    placeholder: photos.example.com
+    help: Public host of the Photos web app; the browser opens it.
+    pattern: ^([A-Za-z0-9][A-Za-z0-9.-]*)?$
+    max_length: 253
+  - key: api_domain
+    label: API domain
+    type: text
+    required: true
+    placeholder: api.photos.example.com
+    help: Public host of the API; the web apps talk to it.
+    pattern: ^([A-Za-z0-9][A-Za-z0-9.-]*)?$
+    max_length: 253
+  - key: albums_domain
+    label: Albums domain
+    type: text
+    required: true
+    placeholder: albums.example.com
+    help: Public host of the shared albums app.
+    pattern: ^([A-Za-z0-9][A-Za-z0-9.-]*)?$
+    max_length: 253
+  - key: db_user
+    label: Database user
+    type: text
+    required: false
+    default: pguser
+    pattern: ^[A-Za-z0-9_]{1,32}$
+    max_length: 32
+  - key: db_password
+    label: Database password
+    type: secret
+    required: true
+    generate: true
+  - key: encryption_key
+    label: Encryption key
+    type: secret
+    required: true
+    help: Base64 of exactly 32 bytes; generate with openssl rand -base64 32. Losing it makes the library unrecoverable.
+    pattern: ^[A-Za-z0-9+/]{43}=$
+    max_length: 44
+  - key: hash_key
+    label: Hash key
+    type: secret
+    required: true
+    help: Base64 of exactly 32 bytes; generate with openssl rand -base64 32. Every server needs it.
+    pattern: ^[A-Za-z0-9+/]{43}=$
+    max_length: 44
+  - key: jwt_secret
+    label: JWT secret
+    type: secret
+    required: true
+    help: At least 32 URL-safe characters that sign login tokens; generate with openssl rand -hex 32.
+    pattern: ^[A-Za-z0-9_-]{32,256}$
+    max_length: 256
+  - key: s3_access_key
+    label: S3 access key
+    type: secret
+    required: true
+    help: Access key of the bucket that stores photos and videos.
+  - key: s3_secret_key
+    label: S3 secret key
+    type: secret
+    required: true
+    help: Secret key of the bucket that stores photos and videos.
+  - key: s3_endpoint
+    label: S3 endpoint
+    type: text
+    required: true
+    placeholder: https://s3.example.com
+    help: S3 API endpoint the server calls.
+  - key: s3_region
+    label: S3 region
+    type: text
+    required: false
+    default: us-east-1
+    pattern: ^[A-Za-z0-9-]{1,64}$
+    max_length: 64
+  - key: s3_bucket
+    label: S3 bucket
+    type: text
+    required: true
+    help: Bucket name; create it before deploying.
+routes:
+  - service: museum
+    port: 8080
+    domain_field: api_domain
+  - service: web
+    port: 3000
+    domain_field: photos_domain
+  - service: albums
+    port: 3002
+    domain_field: albums_domain

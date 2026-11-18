@@ -1,0 +1,48 @@
+name: terraria-server
+icon: terraria-server
+description: Docker multi-arch Image for Terraria Server.
+homepage: https://github.com/hexlo/terraria-server-docker
+category:
+  - games
+fields:
+  - key: game_port
+    label: Server port
+    type: number
+    required: false
+    default: 7777
+    min: 1024
+    max: 65535
+  - key: world
+    label: World file
+    type: text
+    required: false
+    default: world1.wld
+    pattern: ^[A-Za-z0-9._-]{1,64}$
+    max_length: 64
+  - key: difficulty
+    label: Difficulty
+    type: number
+    required: false
+    default: 1
+    help: 0 is normal, 1 expert, 2 master, 3 journey.
+    min: 0
+    max: 3
+  - key: max_players
+    label: Max players
+    type: number
+    required: false
+    default: 8
+    min: 1
+    max: 255
+  - key: password
+    label: Server password
+    type: secret
+    required: true
+    help: Password players need to join; empty disables it.
+    generate: true
+  - key: motd
+    label: Message of the day
+    type: text
+    required: false
+    default: Welcome to the server!
+    max_length: 120

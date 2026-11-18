@@ -1,0 +1,19 @@
+services:
+  minecraft:
+    image: itzg/minecraft-server:2026.11.0
+    restart: unless-stopped
+    ports:
+      - '{{ .game_port }}:25565'
+    environment:
+      EULA: 'true'
+      VERSION: '{{ .version }}'
+      TYPE: '{{ .type }}'
+      MAX_PLAYERS: '{{ .max_players }}'
+      MOTD: '{{ .motd }}'
+      MAX_MEMORY: '{{ .memory }}'
+      ONLINE_MODE: 'true'
+      ENABLE_AUTOPAUSE: 'false'
+    volumes:
+      - minecraft_data:/data
+volumes:
+  minecraft_data:

@@ -1,0 +1,20 @@
+name: overseerr
+icon: overseerr
+description: Seerr (formerly Overseerr) is a request management and media discovery tool for Jellyfin, Plex, and Emby.
+homepage: https://docs.seerr.dev/getting-started/docker
+category:
+  - media
+fields:
+  - key: domain
+    label: Domain
+    type: text
+    required: false
+    default: ""
+    placeholder: app.example.com
+    help: Optional. Leave empty to add a domain later from the service page.
+    pattern: ^([A-Za-z0-9][A-Za-z0-9.-]*)?$
+    max_length: 253
+routes:
+  - service: overseerr
+    port: 5055
+    domain_field: domain

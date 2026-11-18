@@ -1,0 +1,22 @@
+services:
+  terraria:
+    image: hexlo/terraria-server-docker:1.4.5.8
+    restart: unless-stopped
+    stdin_open: true
+    tty: true
+    ports:
+      - '{{ .game_port }}:7777'
+    environment:
+      worldpath: /root/.local/share/Terraria/Worlds
+      autocreate: '2'
+      world: '{{ .world }}'
+      difficulty: '{{ .difficulty }}'
+      maxplayers: '{{ .max_players }}'
+      password: '{{ .password }}'
+      motd: '{{ .motd }}'
+      language: en/US
+      secure: '1'
+    volumes:
+      - terraria_worlds:/root/.local/share/Terraria/Worlds
+volumes:
+  terraria_worlds:

@@ -1,0 +1,15 @@
+services:
+  overseerr:
+    image: ghcr.io/seerr-team/seerr:v3.5.2
+    restart: unless-stopped
+    init: true
+    ports:
+      - '5055'
+    environment:
+      LOG_LEVEL: ${LOG_LEVEL:-info}
+      TZ: ${TZ:-Etc/UTC}
+      PORT: '5055'
+    volumes:
+      - overseerr_config:/app/config
+volumes:
+  overseerr_config:

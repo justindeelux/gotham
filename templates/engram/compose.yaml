@@ -13,8 +13,7 @@ services:
       ENGRAM_CLOUD_TOKEN: "{{ .cloud_token }}"
       ENGRAM_CLOUD_ADMIN: "{{ .admin_password }}"
       ENGRAM_CLOUD_TOKEN_PEPPER: "{{ .token_pepper }}"
-    volumes:
-      - engram_data:/data
+      ENGRAM_CLOUD_ALLOWED_PROJECTS: "*"
     depends_on:
       - postgresql
   postgresql:
@@ -27,5 +26,4 @@ services:
     volumes:
       - engram_postgres_data:/var/lib/postgresql
 volumes:
-  engram_data:
   engram_postgres_data:

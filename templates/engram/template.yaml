@@ -23,7 +23,8 @@ fields:
     label: JWT secret
     type: secret
     required: true
-    generate: true
+    pattern: ^[0-9a-f]{64}$
+    help: 64 hex characters; generate with openssl rand -hex 32.
   - key: cloud_token
     label: Cloud token
     type: secret

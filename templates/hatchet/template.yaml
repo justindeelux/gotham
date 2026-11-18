@@ -1,6 +1,6 @@
 name: Hatchet
 icon: hatchet
-description: Hatchet background task platform with PostgreSQL and RabbitMQ, persistent named volumes and an optional routed domain.
+description: "Hatchet background task platform with PostgreSQL and RabbitMQ, persistent named volumes and an optional routed domain. The quickstart admin is admin@example.com / Admin123!!; change it after the first login."
 homepage: https://docs.hatchet.run/self-hosting/docker-compose
 category:
   - automation

@@ -12,7 +12,7 @@ services:
       DATABASE_URL: "postgresql://postgres:{{ .db_password }}@postgresql:5432/lobechat"
       REDIS_URL: "redis://redis:6379"
       REDIS_PREFIX: lobechat
-      S3_ENDPOINT: "http://rustfs:9000"
+      S3_ENDPOINT: "https://{{ .storage_domain }}"
       S3_INTERNAL_ENDPOINT: "http://rustfs:9000"
       S3_BUCKET: lobe
       S3_ENABLE_PATH_STYLE: "1"
@@ -48,8 +48,15 @@ services:
       RUSTFS_ACCESS_KEY: rustfs
       RUSTFS_SECRET_KEY: "{{ .rustfs_password }}"
       RUSTFS_CONSOLE_ENABLE: "false"
+    ports:
+      - "9000"
     volumes:
       - lobe_rustfs_data:/data
+    healthcheck:
+      test: ["CMD-SHELL", "wget -qO- http://localhost:9000/health > /dev/null 2>&1 || exit 1"]
+      interval: 5s
+      timeout: 3s
+      retries: 30
   rustfs-init:
     image: rustfs/rc:v0.1.37
     restart: "no"
@@ -66,7 +73,8 @@ services:
       RUSTFS_SECRET_KEY: "{{ .rustfs_password }}"
       S3_BUCKET: lobe
     depends_on:
-      - rustfs
+      rustfs:
+        condition: service_healthy
 volumes:
   lobe_postgresql_data:
   lobe_redis_data:

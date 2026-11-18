@@ -13,10 +13,14 @@ services:
       - hatchet_certs:/hatchet/certs
       - hatchet_config:/hatchet/config
     depends_on:
-      - postgres
-      - rabbitmq
-      - setup-config
-      - migration
+      postgres:
+        condition: service_healthy
+      rabbitmq:
+        condition: service_healthy
+      setup-config:
+        condition: service_completed_successfully
+      migration:
+        condition: service_completed_successfully
   hatchet-engine:
     image: ghcr.io/hatchet-dev/hatchet/hatchet-engine:v0.120.6
     restart: on-failure
@@ -29,10 +33,14 @@ services:
       - hatchet_certs:/hatchet/certs
       - hatchet_config:/hatchet/config
     depends_on:
-      - postgres
-      - rabbitmq
-      - setup-config
-      - migration
+      postgres:
+        condition: service_healthy
+      rabbitmq:
+        condition: service_healthy
+      setup-config:
+        condition: service_completed_successfully
+      migration:
+        condition: service_completed_successfully
   migration:
     image: ghcr.io/hatchet-dev/hatchet/hatchet-migrate:v0.120.6
     restart: "no"
@@ -40,7 +48,8 @@ services:
     environment:
       DATABASE_URL: "postgres://hatchet:{{ .postgres_password }}@postgres:5432/hatchet"
     depends_on:
-      - postgres
+      postgres:
+        condition: service_healthy
   setup-config:
     image: ghcr.io/hatchet-dev/hatchet/hatchet-admin:v0.120.6
     restart: "no"
@@ -58,8 +67,10 @@ services:
       - hatchet_certs:/hatchet/certs
       - hatchet_config:/hatchet/config
     depends_on:
-      - postgres
-      - rabbitmq
+      postgres:
+        condition: service_healthy
+      rabbitmq:
+        condition: service_healthy
   postgres:
     image: postgres:16-alpine
     restart: unless-stopped
@@ -69,6 +80,11 @@ services:
       POSTGRES_DB: hatchet
     volumes:
       - hatchet_postgres_data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U $${POSTGRES_USER} -d $${POSTGRES_DB}"]
+      interval: 5s
+      timeout: 20s
+      retries: 10
   rabbitmq:
     image: rabbitmq:3-management
     restart: unless-stopped
@@ -77,6 +93,12 @@ services:
       RABBITMQ_DEFAULT_PASS: "{{ .rabbitmq_password }}"
     volumes:
       - hatchet_rabbitmq_data:/var/lib/rabbitmq
+    healthcheck:
+      test: ["CMD-SHELL", "rabbitmq-diagnostics -q check_port_connectivity"]
+      interval: 5s
+      timeout: 30s
+      retries: 20
+      start_period: 60s
 volumes:
   hatchet_certs:
   hatchet_config:

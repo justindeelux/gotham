@@ -49,7 +49,7 @@ fields:
     type: secret
     required: true
     pattern: ^[0-9a-f]{64}$
-    help: 64 hex characters, for example openssl rand -hex 32.
+    help: 64 hex characters, for example openssl rand -hex 32. Event ingestion also needs the LANGFUSE_S3_EVENT_UPLOAD_* credentials and endpoint, added from the service page after deploy.
   - key: nextauth_secret
     label: Session secret
     type: secret

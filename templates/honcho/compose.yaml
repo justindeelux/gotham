@@ -2,6 +2,7 @@ services:
   api:
     image: ghcr.io/plastic-labs/honcho:v3.6.1
     restart: unless-stopped
+    entrypoint: ["sh", "docker/entrypoint.sh"]
     ports:
       - "8000"
     environment:

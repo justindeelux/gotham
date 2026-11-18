@@ -1,6 +1,6 @@
 name: Mage AI
 icon: mage-ai
-description: Mage AI data pipelines with a persistent project volume and an optional routed domain.
+description: "Mage AI data pipelines with a persistent project volume and an optional routed domain. No built-in authentication: pipelines execute arbitrary code, so put it behind an authenticated proxy."
 homepage: https://docs.mage.ai
 category:
   - automation

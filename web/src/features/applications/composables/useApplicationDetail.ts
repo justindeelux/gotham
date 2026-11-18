@@ -2,7 +2,7 @@ import { useMessage } from "naive-ui";
 import { computed, onMounted, onUnmounted, ref, watch } from "vue";
 import { useRoute, useRouter } from "vue-router";
 
-import { describeApplicationError, isActiveDeployment } from "@/features/applications/api/applications";
+import { describeApplicationError } from "@/features/applications/api/applications";
 import type {
   Application,
   Deployment,
@@ -148,9 +148,9 @@ export function useApplicationDetail() {
 
   const active = computed<Deployment | null>(() => appsStore.activeDeployment(appId.value));
 
-  const containerStopped = ref(false);
-
-  const stoppedForContainer = ref<string>("");
+  const containerStopped = computed<boolean>(
+    () => application.value?.runtime_health?.desired_state === "stopped",
+  );
 
   const containerIsRunning = computed<boolean>(
     () => latest.value?.state === "running" && !containerStopped.value,
@@ -495,8 +495,7 @@ export function useApplicationDetail() {
   async function handleStop(): Promise<void> {
     try {
       await appsStore.stopApp(appId.value);
-      containerStopped.value = true;
-      stoppedForContainer.value = latest.value?.container_id ?? "";
+      await appsStore.fetchApplication(appId.value);
       message.success(tr("applications.detail.stopSent"));
     } catch (error) {
       message.error(describeApplicationError(error, "stop"));
@@ -506,8 +505,7 @@ export function useApplicationDetail() {
   async function handleStart(): Promise<void> {
     try {
       await appsStore.startApp(appId.value);
-      containerStopped.value = false;
-      stoppedForContainer.value = "";
+      await appsStore.fetchApplication(appId.value);
       message.success(tr("applications.detail.startSent"));
     } catch (error) {
       message.error(describeApplicationError(error, "start"));
@@ -680,8 +678,6 @@ export function useApplicationDetail() {
   watch([appId, () => String(route.params.environmentId ?? "")], () => {
     draftGeneration.bump();
     activeTab.value = "overview";
-    containerStopped.value = false;
-    stoppedForContainer.value = "";
     logDeploymentId.value = "";
     logServerId.value = "";
     moveSaving.value = false;
@@ -710,23 +706,6 @@ export function useApplicationDetail() {
     appsStore.stopAllPolling();
     void fetchAll();
   });
-
-  watch(
-    () => latest.value?.id,
-    () => {
-      const row = latest.value;
-      if (
-        row &&
-        !isActiveDeployment(row) &&
-        stoppedForContainer.value !== "" &&
-        row.container_id !== "" &&
-        row.container_id === stoppedForContainer.value
-      ) {
-        return;
-      }
-      containerStopped.value = false;
-    },
-  );
 
   watch(active, (current, previous) => {
     if (previous !== null && current === null && appId.value !== "") {

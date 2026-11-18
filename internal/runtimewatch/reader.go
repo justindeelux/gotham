@@ -18,12 +18,14 @@ import (
 // database detail/list responses. It is derived from pushed evidence, never
 // from a live Docker call.
 type Health struct {
-	State        string          `json:"state"`
-	Coverage     string          `json:"coverage"`
-	Reason       string          `json:"reason,omitempty"`
-	ObservedAt   *time.Time      `json:"observed_at,omitempty"`
-	Enabled      bool            `json:"enabled"`
-	GraceSeconds int             `json:"grace_seconds"`
+	State        string     `json:"state"`
+	Coverage     string     `json:"coverage"`
+	Reason       string     `json:"reason,omitempty"`
+	ObservedAt   *time.Time `json:"observed_at,omitempty"`
+	Enabled      bool       `json:"enabled"`
+	GraceSeconds int        `json:"grace_seconds"`
+	// DesiredState is the last explicit start/stop ("running" or "stopped").
+	DesiredState string          `json:"desired_state"`
 	IncidentID   string          `json:"incident_id,omitempty"`
 	Affected     []ReplicaHealth `json:"affected"`
 }
@@ -134,6 +136,7 @@ func summarize(settings Settings, rows []sqlc.RuntimeMonitorReplica, incidentID 
 		Coverage:     CoverageUnknown,
 		Enabled:      settings.Enabled,
 		GraceSeconds: int(settings.Grace / time.Second),
+		DesiredState: settings.DesiredState,
 		Affected:     make([]ReplicaHealth, 0, len(rows)),
 	}
 	if incidentID != uuid.Nil {

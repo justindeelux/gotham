@@ -2,5 +2,5 @@ package templates
 
 import "embed"
 
-//go:embed wordpress nextcloud n8n uptime-kuma bugsink changedetection checkmate elasticsearch embystat glitchtip goatcounter grafana healthchecks meilisearch metabase openobserve openpanel postiz redis-insight searxng sequin sessy statusnook typesense umami wakapi
+//go:embed */template.yaml */compose.yaml
 var FS embed.FS

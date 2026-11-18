@@ -27,6 +27,8 @@ export interface TemplateSummary {
   name: string;
   icon: string;
   description: string;
+  homepage?: string;
+  category?: string[];
 }
 
 export interface TemplateDetail extends TemplateSummary {

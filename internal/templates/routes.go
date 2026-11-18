@@ -16,18 +16,22 @@ import (
 const maxBodyBytes = 64 << 10
 
 type templateSummary struct {
-	Slug        string `json:"slug"`
-	Name        string `json:"name"`
-	Icon        string `json:"icon"`
-	Description string `json:"description"`
+	Slug        string   `json:"slug"`
+	Name        string   `json:"name"`
+	Icon        string   `json:"icon"`
+	Description string   `json:"description"`
+	Homepage    string   `json:"homepage,omitempty"`
+	Category    []string `json:"category,omitempty"`
 }
 
 type templateDetail struct {
-	Slug        string  `json:"slug"`
-	Name        string  `json:"name"`
-	Icon        string  `json:"icon"`
-	Description string  `json:"description"`
-	Fields      []Field `json:"fields"`
+	Slug        string   `json:"slug"`
+	Name        string   `json:"name"`
+	Icon        string   `json:"icon"`
+	Description string   `json:"description"`
+	Homepage    string   `json:"homepage,omitempty"`
+	Category    []string `json:"category,omitempty"`
+	Fields      []Field  `json:"fields"`
 }
 
 type specResponse struct {
@@ -99,6 +103,8 @@ func (h *handler) list(w http.ResponseWriter, r *http.Request) {
 			Name:        template.Name,
 			Icon:        template.Icon,
 			Description: template.Description,
+			Homepage:    template.Homepage,
+			Category:    template.Category,
 		})
 	}
 	writeJSON(w, http.StatusOK, templateListEnvelope{Templates: response})
@@ -156,6 +162,8 @@ func newTemplateDetail(template Template) templateDetail {
 		Name:        template.Name,
 		Icon:        template.Icon,
 		Description: template.Description,
+		Homepage:    template.Homepage,
+		Category:    template.Category,
 		Fields:      fields,
 	}
 }

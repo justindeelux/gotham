@@ -42,10 +42,12 @@ func TestRoutesList(t *testing.T) {
 	}
 	var list struct {
 		Templates []struct {
-			Slug        string `json:"slug"`
-			Name        string `json:"name"`
-			Icon        string `json:"icon"`
-			Description string `json:"description"`
+			Slug        string   `json:"slug"`
+			Name        string   `json:"name"`
+			Icon        string   `json:"icon"`
+			Description string   `json:"description"`
+			Homepage    string   `json:"homepage"`
+			Category    []string `json:"category"`
 		} `json:"templates"`
 	}
 	if err := json.Unmarshal(recorder.Body.Bytes(), &list); err != nil {
@@ -53,6 +55,10 @@ func TestRoutesList(t *testing.T) {
 	}
 	if len(list.Templates) != 1 || list.Templates[0].Slug != "demo" || list.Templates[0].Name != "Demo" {
 		t.Fatalf("templates = %+v", list.Templates)
+	}
+	if list.Templates[0].Homepage != "https://demo.example.com" ||
+		strings.Join(list.Templates[0].Category, ",") != "devtools,automation" {
+		t.Fatalf("template metadata = %+v", list.Templates[0])
 	}
 	if strings.Contains(recorder.Body.String(), `"fields"`) {
 		t.Errorf("the catalog must not carry the field schema: %s", recorder.Body)
@@ -67,8 +73,10 @@ func TestRoutesGet(t *testing.T) {
 	}
 	var detail struct {
 		Template struct {
-			Slug   string  `json:"slug"`
-			Fields []Field `json:"fields"`
+			Slug     string   `json:"slug"`
+			Homepage string   `json:"homepage"`
+			Category []string `json:"category"`
+			Fields   []Field  `json:"fields"`
 		} `json:"template"`
 	}
 	if err := json.Unmarshal(recorder.Body.Bytes(), &detail); err != nil {
@@ -76,6 +84,10 @@ func TestRoutesGet(t *testing.T) {
 	}
 	if detail.Template.Slug != "demo" || len(detail.Template.Fields) != 6 {
 		t.Fatalf("template = %+v", detail.Template)
+	}
+	if detail.Template.Homepage != "https://demo.example.com" ||
+		strings.Join(detail.Template.Category, ",") != "devtools,automation" {
+		t.Errorf("template metadata = %+v", detail.Template)
 	}
 	secret := detail.Template.Fields[4]
 	if secret.Key != "password" || secret.Type != FieldSecret || secret.Default != nil || !secret.Required || !secret.Generate {

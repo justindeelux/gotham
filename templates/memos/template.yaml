@@ -1,0 +1,20 @@
+name: Memos
+icon: memos
+description: Memos note taking with a persistent named volume and a routed domain.
+homepage: https://github.com/usememos/memos
+category:
+  - productivity
+fields:
+  - key: domain
+    label: Domain
+    type: text
+    required: false
+    default: ""
+    placeholder: memos.example.com
+    help: Optional. Leave empty to add a domain later from the service page.
+    pattern: ^([A-Za-z0-9][A-Za-z0-9.-]*)?$
+    max_length: 253
+routes:
+  - service: memos
+    port: 5230
+    domain_field: domain

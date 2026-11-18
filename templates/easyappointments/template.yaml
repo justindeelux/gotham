@@ -1,0 +1,26 @@
+name: Easy!Appointments
+icon: easyappointments
+description: Easy!Appointments booking scheduler with MySQL and a persistent named volume.
+homepage: https://easyappointments.org/
+category:
+  - productivity
+fields:
+  - key: domain
+    label: Domain
+    type: text
+    required: false
+    default: ""
+    placeholder: book.example.com
+    help: Optional. Leave empty to add a domain later from the service page.
+    pattern: ^([A-Za-z0-9][A-Za-z0-9.-]*)?$
+    max_length: 253
+  - key: db_password
+    label: Database password
+    type: secret
+    required: true
+    generate: true
+    help: Used by Easy!Appointments and its MySQL root account; use Generate for a strong value.
+routes:
+  - service: easyappointments
+    port: 80
+    domain_field: domain

@@ -1,0 +1,25 @@
+name: Appsmith
+icon: appsmith
+description: Appsmith low-code internal tools platform with a persistent named volume.
+homepage: https://appsmith.com
+category:
+  - productivity
+fields:
+  - key: domain
+    label: Domain
+    type: text
+    required: false
+    default: ""
+    placeholder: appsmith.example.com
+    help: Optional. Leave empty to add a domain later from the service page.
+    pattern: ^([A-Za-z0-9][A-Za-z0-9.-]*)?$
+    max_length: 253
+  - key: telemetry
+    label: Send telemetry
+    type: bool
+    default: false
+    help: Allow Appsmith to send anonymous usage telemetry.
+routes:
+  - service: appsmith
+    port: 80
+    domain_field: domain

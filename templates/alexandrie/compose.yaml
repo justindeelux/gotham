@@ -1,0 +1,69 @@
+services:
+  frontend:
+    image: ghcr.io/smaug6739/alexandrie-frontend:v8.14.4
+    restart: unless-stopped
+    ports:
+      - "8200"
+    environment:
+      PORT: "8200"
+      NUXT_PUBLIC_CONFIG_DISABLE_SIGNUP_PAGE: "${CONFIG_DISABLE_SIGNUP:-false}"
+      NUXT_PUBLIC_CONFIG_DISABLE_LANDING_PAGE: "${CONFIG_DISABLE_LANDING:-false}"
+      NUXT_PUBLIC_BASE_API: "https://{{ .api_domain }}"
+      NUXT_PUBLIC_BASE_CDN: "https://{{ .cdn_domain }}"
+      NUXT_PUBLIC_CDN_ENDPOINT: "${CDN_ENDPOINT:-/alexandrie/}"
+      NUXT_PUBLIC_BASE_URL: "https://{{ .domain }}"
+    depends_on:
+      - backend
+  backend:
+    image: ghcr.io/smaug6739/alexandrie-backend:v8.14.4
+    restart: unless-stopped
+    ports:
+      - "8201"
+    environment:
+      BACKEND_PORT: "8201"
+      GIN_MODE: release
+      JWT_SECRET: "{{ .jwt_secret }}"
+      COOKIE_DOMAIN: "{{ .domain }}"
+      FRONTEND_URL: "https://{{ .domain }}"
+      ALLOW_UNSECURE: "${ALLOW_UNSECURE:-false}"
+      DATABASE_HOST: mysql
+      DATABASE_PORT: "3306"
+      DATABASE_NAME: alexandrie
+      DATABASE_USER: "{{ .db_user }}"
+      DATABASE_PASSWORD: "{{ .db_password }}"
+      MINIO_ENDPOINT: rustfs:9000
+      MINIO_PUBLIC_URL: "https://{{ .cdn_domain }}"
+      MINIO_SECURE: "false"
+      MINIO_ACCESSKEY: "{{ .storage_user }}"
+      MINIO_SECRETKEY: "{{ .storage_password }}"
+      MINIO_BUCKET: alexandrie
+    depends_on:
+      - mysql
+      - rustfs
+  mysql:
+    image: mysql:8.0
+    restart: unless-stopped
+    environment:
+      MYSQL_ROOT_PASSWORD: "{{ .db_root_password }}"
+      MYSQL_USER: "{{ .db_user }}"
+      MYSQL_PASSWORD: "{{ .db_password }}"
+      MYSQL_DATABASE: alexandrie
+    volumes:
+      - mysql_data:/var/lib/mysql
+  rustfs:
+    image: rustfs/rustfs:1.0.0-beta.8
+    restart: unless-stopped
+    ports:
+      - "9000"
+    environment:
+      RUSTFS_ACCESS_KEY: "{{ .storage_user }}"
+      RUSTFS_SECRET_KEY: "{{ .storage_password }}"
+      RUSTFS_CONSOLE_ENABLE: "false"
+      RUSTFS_LOG_LEVEL: info
+    volumes:
+      - rustfs_data:/data
+      - rustfs_logs:/logs
+volumes:
+  mysql_data:
+  rustfs_data:
+  rustfs_logs:

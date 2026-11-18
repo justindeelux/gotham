@@ -1,0 +1,30 @@
+services:
+  codimd:
+    image: nabo.codimd.dev/hackmdio/hackmd:2.6.1
+    restart: unless-stopped
+    ports:
+      - "3000"
+    environment:
+      CMD_DOMAIN: "${GOTHAM_DOMAIN:-localhost}"
+      CMD_PROTOCOL_USESSL: "true"
+      CMD_SESSION_SECRET: "{{ .session_secret }}"
+      CMD_USECDN: "false"
+      CMD_DB_URL: "postgres://{{ .db_user }}:{{ .db_password }}@postgres:5432/codimd"
+      CMD_EMAIL: "true"
+      CMD_ALLOW_EMAIL_REGISTER: "true"
+    volumes:
+      - uploads_data:/home/hackmd/app/public/uploads
+    depends_on:
+      - postgres
+  postgres:
+    image: postgres:16-alpine
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: "{{ .db_user }}"
+      POSTGRES_PASSWORD: "{{ .db_password }}"
+      POSTGRES_DB: codimd
+    volumes:
+      - codimd_postgres_data:/var/lib/postgresql/data
+volumes:
+  uploads_data:
+  codimd_postgres_data:

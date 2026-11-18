@@ -1,0 +1,46 @@
+name: Fizzy
+icon: fizzy
+description: Fizzy Kanban boards with SQLite and persistent named volumes.
+homepage: https://github.com/basecamp/fizzy
+category:
+  - productivity
+fields:
+  - key: domain
+    label: Domain
+    type: text
+    required: false
+    default: ""
+    placeholder: fizzy.example.com
+    help: Optional. Leave empty to add a domain later from the service page.
+    pattern: ^([A-Za-z0-9][A-Za-z0-9.-]*)?$
+    max_length: 253
+  - key: secret_key_base
+    label: Secret key base
+    type: secret
+    required: true
+    generate: true
+    help: Signs cookies and sessions; use Generate for a strong value.
+  - key: master_key
+    label: Rails master key
+    type: secret
+    required: true
+    generate: true
+    help: Encrypts Rails credentials; keep it with the service.
+  - key: vapid_private_key
+    label: VAPID private key
+    type: text
+    required: false
+    default: ""
+    max_length: 512
+    help: Optional. Web push notifications need a VAPID key pair.
+  - key: vapid_public_key
+    label: VAPID public key
+    type: text
+    required: false
+    default: ""
+    max_length: 512
+    help: Optional. The public half of the VAPID key pair.
+routes:
+  - service: fizzy
+    port: 80
+    domain_field: domain

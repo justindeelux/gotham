@@ -1,0 +1,42 @@
+name: Leantime
+icon: leantime
+description: Leantime project management with MySQL, Redis and persistent volumes.
+homepage: https://leantime.io
+category:
+  - productivity
+fields:
+  - key: domain
+    label: Domain
+    type: text
+    required: false
+    default: ""
+    placeholder: projects.example.com
+    help: Optional. Leave empty to add a domain later from the service page.
+    pattern: ^([A-Za-z0-9][A-Za-z0-9.-]*)?$
+    max_length: 253
+  - key: db_user
+    label: Database user
+    type: text
+    default: leantime
+    pattern: ^[A-Za-z0-9_]{1,32}$
+    max_length: 32
+  - key: db_password
+    label: Database password
+    type: secret
+    required: true
+    generate: true
+  - key: db_root_password
+    label: MySQL root password
+    type: secret
+    required: true
+    generate: true
+  - key: session_password
+    label: Session password
+    type: secret
+    required: true
+    generate: true
+    help: Signs sessions; use Generate for a strong value.
+routes:
+  - service: leantime
+    port: 8080
+    domain_field: domain

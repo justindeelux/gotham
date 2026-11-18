@@ -1,0 +1,28 @@
+name: Baby Buddy
+icon: babybuddy
+description: Baby Buddy baby tracking with a persistent named volume and a routed domain.
+homepage: https://docs.baby-buddy.net
+category:
+  - productivity
+fields:
+  - key: domain
+    label: Domain
+    type: text
+    required: false
+    default: ""
+    placeholder: baby.example.com
+    help: Optional. Leave empty to add a domain later from the service page.
+    pattern: ^([A-Za-z0-9][A-Za-z0-9.-]*)?$
+    max_length: 253
+  - key: tz
+    label: Timezone
+    type: text
+    default: UTC
+    placeholder: Europe/Berlin
+    pattern: ^[A-Za-z0-9_/+-]+$
+    max_length: 64
+    help: IANA timezone name used by the container clock.
+routes:
+  - service: babybuddy
+    port: 8000
+    domain_field: domain

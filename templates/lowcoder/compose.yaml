@@ -1,0 +1,14 @@
+services:
+  lowcoder:
+    image: lowcoderorg/lowcoder-ce:3.0.0
+    restart: unless-stopped
+    ports:
+      - "3000"
+    environment:
+      LOWCODER_EMAIL_SIGNUP_ENABLED: "${LOWCODER_EMAIL_SIGNUP_ENABLED:-true}"
+      LOWCODER_DB_ENCRYPTION_PASSWORD: "{{ .encryption_password }}"
+      LOWCODER_DB_ENCRYPTION_SALT: "{{ .encryption_salt }}"
+    volumes:
+      - lowcoder_data:/lowcoder-stacks
+volumes:
+  lowcoder_data:

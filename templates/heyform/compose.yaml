@@ -1,0 +1,36 @@
+services:
+  heyform:
+    image: heyform/community-edition:v3.0.6
+    restart: unless-stopped
+    ports:
+      - "9157"
+    environment:
+      APP_HOMEPAGE_URL: "https://${GOTHAM_DOMAIN:-localhost}"
+      SESSION_KEY: "{{ .session_secret }}"
+      FORM_ENCRYPTION_KEY: "{{ .form_secret }}"
+      MONGO_URI: mongodb://mongo:27017/heyform
+      REDIS_HOST: keydb
+      REDIS_PORT: "6379"
+      REDIS_PASSWORD: "{{ .keydb_password }}"
+    volumes:
+      - heyform_assets:/app/static/upload
+    depends_on:
+      - mongo
+      - keydb
+  mongo:
+    image: percona/percona-server-mongodb:8.3.13
+    restart: unless-stopped
+    volumes:
+      - heyform_mongo_data:/data/db
+  keydb:
+    image: eqalpha/keydb:latest
+    restart: unless-stopped
+    command: ["keydb-server", "--appendonly", "yes"]
+    environment:
+      KEYDB_PASSWORD: "{{ .keydb_password }}"
+    volumes:
+      - heyform_keydb_data:/data
+volumes:
+  heyform_assets:
+  heyform_mongo_data:
+  heyform_keydb_data:

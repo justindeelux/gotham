@@ -1,0 +1,36 @@
+name: HeyForm
+icon: heyform
+description: HeyForm conversational forms with MongoDB, KeyDB and persistent volumes.
+homepage: https://docs.heyform.net/open-source/self-hosting
+category:
+  - productivity
+fields:
+  - key: domain
+    label: Domain
+    type: text
+    required: false
+    default: ""
+    placeholder: forms.example.com
+    help: Optional. Leave empty to add a domain later from the service page.
+    pattern: ^([A-Za-z0-9][A-Za-z0-9.-]*)?$
+    max_length: 253
+  - key: session_secret
+    label: Session key
+    type: secret
+    required: true
+    generate: true
+    help: Signs sessions; use Generate for a strong value.
+  - key: form_secret
+    label: Form encryption key
+    type: secret
+    required: true
+    generate: true
+  - key: keydb_password
+    label: KeyDB password
+    type: secret
+    required: true
+    generate: true
+routes:
+  - service: heyform
+    port: 9157
+    domain_field: domain

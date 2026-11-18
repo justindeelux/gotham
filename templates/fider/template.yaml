@@ -1,0 +1,37 @@
+name: Fider
+icon: fider
+description: Fider feedback platform with PostgreSQL and persistent named volumes.
+homepage: https://fider.io
+category:
+  - productivity
+fields:
+  - key: domain
+    label: Domain
+    type: text
+    required: false
+    default: ""
+    placeholder: feedback.example.com
+    help: Optional. Leave empty to add a domain later from the service page.
+    pattern: ^([A-Za-z0-9][A-Za-z0-9.-]*)?$
+    max_length: 253
+  - key: db_user
+    label: Database user
+    type: text
+    default: fider
+    pattern: ^[A-Za-z0-9_]{1,32}$
+    max_length: 32
+  - key: db_password
+    label: Database password
+    type: secret
+    required: true
+    generate: true
+  - key: jwt_secret
+    label: Session secret
+    type: secret
+    required: true
+    generate: true
+    help: Signs session tokens; use Generate for a strong value.
+routes:
+  - service: fider
+    port: 3000
+    domain_field: domain

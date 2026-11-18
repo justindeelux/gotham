@@ -1,0 +1,74 @@
+name: Alexandrie
+icon: alexandrie
+description: Alexandrie Markdown workspace with MySQL, S3 storage and three routed hostnames.
+homepage: https://github.com/Smaug6739/Alexandrie/tree/main/docs
+category:
+  - productivity
+fields:
+  - key: domain
+    label: Site domain
+    type: text
+    required: true
+    placeholder: markdown.example.com
+    help: Public host of the Alexandrie frontend.
+    pattern: ^[A-Za-z0-9][A-Za-z0-9.-]*$
+    max_length: 253
+  - key: api_domain
+    label: API domain
+    type: text
+    required: true
+    placeholder: api.example.com
+    help: Public host the browser uses to reach the Alexandrie backend.
+    pattern: ^[A-Za-z0-9][A-Za-z0-9.-]*$
+    max_length: 253
+  - key: cdn_domain
+    label: Storage domain
+    type: text
+    required: true
+    placeholder: files.example.com
+    help: Public host of the object storage that serves uploaded files.
+    pattern: ^[A-Za-z0-9][A-Za-z0-9.-]*$
+    max_length: 253
+  - key: db_user
+    label: Database user
+    type: text
+    default: alexandrie
+    pattern: ^[A-Za-z0-9_]{1,32}$
+    max_length: 32
+  - key: db_password
+    label: Database password
+    type: secret
+    required: true
+    generate: true
+  - key: db_root_password
+    label: MySQL root password
+    type: secret
+    required: true
+    generate: true
+  - key: jwt_secret
+    label: Session secret
+    type: secret
+    required: true
+    generate: true
+    help: Signs session tokens; use Generate for a strong value.
+  - key: storage_user
+    label: Storage access key
+    type: text
+    default: alexandrie
+    pattern: ^[A-Za-z0-9_-]{3,32}$
+    max_length: 32
+  - key: storage_password
+    label: Storage secret key
+    type: secret
+    required: true
+    generate: true
+routes:
+  - service: frontend
+    port: 8200
+    domain_field: domain
+  - service: backend
+    port: 8201
+    domain_field: api_domain
+  - service: rustfs
+    port: 9000
+    domain_field: cdn_domain

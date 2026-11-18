@@ -1,0 +1,43 @@
+services:
+  outline:
+    image: docker.getoutline.com/outlinewiki/outline:1.13.0
+    restart: unless-stopped
+    ports:
+      - "3000"
+    environment:
+      NODE_ENV: production
+      SECRET_KEY: "{{ .secret_key }}"
+      UTILS_SECRET: "{{ .utils_secret }}"
+      DATABASE_URL: "postgres://{{ .db_user }}:{{ .db_password }}@postgres:5432/outline"
+      REDIS_URL: "redis://:{{ .redis_password }}@redis:6379"
+      URL: "https://${GOTHAM_DOMAIN:-localhost}"
+      PORT: "3000"
+      PGSSLMODE: disable
+      FORCE_HTTPS: "${FORCE_HTTPS:-true}"
+      FILE_STORAGE: local
+      FILE_STORAGE_LOCAL_ROOT_DIR: /var/lib/outline/data
+      FILE_STORAGE_UPLOAD_MAX_SIZE: "2000"
+      FILE_STORAGE_IMPORT_MAX_SIZE: "100"
+    volumes:
+      - storage_data:/var/lib/outline/data
+    depends_on:
+      - postgres
+      - redis
+  redis:
+    image: redis:8.10.3-alpine
+    restart: unless-stopped
+    environment:
+      REDIS_PASSWORD: "{{ .redis_password }}"
+    command: ["redis-server", "--requirepass", "{{ .redis_password }}"]
+  postgres:
+    image: postgres:16-alpine
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: "{{ .db_user }}"
+      POSTGRES_PASSWORD: "{{ .db_password }}"
+      POSTGRES_DB: outline
+    volumes:
+      - database_data:/var/lib/postgresql/data
+volumes:
+  storage_data:
+  database_data:

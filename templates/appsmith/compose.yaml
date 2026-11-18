@@ -1,0 +1,14 @@
+services:
+  appsmith:
+    image: index.docker.io/appsmith/appsmith-ce:v2.7.0
+    restart: unless-stopped
+    ports:
+      - "80"
+    environment:
+      APPSMITH_MAIL_ENABLED: "false"
+      APPSMITH_DISABLE_INTERCOM: "true"
+      APPSMITH_DISABLE_TELEMETRY: "{{ .telemetry }}"
+    volumes:
+      - stacks_data:/appsmith-stacks
+volumes:
+  stacks_data:

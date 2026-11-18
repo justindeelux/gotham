@@ -1,0 +1,32 @@
+services:
+  kimai:
+    image: kimai/kimai2:2.72.0
+    restart: unless-stopped
+    ports:
+      - "8001"
+    environment:
+      APP_SECRET: "{{ .app_secret }}"
+      MAILER_FROM: "${MAILER_FROM:-kimai@example.com}"
+      MAILER_URL: "${MAILER_URL:-null://null}"
+      ADMINMAIL: "${ADMINMAIL:-admin@example.com}"
+      ADMINPASS: "{{ .admin_password }}"
+      DATABASE_URL: "mysql://{{ .db_user }}:{{ .db_password }}@mysql/kimai?charset=utf8mb4&serverVersion=8.3.0"
+      TRUSTED_HOSTS: "${GOTHAM_DOMAIN:-localhost}|localhost|127.0.0.1"
+    volumes:
+      - kimai_data:/opt/kimai/var/data
+    depends_on:
+      - mysql
+  mysql:
+    image: mysql:8
+    restart: unless-stopped
+    command: ["--default-storage-engine", "innodb"]
+    environment:
+      MYSQL_DATABASE: kimai
+      MYSQL_USER: "{{ .db_user }}"
+      MYSQL_PASSWORD: "{{ .db_password }}"
+      MYSQL_ROOT_PASSWORD: "{{ .db_root_password }}"
+    volumes:
+      - kimai_mysql_data:/var/lib/mysql
+volumes:
+  kimai_data:
+  kimai_mysql_data:

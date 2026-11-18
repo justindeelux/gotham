@@ -1,0 +1,61 @@
+services:
+  hi-events:
+    image: daveearley/hi.events-all-in-one:v2.2.0
+    restart: unless-stopped
+    ports:
+      - "80"
+    environment:
+      VITE_APP_NAME: "${VITE_APP_NAME:-Hi.Events}"
+      VITE_FRONTEND_URL: "https://${GOTHAM_DOMAIN:-localhost}"
+      VITE_API_URL_CLIENT: "https://${GOTHAM_DOMAIN:-localhost}/api"
+      VITE_API_URL_SERVER: http://localhost:80/api
+      APP_KEY: "base64:{{ .app_key }}"
+      JWT_SECRET: "{{ .jwt_secret }}"
+      APP_FRONTEND_URL: "https://${GOTHAM_DOMAIN:-localhost}"
+      APP_CDN_URL: "https://${GOTHAM_DOMAIN:-localhost}/storage"
+      APP_DISABLE_REGISTRATION: "false"
+      APP_SAAS_MODE_ENABLED: "false"
+      LOG_CHANNEL: stderr
+      QUEUE_CONNECTION: redis
+      DB_CONNECTION: pgsql
+      DATABASE_URL: "postgresql://{{ .db_user }}:{{ .db_password }}@postgres:5432/hi-events"
+      REDIS_HOST: redis
+      REDIS_PASSWORD: "{{ .redis_password }}"
+      REDIS_PORT: "6379"
+      MAIL_MAILER: "${MAIL_MAILER:-log}"
+      MAIL_HOST: "${MAIL_HOST:-}"
+      MAIL_PORT: "${MAIL_PORT:-587}"
+      MAIL_USERNAME: "${MAIL_USERNAME:-}"
+      MAIL_PASSWORD: "${MAIL_PASSWORD:-}"
+      MAIL_ENCRYPTION: "${MAIL_ENCRYPTION:-tls}"
+      MAIL_FROM_ADDRESS: "${MAIL_FROM_ADDRESS:-noreply@example.com}"
+      MAIL_FROM_NAME: "${MAIL_FROM_NAME:-Hi.Events}"
+      FILESYSTEM_PUBLIC_DISK: public
+      FILESYSTEM_PRIVATE_DISK: local
+      WEBHOOK_QUEUE_NAME: webhook-queue
+    volumes:
+      - hi_events_storage:/app/backend/storage/app
+    depends_on:
+      - postgres
+      - redis
+  postgres:
+    image: postgres:17-alpine
+    restart: unless-stopped
+    environment:
+      POSTGRES_DB: hi-events
+      POSTGRES_USER: "{{ .db_user }}"
+      POSTGRES_PASSWORD: "{{ .db_password }}"
+    volumes:
+      - hi_events_postgres_data:/var/lib/postgresql/data
+  redis:
+    image: redis:7-alpine
+    restart: unless-stopped
+    command: ["redis-server", "--requirepass", "{{ .redis_password }}"]
+    environment:
+      REDIS_PASSWORD: "{{ .redis_password }}"
+    volumes:
+      - hi_events_redis_data:/data
+volumes:
+  hi_events_storage:
+  hi_events_postgres_data:
+  hi_events_redis_data:

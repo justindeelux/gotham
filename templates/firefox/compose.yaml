@@ -1,0 +1,12 @@
+services:
+  firefox:
+    image: jlesage/firefox:v26.09.1
+    restart: unless-stopped
+    ports:
+      - "5800"
+    environment:
+      TZ: "{{ .tz }}"
+    volumes:
+      - firefox_config:/config
+volumes:
+  firefox_config:

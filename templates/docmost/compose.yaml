@@ -1,0 +1,43 @@
+services:
+  docmost:
+    image: docmost/docmost:0.97.0
+    restart: unless-stopped
+    ports:
+      - "3000"
+    environment:
+      APP_SECRET: "{{ .app_secret }}"
+      APP_URL: "https://${GOTHAM_DOMAIN:-localhost}"
+      DATABASE_URL: "postgresql://{{ .db_user }}:{{ .db_password }}@postgresql:5432/docmost?schema=public"
+      REDIS_URL: redis://redis:6379
+      MAIL_DRIVER: "${MAIL_DRIVER:-log}"
+      SMTP_HOST: "${SMTP_HOST:-}"
+      SMTP_PORT: "${SMTP_PORT:-}"
+      SMTP_USERNAME: "${SMTP_USERNAME:-}"
+      SMTP_PASSWORD: "${SMTP_PASSWORD:-}"
+      SMTP_SECURE: "${SMTP_SECURE:-}"
+      MAIL_FROM_ADDRESS: "${MAIL_FROM_ADDRESS:-}"
+      MAIL_FROM_NAME: "${MAIL_FROM_NAME:-Docmost}"
+      POSTMARK_TOKEN: "${POSTMARK_TOKEN:-}"
+    volumes:
+      - docmost_data:/app/data/storage
+    depends_on:
+      - postgresql
+      - redis
+  postgresql:
+    image: postgres:18-alpine
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: "{{ .db_user }}"
+      POSTGRES_PASSWORD: "{{ .db_password }}"
+      POSTGRES_DB: docmost
+    volumes:
+      - postgresql_data:/var/lib/postgresql
+  redis:
+    image: redis:8.10-alpine
+    restart: unless-stopped
+    volumes:
+      - redis_data:/data
+volumes:
+  docmost_data:
+  postgresql_data:
+  redis_data:

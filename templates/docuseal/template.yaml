@@ -1,0 +1,20 @@
+name: DocuSeal
+icon: docuseal
+description: DocuSeal document signing with SQLite and a persistent named volume.
+homepage: https://www.docuseal.co/
+category:
+  - productivity
+fields:
+  - key: domain
+    label: Domain
+    type: text
+    required: false
+    default: ""
+    placeholder: sign.example.com
+    help: Optional. Leave empty to add a domain later from the service page.
+    pattern: ^([A-Za-z0-9][A-Za-z0-9.-]*)?$
+    max_length: 253
+routes:
+  - service: docuseal
+    port: 3000
+    domain_field: domain

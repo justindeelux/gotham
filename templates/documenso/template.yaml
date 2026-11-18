@@ -1,0 +1,53 @@
+name: Documenso
+icon: documenso
+description: Documenso document signing with PostgreSQL and generated signing keys.
+homepage: https://docs.documenso.com/
+category:
+  - productivity
+fields:
+  - key: domain
+    label: Domain
+    type: text
+    required: false
+    default: ""
+    placeholder: sign.example.com
+    help: Optional. Leave empty to add a domain later from the service page.
+    pattern: ^([A-Za-z0-9][A-Za-z0-9.-]*)?$
+    max_length: 253
+  - key: db_user
+    label: Database user
+    type: text
+    default: documenso
+    pattern: ^[A-Za-z0-9_]{1,32}$
+    max_length: 32
+  - key: db_password
+    label: Database password
+    type: secret
+    required: true
+    generate: true
+  - key: auth_secret
+    label: Authentication secret
+    type: secret
+    required: true
+    generate: true
+    help: Signs login sessions; use Generate for a strong value.
+  - key: encryption_key
+    label: Encryption key
+    type: secret
+    required: true
+    generate: true
+  - key: secondary_encryption_key
+    label: Secondary encryption key
+    type: secret
+    required: true
+    generate: true
+  - key: signing_passphrase
+    label: Signing passphrase
+    type: secret
+    required: true
+    generate: true
+    help: Protects the generated signing certificate; keep it with the service.
+routes:
+  - service: documenso
+    port: 3000
+    domain_field: domain

@@ -1,0 +1,14 @@
+services:
+  dashy:
+    image: lissy93/dashy:4.9.18
+    restart: unless-stopped
+    ports:
+      - "8080"
+    environment:
+      PUID: "1000"
+      PGID: "1000"
+      TZ: "{{ .tz }}"
+    volumes:
+      - dashy_user_data:/app/user-data
+volumes:
+  dashy_user_data:

@@ -1,0 +1,46 @@
+services:
+  espocrm:
+    image: espocrm/espocrm:10
+    restart: unless-stopped
+    ports:
+      - "80"
+    environment:
+      ESPOCRM_ADMIN_USERNAME: "{{ .admin_user }}"
+      ESPOCRM_ADMIN_PASSWORD: "{{ .admin_password }}"
+      ESPOCRM_DATABASE_PLATFORM: Mysql
+      ESPOCRM_DATABASE_HOST: espocrm-db
+      ESPOCRM_DATABASE_NAME: espocrm
+      ESPOCRM_DATABASE_USER: "{{ .db_user }}"
+      ESPOCRM_DATABASE_PASSWORD: "{{ .db_password }}"
+      ESPOCRM_SITE_URL: "https://${GOTHAM_DOMAIN:-localhost}"
+    volumes:
+      - espocrm_data:/var/www/html/data
+      - espocrm_custom:/var/www/html/custom
+      - espocrm_custom_client:/var/www/html/client/custom
+    depends_on:
+      - espocrm-db
+  espocrm-daemon:
+    image: espocrm/espocrm:10
+    restart: unless-stopped
+    entrypoint: docker-daemon.sh
+    volumes:
+      - espocrm_data:/var/www/html/data
+      - espocrm_custom:/var/www/html/custom
+      - espocrm_custom_client:/var/www/html/client/custom
+    depends_on:
+      - espocrm
+  espocrm-db:
+    image: mariadb:12.3
+    restart: unless-stopped
+    environment:
+      MARIADB_DATABASE: espocrm
+      MARIADB_USER: "{{ .db_user }}"
+      MARIADB_PASSWORD: "{{ .db_password }}"
+      MARIADB_ROOT_PASSWORD: "{{ .db_root_password }}"
+    volumes:
+      - espocrm_db:/var/lib/mysql
+volumes:
+  espocrm_data:
+  espocrm_custom:
+  espocrm_custom_client:
+  espocrm_db:

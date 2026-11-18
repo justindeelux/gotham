@@ -35,12 +35,14 @@ fields:
     label: Encryption key
     type: secret
     required: true
-    help: Encrypts archived mail. Keep it stable and backed up; losing it makes the archive unreadable.
+    pattern: ^[0-9a-f]{64}$
+    help: 64 lowercase hex characters (openssl rand -hex 32). Encrypts archived mail; keep it backed up, losing it makes the archive unreadable.
   - key: storage_encryption_key
     label: Storage encryption key
     type: secret
     required: true
-    help: Encrypts stored attachments and message bodies.
+    pattern: ^[0-9a-f]{64}$
+    help: 64 lowercase hex characters (openssl rand -hex 32). Encrypts stored attachments and message bodies.
   - key: meili_master_key
     label: Meilisearch master key
     type: secret
@@ -55,7 +57,8 @@ fields:
     label: JWT secret
     type: secret
     required: true
-    generate: true
+    pattern: ^[A-Za-z0-9+/=_-]{32,128}$
+    help: At least 32 characters, for example from openssl rand -hex 32.
 routes:
   - service: open-archiver
     port: 3000

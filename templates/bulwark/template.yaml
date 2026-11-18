@@ -24,8 +24,8 @@ fields:
     label: Session secret
     type: secret
     required: true
-    generate: true
-    help: Signs webmail sessions; use Generate for a strong value.
+    pattern: ^[A-Za-z0-9+/=_-]{32,128}$
+    help: At least 32 characters, for example from openssl rand -hex 32. Signs webmail sessions.
 routes:
   - service: bulwark
     port: 3000

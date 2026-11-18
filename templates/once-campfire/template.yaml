@@ -18,8 +18,8 @@ fields:
     label: Secret key base
     type: secret
     required: true
-    generate: true
-    help: Signs cookies and sessions; use Generate for a strong value. Changing it signs every user out.
+    pattern: ^[A-Za-z0-9+/=_-]{32,128}$
+    help: At least 32 characters, for example from openssl rand -hex 32. Changing it signs every user out.
 routes:
   - service: campfire
     port: 80

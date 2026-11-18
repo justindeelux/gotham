@@ -1,0 +1,12 @@
+services:
+  organizr:
+    image: organizr/organizr:latest
+    restart: unless-stopped
+    ports:
+      - "80"
+    environment:
+      branch: "{{ .branch }}"
+    volumes:
+      - organizr_data:/config
+volumes:
+  organizr_data:

@@ -1,0 +1,38 @@
+name: Shlink
+icon: shlink
+description: Shlink is a self-hosted URL shortener with its web client, a generated API key and persistent named volumes.
+homepage: https://shlink.io/
+category:
+  - productivity
+fields:
+  - key: domain
+    label: Short domain
+    type: text
+    required: false
+    default: ""
+    placeholder: sh.example.com
+    help: Optional. Hosts the short links and the REST API.
+    pattern: ^([A-Za-z0-9][A-Za-z0-9.-]*)?$
+    max_length: 253
+  - key: web_domain
+    label: Web client domain
+    type: text
+    required: false
+    default: ""
+    placeholder: links.example.com
+    help: Optional. Must differ from the short domain; hosts the admin web client.
+    pattern: ^([A-Za-z0-9][A-Za-z0-9.-]*)?$
+    max_length: 253
+  - key: api_key
+    label: API key
+    type: secret
+    required: true
+    generate: true
+    help: Shared by the server and the web client; use Generate for a strong value.
+routes:
+  - service: shlink
+    port: 8080
+    domain_field: domain
+  - service: shlink-web
+    port: 8080
+    domain_field: web_domain

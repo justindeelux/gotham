@@ -1,0 +1,20 @@
+name: Readeck
+icon: readeck
+description: Readeck saves the readable content of web pages as a personal read-later archive, with a persistent named volume.
+homepage: https://readeck.org/en/docs/
+category:
+  - productivity
+fields:
+  - key: domain
+    label: Domain
+    type: text
+    required: false
+    default: ""
+    placeholder: read.example.com
+    help: Optional. Leave empty to add a domain later from the service page.
+    pattern: ^([A-Za-z0-9][A-Za-z0-9.-]*)?$
+    max_length: 253
+routes:
+  - service: readeck
+    port: 8000
+    domain_field: domain

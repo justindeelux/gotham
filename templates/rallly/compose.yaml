@@ -1,0 +1,28 @@
+services:
+  rallly:
+    image: lukevella/rallly:4.17.0
+    restart: unless-stopped
+    ports:
+      - "3000"
+    environment:
+      PROXY_MODE: external
+      DATABASE_URL: "postgres://{{ .db_user }}:{{ .db_password }}@rallly_db:5432/{{ .db_name }}"
+      SECRET_PASSWORD: "{{ .secret_password }}"
+      NEXT_PUBLIC_BASE_URL: "https://${GOTHAM_DOMAIN:-localhost}"
+      BETTER_AUTH_TRUSTED_ORIGINS: "https://${GOTHAM_DOMAIN:-localhost}"
+      REGISTRATION_ENABLED: "true"
+      INITIAL_ADMIN_EMAIL: "{{ .admin_email }}"
+      SUPPORT_EMAIL: "{{ .support_email }}"
+    depends_on:
+      - rallly_db
+  rallly_db:
+    image: postgres:18
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: "{{ .db_user }}"
+      POSTGRES_PASSWORD: "{{ .db_password }}"
+      POSTGRES_DB: "{{ .db_name }}"
+    volumes:
+      - rallly_postgres_data:/var/lib/postgresql
+volumes:
+  rallly_postgres_data:

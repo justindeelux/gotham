@@ -1,0 +1,27 @@
+services:
+  vikunja:
+    image: vikunja/vikunja:2.8.0
+    restart: unless-stopped
+    ports:
+      - "3456"
+    environment:
+      VIKUNJA_SERVICE_PUBLICURL: "https://${GOTHAM_DOMAIN:-localhost}"
+      VIKUNJA_SERVICE_SECRET: "{{ .jwt_secret }}"
+      VIKUNJA_SERVICE_ENABLEREGISTRATION: "true"
+      VIKUNJA_DATABASE_PATH: /db/vikunja.db
+      VIKUNJA_DATABASE_TYPE: sqlite
+    volumes:
+      - vikunja_data:/app/vikunja/
+      - vikunja_sqlite_data:/db
+    depends_on:
+      - init
+  init:
+    image: busybox:1.38.0
+    restart: "no"
+    command: ["sh", "-c", "touch /db/vikunja.db && chown -R 1000 /db && chown -R 1000 /app/vikunja"]
+    volumes:
+      - vikunja_data:/app/vikunja
+      - vikunja_sqlite_data:/db
+volumes:
+  vikunja_data:
+  vikunja_sqlite_data:

@@ -1,0 +1,58 @@
+name: Rallly
+icon: rallly
+description: Rallly is a scheduling tool for organizing meetings and events, backed by PostgreSQL with a persistent named volume.
+homepage: https://support.rallly.co/self-hosting/introduction
+category:
+  - productivity
+fields:
+  - key: domain
+    label: Domain
+    type: text
+    required: false
+    default: ""
+    placeholder: schedule.example.com
+    help: Optional. Leave empty to add a domain later from the service page.
+    pattern: ^([A-Za-z0-9][A-Za-z0-9.-]*)?$
+    max_length: 253
+  - key: admin_email
+    label: Admin email
+    type: text
+    default: admin@example.com
+    pattern: ^[^@\s]+@[^@\s]+$
+    max_length: 254
+    help: Created as the first administrator on start.
+  - key: support_email
+    label: Support email
+    type: text
+    default: admin@example.com
+    pattern: ^[^@\s]+@[^@\s]+$
+    max_length: 254
+    help: Shown to users as the contact address.
+  - key: secret_password
+    label: Secret password
+    type: secret
+    required: true
+    generate: true
+    help: Signs sessions and login links; use Generate for a strong value.
+  - key: db_name
+    label: Database name
+    type: text
+    default: rallly
+    pattern: ^[A-Za-z0-9_]{1,64}$
+    max_length: 64
+  - key: db_user
+    label: Database user
+    type: text
+    default: rallly
+    pattern: ^[A-Za-z0-9_]{1,32}$
+    max_length: 32
+  - key: db_password
+    label: Database password
+    type: secret
+    required: true
+    generate: true
+    help: Used by Rallly and PostgreSQL; use Generate for a strong value.
+routes:
+  - service: rallly
+    port: 3000
+    domain_field: domain

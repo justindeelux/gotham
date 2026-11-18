@@ -1,0 +1,22 @@
+services:
+  shlink:
+    image: shlinkio/shlink:5.1.8
+    restart: unless-stopped
+    ports:
+      - "8080"
+    environment:
+      DEFAULT_DOMAIN: "${GOTHAM_DOMAIN:-localhost}"
+      IS_HTTPS_ENABLED: "false"
+      INITIAL_API_KEY: "{{ .api_key }}"
+    volumes:
+      - shlink_data:/etc/shlink/data
+  shlink-web:
+    image: shlinkio/shlink-web-client:4.9.0
+    restart: unless-stopped
+    ports:
+      - "8080"
+    environment:
+      SHLINK_SERVER_URL: "https://${GOTHAM_DOMAIN:-localhost}"
+      SHLINK_SERVER_API_KEY: "{{ .api_key }}"
+volumes:
+  shlink_data:

@@ -1,0 +1,26 @@
+name: Yamtrack
+icon: yamtrack
+description: Yamtrack tracks movies, shows, anime, manga, games and books, with Redis and persistent named volumes.
+homepage: https://github.com/FuzzyGrim/Yamtrack/wiki
+category:
+  - productivity
+fields:
+  - key: domain
+    label: Domain
+    type: text
+    required: false
+    default: ""
+    placeholder: media.example.com
+    help: Optional. Leave empty to add a domain later from the service page.
+    pattern: ^([A-Za-z0-9][A-Za-z0-9.-]*)?$
+    max_length: 253
+  - key: secret
+    label: Secret key
+    type: secret
+    required: true
+    generate: true
+    help: Signs sessions; changing it logs every user out.
+routes:
+  - service: yamtrack
+    port: 8000
+    domain_field: domain

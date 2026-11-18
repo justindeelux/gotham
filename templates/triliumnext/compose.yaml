@@ -1,0 +1,12 @@
+services:
+  triliumnext:
+    image: ghcr.io/triliumnext/trilium:v0.107.0
+    restart: unless-stopped
+    ports:
+      - "8080"
+    environment:
+      TZ: "{{ .timezone }}"
+    volumes:
+      - triliumnext_data:/home/node/trilium-data
+volumes:
+  triliumnext_data:

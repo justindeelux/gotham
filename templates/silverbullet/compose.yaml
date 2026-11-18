@@ -1,0 +1,12 @@
+services:
+  silverbullet:
+    image: ghcr.io/silverbulletmd/silverbullet:v2
+    restart: unless-stopped
+    ports:
+      - "3000"
+    environment:
+      SB_USER: "{{ .admin_user }}:{{ .admin_password }}"
+    volumes:
+      - silverbullet_space:/space
+volumes:
+  silverbullet_space:

@@ -1,0 +1,38 @@
+name: Redmine
+icon: redmine
+description: Redmine project management with a PostgreSQL database, issue tracking and persistent named volumes for files and configuration.
+homepage: https://www.redmine.org/
+category:
+  - productivity
+fields:
+  - key: domain
+    label: Domain
+    type: text
+    required: false
+    default: ""
+    placeholder: projects.example.com
+    help: Optional. Leave empty to add a domain later from the service page.
+    pattern: ^([A-Za-z0-9][A-Za-z0-9.-]*)?$
+    max_length: 253
+  - key: db_user
+    label: Database user
+    type: text
+    default: redmine
+    pattern: ^[A-Za-z0-9_]{1,32}$
+    max_length: 32
+  - key: db_password
+    label: Database password
+    type: secret
+    required: true
+    generate: true
+    help: Used by Redmine and PostgreSQL; use Generate for a strong value.
+  - key: secret_key_base
+    label: Secret key base
+    type: secret
+    required: true
+    pattern: ^[0-9a-f]{64}$
+    help: Signs cookies and sessions; exactly 64 lowercase hex characters. Generate one with openssl rand -hex 32. Changing it logs every user out.
+routes:
+  - service: redmine
+    port: 3000
+    domain_field: domain

@@ -1,0 +1,68 @@
+name: Plane
+icon: plane
+description: Plane is an open source project management tool with PostgreSQL, Valkey, RabbitMQ and MinIO, all in persistent named volumes.
+homepage: https://docs.plane.so/self-hosting/methods/docker-compose
+category:
+  - productivity
+fields:
+  - key: domain
+    label: Domain
+    type: text
+    required: false
+    default: ""
+    placeholder: projects.example.com
+    help: Optional. Leave empty to add a domain later from the service page.
+    pattern: ^([A-Za-z0-9][A-Za-z0-9.-]*)?$
+    max_length: 253
+  - key: db_user
+    label: Database user
+    type: text
+    default: plane
+    pattern: ^[A-Za-z0-9_]{1,32}$
+    max_length: 32
+  - key: db_password
+    label: Database password
+    type: secret
+    required: true
+    generate: true
+    help: Used by Plane and PostgreSQL; use Generate for a strong value.
+  - key: secret_key
+    label: Secret key
+    type: secret
+    required: true
+    pattern: ^[A-Za-z0-9]{32,}$
+    help: Signs sessions and tokens; at least 32 characters. Generate one with openssl rand -hex 32. Changing it logs every user out.
+  - key: live_secret
+    label: Live server secret
+    type: secret
+    required: true
+    pattern: ^[A-Za-z0-9]{32,}$
+    help: Secures the realtime collaboration server; at least 32 characters. Generate one with openssl rand -hex 32.
+  - key: minio_user
+    label: Object storage user
+    type: text
+    default: plane
+    pattern: ^[A-Za-z0-9_.-]{1,32}$
+    max_length: 32
+  - key: minio_password
+    label: Object storage password
+    type: secret
+    required: true
+    generate: true
+    help: Used by Plane and MinIO; use Generate for a strong value.
+  - key: rabbitmq_user
+    label: RabbitMQ user
+    type: text
+    default: plane
+    pattern: ^[A-Za-z0-9_.-]{1,32}$
+    max_length: 32
+  - key: rabbitmq_password
+    label: RabbitMQ password
+    type: secret
+    required: true
+    generate: true
+    help: Used by Plane and RabbitMQ; use Generate for a strong value.
+routes:
+  - service: proxy
+    port: 80
+    domain_field: domain

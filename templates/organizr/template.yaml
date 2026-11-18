@@ -1,0 +1,28 @@
+name: Organizr
+icon: organizr
+description: Organizr groups your homelab services behind one dashboard, with a persistent named volume and an optional routed domain.
+homepage: https://docs.organizr.app/
+category:
+  - productivity
+fields:
+  - key: domain
+    label: Domain
+    type: text
+    required: false
+    default: ""
+    placeholder: home.example.com
+    help: Optional. Leave empty to add a domain later from the service page.
+    pattern: ^([A-Za-z0-9][A-Za-z0-9.-]*)?$
+    max_length: 253
+  - key: branch
+    label: Branch
+    type: select
+    default: v2-master
+    options:
+      - v2-master
+      - v2-develop
+    help: v2-master is the stable release; v2-develop tracks development.
+routes:
+  - service: organizr
+    port: 80
+    domain_field: domain

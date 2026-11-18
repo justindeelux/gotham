@@ -1,0 +1,20 @@
+name: NocoDB
+icon: nocodb
+description: NocoDB is an open source Airtable alternative that turns any SQL database into a smart spreadsheet, with a persistent named volume.
+homepage: https://nocodb.com/
+category:
+  - productivity
+fields:
+  - key: domain
+    label: Domain
+    type: text
+    required: false
+    default: ""
+    placeholder: tables.example.com
+    help: Optional. Leave empty to add a domain later from the service page.
+    pattern: ^([A-Za-z0-9][A-Za-z0-9.-]*)?$
+    max_length: 253
+routes:
+  - service: nocodb
+    port: 8080
+    domain_field: domain

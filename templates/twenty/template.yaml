@@ -1,0 +1,50 @@
+name: Twenty
+icon: twenty
+description: Twenty is an open source CRM with custom objects, workflows and email sync, backed by PostgreSQL and Redis with persistent named volumes.
+homepage: https://docs.twenty.com
+category:
+  - productivity
+fields:
+  - key: domain
+    label: Domain
+    type: text
+    required: false
+    default: ""
+    placeholder: crm.example.com
+    help: Optional. Leave empty to add a domain later from the service page.
+    pattern: ^([A-Za-z0-9][A-Za-z0-9.-]*)?$
+    max_length: 253
+  - key: db_name
+    label: Database name
+    type: text
+    default: twenty
+    pattern: ^[A-Za-z0-9_]{1,64}$
+    max_length: 64
+  - key: db_user
+    label: Database user
+    type: text
+    default: twenty
+    pattern: ^[A-Za-z0-9_]{1,32}$
+    max_length: 32
+  - key: db_password
+    label: Database password
+    type: secret
+    required: true
+    generate: true
+    help: Used by Twenty and PostgreSQL; keep it free of special characters.
+  - key: app_secret
+    label: App secret
+    type: secret
+    required: true
+    pattern: ^[A-Za-z0-9]{32,}$
+    help: Legacy session and token secret; at least 32 characters. Generate one with openssl rand -hex 32.
+  - key: encryption_key
+    label: Encryption key
+    type: secret
+    required: true
+    pattern: ^[A-Za-z0-9]{32,}$
+    help: Encrypts stored secrets; at least 32 characters. Generate one with openssl rand -hex 32. Losing it makes them unreadable.
+routes:
+  - service: twenty
+    port: 3000
+    domain_field: domain

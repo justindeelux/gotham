@@ -1,0 +1,31 @@
+services:
+  tolgee:
+    image: tolgee/tolgee:v3.243.1
+    restart: unless-stopped
+    ports:
+      - "8080"
+    environment:
+      TOLGEE_AUTHENTICATION_ENABLED: "true"
+      TOLGEE_AUTHENTICATION_INITIAL_USERNAME: admin
+      TOLGEE_AUTHENTICATION_INITIAL_PASSWORD: "{{ .admin_password }}"
+      TOLGEE_AUTHENTICATION_JWT_SECRET: "{{ .jwt_secret }}"
+      TOLGEE_POSTGRES_AUTOSTART_ENABLED: "false"
+      SPRING_DATASOURCE_URL: "jdbc:postgresql://postgresql:5432/{{ .db_name }}"
+      SPRING_DATASOURCE_USERNAME: "{{ .db_user }}"
+      SPRING_DATASOURCE_PASSWORD: "{{ .db_password }}"
+    volumes:
+      - tolgee_data:/data
+    depends_on:
+      - postgresql
+  postgresql:
+    image: postgres:16-alpine
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: "{{ .db_user }}"
+      POSTGRES_PASSWORD: "{{ .db_password }}"
+      POSTGRES_DB: "{{ .db_name }}"
+    volumes:
+      - tolgee_postgresql_data:/var/lib/postgresql/data
+volumes:
+  tolgee_data:
+  tolgee_postgresql_data:

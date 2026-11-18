@@ -1,0 +1,25 @@
+name: Pocket ID
+icon: pocket-id
+description: Pocket ID OIDC provider with passkey login and a persistent SQLite volume.
+homepage: https://pocket-id.org/docs/setup/installation
+category:
+  - auth
+fields:
+  - key: domain
+    label: Domain
+    type: text
+    required: true
+    placeholder: id.example.com
+    help: Public host Pocket ID uses for its OIDC issuer; required on the first start.
+    pattern: ^[A-Za-z0-9][A-Za-z0-9.-]*$
+    max_length: 253
+  - key: encryption_key
+    label: Encryption key
+    type: secret
+    required: true
+    generate: true
+    help: Encrypts stored tokens and client secrets; losing it invalidates sessions.
+routes:
+  - service: pocket-id
+    port: 1411
+    domain_field: domain

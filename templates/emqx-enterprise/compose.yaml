@@ -1,0 +1,24 @@
+services:
+  emqx:
+    image: emqx/emqx-enterprise:6.3.3
+    restart: unless-stopped
+    ports:
+      - "1883"
+      - "8083"
+      - "8084"
+      - "8883"
+      - "18083"
+    environment:
+      EMQX_DASHBOARD__DEFAULT_PASSWORD: "{{ .dashboard_password }}"
+    volumes:
+      - emqx_data:/opt/emqx/data
+      - emqx_log:/opt/emqx/log
+    healthcheck:
+      test: ["CMD", "/opt/emqx/bin/emqx", "ctl", "status"]
+      interval: 10s
+      timeout: 30s
+      retries: 5
+      start_period: 30s
+volumes:
+  emqx_data:
+  emqx_log:

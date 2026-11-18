@@ -1,0 +1,37 @@
+services:
+  logto:
+    image: svhd/logto:1.46.0
+    restart: unless-stopped
+    entrypoint: ["sh", "-c", "npm run cli db seed -- --swe && npm run alteration deploy latest && npm start"]
+    ports:
+      - "3001"
+    environment:
+      TRUST_PROXY_HEADER: "1"
+      DB_URL: "postgres://{{ .db_user }}:{{ .db_password }}@postgres:5432/{{ .db_name }}"
+      ENDPOINT: "https://{{ .domain }}"
+      ADMIN_ENDPOINT: "https://{{ .domain }}/admin"
+    depends_on:
+      postgres:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD-SHELL", "exit 0"]
+      interval: 5s
+      timeout: 20s
+      retries: 10
+  postgres:
+    image: postgres:17-alpine
+    restart: unless-stopped
+    user: postgres
+    environment:
+      POSTGRES_USER: "{{ .db_user }}"
+      POSTGRES_PASSWORD: "{{ .db_password }}"
+      POSTGRES_DB: "{{ .db_name }}"
+    volumes:
+      - logto_db:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U $${POSTGRES_USER} -d $${POSTGRES_DB}"]
+      interval: 5s
+      timeout: 20s
+      retries: 10
+volumes:
+  logto_db:

@@ -1,0 +1,28 @@
+name: Syncthing
+icon: syncthing
+description: Syncthing continuous file sync with persistent config and data volumes.
+homepage: https://syncthing.net/
+category:
+  - storage
+fields:
+  - key: domain
+    label: Domain
+    type: text
+    required: false
+    default: ""
+    placeholder: sync.example.com
+    help: Optional. Leave empty to add a domain later from the service page.
+    pattern: ^([A-Za-z0-9][A-Za-z0-9.-]*)?$
+    max_length: 253
+  - key: timezone
+    label: Timezone
+    type: text
+    default: Etc/UTC
+    placeholder: Europe/Berlin
+    pattern: ^[A-Za-z0-9_/+-]+$
+    max_length: 64
+    help: IANA timezone name used by the container clock.
+routes:
+  - service: syncthing
+    port: 8384
+    domain_field: domain

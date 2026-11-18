@@ -1,0 +1,56 @@
+services:
+  cloudreve:
+    image: cloudreve/cloudreve:4.19.1
+    restart: unless-stopped
+    ports:
+      - "5212"
+    environment:
+      CR_CONF_Database.Type: postgres
+      CR_CONF_Database.Host: postgres
+      CR_CONF_Database.User: "{{ .db_user }}"
+      CR_CONF_Database.Password: "{{ .db_password }}"
+      CR_CONF_Database.Name: "{{ .db_name }}"
+      CR_CONF_Database.Port: "5432"
+      CR_CONF_Redis.Server: redis:6379
+      CR_CONF_Redis.Password: "{{ .redis_password }}"
+    volumes:
+      - cloudreve_data:/cloudreve/data
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "nc", "-z", "localhost", "5212"]
+      interval: 20s
+      timeout: 10s
+      retries: 3
+  postgres:
+    image: postgres:18-alpine
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: "{{ .db_user }}"
+      POSTGRES_PASSWORD: "{{ .db_password }}"
+      POSTGRES_DB: "{{ .db_name }}"
+    volumes:
+      - cloudreve_db:/var/lib/postgresql
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U $${POSTGRES_USER} -d $${POSTGRES_DB}"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+  redis:
+    image: redis:7-alpine
+    restart: unless-stopped
+    command: ["redis-server", "--requirepass", "{{ .redis_password }}"]
+    volumes:
+      - cloudreve_redis:/data
+    healthcheck:
+      test: ["CMD", "redis-cli", "-a", "{{ .redis_password }}", "ping"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+volumes:
+  cloudreve_data:
+  cloudreve_db:
+  cloudreve_redis:

@@ -1,0 +1,23 @@
+services:
+  keycloak:
+    image: quay.io/keycloak/keycloak:26.8
+    restart: unless-stopped
+    command: ["start"]
+    ports:
+      - "8080"
+    environment:
+      KC_BOOTSTRAP_ADMIN_USERNAME: "{{ .admin_user }}"
+      KC_BOOTSTRAP_ADMIN_PASSWORD: "{{ .admin_password }}"
+      KC_HOSTNAME: "https://{{ .domain }}"
+      KC_HTTP_ENABLED: "true"
+      KC_HEALTH_ENABLED: "true"
+      KC_PROXY_HEADERS: xforwarded
+    volumes:
+      - keycloak_data:/opt/keycloak/data
+    healthcheck:
+      test: ["CMD-SHELL", "exec 3<>/dev/tcp/127.0.0.1/9000"]
+      interval: 10s
+      timeout: 5s
+      retries: 10
+volumes:
+  keycloak_data:

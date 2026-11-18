@@ -1,0 +1,54 @@
+name: Seafile
+icon: seafile
+description: Seafile file sync and share with MariaDB, memcached and the SeaDoc editor.
+homepage: https://manual.seafile.com
+category:
+  - storage
+fields:
+  - key: domain
+    label: Domain
+    type: text
+    required: true
+    placeholder: files.example.com
+    help: Public host Seafile bakes into its configuration on the first start.
+    pattern: ^[A-Za-z0-9][A-Za-z0-9.-]*$
+    max_length: 253
+  - key: admin_email
+    label: Admin email
+    type: text
+    default: admin@example.com
+    pattern: ^[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+$
+    max_length: 254
+    help: Email of the initial Seafile administrator account.
+  - key: admin_password
+    label: Admin password
+    type: secret
+    required: true
+    generate: true
+    help: Initial Seafile administrator password.
+  - key: mysql_user
+    label: Database user
+    type: text
+    default: seafile
+    pattern: ^[A-Za-z0-9_]{1,32}$
+    max_length: 32
+  - key: mysql_password
+    label: Database password
+    type: secret
+    required: true
+    generate: true
+  - key: mysql_root_password
+    label: MariaDB root password
+    type: secret
+    required: true
+    generate: true
+  - key: jwt_private_key
+    label: JWT private key
+    type: secret
+    required: true
+    generate: true
+    help: Shared between Seafile and SeaDoc; must stay identical on both.
+routes:
+  - service: seafile
+    port: 80
+    domain_field: domain

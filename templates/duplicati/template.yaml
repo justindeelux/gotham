@@ -1,0 +1,39 @@
+name: Duplicati
+icon: duplicati
+description: Duplicati backup server with encrypted settings and persistent config and backup volumes.
+homepage: https://duplicati.readthedocs.io
+category:
+  - storage
+fields:
+  - key: domain
+    label: Domain
+    type: text
+    required: false
+    default: ""
+    placeholder: backup.example.com
+    help: Optional. Leave empty to add a domain later from the service page.
+    pattern: ^([A-Za-z0-9][A-Za-z0-9.-]*)?$
+    max_length: 253
+  - key: encryption_key
+    label: Settings encryption key
+    type: secret
+    required: true
+    generate: true
+    help: Encrypts the credentials Duplicati stores for backup targets.
+  - key: web_password
+    label: Web UI password
+    type: secret
+    required: true
+    generate: true
+  - key: timezone
+    label: Timezone
+    type: text
+    default: UTC
+    placeholder: Europe/Berlin
+    pattern: ^[A-Za-z0-9_/+-]+$
+    max_length: 64
+    help: IANA timezone name used for schedules and the container clock.
+routes:
+  - service: duplicati
+    port: 8200
+    domain_field: domain

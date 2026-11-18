@@ -1,0 +1,43 @@
+name: SuperTokens
+icon: supertokens
+description: SuperTokens authentication core backed by PostgreSQL.
+homepage: https://supertokens.com/docs/guides
+category:
+  - auth
+fields:
+  - key: domain
+    label: Domain
+    type: text
+    required: false
+    default: ""
+    placeholder: auth.example.com
+    help: Optional. Leave empty to add a domain later from the service page.
+    pattern: ^([A-Za-z0-9][A-Za-z0-9.-]*)?$
+    max_length: 253
+  - key: api_key
+    label: API key
+    type: secret
+    required: true
+    generate: true
+    help: Shared with your app so only it can call the SuperTokens core.
+  - key: db_user
+    label: Database user
+    type: text
+    default: supertokens
+    pattern: ^[A-Za-z0-9_]{1,32}$
+    max_length: 32
+  - key: db_password
+    label: Database password
+    type: secret
+    required: true
+    generate: true
+  - key: db_name
+    label: Database name
+    type: text
+    default: supertokens
+    pattern: ^[A-Za-z0-9_]{1,64}$
+    max_length: 64
+routes:
+  - service: supertokens
+    port: 3567
+    domain_field: domain

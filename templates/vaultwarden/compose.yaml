@@ -1,0 +1,20 @@
+services:
+  vaultwarden:
+    image: vaultwarden/server:1.37.5
+    restart: unless-stopped
+    ports:
+      - "80"
+    environment:
+      DOMAIN: "https://{{ .domain }}"
+      SIGNUPS_ALLOWED: "{{ .signups_allowed }}"
+      ADMIN_TOKEN: "{{ .admin_token }}"
+      IP_HEADER: X-Forwarded-For
+    volumes:
+      - vaultwarden_data:/data
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://127.0.0.1/"]
+      interval: 2s
+      timeout: 10s
+      retries: 15
+volumes:
+  vaultwarden_data:

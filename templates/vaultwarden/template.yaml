@@ -1,0 +1,30 @@
+name: Vaultwarden
+icon: vaultwarden
+description: Vaultwarden password manager with a persistent data volume and an admin token.
+homepage: https://github.com/dani-garcia/vaultwarden
+category:
+  - auth
+fields:
+  - key: domain
+    label: Domain
+    type: text
+    required: true
+    placeholder: vault.example.com
+    help: Public host Vaultwarden uses in its links and WebAuthn setup.
+    pattern: ^[A-Za-z0-9][A-Za-z0-9.-]*$
+    max_length: 253
+  - key: admin_token
+    label: Admin token
+    type: secret
+    required: true
+    generate: true
+    help: Unlocks the /admin page; use Generate for a strong value.
+  - key: signups_allowed
+    label: Allow signups
+    type: bool
+    default: true
+    help: Turn off after creating the first account to close public registration.
+routes:
+  - service: vaultwarden
+    port: 80
+    domain_field: domain

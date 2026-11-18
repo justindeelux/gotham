@@ -483,6 +483,36 @@ for installer in "${INSTALL_SH}" "${AGENT_INSTALLER}"; do
 done
 echo "PASS: no cleanup-only signal trap (I4)"
 
+# ---- GOTHAM-208: the body runs from main() and the file ends with its call ---
+# The installer is piped into `sh` by the documented one-liner. With top-level
+# code, the bootstrap's `exit $?` closes the pipe while sh is still reading,
+# and curl reports "(23) Failure writing output to destination". Running the
+# body from main() makes sh read to EOF first; the last line must stay the
+# call, or a future top-level exit before EOF brings the curl error back and
+# lets a truncated download run a partial script.
+MAIN_CALL_LINE="$(grep -n '^main "\$@"$' "${INSTALL_SH}" | cut -d: -f1)"
+[ -n "${MAIN_CALL_LINE}" ] \
+    || { echo "FAIL: ${INSTALL_SH} never calls main \"\$@\" (GOTHAM-208)" >&2; exit 1; }
+LAST_LINE="$(awk 'NF { line = $0 } END { print line }' "${INSTALL_SH}")"
+[ "${LAST_LINE}" = 'main "$@"' ] \
+    || { echo "FAIL: ${INSTALL_SH} ends with '${LAST_LINE}', not the main \"\$@\" call (GOTHAM-208)" >&2; exit 1; }
+grep -qx 'main() {' "${INSTALL_SH}" \
+    || { echo "FAIL: ${INSTALL_SH} does not wrap its body in main() (GOTHAM-208)" >&2; exit 1; }
+echo "PASS: the installer body runs from main() (GOTHAM-208)"
+
+# A download that stops before the final call must run nothing: the prefix
+# parses (a complete main() definition and nothing else), main is never
+# called, so not even --help prints.
+head -n "$((MAIN_CALL_LINE - 1))" "${INSTALL_SH}" >"${SCRATCH}/truncated.sh"
+if ! sh "${SCRATCH}/truncated.sh" --help >"${SCRATCH}/truncated.log" 2>&1; then
+    echo "FAIL: an install.sh cut before its main call errored out (GOTHAM-208)" >&2
+    cat "${SCRATCH}/truncated.log" >&2
+    exit 1
+fi
+[ ! -s "${SCRATCH}/truncated.log" ] \
+    || { echo "FAIL: an install.sh cut before its main call ran part of the script (GOTHAM-208)" >&2; cat "${SCRATCH}/truncated.log" >&2; exit 1; }
+echo "PASS: an install.sh cut before its main call runs nothing (GOTHAM-208)"
+
 # ---- B1: re-install with no operator additions succeeds ---------------------
 # Regression: the preservation pipeline filtered every managed key and the
 # gotham.env header, so on a host that never added operator settings the final

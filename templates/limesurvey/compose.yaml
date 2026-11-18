@@ -1,0 +1,45 @@
+services:
+  limesurvey:
+    image: adamzammit/limesurvey:7.10.0
+    restart: unless-stopped
+    ports:
+      - "80"
+    environment:
+      LIMESURVEY_DB_HOST: mariadb
+      LIMESURVEY_DB_PASSWORD: "{{ .db_password }}"
+      LIMESURVEY_DB_USER: "{{ .db_user }}"
+      LIMESURVEY_DB_NAME: limesurvey
+      LIMESURVEY_ADMIN_USER: "{{ .admin_user }}"
+      LIMESURVEY_ADMIN_PASSWORD: "{{ .admin_password }}"
+      LIMESURVEY_ADMIN_NAME: "${LIMESURVEY_ADMIN_NAME:-Admin}"
+      LIMESURVEY_ADMIN_EMAIL: "${LIMESURVEY_ADMIN_EMAIL:-admin@example.com}"
+      LIMESURVEY_PHP_SESSION_SAVE_HANDLER: redis
+      LIMESURVEY_PHP_SESSION_SAVE_PATH: tcp://redis:6379
+      TZ: "${TZ:-UTC}"
+    volumes:
+      - limesurvey_plugins_data:/var/www/html/plugins
+      - limesurvey_upload_data:/var/www/html/upload
+      - limesurvey_config_data:/var/www/html/application/config
+      - limesurvey_sessions_data:/var/lime/sessions
+    depends_on:
+      - mariadb
+      - redis
+  mariadb:
+    image: mariadb:11
+    restart: unless-stopped
+    environment:
+      MYSQL_USER: "{{ .db_user }}"
+      MYSQL_PASSWORD: "{{ .db_password }}"
+      MYSQL_DATABASE: limesurvey
+      MYSQL_ROOT_PASSWORD: "{{ .db_root_password }}"
+    volumes:
+      - limesurvey_mariadb_data:/var/lib/mysql
+  redis:
+    image: redis:7-alpine
+    restart: unless-stopped
+volumes:
+  limesurvey_plugins_data:
+  limesurvey_upload_data:
+  limesurvey_config_data:
+  limesurvey_sessions_data:
+  limesurvey_mariadb_data:

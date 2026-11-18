@@ -1,0 +1,56 @@
+name: Grist
+icon: grist
+description: Grist relational spreadsheet with PostgreSQL, Redis and persistent volumes.
+homepage: https://support.getgrist.com/
+category:
+  - productivity
+fields:
+  - key: domain
+    label: Domain
+    type: text
+    required: false
+    default: ""
+    placeholder: grist.example.com
+    help: Optional. Leave empty to add a domain later from the service page.
+    pattern: ^([A-Za-z0-9][A-Za-z0-9.-]*)?$
+    max_length: 253
+  - key: db_user
+    label: Database user
+    type: text
+    default: grist
+    pattern: ^[A-Za-z0-9_]{1,32}$
+    max_length: 32
+  - key: db_password
+    label: Database password
+    type: secret
+    required: true
+    generate: true
+  - key: session_secret
+    label: Session secret
+    type: secret
+    required: true
+    generate: true
+    help: Signs session cookies; use Generate for a strong value.
+  - key: oidc_issuer
+    label: OIDC issuer URL
+    type: text
+    required: true
+    placeholder: https://auth.example.com/application/o/grist/
+    pattern: ^https://[^ ]+$
+    max_length: 300
+    help: Issuer URL of the OpenID Connect provider that authenticates Grist users.
+  - key: oidc_client_id
+    label: OIDC client ID
+    type: text
+    required: true
+    pattern: ^[A-Za-z0-9._-]{1,128}$
+    max_length: 128
+  - key: oidc_client_secret
+    label: OIDC client secret
+    type: secret
+    required: true
+    help: Client secret issued by the identity provider; paste the value it shows.
+routes:
+  - service: grist
+    port: 8484
+    domain_field: domain

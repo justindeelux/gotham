@@ -1,0 +1,15 @@
+services:
+  homebox:
+    image: ghcr.io/sysadminsmedia/homebox:0.27.1
+    restart: unless-stopped
+    ports:
+      - "7745"
+    environment:
+      HBOX_OPTIONS_ALLOW_REGISTRATION: "false"
+      HBOX_LOG_LEVEL: info
+      HBOX_LOG_FORMAT: text
+      HBOX_WEB_MAX_UPLOAD_SIZE: "10"
+    volumes:
+      - homebox_data:/data
+volumes:
+  homebox_data:

@@ -1,0 +1,28 @@
+name: Heimdall
+icon: heimdall
+description: Heimdall application dashboard with a persistent named volume and a routed domain.
+homepage: https://github.com/linuxserver/Heimdall
+category:
+  - productivity
+fields:
+  - key: domain
+    label: Domain
+    type: text
+    required: false
+    default: ""
+    placeholder: home.example.com
+    help: Optional. Leave empty to add a domain later from the service page.
+    pattern: ^([A-Za-z0-9][A-Za-z0-9.-]*)?$
+    max_length: 253
+  - key: tz
+    label: Timezone
+    type: text
+    default: UTC
+    placeholder: Europe/Berlin
+    pattern: ^[A-Za-z0-9_/+-]+$
+    max_length: 64
+    help: IANA timezone name used by the container clock.
+routes:
+  - service: heimdall
+    port: 80
+    domain_field: domain

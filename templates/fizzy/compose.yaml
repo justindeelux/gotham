@@ -1,0 +1,20 @@
+services:
+  fizzy:
+    image: ghcr.io/basecamp/fizzy:main
+    restart: unless-stopped
+    ports:
+      - "80"
+    environment:
+      SECRET_KEY_BASE: "{{ .secret_key_base }}"
+      RAILS_MASTER_KEY: "{{ .master_key }}"
+      RAILS_ENV: production
+      RAILS_LOG_TO_STDOUT: "true"
+      RAILS_SERVE_STATIC_FILES: "true"
+      DATABASE_ADAPTER: sqlite
+      SOLID_QUEUE_CONNECTS_TO: "false"
+    volumes:
+      - fizzy_data:/rails/db
+      - fizzy_storage:/rails/storage
+volumes:
+  fizzy_data:
+  fizzy_storage:

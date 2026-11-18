@@ -1,0 +1,47 @@
+name: Dolibarr
+icon: dolibarr
+description: Dolibarr ERP and CRM with MariaDB and persistent named volumes.
+homepage: https://www.dolibarr.org/documentation-home.php
+category:
+  - productivity
+fields:
+  - key: domain
+    label: Domain
+    type: text
+    required: false
+    default: ""
+    placeholder: erp.example.com
+    help: Optional. Leave empty to add a domain later from the service page.
+    pattern: ^([A-Za-z0-9][A-Za-z0-9.-]*)?$
+    max_length: 253
+  - key: db_user
+    label: Database user
+    type: text
+    default: dolibarr
+    pattern: ^[A-Za-z0-9_]{1,32}$
+    max_length: 32
+  - key: db_password
+    label: Database password
+    type: secret
+    required: true
+    generate: true
+  - key: db_root_password
+    label: MariaDB root password
+    type: secret
+    required: true
+    generate: true
+  - key: admin_user
+    label: Admin user
+    type: text
+    default: admin
+    pattern: ^[A-Za-z0-9_.@-]{1,64}$
+    max_length: 64
+  - key: admin_password
+    label: Admin password
+    type: secret
+    required: true
+    generate: true
+routes:
+  - service: dolibarr
+    port: 80
+    domain_field: domain

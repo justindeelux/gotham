@@ -1,0 +1,50 @@
+name: Hi.Events
+icon: hi-events
+description: Hi.Events ticketing platform with PostgreSQL, Redis and persistent volumes.
+homepage: https://hi.events/docs
+category:
+  - productivity
+fields:
+  - key: domain
+    label: Domain
+    type: text
+    required: false
+    default: ""
+    placeholder: tickets.example.com
+    help: Optional, but sign-in needs HTTPS in production. Leave empty to add a domain later.
+    pattern: ^([A-Za-z0-9][A-Za-z0-9.-]*)?$
+    max_length: 253
+  - key: db_user
+    label: Database user
+    type: text
+    default: hievents
+    pattern: ^[A-Za-z0-9_]{1,32}$
+    max_length: 32
+  - key: db_password
+    label: Database password
+    type: secret
+    required: true
+    generate: true
+  - key: redis_password
+    label: Redis password
+    type: secret
+    required: true
+    generate: true
+  - key: app_key
+    label: Application key
+    type: secret
+    required: true
+    pattern: ^[A-Za-z0-9+/]{43}=$
+    max_length: 44
+    help: The 44-character base64 output of `openssl rand -base64 32`, without the `base64:` prefix. Encrypts application data.
+  - key: jwt_secret
+    label: JWT secret
+    type: secret
+    required: true
+    pattern: ^[A-Za-z0-9+/=_-]{32,}$
+    max_length: 512
+    help: At least 32 characters from `openssl rand -base64 32`; signs access tokens.
+routes:
+  - service: hi-events
+    port: 80
+    domain_field: domain

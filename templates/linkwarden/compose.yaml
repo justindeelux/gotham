@@ -1,0 +1,36 @@
+services:
+  linkwarden:
+    image: ghcr.io/linkwarden/linkwarden:v2.17.0
+    restart: unless-stopped
+    ports:
+      - "3000"
+    environment:
+      NEXTAUTH_URL: "https://${GOTHAM_DOMAIN:-localhost}/api/v1/auth"
+      NEXTAUTH_SECRET: "{{ .nextauth_secret }}"
+      MEILI_MASTER_KEY: "{{ .meili_key }}"
+      DATABASE_URL: "postgresql://{{ .db_user }}:{{ .db_password }}@postgresql:5432/linkwarden"
+    volumes:
+      - linkwarden_data:/data/data
+    depends_on:
+      - postgresql
+      - meilisearch
+  postgresql:
+    image: postgres:16-alpine
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: "{{ .db_user }}"
+      POSTGRES_PASSWORD: "{{ .db_password }}"
+      POSTGRES_DB: linkwarden
+    volumes:
+      - postgresql_data:/var/lib/postgresql/data
+  meilisearch:
+    image: getmeili/meilisearch:v1.13.3
+    restart: unless-stopped
+    environment:
+      MEILI_MASTER_KEY: "{{ .meili_key }}"
+    volumes:
+      - meilisearch_data:/meili_data
+volumes:
+  linkwarden_data:
+  postgresql_data:
+  meilisearch_data:

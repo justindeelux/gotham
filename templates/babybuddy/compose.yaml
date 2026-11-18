@@ -1,0 +1,15 @@
+services:
+  babybuddy:
+    image: lscr.io/linuxserver/babybuddy:2.11.0
+    restart: unless-stopped
+    ports:
+      - "8000"
+    environment:
+      PUID: "1000"
+      PGID: "1000"
+      TZ: "{{ .tz }}"
+      CSRF_TRUSTED_ORIGINS: "https://${GOTHAM_DOMAIN:-localhost}"
+    volumes:
+      - babybuddy_config:/config
+volumes:
+  babybuddy_config:

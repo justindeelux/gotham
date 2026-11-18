@@ -1,0 +1,49 @@
+name: Outline
+icon: getoutline
+description: Outline knowledge base with PostgreSQL, Redis and persistent volumes.
+homepage: https://docs.getoutline.com/s/hosting/doc/hosting-outline-nipGaCRBDu
+category:
+  - productivity
+fields:
+  - key: domain
+    label: Domain
+    type: text
+    required: false
+    default: ""
+    placeholder: docs.example.com
+    help: Optional. Leave empty to add a domain later from the service page.
+    pattern: ^([A-Za-z0-9][A-Za-z0-9.-]*)?$
+    max_length: 253
+  - key: db_user
+    label: Database user
+    type: text
+    default: outline
+    pattern: ^[A-Za-z0-9_]{1,32}$
+    max_length: 32
+  - key: db_password
+    label: Database password
+    type: secret
+    required: true
+    generate: true
+  - key: redis_password
+    label: Redis password
+    type: secret
+    required: true
+    generate: true
+  - key: secret_key
+    label: Secret key
+    type: secret
+    required: true
+    pattern: ^[0-9a-f]{64}$
+    max_length: 64
+    help: Exactly 64 hexadecimal characters from `openssl rand -hex 32`. Encrypts stored data; losing it makes existing content unreadable.
+  - key: utils_secret
+    label: Utilities secret
+    type: secret
+    required: true
+    generate: true
+    help: Signs internal utility links; use Generate for a strong value.
+routes:
+  - service: outline
+    port: 3000
+    domain_field: domain

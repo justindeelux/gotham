@@ -1,0 +1,12 @@
+services:
+  docuseal:
+    image: docuseal/docuseal:3.3.6
+    restart: unless-stopped
+    ports:
+      - "3000"
+    environment:
+      HOST: "https://${GOTHAM_DOMAIN:-localhost}"
+    volumes:
+      - docuseal_data:/data
+volumes:
+  docuseal_data:

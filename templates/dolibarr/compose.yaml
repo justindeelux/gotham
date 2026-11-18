@@ -1,0 +1,38 @@
+services:
+  dolibarr:
+    image: dolibarr/dolibarr:24.0.2
+    restart: unless-stopped
+    ports:
+      - "80"
+    environment:
+      WWW_USER_ID: "1000"
+      WWW_GROUP_ID: "1000"
+      DOLI_DB_HOST: mariadb
+      DOLI_DB_NAME: dolibarr
+      DOLI_DB_USER: "{{ .db_user }}"
+      DOLI_DB_PASSWORD: "{{ .db_password }}"
+      DOLI_URL_ROOT: "https://${GOTHAM_DOMAIN:-localhost}"
+      DOLI_ADMIN_LOGIN: "{{ .admin_user }}"
+      DOLI_ADMIN_PASSWORD: "{{ .admin_password }}"
+      DOLI_CRON: "0"
+      DOLI_INIT_DEMO: "0"
+      DOLI_COMPANY_NAME: "${DOLI_COMPANY_NAME:-MyCompany}"
+    volumes:
+      - dolibarr_docs:/var/www/documents
+      - dolibarr_custom:/var/www/html/custom
+    depends_on:
+      - mariadb
+  mariadb:
+    image: mariadb:13.0.2
+    restart: unless-stopped
+    environment:
+      MYSQL_DATABASE: dolibarr
+      MYSQL_USER: "{{ .db_user }}"
+      MYSQL_PASSWORD: "{{ .db_password }}"
+      MYSQL_ROOT_PASSWORD: "{{ .db_root_password }}"
+    volumes:
+      - dolibarr_mariadb_data:/var/lib/mysql
+volumes:
+  dolibarr_docs:
+  dolibarr_custom:
+  dolibarr_mariadb_data:

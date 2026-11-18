@@ -53,15 +53,21 @@ func TestApplicationSourceComposeMatchesDeployedDocument(t *testing.T) {
     image: example.com/app:1.0
     environment:
       DATABASE_URL: postgres://app:${POSTGRES_PASSWORD}@db:5432/app
+      LOG_LEVEL: debug-literal
 `
-	repo := &fakeRepository{app: app}
-	repo.envVars = []EnvVar{{Key: "APP_URL", Value: "https://app.example.com"}}
 	sealed, err := providers.SealSecret(testSecretKey, "db-password-value")
 	if err != nil {
 		t.Fatalf("seal secret: %v", err)
 	}
+	repo := &fakeRepository{app: app}
+	app = seedSharedApp(app, uuid.New(),
+		[]SharedVariable{{Key: "SESSION_SECRET", Value: "project-session-value"}}, nil, repo)
+	repo.app = app
+	repo.envVars = []EnvVar{
+		{Key: "APP_URL", Value: "https://app.example.com"},
+		{Key: "ADMIN_PASSWORD", Value: "plain-admin-password"},
+	}
 	repo.secrets = []Secret{{Key: "POSTGRES_PASSWORD", Ciphertext: sealed}}
-	dep := seedDeployment(t, repo, app, Deployment{Kind: KindDeploy})
 
 	node := newMockNode()
 	node.composeContainers = []ComposeContainer{{ID: "web-id", Service: "web", State: "running", Status: "Up 1 second"}}
@@ -72,11 +78,17 @@ func TestApplicationSourceComposeMatchesDeployedDocument(t *testing.T) {
 		Dial:       dialAlways(node),
 		Emitter:    NewEmitter(&recordPublisher{}),
 	})
-	o.run(context.Background(), job{app: app, dep: dep})
+	o.run(context.Background(), job{app: app, dep: seedDeployment(t, repo, app, Deployment{Kind: KindDeploy})})
 	if len(node.composeDocuments) != 1 {
 		t.Fatalf("compose documents = %d, want 1", len(node.composeDocuments))
 	}
 	deployed := node.composeDocuments[0]
+	injected := []string{"db-password-value", "https://app.example.com", "plain-admin-password", "project-session-value"}
+	for _, value := range injected {
+		if !strings.Contains(deployed, value) {
+			t.Fatalf("deployed document is missing %q:\n%s", value, deployed)
+		}
+	}
 
 	s := &Service{Orchestrator: o}
 	source, err := s.applicationSource(context.Background(), app)
@@ -89,18 +101,38 @@ func TestApplicationSourceComposeMatchesDeployedDocument(t *testing.T) {
 	if source.Raw != app.ComposeContent {
 		t.Errorf("raw = %q, want the stored content", source.Raw)
 	}
-	want, err := redactComposeDocument(deployed, map[string]string{"POSTGRES_PASSWORD": "db-password-value"})
-	if err != nil {
-		t.Fatalf("redact the deployed document: %v", err)
+	for _, value := range injected {
+		if strings.Contains(source.Deployable, value) {
+			t.Errorf("deployable holds the injected value %q:\n%s", value, source.Deployable)
+		}
 	}
-	if source.Deployable != want {
-		t.Errorf("deployable =\n%s\nwant the deployed document with the secret masked:\n%s", source.Deployable, want)
+	for _, key := range []string{"APP_URL", "ADMIN_PASSWORD", "POSTGRES_PASSWORD", "SESSION_SECRET"} {
+		if !strings.Contains(source.Deployable, key) {
+			t.Errorf("deployable is missing the injected key %s:\n%s", key, source.Deployable)
+		}
+		if !strings.Contains(source.Deployable, key+": <redacted>") {
+			t.Errorf("deployable does not show %s as masked:\n%s", key, source.Deployable)
+		}
 	}
-	if strings.Contains(source.Deployable, "db-password-value") {
-		t.Errorf("deployable holds the secret value:\n%s", source.Deployable)
+	if strings.Count(source.Deployable, "<redacted>") < len(injected) {
+		t.Errorf("deployable holds fewer masks than injected values:\n%s", source.Deployable)
 	}
-	if !strings.Contains(source.Deployable, "APP_URL") {
-		t.Errorf("deployable is missing the injected environment:\n%s", source.Deployable)
+	if !strings.Contains(source.Deployable, "debug-literal") {
+		t.Errorf("deployable masked the literal the user wrote:\n%s", source.Deployable)
+	}
+	var doc yaml.Node
+	if err := yaml.Unmarshal([]byte(source.Deployable), &doc); err != nil {
+		t.Errorf("deployable is not valid YAML: %v", err)
+	}
+
+	// The view must not touch the deploy path: a second deploy sends the same
+	// bytes as the first.
+	o.run(context.Background(), job{app: app, dep: seedDeployment(t, repo, app, Deployment{Kind: KindDeploy})})
+	if len(node.composeDocuments) != 2 {
+		t.Fatalf("compose documents = %d, want 2", len(node.composeDocuments))
+	}
+	if node.composeDocuments[1] != deployed {
+		t.Errorf("second deploy document =\n%s\nwant the first, unmasked:\n%s", node.composeDocuments[1], deployed)
 	}
 }
 
@@ -149,6 +181,45 @@ func TestApplicationSourceMasksReencodedSecrets(t *testing.T) {
 	var doc yaml.Node
 	if err := yaml.Unmarshal([]byte(deployable), &doc); err != nil {
 		t.Errorf("deployable is not valid YAML: %v", err)
+	}
+}
+
+func TestApplicationSourceLeavesShortInjectedValues(t *testing.T) {
+	userID := uuid.New()
+	app := testComposeApp(userID)
+	app.ComposeContent = `services:
+  web:
+    image: example.com/app:1.0
+    environment:
+      DEBUG: "true"
+      REPLICAS: "1"
+`
+	repo := &fakeRepository{app: app}
+	repo.envVars = []EnvVar{
+		{Key: "EMPTY", Value: ""},
+		{Key: "ONE_CHAR", Value: "x"},
+		{Key: "FLAG", Value: "true"},
+		{Key: "COUNT", Value: "1"},
+	}
+	s := &Service{Orchestrator: newTestOrchestrator(Config{Repository: repo, Source: &fakeSource{}})}
+	source, err := s.applicationSource(context.Background(), app)
+	if err != nil {
+		t.Fatalf("applicationSource = %v, want nil", err)
+	}
+	if strings.Contains(source.Deployable, "<redacted>") {
+		t.Errorf("deployable masked a short or boolean-like value:\n%s", source.Deployable)
+	}
+	var doc yaml.Node
+	if err := yaml.Unmarshal([]byte(source.Deployable), &doc); err != nil {
+		t.Fatalf("deployable is not valid YAML: %v", err)
+	}
+	for _, want := range []string{"example.com/app:1.0", "DEBUG", "REPLICAS", "FLAG", "COUNT"} {
+		if !strings.Contains(source.Deployable, want) {
+			t.Errorf("deployable is missing %q:\n%s", want, source.Deployable)
+		}
+	}
+	if !strings.Contains(source.Deployable, "true") {
+		t.Errorf("deployable lost the boolean it held:\n%s", source.Deployable)
 	}
 }
 

@@ -1,6 +1,6 @@
 name: BookStack
 icon: bookstack
-description: BookStack wiki with MariaDB, persistent named volumes and an optional routed domain.
+description: "BookStack wiki with MariaDB and persistent named volumes. First login is admin@admin.com with password \"password\"; change it after signing in."
 homepage: https://www.bookstackapp.com/docs/
 category:
   - cms

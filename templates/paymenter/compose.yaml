@@ -25,9 +25,16 @@ services:
       - paymenter_themes:/app/themes
       - paymenter_storage:/app/storage/app
       - paymenter_public_storage:/app/storage/app/public
+    healthcheck:
+      test: ["CMD-SHELL", "curl -sf http://localhost:80 || exit 1"]
+      interval: 10s
+      timeout: 1s
+      retries: 3
     depends_on:
-      - mariadb
-      - redis
+      mariadb:
+        condition: service_healthy
+      redis:
+        condition: service_started
   mariadb:
     image: mariadb:12.3
     restart: unless-stopped
@@ -38,12 +45,22 @@ services:
       MYSQL_PASSWORD: "{{ .db_password }}"
     volumes:
       - paymenter_mariadb_data:/var/lib/mysql
+    healthcheck:
+      test: ["CMD", "healthcheck.sh", "--connect", "--innodb_initialized"]
+      interval: 5s
+      timeout: 20s
+      retries: 10
   redis:
     image: redis:8.10.3-alpine
     restart: unless-stopped
     command: ["redis-server", "--requirepass", "{{ .redis_password }}"]
     volumes:
       - paymenter_redis_data:/data
+    healthcheck:
+      test: ["CMD-SHELL", "redis-cli ping || exit 1"]
+      interval: 10s
+      timeout: 1s
+      retries: 3
 volumes:
   paymenter_logs:
   paymenter_extensions:

@@ -8,6 +8,11 @@ services:
       - cockpit_config:/var/www/html/config
       - cockpit_spaces:/var/www/html/.spaces
       - cockpit_storage:/var/www/html/storage
+    healthcheck:
+      test: ["CMD", "wget", "-q", "--spider", "http://127.0.0.1/api/system/healthcheck"]
+      interval: 5s
+      timeout: 20s
+      retries: 10
 volumes:
   cockpit_config:
   cockpit_spaces:

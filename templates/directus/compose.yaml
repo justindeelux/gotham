@@ -20,6 +20,11 @@ services:
       - directus_uploads:/directus/uploads
       - directus_extensions:/directus/extensions
       - directus_templates:/directus/templates
+    healthcheck:
+      test: ["CMD", "wget", "-q", "--spider", "http://127.0.0.1:8055/server/ping"]
+      interval: 5s
+      timeout: 20s
+      retries: 10
 volumes:
   directus_database:
   directus_uploads:

@@ -25,8 +25,9 @@ fields:
     label: Cron token
     type: secret
     required: true
-    generate: true
-    help: Protects the /api/v1/cron endpoint called by the scheduler.
+    pattern: ^[A-Za-z0-9]{32}$
+    max_length: 32
+    help: Exactly 32 characters. Run `openssl rand -hex 16` and paste the result; the cron container calls the endpoint with it.
   - key: db_name
     label: Database name
     type: text

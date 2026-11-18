@@ -16,8 +16,14 @@ services:
       DB_DATABASE: "{{ .db_name }}"
     volumes:
       - bookstack_data:/config
+    healthcheck:
+      test: ["CMD-SHELL", "curl -f http://127.0.0.1:80/"]
+      interval: 5s
+      timeout: 20s
+      retries: 10
     depends_on:
-      - mariadb
+      mariadb:
+        condition: service_healthy
   mariadb:
     image: lscr.io/linuxserver/mariadb:11.8.9
     restart: unless-stopped
@@ -30,6 +36,11 @@ services:
       MYSQL_PASSWORD: "{{ .db_password }}"
     volumes:
       - bookstack_mariadb_data:/config
+    healthcheck:
+      test: ["CMD", "mysqladmin", "ping", "-h", "127.0.0.1"]
+      interval: 5s
+      timeout: 20s
+      retries: 10
 volumes:
   bookstack_data:
   bookstack_mariadb_data:

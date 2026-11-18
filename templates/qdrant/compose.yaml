@@ -8,5 +8,10 @@ services:
       QDRANT__SERVICE__API_KEY: "{{ .api_key }}"
     volumes:
       - qdrant_storage:/qdrant/storage
+    healthcheck:
+      test: ["CMD-SHELL", "bash -c ':> /dev/tcp/127.0.0.1/6333' || exit 1"]
+      interval: 5s
+      timeout: 5s
+      retries: 3
 volumes:
   qdrant_storage:

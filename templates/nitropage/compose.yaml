@@ -10,5 +10,10 @@ services:
       DATABASE_URL: "file:../.data/dev.db"
     volumes:
       - nitropage_data:/app/.data
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://127.0.0.1:3000/admin"]
+      interval: 2s
+      timeout: 10s
+      retries: 15
 volumes:
   nitropage_data:

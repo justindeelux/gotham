@@ -14,6 +14,11 @@ services:
       - drupal_profiles:/var/www/html/profiles
       - drupal_themes:/var/www/html/themes
       - drupal_sites:/var/www/html/sites
+    healthcheck:
+      test: ["CMD-SHELL", "curl -f http://localhost:80 || exit 1"]
+      interval: 30s
+      timeout: 10s
+      retries: 5
     depends_on:
       - postgres
   postgres:
@@ -25,6 +30,11 @@ services:
       POSTGRES_PASSWORD: "{{ .db_password }}"
     volumes:
       - drupal_postgres_data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U $${POSTGRES_USER} -d $${POSTGRES_DB}"]
+      interval: 5s
+      timeout: 10s
+      retries: 20
 volumes:
   drupal_modules:
   drupal_profiles:

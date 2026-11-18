@@ -13,8 +13,14 @@ services:
       database__connection__database: "{{ .db_name }}"
     volumes:
       - ghost_content:/var/lib/ghost/content
+    healthcheck:
+      test: ["CMD", "echo", "ok"]
+      interval: 5s
+      timeout: 20s
+      retries: 10
     depends_on:
-      - mysql
+      mysql:
+        condition: service_healthy
   mysql:
     image: mysql:8.0
     restart: unless-stopped
@@ -25,6 +31,11 @@ services:
       MYSQL_ROOT_PASSWORD: "{{ .db_root_password }}"
     volumes:
       - ghost_mysql_data:/var/lib/mysql
+    healthcheck:
+      test: ["CMD", "mysqladmin", "ping", "-h", "127.0.0.1"]
+      interval: 5s
+      timeout: 20s
+      retries: 10
 volumes:
   ghost_content:
   ghost_mysql_data:

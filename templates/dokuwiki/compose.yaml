@@ -9,5 +9,10 @@ services:
       PGID: "1000"
     volumes:
       - dokuwiki_config:/config
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://127.0.0.1:80"]
+      interval: 2s
+      timeout: 10s
+      retries: 15
 volumes:
   dokuwiki_config:

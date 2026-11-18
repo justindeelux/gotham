@@ -1,6 +1,6 @@
 name: Sure
 icon: sure
-description: Sure personal finance platform with PostgreSQL, Valkey, a background worker and an optional routed domain.
+description: "Sure personal finance platform with PostgreSQL, Valkey and a background worker. Sign-up is open, so the first visitor can create the admin account."
 homepage: https://github.com/we-promise/sure
 category:
   - finance

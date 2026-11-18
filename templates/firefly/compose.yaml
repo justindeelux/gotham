@@ -16,8 +16,14 @@ services:
       TRUSTED_PROXIES: "*"
     volumes:
       - firefly_upload:/var/www/html/storage/upload
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://127.0.0.1:8080/health"]
+      interval: 5s
+      timeout: 20s
+      retries: 10
     depends_on:
-      - mysql
+      mysql:
+        condition: service_healthy
   mysql:
     image: mariadb:12
     restart: unless-stopped
@@ -28,6 +34,23 @@ services:
       MYSQL_ROOT_PASSWORD: "{{ .db_root_password }}"
     volumes:
       - firefly_mysql_data:/var/lib/mysql
+    healthcheck:
+      test: ["CMD", "mariadb-admin", "ping", "-h", "127.0.0.1", "-uroot", "-p{{ .db_root_password }}"]
+      interval: 5s
+      timeout: 20s
+      retries: 10
+  cron:
+    image: alpine:3.24.4
+    restart: unless-stopped
+    entrypoint: ["sh", "-c", "echo \"0 3 * * * wget -qO- http://firefly:8080/api/v1/cron/$$STATIC_CRON_TOKEN\" | crontab - && exec crond -f -L /dev/stdout"]
+    environment:
+      STATIC_CRON_TOKEN: "{{ .cron_token }}"
+    healthcheck:
+      test: ["CMD-SHELL", "crontab -l >/dev/null 2>&1 || exit 1"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 40s
 volumes:
   firefly_upload:
   firefly_mysql_data:

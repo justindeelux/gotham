@@ -15,8 +15,14 @@ services:
       - grimmory_data:/app/data
       - grimmory_books:/books
       - grimmory_bookdrop:/bookdrop
+    healthcheck:
+      test: ["CMD-SHELL", "wget --no-verbose --tries=1 --spider http://127.0.0.1/health || exit 1"]
+      interval: 10s
+      timeout: 5s
+      retries: 10
     depends_on:
-      - mariadb
+      mariadb:
+        condition: service_healthy
   mariadb:
     image: mariadb:12
     restart: unless-stopped
@@ -27,6 +33,11 @@ services:
       MARIADB_DATABASE: "{{ .db_name }}"
     volumes:
       - grimmory_mariadb_data:/var/lib/mysql
+    healthcheck:
+      test: ["CMD", "healthcheck.sh", "--connect", "--innodb_initialized"]
+      interval: 10s
+      timeout: 5s
+      retries: 10
 volumes:
   grimmory_data:
   grimmory_books:

@@ -19,8 +19,15 @@ services:
       MCP_ENABLED: "false"
     volumes:
       - portabase_data:/data
+    healthcheck:
+      test: ["CMD-SHELL", "curl -f http://localhost/api/health"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 60s
     depends_on:
-      - postgres
+      postgres:
+        condition: service_healthy
   postgres:
     image: postgres:18-alpine
     restart: unless-stopped
@@ -30,6 +37,11 @@ services:
       POSTGRES_PASSWORD: "{{ .db_password }}"
     volumes:
       - portabase_postgres_data:/var/lib/postgresql
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U $${POSTGRES_USER} -d $${POSTGRES_DB}"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
 volumes:
   portabase_data:
   portabase_postgres_data:

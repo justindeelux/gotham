@@ -1,6 +1,6 @@
 name: MediaWiki
 icon: mediawiki
-description: MediaWiki with a persistent named volume holding the install and uploaded images, plus an optional routed domain.
+description: "MediaWiki with a persistent volume for the whole document root and an optional routed domain. An image tag bump does not update the code already copied into that volume."
 homepage: https://www.mediawiki.org
 category:
   - cms

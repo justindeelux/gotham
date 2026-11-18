@@ -20,6 +20,11 @@ services:
       - gramps_db:/root/.gramps/grampsdb
       - gramps_media:/app/media
       - gramps_tmp:/tmp
+    healthcheck:
+      test: ["CMD-SHELL", "wget -O - http://localhost:5000 > /dev/null 2>&1"]
+      interval: 5s
+      timeout: 10s
+      retries: 3
     depends_on:
       - grampsweb_redis
   grampsweb_celery:
@@ -40,6 +45,11 @@ services:
       - gramps_db:/root/.gramps/grampsdb
       - gramps_media:/app/media
       - gramps_tmp:/tmp
+    healthcheck:
+      test: ["CMD-SHELL", "SECRET_KEY=\"$(cat secret/secret)\" celery -A gramps_webapi.celery status || exit 1"]
+      interval: 5s
+      timeout: 10s
+      retries: 3
     depends_on:
       - grampsweb_redis
   grampsweb_redis:
@@ -47,6 +57,11 @@ services:
     restart: unless-stopped
     volumes:
       - gramps_redis_data:/data
+    healthcheck:
+      test: ["CMD-SHELL", "redis-cli ping | grep PONG"]
+      interval: 5s
+      timeout: 10s
+      retries: 3
 volumes:
   gramps_users:
   gramps_index:

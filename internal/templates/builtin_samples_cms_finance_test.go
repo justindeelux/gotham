@@ -20,22 +20,11 @@ func init() {
 	builtinSamples["firefly"] = map[string]any{
 		"domain":           "app.example.test",
 		"app_key":          laravelKey,
-		"cron_token":       secret,
+		"cron_token":       strings.Repeat("ab", 16),
 		"db_name":          "firefly",
 		"db_user":          "firefly",
 		"db_password":      secret,
 		"db_root_password": secret,
-	}
-	builtinSamples["invoice-ninja"] = map[string]any{
-		"domain":           "app.example.test",
-		"app_key":          laravelKey,
-		"admin_email":      "admin@example.test",
-		"admin_password":   secret,
-		"db_name":          "invoiceninja",
-		"db_user":          "invoiceninja",
-		"db_password":      secret,
-		"db_root_password": secret,
-		"redis_password":   secret,
 	}
 	builtinSamples["paymenter"] = map[string]any{
 		"domain":           "app.example.test",

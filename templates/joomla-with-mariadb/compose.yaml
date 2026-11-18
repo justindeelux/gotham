@@ -11,8 +11,14 @@ services:
       JOOMLA_DB_NAME: "{{ .db_name }}"
     volumes:
       - joomla_data:/var/www/html
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://127.0.0.1"]
+      interval: 2s
+      timeout: 10s
+      retries: 10
     depends_on:
-      - mariadb
+      mariadb:
+        condition: service_healthy
   mariadb:
     image: mariadb:11
     restart: unless-stopped
@@ -23,6 +29,11 @@ services:
       MYSQL_PASSWORD: "{{ .db_password }}"
     volumes:
       - joomla_mariadb_data:/var/lib/mysql
+    healthcheck:
+      test: ["CMD", "healthcheck.sh", "--connect", "--innodb_initialized"]
+      interval: 5s
+      timeout: 20s
+      retries: 10
 volumes:
   joomla_data:
   joomla_mariadb_data:

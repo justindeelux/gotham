@@ -9,5 +9,10 @@ services:
     command: ["--sqlite-path", "/data/denokv.sqlite", "serve", "--access-token", "{{ .access_token }}"]
     volumes:
       - denokv_data:/data
+    healthcheck:
+      test: ["CMD", "nc", "-zv", "127.0.0.1", "4512"]
+      interval: 5s
+      timeout: 5s
+      retries: 3
 volumes:
   denokv_data:

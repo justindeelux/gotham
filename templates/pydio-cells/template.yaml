@@ -1,0 +1,42 @@
+name: Pydio Cells
+icon: pydio-cells
+description: Pydio Cells file sharing with MariaDB and persistent data volumes.
+homepage: https://docs.pydio.com/
+category:
+  - storage
+fields:
+  - key: domain
+    label: Domain
+    type: text
+    required: false
+    default: ""
+    placeholder: files.example.com
+    help: Optional. Leave empty to add a domain later from the service page.
+    pattern: ^([A-Za-z0-9][A-Za-z0-9.-]*)?$
+    max_length: 253
+  - key: mysql_user
+    label: Database user
+    type: text
+    default: cells
+    pattern: ^[A-Za-z0-9_]{1,32}$
+    max_length: 32
+  - key: mysql_password
+    label: Database password
+    type: secret
+    required: true
+    generate: true
+  - key: mysql_root_password
+    label: MariaDB root password
+    type: secret
+    required: true
+    generate: true
+  - key: mysql_database
+    label: Database name
+    type: text
+    default: cells
+    pattern: ^[A-Za-z0-9_]{1,64}$
+    max_length: 64
+routes:
+  - service: cells
+    port: 8080
+    domain_field: domain

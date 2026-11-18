@@ -1,0 +1,20 @@
+name: Vault
+icon: vault
+description: HashiCorp Vault secret store with a persistent file storage volume.
+homepage: https://developer.hashicorp.com/vault/docs/deploy/run-container
+category:
+  - security
+fields:
+  - key: domain
+    label: Domain
+    type: text
+    required: false
+    default: ""
+    placeholder: vault.example.com
+    help: Optional. Leave empty to add a domain later from the service page.
+    pattern: ^([A-Za-z0-9][A-Za-z0-9.-]*)?$
+    max_length: 253
+routes:
+  - service: vault
+    port: 8200
+    domain_field: domain

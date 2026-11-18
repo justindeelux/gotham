@@ -1,0 +1,33 @@
+services:
+  supertokens:
+    image: registry.supertokens.io/supertokens/supertokens-postgresql:12.5.0
+    restart: unless-stopped
+    ports:
+      - "3567"
+    environment:
+      API_KEYS: "{{ .api_key }}"
+      POSTGRESQL_CONNECTION_URI: "postgresql://{{ .db_user }}:{{ .db_password }}@postgres:5432/{{ .db_name }}"
+    depends_on:
+      postgres:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD-SHELL", "exec 3<>/dev/tcp/127.0.0.1/3567"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+  postgres:
+    image: postgres:16
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: "{{ .db_user }}"
+      POSTGRES_PASSWORD: "{{ .db_password }}"
+      POSTGRES_DB: "{{ .db_name }}"
+    volumes:
+      - supertokens_db:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U $${POSTGRES_USER} -d $${POSTGRES_DB}"]
+      interval: 5s
+      timeout: 5s
+      retries: 5
+volumes:
+  supertokens_db:

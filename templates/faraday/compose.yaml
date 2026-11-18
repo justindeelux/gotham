@@ -1,0 +1,54 @@
+services:
+  faraday:
+    image: faradaysec/faraday:5.25.4
+    restart: unless-stopped
+    entrypoint: ["/entrypoint.sh"]
+    ports:
+      - "5985"
+    environment:
+      PGSQL_USER: "{{ .db_user }}"
+      PGSQL_PASSWD: "{{ .db_password }}"
+      PGSQL_DBNAME: "{{ .db_name }}"
+      PGSQL_HOST: postgresql
+      REDIS_SERVER: redis
+    volumes:
+      - faraday_data:/home/faraday/.faraday
+    depends_on:
+      postgresql:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "nc", "-z", "localhost", "5985"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+  postgresql:
+    image: postgres:18.7
+    restart: unless-stopped
+    environment:
+      POSTGRES_PASSWORD: "{{ .db_password }}"
+      POSTGRES_USER: "{{ .db_user }}"
+      POSTGRES_DB: "{{ .db_name }}"
+    volumes:
+      - faraday_db:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -d $${POSTGRES_DB} -U $${POSTGRES_USER}"]
+      interval: 15s
+      timeout: 10s
+      retries: 15
+  redis:
+    image: redis:8.10.3-alpine
+    restart: unless-stopped
+    command: "--save 60 1 --loglevel warning"
+    volumes:
+      - faraday_redis:/data
+    healthcheck:
+      test: ["CMD-SHELL", "redis-cli ping | grep PONG"]
+      interval: 15s
+      timeout: 10s
+      retries: 15
+volumes:
+  faraday_data:
+  faraday_db:
+  faraday_redis:

@@ -1,0 +1,28 @@
+name: Newt (Pangolin)
+icon: newt-pangolin
+description: Pangolin tunnel client that exposes local services through the Pangolin edge.
+homepage: https://docs.digpangolin.com/manage/sites/install-site
+category:
+  - proxy
+fields:
+  - key: endpoint
+    label: Pangolin endpoint
+    type: text
+    required: true
+    placeholder: https://pangolin.example.com
+    help: Base URL of your Pangolin instance.
+    pattern: ^https://[A-Za-z0-9][A-Za-z0-9.:/-]*$
+    max_length: 300
+  - key: newt_id
+    label: Site ID
+    type: text
+    required: true
+    placeholder: my-site
+    help: Site ID shown on the Pangolin site page.
+    pattern: ^[A-Za-z0-9_-]+$
+    max_length: 128
+  - key: newt_secret
+    label: Site secret
+    type: secret
+    required: true
+    help: Secret shown on the Pangolin site page. It must match the server, so paste it instead of generating one.

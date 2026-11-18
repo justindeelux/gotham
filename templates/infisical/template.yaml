@@ -1,0 +1,51 @@
+name: Infisical
+icon: infisical
+description: Infisical secrets platform with PostgreSQL and Redis for durable state.
+homepage: https://infisical.com/docs/documentation/getting-started/introduction
+category:
+  - security
+fields:
+  - key: domain
+    label: Domain
+    type: text
+    required: false
+    default: ""
+    placeholder: secrets.example.com
+    help: Optional. Leave empty to add a domain later from the service page.
+    pattern: ^([A-Za-z0-9][A-Za-z0-9.-]*)?$
+    max_length: 253
+  - key: encryption_key
+    label: Encryption key
+    type: secret
+    required: true
+    help: A 16-byte hex string; generate with "openssl rand -hex 16". Losing it makes every stored secret unreadable.
+    pattern: ^[0-9a-f]{32}$
+    max_length: 32
+  - key: auth_secret
+    label: Auth secret
+    type: secret
+    required: true
+    help: A 32-byte base64 string; generate with "openssl rand -base64 32". Signs session tokens and JWTs.
+    pattern: ^[A-Za-z0-9+/]{43}=$
+    max_length: 44
+  - key: db_user
+    label: Database user
+    type: text
+    default: infisical
+    pattern: ^[A-Za-z0-9_]{1,32}$
+    max_length: 32
+  - key: db_password
+    label: Database password
+    type: secret
+    required: true
+    generate: true
+  - key: db_name
+    label: Database name
+    type: text
+    default: infisical
+    pattern: ^[A-Za-z0-9_]{1,64}$
+    max_length: 64
+routes:
+  - service: backend
+    port: 8080
+    domain_field: domain

@@ -1,0 +1,21 @@
+services:
+  vault:
+    image: hashicorp/vault:2.2.2
+    restart: unless-stopped
+    command: ["server"]
+    ports:
+      - "8200"
+    environment:
+      VAULT_ADDR: http://127.0.0.1:8200
+      VAULT_API_ADDR: "https://${GOTHAM_DOMAIN:-localhost}"
+      VAULT_LOCAL_CONFIG: '{"ui":true,"disable_mlock":true,"storage":{"file":{"path":"/vault/file"} },"listener":{"tcp":{"address":"0.0.0.0:8200","tls_disable":true} } }'
+    volumes:
+      - vault_data:/vault/file
+    healthcheck:
+      test: ["CMD-SHELL", "wget -qO- 'http://127.0.0.1:8200/v1/sys/health?standbyok=true&sealedcode=200&uninitcode=200' > /dev/null"]
+      interval: 10s
+      timeout: 5s
+      retries: 12
+      start_period: 15s
+volumes:
+  vault_data:

@@ -1,0 +1,44 @@
+name: Authentik
+icon: authentik
+description: Authentik identity provider with PostgreSQL, a server and a background worker.
+homepage: https://docs.goauthentik.io/docs/installation/docker-compose
+category:
+  - auth
+fields:
+  - key: domain
+    label: Domain
+    type: text
+    required: false
+    default: ""
+    placeholder: auth.example.com
+    help: Optional. Leave empty to add a domain later from the service page.
+    pattern: ^([A-Za-z0-9][A-Za-z0-9.-]*)?$
+    max_length: 253
+  - key: secret_key
+    label: Secret key
+    type: secret
+    required: true
+    help: At least 50 random characters; generate with "openssl rand -hex 32". Signs sessions and tokens.
+    pattern: ^[A-Za-z0-9+/=_-]{50,128}$
+    max_length: 128
+  - key: db_user
+    label: Database user
+    type: text
+    default: authentik
+    pattern: ^[A-Za-z0-9_]{1,32}$
+    max_length: 32
+  - key: db_password
+    label: Database password
+    type: secret
+    required: true
+    generate: true
+  - key: db_name
+    label: Database name
+    type: text
+    default: authentik
+    pattern: ^[A-Za-z0-9_]{1,64}$
+    max_length: 64
+routes:
+  - service: authentik-server
+    port: 9000
+    domain_field: domain

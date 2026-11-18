@@ -1,0 +1,20 @@
+name: PrivateBin
+icon: privatebin
+description: PrivateBin zero-knowledge pastebin with a persistent data volume.
+homepage: https://github.com/PrivateBin/PrivateBin/blob/master/doc/README.md
+category:
+  - security
+fields:
+  - key: domain
+    label: Domain
+    type: text
+    required: false
+    default: ""
+    placeholder: paste.example.com
+    help: Optional. Leave empty to add a domain later from the service page.
+    pattern: ^([A-Za-z0-9][A-Za-z0-9.-]*)?$
+    max_length: 253
+routes:
+  - service: privatebin
+    port: 8080
+    domain_field: domain

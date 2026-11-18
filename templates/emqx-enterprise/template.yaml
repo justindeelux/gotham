@@ -1,0 +1,26 @@
+name: EMQX Enterprise
+icon: emqx-enterprise
+description: EMQX MQTT broker with a dashboard, persistent data and logs.
+homepage: https://www.emqx.io/docs/en/latest/deploy/install-docker.html
+category:
+  - networking
+fields:
+  - key: domain
+    label: Domain
+    type: text
+    required: false
+    default: ""
+    placeholder: mqtt.example.com
+    help: Optional. Leave empty to add a domain later from the service page.
+    pattern: ^([A-Za-z0-9][A-Za-z0-9.-]*)?$
+    max_length: 253
+  - key: dashboard_password
+    label: Dashboard password
+    type: secret
+    required: true
+    generate: true
+    help: Initial password of the dashboard admin user.
+routes:
+  - service: emqx
+    port: 18083
+    domain_field: domain

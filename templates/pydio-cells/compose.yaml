@@ -1,0 +1,32 @@
+services:
+  cells:
+    image: pydio/cells:5.1
+    restart: unless-stopped
+    ports:
+      - "8080"
+    environment:
+      CELLS_SITE_EXTERNAL: "https://${GOTHAM_DOMAIN:-localhost}"
+      CELLS_SITE_NO_TLS: "1"
+    volumes:
+      - pydio_cells:/var/cells
+    depends_on:
+      mariadb:
+        condition: service_healthy
+  mariadb:
+    image: mariadb:11
+    restart: unless-stopped
+    environment:
+      MYSQL_ROOT_PASSWORD: "{{ .mysql_root_password }}"
+      MYSQL_DATABASE: "{{ .mysql_database }}"
+      MYSQL_USER: "{{ .mysql_user }}"
+      MYSQL_PASSWORD: "{{ .mysql_password }}"
+    volumes:
+      - pydio_mysql:/var/lib/mysql
+    healthcheck:
+      test: ["CMD", "healthcheck.sh", "--connect", "--innodb_initialized"]
+      interval: 10s
+      timeout: 20s
+      retries: 5
+volumes:
+  pydio_cells:
+  pydio_mysql:

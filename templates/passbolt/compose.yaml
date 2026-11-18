@@ -1,0 +1,43 @@
+services:
+  passbolt:
+    image: passbolt/passbolt:5.18.0-1-ce
+    restart: unless-stopped
+    ports:
+      - "80"
+    environment:
+      APP_FULL_BASE_URL: "https://{{ .domain }}"
+      DATASOURCES_DEFAULT_HOST: mariadb
+      DATASOURCES_DEFAULT_USERNAME: "{{ .db_user }}"
+      DATASOURCES_DEFAULT_PASSWORD: "{{ .db_password }}"
+      DATASOURCES_DEFAULT_DATABASE: "{{ .db_name }}"
+    volumes:
+      - passbolt_gpg:/etc/passbolt/gpg
+      - passbolt_jwt:/etc/passbolt/jwt
+    command: ["/usr/bin/wait-for.sh", "-t", "0", "mariadb:3306", "--", "/docker-entrypoint.sh"]
+    depends_on:
+      mariadb:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://127.0.0.1/"]
+      interval: 5s
+      timeout: 20s
+      retries: 10
+  mariadb:
+    image: mariadb:11
+    restart: unless-stopped
+    environment:
+      MARIADB_ROOT_PASSWORD: "{{ .mariadb_root_password }}"
+      MARIADB_DATABASE: "{{ .db_name }}"
+      MARIADB_USER: "{{ .db_user }}"
+      MARIADB_PASSWORD: "{{ .db_password }}"
+    volumes:
+      - passbolt_mariadb_data:/var/lib/mysql
+    healthcheck:
+      test: ["CMD", "healthcheck.sh", "--connect", "--innodb_initialized"]
+      interval: 5s
+      timeout: 20s
+      retries: 10
+volumes:
+  passbolt_gpg:
+  passbolt_jwt:
+  passbolt_mariadb_data:

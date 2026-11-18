@@ -1,0 +1,23 @@
+services:
+  duplicati:
+    image: lscr.io/linuxserver/duplicati:v2.4.1.0_stable_2026-10-29-ls318
+    restart: unless-stopped
+    ports:
+      - "8200"
+    environment:
+      PUID: "1000"
+      PGID: "1000"
+      TZ: "{{ .timezone }}"
+      SETTINGS_ENCRYPTION_KEY: "{{ .encryption_key }}"
+      DUPLICATI__WEBSERVICE_PASSWORD: "{{ .web_password }}"
+    volumes:
+      - duplicati_config:/config
+      - duplicati_backups:/backups
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://127.0.0.1:8200"]
+      interval: 2s
+      timeout: 10s
+      retries: 15
+volumes:
+  duplicati_config:
+  duplicati_backups:

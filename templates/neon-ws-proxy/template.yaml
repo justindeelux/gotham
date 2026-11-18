@@ -1,0 +1,37 @@
+name: Neon WebSocket Proxy
+icon: neon-ws-proxy
+description: WebSocket proxy that exposes a PostgreSQL database to serverless clients.
+homepage: https://neon.tech
+category:
+  - proxy
+fields:
+  - key: domain
+    label: Domain
+    type: text
+    required: false
+    default: ""
+    placeholder: pg.example.com
+    help: Optional. Leave empty to add a domain later from the service page.
+    pattern: ^([A-Za-z0-9][A-Za-z0-9.-]*)?$
+    max_length: 253
+  - key: db_user
+    label: Database user
+    type: text
+    default: postgres
+    pattern: ^[A-Za-z0-9_]{1,32}$
+    max_length: 32
+  - key: db_password
+    label: Database password
+    type: secret
+    required: true
+    generate: true
+  - key: db_name
+    label: Database name
+    type: text
+    default: postgres
+    pattern: ^[A-Za-z0-9_]{1,64}$
+    max_length: 64
+routes:
+  - service: neon-proxy
+    port: 80
+    domain_field: domain

@@ -1,0 +1,20 @@
+name: CyberChef
+icon: cyberchef
+description: CyberChef web app for encryption, encoding, compression and data analysis.
+homepage: https://github.com/gchq/CyberChef
+category:
+  - security
+fields:
+  - key: domain
+    label: Domain
+    type: text
+    required: false
+    default: ""
+    placeholder: chef.example.com
+    help: Optional. Leave empty to add a domain later from the service page.
+    pattern: ^([A-Za-z0-9][A-Za-z0-9.-]*)?$
+    max_length: 253
+routes:
+  - service: cyberchef
+    port: 8080
+    domain_field: domain

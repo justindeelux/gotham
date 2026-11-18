@@ -1,0 +1,26 @@
+name: Cap CAPTCHA
+icon: cap-captcha
+description: Self-hosted proof-of-work CAPTCHA with a Valkey cache and a persistent data volume.
+homepage: https://capjs.js.org/guide/
+category:
+  - security
+fields:
+  - key: domain
+    label: Domain
+    type: text
+    required: false
+    default: ""
+    placeholder: captcha.example.com
+    help: Optional. Leave empty to add a domain later from the service page.
+    pattern: ^([A-Za-z0-9][A-Za-z0-9.-]*)?$
+    max_length: 253
+  - key: admin_key
+    label: Admin key
+    type: secret
+    required: true
+    generate: true
+    help: Protects the CAPTCHA admin API; use Generate for a strong value.
+routes:
+  - service: cap
+    port: 3000
+    domain_field: domain

@@ -1,0 +1,17 @@
+services:
+  filebrowser:
+    image: filebrowser/filebrowser:v2.63.23
+    restart: unless-stopped
+    ports:
+      - "80"
+    environment:
+      FB_DATABASE: /data/filebrowser.db
+      FB_ROOT: /srv
+      FB_ADDRESS: 0.0.0.0
+      FB_PORT: "80"
+    volumes:
+      - filebrowser_data:/data
+      - filebrowser_files:/srv
+volumes:
+  filebrowser_data:
+  filebrowser_files:

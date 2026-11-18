@@ -18,28 +18,16 @@ fields:
     label: Secret key base
     type: secret
     required: true
-    generate: true
-    help: Signs cookies and sessions; use Generate for a strong value.
+    pattern: ^[A-Za-z0-9+/=_-]{64,}$
+    max_length: 512
+    help: At least 64 characters from `openssl rand -hex 64`; Rails signs cookies and sessions with it.
   - key: master_key
     label: Rails master key
     type: secret
     required: true
-    generate: true
-    help: Encrypts Rails credentials; keep it with the service.
-  - key: vapid_private_key
-    label: VAPID private key
-    type: text
-    required: false
-    default: ""
-    max_length: 512
-    help: Optional. Web push notifications need a VAPID key pair.
-  - key: vapid_public_key
-    label: VAPID public key
-    type: text
-    required: false
-    default: ""
-    max_length: 512
-    help: Optional. The public half of the VAPID key pair.
+    pattern: ^[0-9a-f]{32}$
+    max_length: 32
+    help: Exactly 32 hexadecimal characters from `openssl rand -hex 16`; keep it with the service.
 routes:
   - service: fizzy
     port: 80

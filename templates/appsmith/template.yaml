@@ -14,11 +14,11 @@ fields:
     help: Optional. Leave empty to add a domain later from the service page.
     pattern: ^([A-Za-z0-9][A-Za-z0-9.-]*)?$
     max_length: 253
-  - key: telemetry
-    label: Send telemetry
+  - key: disable_telemetry
+    label: Disable telemetry
     type: bool
     default: false
-    help: Allow Appsmith to send anonymous usage telemetry.
+    help: Stop Appsmith from sending anonymous usage telemetry.
 routes:
   - service: appsmith
     port: 80

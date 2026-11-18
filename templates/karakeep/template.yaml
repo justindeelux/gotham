@@ -25,13 +25,6 @@ fields:
     type: secret
     required: true
     generate: true
-  - key: openai_key
-    label: OpenAI API key
-    type: text
-    required: false
-    default: ""
-    max_length: 256
-    help: Optional. Enables AI tagging and summarising of bookmarks.
 routes:
   - service: web
     port: 3000

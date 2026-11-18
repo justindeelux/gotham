@@ -31,6 +31,25 @@ fields:
     required: true
     generate: true
     help: Signs session cookies; use Generate for a strong value.
+  - key: oidc_issuer
+    label: OIDC issuer URL
+    type: text
+    required: true
+    placeholder: https://auth.example.com/application/o/grist/
+    pattern: ^https://[^ ]+$
+    max_length: 300
+    help: Issuer URL of the OpenID Connect provider that authenticates Grist users.
+  - key: oidc_client_id
+    label: OIDC client ID
+    type: text
+    required: true
+    pattern: ^[A-Za-z0-9._-]{1,128}$
+    max_length: 128
+  - key: oidc_client_secret
+    label: OIDC client secret
+    type: secret
+    required: true
+    help: Client secret issued by the identity provider; paste the value it shows.
 routes:
   - service: grist
     port: 8484

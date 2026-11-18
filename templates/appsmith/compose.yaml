@@ -7,7 +7,7 @@ services:
     environment:
       APPSMITH_MAIL_ENABLED: "false"
       APPSMITH_DISABLE_INTERCOM: "true"
-      APPSMITH_DISABLE_TELEMETRY: "{{ .telemetry }}"
+      APPSMITH_DISABLE_TELEMETRY: "{{ .disable_telemetry }}"
     volumes:
       - stacks_data:/appsmith-stacks
 volumes:

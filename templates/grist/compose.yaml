@@ -17,6 +17,12 @@ services:
       GRIST_UI_FEATURES: helpCenter,billing,templates,createSite,multiSite,sendToDrive,tutorials,supportGrist
       GRIST_DEFAULT_EMAIL: "${GRIST_DEFAULT_EMAIL:-admin@example.com}"
       GRIST_ORG_IN_PATH: "true"
+      GRIST_OIDC_SP_HOST: "https://${GOTHAM_DOMAIN:-localhost}"
+      GRIST_OIDC_IDP_SCOPES: "${GRIST_OIDC_IDP_SCOPES:-openid profile email}"
+      GRIST_OIDC_IDP_SKIP_END_SESSION_ENDPOINT: "${GRIST_OIDC_IDP_SKIP_END_SESSION_ENDPOINT:-false}"
+      GRIST_OIDC_IDP_ISSUER: "{{ .oidc_issuer }}"
+      GRIST_OIDC_IDP_CLIENT_ID: "{{ .oidc_client_id }}"
+      GRIST_OIDC_IDP_CLIENT_SECRET: "{{ .oidc_client_secret }}"
       GRIST_SESSION_SECRET: "{{ .session_secret }}"
       GRIST_HOME_INCLUDE_STATIC: "true"
       GRIST_SANDBOX_FLAVOR: "${SANDBOX_FLAVOR:-gvisor}"

@@ -34,13 +34,16 @@ fields:
     label: Application key
     type: secret
     required: true
-    generate: true
-    help: Encrypts application data; keep it with the service.
+    pattern: ^[A-Za-z0-9+/]{43}=$
+    max_length: 44
+    help: The 44-character base64 output of `openssl rand -base64 32`, without the `base64:` prefix. Encrypts application data.
   - key: jwt_secret
     label: JWT secret
     type: secret
     required: true
-    generate: true
+    pattern: ^[A-Za-z0-9+/=_-]{32,}$
+    max_length: 512
+    help: At least 32 characters from `openssl rand -base64 32`; signs access tokens.
 routes:
   - service: hi-events
     port: 80

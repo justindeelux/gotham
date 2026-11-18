@@ -1,0 +1,20 @@
+name: Excalidraw
+icon: excalidraw
+description: Excalidraw virtual whiteboard for hand-drawn style diagrams, served as a static app.
+homepage: https://docs.excalidraw.com/docs
+category:
+  - productivity
+fields:
+  - key: domain
+    label: Domain
+    type: text
+    required: false
+    default: ""
+    placeholder: draw.example.com
+    help: Optional. Leave empty to add a domain later from the service page.
+    pattern: ^([A-Za-z0-9][A-Za-z0-9.-]*)?$
+    max_length: 253
+routes:
+  - service: excalidraw
+    port: 80
+    domain_field: domain

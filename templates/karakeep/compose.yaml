@@ -10,7 +10,6 @@ services:
       MEILI_MASTER_KEY: "{{ .meili_key }}"
       MEILI_ADDR: http://meilisearch:7700
       BROWSER_WEB_URL: http://chrome:9222
-      OPENAI_API_KEY: "{{ .openai_key }}"
       DISABLE_SIGNUPS: "${DISABLE_SIGNUPS:-false}"
       DATA_DIR: /data
     volumes:

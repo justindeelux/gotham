@@ -1,0 +1,6 @@
+services:
+  bento-pdf:
+    image: ghcr.io/alam00000/bentopdf:v2.8.11
+    restart: unless-stopped
+    ports:
+      - "8080"

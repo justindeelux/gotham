@@ -24,6 +24,7 @@ import {
   wizardStepNames,
 } from "@/features/databases/composables/useCreateDatabaseWizard";
 import { ENGINES } from "@/features/databases/utils/databaseEngines";
+import HomepageLink from "@/shared/components/HomepageLink.vue";
 import ResourceScopeSummary from "@/features/projects/components/ResourceScopeSummary.vue";
 import { useAuthStore } from "@/features/auth";
 import ServerPicker from "@/features/projects/components/ServerPicker.vue";
@@ -71,6 +72,12 @@ provide(wizardFormKey, wizard.form);
     class="form-container"
     @update:show="wizard.handleClose"
   >
+    <template #header-extra>
+      <HomepageLink
+        :href="wizard.selectedEngine.value.homepage"
+        :name="wizard.selectedEngine.value.label"
+      />
+    </template>
     <NSpace vertical :size="16">
       <NText depth="3">
         {{

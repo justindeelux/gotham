@@ -5,6 +5,7 @@ export interface EngineMeta {
   defaultVersion: string;
   versions: string[];
   port: number;
+  homepage: string;
 }
 
 export const ENGINES: EngineMeta[] = [
@@ -15,6 +16,7 @@ export const ENGINES: EngineMeta[] = [
     defaultVersion: "16-alpine",
     versions: ["16-alpine", "15-alpine", "14-alpine"],
     port: 5432,
+    homepage: "https://www.postgresql.org",
   },
   {
     value: "mysql",
@@ -23,6 +25,7 @@ export const ENGINES: EngineMeta[] = [
     defaultVersion: "8.4",
     versions: ["8.4", "8.0"],
     port: 3306,
+    homepage: "https://www.mysql.com",
   },
   {
     value: "mariadb",
@@ -31,6 +34,7 @@ export const ENGINES: EngineMeta[] = [
     defaultVersion: "11.4",
     versions: ["11.4", "11", "10.11"],
     port: 3306,
+    homepage: "https://mariadb.org",
   },
   {
     value: "mongodb",
@@ -39,6 +43,7 @@ export const ENGINES: EngineMeta[] = [
     defaultVersion: "7.0",
     versions: ["7.0", "6.0"],
     port: 27017,
+    homepage: "https://www.mongodb.com",
   },
   {
     value: "redis",
@@ -47,6 +52,7 @@ export const ENGINES: EngineMeta[] = [
     defaultVersion: "7.2-alpine",
     versions: ["7.2-alpine", "7.0-alpine"],
     port: 6379,
+    homepage: "https://redis.io",
   },
 ];
 

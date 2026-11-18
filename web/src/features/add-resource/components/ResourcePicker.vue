@@ -15,6 +15,7 @@ import {
 import type { TemplateSummary } from "@/features/templates/api/templates";
 import { useTemplatesStore } from "@/features/templates/stores/templates";
 import { activeLocale, i18n } from "@/shared/i18n";
+import HomepageLink from "@/shared/components/HomepageLink.vue";
 import BrandIcon from "./BrandIcon.vue";
 import { brandFor, templateBrand } from "../utils/brands";
 
@@ -269,20 +270,24 @@ onMounted(() => {
       <div v-if="activeTab === 'application'" class="res-pane">
         <p class="pane-hint">{{ t("add-resource.panels.application") }}</p>
         <div class="res-grid" @keydown="handleGroupKey">
-          <button
+          <div
             v-for="source in sourceValues"
             :key="source"
-            type="button"
-            class="res-card"
-            :data-source="source"
-            @click="openApplication(source)"
+            class="res-card-tile"
           >
-            <span class="res-head">
-              <BrandIcon v-bind="brandFor(source, sourceLabel(source))" />
-              <span class="res-name">{{ sourceLabel(source) }}</span>
-            </span>
-            <span class="res-desc">{{ sourceDescription(source) }}</span>
-          </button>
+            <button
+              type="button"
+              class="res-card"
+              :data-source="source"
+              @click="openApplication(source)"
+            >
+              <span class="res-head">
+                <BrandIcon v-bind="brandFor(source, sourceLabel(source))" />
+                <span class="res-name">{{ sourceLabel(source) }}</span>
+              </span>
+              <span class="res-desc">{{ sourceDescription(source) }}</span>
+            </button>
+          </div>
         </div>
       </div>
       <div v-else-if="activeTab === 'service'" class="res-pane">
@@ -321,20 +326,29 @@ onMounted(() => {
           class="res-grid"
           @keydown="handleGroupKey"
         >
-          <button
+          <div
             v-for="template in filteredTemplates"
             :key="template.slug"
-            type="button"
-            class="res-card"
-            :data-template="template.slug"
-            @click="openTemplate(template.slug)"
+            class="res-card-tile"
           >
-            <span class="res-head">
-              <BrandIcon v-bind="templateBrand(template.icon, template.name)" />
-              <span class="res-name">{{ template.name }}</span>
-            </span>
-            <span class="res-desc">{{ templateOverlayDescription(template) }}</span>
-          </button>
+            <button
+              type="button"
+              class="res-card"
+              :data-template="template.slug"
+              @click="openTemplate(template.slug)"
+            >
+              <span class="res-head">
+                <BrandIcon v-bind="templateBrand(template.icon, template.name)" />
+                <span class="res-name">{{ template.name }}</span>
+              </span>
+              <span class="res-desc">{{ templateOverlayDescription(template) }}</span>
+            </button>
+            <HomepageLink
+              :href="template.homepage"
+              :name="template.name"
+              class="res-site"
+            />
+          </div>
         </div>
         <NEmpty
           v-else
@@ -350,24 +364,33 @@ onMounted(() => {
       <div v-else class="res-pane">
         <p class="pane-hint">{{ t("add-resource.panels.database") }}</p>
         <div class="res-grid" @keydown="handleGroupKey">
-          <button
+          <div
             v-for="engine in ENGINES"
             :key="engine.value"
-            type="button"
-            class="res-card"
-            :data-engine="engine.value"
-            @click="openDatabase(engine.value)"
+            class="res-card-tile"
           >
-            <span class="res-head">
-              <BrandIcon v-bind="brandFor(engine.value, engine.label)" />
-              <span class="res-name">{{ engine.label }}</span>
-            </span>
-            <span class="res-desc">{{ engineDescription(engine.value) }}</span>
-            <span class="res-meta">
-              <span class="tag mono">{{ engineImage(engine.value) }}</span>
-              <span class="tag mono">:{{ engine.port }}</span>
-            </span>
-          </button>
+            <button
+              type="button"
+              class="res-card"
+              :data-engine="engine.value"
+              @click="openDatabase(engine.value)"
+            >
+              <span class="res-head">
+                <BrandIcon v-bind="brandFor(engine.value, engine.label)" />
+                <span class="res-name">{{ engine.label }}</span>
+              </span>
+              <span class="res-desc">{{ engineDescription(engine.value) }}</span>
+              <span class="res-meta">
+                <span class="tag mono">{{ engineImage(engine.value) }}</span>
+                <span class="tag mono">:{{ engine.port }}</span>
+              </span>
+            </button>
+            <HomepageLink
+              :href="engine.homepage"
+              :name="engine.label"
+              class="res-site"
+            />
+          </div>
         </div>
       </div>
     </div>
@@ -433,31 +456,47 @@ onMounted(() => {
   gap: var(--space-4);
 }
 
-.res-card {
+.res-card-tile {
   display: flex;
   flex-direction: column;
-  gap: var(--space-3);
-  text-align: left;
+  gap: var(--space-2);
   background: var(--surface);
   border: 1px solid var(--border);
   border-radius: var(--radius-md);
   padding: var(--space-4);
-  cursor: pointer;
-  color: inherit;
-  font: inherit;
   transition:
     border-color var(--motion-base) var(--ease-standard),
     background var(--motion-base) var(--ease-standard);
 }
 
-.res-card:hover {
+.res-card-tile:hover,
+.res-card-tile:focus-within {
   border-color: var(--accent);
   background: color-mix(in oklab, var(--surface) 88%, var(--accent));
+}
+
+.res-card {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-3);
+  text-align: left;
+  background: none;
+  border: 0;
+  padding: 0;
+  cursor: pointer;
+  color: inherit;
+  font: inherit;
 }
 
 .res-card:focus-visible {
   outline: none;
   box-shadow: var(--focus-ring);
+  border-radius: var(--radius-sm);
+}
+
+.res-site {
+  align-self: flex-start;
 }
 
 .res-head {

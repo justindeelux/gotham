@@ -11,6 +11,7 @@ const en = {
       delete: "Delete",
       create: "Create",
       edit: "Edit",
+      openWebsite: "Open website",
     },
     roles: {
       owner: "Owner",

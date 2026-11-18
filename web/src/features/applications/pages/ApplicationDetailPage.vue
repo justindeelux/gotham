@@ -4,6 +4,7 @@ import { computed } from "vue";
 import { useI18n } from "vue-i18n";
 
 import ResourceBackupsTab from "@/features/backups/components/ResourceBackupsTab.vue";
+import ApplicationContainersTab from "@/features/applications/components/ApplicationContainersTab.vue";
 import ApplicationDeleteDialog from "@/features/applications/components/ApplicationDeleteDialog.vue";
 import ApplicationDeploymentsTab from "@/features/applications/components/ApplicationDeploymentsTab.vue";
 import ApplicationEnvTab from "@/features/applications/components/ApplicationEnvTab.vue";
@@ -170,6 +171,17 @@ const activeTab = computed<string>({
         <ApplicationImagePanel
           v-if="detail.application.value && detail.application.value.source_type === 'image' && detail.canWrite.value"
           :application="detail.application.value"
+        />
+      </NTabPane>
+
+      <NTabPane
+        v-if="detail.application.value"
+        name="containers"
+        :tab="t('applications.tabs.containers')"
+      >
+        <ApplicationContainersTab
+          :app-id="detail.application.value.id"
+          :can-write="detail.canWrite.value"
         />
       </NTabPane>
 

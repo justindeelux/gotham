@@ -10,6 +10,7 @@ import { toRef } from "vue";
 
 import { useTemplateWizard } from "@/features/templates/composables/useTemplateWizard";
 import { activeLocale, i18n } from "@/shared/i18n";
+import HomepageLink from "@/shared/components/HomepageLink.vue";
 import WizardConfigureStep from "./WizardConfigureStep.vue";
 import WizardFooter from "./WizardFooter.vue";
 import WizardPreviewStep from "./WizardPreviewStep.vue";
@@ -56,6 +57,12 @@ function t(key: string, params?: Record<string, string | number>): string {
   >
     <template #header>
       {{ t("templates.wizard.title", { name: wizard.detail.value?.name ?? slug }) }}
+    </template>
+    <template #header-extra>
+      <HomepageLink
+        :href="wizard.detail.value?.homepage"
+        :name="wizard.detail.value?.name"
+      />
     </template>
 
     <NSpin :show="wizard.detailLoading.value">

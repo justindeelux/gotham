@@ -13,6 +13,7 @@ const vi: CommonMessages = {
       delete: "Xóa",
       create: "Tạo",
       edit: "Sửa",
+      openWebsite: "Mở trang web",
     },
     roles: {
       owner: "Chủ sở hữu",

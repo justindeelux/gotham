@@ -253,6 +253,8 @@ type updateApplicationRequest struct {
 
 type errorBody struct {
 	Message string `json:"message"`
+	// Code is a stable reason the web translates; the message stays a detail.
+	Code string `json:"code,omitempty"`
 }
 
 type deployKeyResponse struct {

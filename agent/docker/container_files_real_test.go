@@ -135,8 +135,8 @@ func TestRealContainerFilesArchiveAndExec(t *testing.T) {
 		t.Fatalf("download archive entries = %v", names)
 	}
 
-	// A stopped container still lists and reads, and the exec actions say why
-	// they are unavailable instead of failing obscurely.
+	// A stopped container refuses the listing, while reads still work and the
+	// exec actions say why they are unavailable instead of failing obscurely.
 	if err := client.Stop(ctx, containerID); err != nil {
 		t.Fatalf("stop: %v", err)
 	}
@@ -147,8 +147,8 @@ func TestRealContainerFilesArchiveAndExec(t *testing.T) {
 	if capabilities.GetExecAvailable() || capabilities.GetExecBlockedBy() != containerFileExecNotRunning {
 		t.Fatalf("stopped capabilities = %+v", capabilities)
 	}
-	if _, err := server.ListContainerFiles(ctx, &agentv1.ContainerFilesListRequest{ContainerId: containerID, Path: "/data/work"}); err != nil {
-		t.Fatalf("list stopped: %v", err)
+	if _, err := server.ListContainerFiles(ctx, &agentv1.ContainerFilesListRequest{ContainerId: containerID, Path: "/data/work"}); status.Code(err) != codes.FailedPrecondition {
+		t.Fatalf("list stopped: %v, want FailedPrecondition", err)
 	}
 	stoppedRead := &fakeChunkStream{}
 	if err := server.ReadContainerFile(&agentv1.ContainerFilesReadRequest{ContainerId: containerID, Path: "/data/work/app.conf"}, stoppedRead); err != nil {
@@ -163,6 +163,58 @@ func TestRealContainerFilesArchiveAndExec(t *testing.T) {
 		Path:        "/data/stopped",
 	}); status.Code(err) != codes.FailedPrecondition {
 		t.Fatalf("mkdir on a stopped container: %v, want FailedPrecondition", err)
+	}
+}
+
+// TestRealContainerFilesExecListingKeepsOddNames proves the exec script and
+// the byte-exact (non-TTY) stream keep every name, including a newline.
+func TestRealContainerFilesExecListingKeepsOddNames(t *testing.T) {
+	client := e2eContainerClient(t)
+	containerID := e2eContainer(t, client)
+	server := NewDockerServer(client, nil)
+	ctx := context.Background()
+
+	const directory = "/data/odd"
+	names := []string{"with space", "pipe|name", `quote"name`, "tab\tname", "new\nline", ".hidden"}
+	command := []string{
+		"/bin/sh", "-c",
+		`dir=$1
+mkdir -p "$dir"
+shift
+for name in "$@"; do printf x > "$dir/$name"; done
+ln -s -- "/target dir/odd|name" "$dir/link"`,
+		"gotham", directory,
+	}
+	command = append(command, names...)
+	if output, code, err := client.RunContainerCommand(ctx, containerID, command); err != nil || code != 0 {
+		t.Fatalf("prepare the folder: %v (exit %d): %s", err, code, output)
+	}
+
+	listing, err := server.ListContainerFiles(ctx, &agentv1.ContainerFilesListRequest{
+		ContainerId: containerID,
+		Path:        directory,
+	})
+	if err != nil {
+		t.Fatalf("list: %v", err)
+	}
+	got := make(map[string]*agentv1.ContainerFileEntry, len(listing.GetEntries()))
+	for _, entry := range listing.GetEntries() {
+		got[entry.GetName()] = entry
+	}
+	for _, name := range names {
+		entry := got[name]
+		if entry == nil {
+			t.Errorf("missing %q in the listing", name)
+			continue
+		}
+		if entry.GetKind() != agentv1.FileKind_FILE_KIND_FILE || entry.GetSize() != 1 {
+			t.Errorf("%q = %+v", name, entry)
+		}
+	}
+	link := got["link"]
+	if link == nil || link.GetKind() != agentv1.FileKind_FILE_KIND_SYMLINK ||
+		link.GetSymlinkTarget() != "/target dir/odd|name" {
+		t.Errorf("link = %+v", link)
 	}
 }
 

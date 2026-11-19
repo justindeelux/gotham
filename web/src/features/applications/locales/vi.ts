@@ -49,10 +49,10 @@ const vi: ApplicationsMessages = {
     containersError: "Không tải được danh sách container.",
     noContainers: "Ứng dụng chưa có container nào. Hãy triển khai trước.",
     empty: "Thư mục này trống.",
+    startContainer: "Hãy khởi động container để xem tệp của nó.",
     upload: "Tải lên",
     newFolder: "Thư mục mới",
     truncated: "Chỉ đọc được một phần thư mục này.",
-    loadMore: "Tải thêm",
     table: {
       name: "Tên",
       kind: "Loại",

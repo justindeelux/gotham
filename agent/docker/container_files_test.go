@@ -40,6 +40,9 @@ type containerFileEngine struct {
 	// importErr makes ImportArchive fail without reading the body, the way the
 	// engine rejects a PUT on a read-only root or a missing parent directory.
 	importErr error
+	// listExit makes the listing script fail with this exit code instead of
+	// printing entries, the way a missing stat or an unreadable folder does.
+	listExit int32
 }
 
 type commandCall struct {
@@ -278,6 +281,49 @@ func (e *containerFileEngine) RunContainerCommand(ctx context.Context, container
 	return "", 0, nil
 }
 
+func (e *containerFileEngine) RunContainerCommandLimited(_ context.Context, _ string, command []string, maxBytes int64) (string, int32, error) {
+	e.commands = append(e.commands, commandCall{argv: command})
+	if len(command) < 5 || command[2] != containerFileListScript {
+		return "", 1, nil
+	}
+	if e.listExit != 0 {
+		return "", e.listExit, nil
+	}
+	output := e.listOutput(command[4])
+	if int64(len(output)) > maxBytes {
+		return "", -1, fmt.Errorf("%w: more than %d bytes", ErrCommandOutputTooLarge, maxBytes)
+	}
+	return output, 0, nil
+}
+
+// listOutput renders the NUL separated listing the real script prints, so the
+// tests exercise the same parser and the same deny filter as a node.
+func (e *containerFileEngine) listOutput(directory string) string {
+	var output strings.Builder
+	for _, child := range e.children(directory) {
+		file := e.files[child]
+		raw := file.mode
+		size := int64(len(file.data))
+		switch file.kind {
+		case agentv1.FileKind_FILE_KIND_DIRECTORY:
+			raw |= 0o040000
+		case agentv1.FileKind_FILE_KIND_SYMLINK:
+			raw |= 0o120000
+			size = int64(len(file.target))
+		case agentv1.FileKind_FILE_KIND_SPECIAL:
+			raw |= 0o010000
+		default:
+			raw |= 0o100000
+		}
+		fmt.Fprintf(&output, "E\x00%s\x00%x\x00%d\x00%d\x00%d\x00%d\x00",
+			path.Base(child), raw, size, file.uid, file.gid, 0)
+		if file.kind == agentv1.FileKind_FILE_KIND_SYMLINK {
+			fmt.Fprintf(&output, "L\x00%s\x00%s\x00", path.Base(child), file.target)
+		}
+	}
+	return output.String()
+}
+
 func containerFileService(engine *containerFileEngine) *DockerServer {
 	return NewDockerServer(engine, nil)
 }
@@ -333,7 +379,7 @@ func TestContainerFileListReportsImmediateChildren(t *testing.T) {
 	}
 }
 
-func TestContainerFileListRootAndCursor(t *testing.T) {
+func TestContainerFileListRootIgnoresACursor(t *testing.T) {
 	server := containerFileService(newContainerFileEngine(sampleContainerFiles()))
 	root, err := server.ListContainerFiles(context.Background(), &agentv1.ContainerFilesListRequest{ContainerId: "c1"})
 	if err != nil {
@@ -349,7 +395,12 @@ func TestContainerFileListRootAndCursor(t *testing.T) {
 	if strings.Join(names, ",") != "bin,etc,run,tmp,usr,var" {
 		t.Fatalf("root entries = %v", names)
 	}
+	if root.GetTruncated() || root.GetCursor() != "" {
+		t.Fatalf("exec listing is never paged: truncated %v, cursor %q", root.GetTruncated(), root.GetCursor())
+	}
 
+	// A running container is listed in one exec even if a caller sends the
+	// cursor of an older tar page; the cursor only belongs to the fallback.
 	page, err := server.ListContainerFiles(context.Background(), &agentv1.ContainerFilesListRequest{
 		ContainerId: "c1",
 		Path:        "/",
@@ -358,12 +409,203 @@ func TestContainerFileListRootAndCursor(t *testing.T) {
 	if err != nil {
 		t.Fatalf("list with cursor: %v", err)
 	}
-	after := make([]string, 0, len(page.GetEntries()))
-	for _, entry := range page.GetEntries() {
-		after = append(after, entry.GetName())
+	if len(page.GetEntries()) != len(root.GetEntries()) {
+		t.Fatalf("entries with a cursor = %d, want the whole folder", len(page.GetEntries()))
 	}
-	if strings.Join(after, ",") != "run,tmp,usr,var" {
-		t.Fatalf("entries after the cursor = %v", after)
+}
+
+func TestContainerFileListFallsBackToTheArchiveWithoutAShell(t *testing.T) {
+	engine := newContainerFileEngine(sampleContainerFiles())
+	engine.shellErr = fmt.Errorf("%w: no shell", ErrDockerNoShell)
+	server := containerFileService(engine)
+	response, err := server.ListContainerFiles(context.Background(), &agentv1.ContainerFilesListRequest{
+		ContainerId: "c1",
+		Path:        "/etc",
+	})
+	if err != nil {
+		t.Fatalf("list: %v", err)
+	}
+	names := make([]string, 0, len(response.GetEntries()))
+	for _, entry := range response.GetEntries() {
+		names = append(names, entry.GetName())
+	}
+	if strings.Join(names, ",") != "app.conf,certs,hosts" {
+		t.Fatalf("fallback entries = %v", names)
+	}
+	if len(engine.commands) != 0 {
+		t.Fatalf("commands ran without a shell: %v", engine.commands)
+	}
+}
+
+func TestContainerFileListFallsBackWhenTheExecUserCannotRead(t *testing.T) {
+	cases := []struct {
+		name string
+		exit int32
+	}{
+		{"no stat", containerFileListExitNoStat},
+		{"folder unreadable", containerFileListExitUnreadable},
+	}
+	for _, testCase := range cases {
+		t.Run(testCase.name, func(t *testing.T) {
+			engine := newContainerFileEngine(sampleContainerFiles())
+			engine.listExit = testCase.exit
+			server := containerFileService(engine)
+			response, err := server.ListContainerFiles(context.Background(), &agentv1.ContainerFilesListRequest{
+				ContainerId: "c1",
+				Path:        "/etc",
+			})
+			if err != nil {
+				t.Fatalf("list: %v", err)
+			}
+			names := make([]string, 0, len(response.GetEntries()))
+			for _, entry := range response.GetEntries() {
+				names = append(names, entry.GetName())
+			}
+			if strings.Join(names, ",") != "app.conf,certs,hosts" {
+				t.Fatalf("fallback entries = %v", names)
+			}
+		})
+	}
+}
+
+func TestContainerFileListReportsAFailedStat(t *testing.T) {
+	engine := newContainerFileEngine(sampleContainerFiles())
+	engine.listExit = 3
+	server := containerFileService(engine)
+	_, err := server.ListContainerFiles(context.Background(), &agentv1.ContainerFilesListRequest{
+		ContainerId: "c1",
+		Path:        "/etc",
+	})
+	if status.Code(err) != codes.Internal {
+		t.Fatalf("failed stat: %v, want Internal", err)
+	}
+	if !strings.Contains(err.Error(), "exit code 3") {
+		t.Fatalf("failed stat = %v, want the exit code in the error", err)
+	}
+}
+
+func TestContainerFileListRefusesAStoppedContainer(t *testing.T) {
+	engine := newContainerFileEngine(sampleContainerFiles())
+	engine.state = "exited"
+	server := containerFileService(engine)
+	_, err := server.ListContainerFiles(context.Background(), &agentv1.ContainerFilesListRequest{
+		ContainerId: "c1",
+		Path:        "/etc",
+	})
+	if status.Code(err) != codes.FailedPrecondition || !strings.Contains(err.Error(), "not running") {
+		t.Fatalf("list stopped: %v, want a not-running FailedPrecondition", err)
+	}
+	if len(engine.commands) != 0 {
+		t.Fatalf("commands ran on a stopped container: %v", engine.commands)
+	}
+}
+
+func TestContainerFileExecListingParsesAwkwardNames(t *testing.T) {
+	files := map[string]*fakeContainerFile{
+		"/data":             {kind: agentv1.FileKind_FILE_KIND_DIRECTORY, mode: 0o755},
+		"/data/with space":  {kind: agentv1.FileKind_FILE_KIND_FILE, data: []byte("abc"), mode: 0o644, uid: 1000, gid: 1001},
+		"/data/pipe|name":   {kind: agentv1.FileKind_FILE_KIND_FILE, data: []byte("x"), mode: 0o600},
+		"/data/quote\"name": {kind: agentv1.FileKind_FILE_KIND_FILE, data: []byte("x"), mode: 0o600},
+		"/data/tab\tname":   {kind: agentv1.FileKind_FILE_KIND_FILE, data: []byte("x"), mode: 0o600},
+		"/data/new\nline":   {kind: agentv1.FileKind_FILE_KIND_FILE, data: []byte("x"), mode: 0o600},
+		"/data/.hidden":     {kind: agentv1.FileKind_FILE_KIND_FILE, data: []byte("x"), mode: 0o600},
+		"/data/..double":    {kind: agentv1.FileKind_FILE_KIND_FILE, data: []byte("x"), mode: 0o600},
+		"/data/sub":         {kind: agentv1.FileKind_FILE_KIND_DIRECTORY, mode: 0o700},
+		"/data/fifo":        {kind: agentv1.FileKind_FILE_KIND_SPECIAL, mode: 0o600},
+		"/data/link":        {kind: agentv1.FileKind_FILE_KIND_SYMLINK, target: "/target dir/odd|name"},
+	}
+	server := containerFileService(newContainerFileEngine(files))
+	response, err := server.ListContainerFiles(context.Background(), &agentv1.ContainerFilesListRequest{
+		ContainerId: "c1",
+		Path:        "/data",
+	})
+	if err != nil {
+		t.Fatalf("list: %v", err)
+	}
+	byName := make(map[string]*agentv1.ContainerFileEntry, len(response.GetEntries()))
+	for _, entry := range response.GetEntries() {
+		byName[entry.GetName()] = entry
+	}
+	wantNames := []string{"with space", "pipe|name", `quote"name`, "tab\tname", "new\nline", ".hidden", "..double", "sub", "fifo", "link"}
+	if len(byName) != len(wantNames) {
+		t.Fatalf("entries = %d, want %d", len(byName), len(wantNames))
+	}
+	for _, name := range wantNames {
+		if byName[name] == nil {
+			t.Errorf("missing %q in %v", name, byName)
+		}
+	}
+	space := byName["with space"]
+	if space.GetPath() != "/data/with space" || space.GetSize() != 3 || space.GetMode() != 0o644 ||
+		space.GetUid() != 1000 || space.GetGid() != 1001 || space.GetKind() != agentv1.FileKind_FILE_KIND_FILE {
+		t.Errorf("with space = %+v", space)
+	}
+	if byName["sub"].GetKind() != agentv1.FileKind_FILE_KIND_DIRECTORY {
+		t.Errorf("sub kind = %v", byName["sub"].GetKind())
+	}
+	if byName["fifo"].GetKind() != agentv1.FileKind_FILE_KIND_SPECIAL {
+		t.Errorf("fifo kind = %v", byName["fifo"].GetKind())
+	}
+	link := byName["link"]
+	if link.GetKind() != agentv1.FileKind_FILE_KIND_SYMLINK || link.GetSymlinkTarget() != "/target dir/odd|name" {
+		t.Errorf("link = %+v", link)
+	}
+}
+
+func TestContainerFileExecListingOfAnEmptyDirectory(t *testing.T) {
+	files := map[string]*fakeContainerFile{
+		"/data": {kind: agentv1.FileKind_FILE_KIND_DIRECTORY, mode: 0o755},
+	}
+	server := containerFileService(newContainerFileEngine(files))
+	response, err := server.ListContainerFiles(context.Background(), &agentv1.ContainerFilesListRequest{
+		ContainerId: "c1",
+		Path:        "/data",
+	})
+	if err != nil {
+		t.Fatalf("list: %v", err)
+	}
+	if len(response.GetEntries()) != 0 || response.GetTruncated() || response.GetCursor() != "" {
+		t.Fatalf("empty folder = %+v", response)
+	}
+}
+
+func TestContainerFileExecListingHidesDeniedPaths(t *testing.T) {
+	engine := newContainerFileEngine(sampleContainerFiles())
+	engine.files["/socket"] = &fakeContainerFile{kind: agentv1.FileKind_FILE_KIND_DIRECTORY, mode: 0o755}
+	engine.files["/socket/docker.sock"] = &fakeContainerFile{kind: agentv1.FileKind_FILE_KIND_SPECIAL, mode: 0o600}
+	engine.mounts = []ContainerMount{{Type: "bind", Source: "/var/run/docker.sock", Destination: "/socket/docker.sock"}}
+	server := containerFileService(engine)
+
+	root, err := server.ListContainerFiles(context.Background(), &agentv1.ContainerFilesListRequest{ContainerId: "c1"})
+	if err != nil {
+		t.Fatalf("list root: %v", err)
+	}
+	for _, entry := range root.GetEntries() {
+		if entry.GetPath() == "/proc" || entry.GetPath() == "/sys" || entry.GetPath() == "/dev" {
+			t.Errorf("denied entry listed: %s", entry.GetPath())
+		}
+	}
+	socket, err := server.ListContainerFiles(context.Background(), &agentv1.ContainerFilesListRequest{ContainerId: "c1", Path: "/socket"})
+	if err != nil {
+		t.Fatalf("list socket dir: %v", err)
+	}
+	if len(socket.GetEntries()) != 0 {
+		t.Fatalf("mounted socket listed: %+v", socket.GetEntries())
+	}
+}
+
+func TestContainerFileExecListingRefusesOversizeOutput(t *testing.T) {
+	previousLimit := containerFileExecByteLimit
+	containerFileExecByteLimit = 64
+	defer func() { containerFileExecByteLimit = previousLimit }()
+
+	server := containerFileService(newContainerFileEngine(sampleContainerFiles()))
+	_, err := server.ListContainerFiles(context.Background(), &agentv1.ContainerFilesListRequest{
+		ContainerId: "c1",
+		Path:        "/etc",
+	})
+	if status.Code(err) != codes.ResourceExhausted {
+		t.Fatalf("oversize listing: %v, want ResourceExhausted", err)
 	}
 }
 
@@ -374,7 +616,9 @@ func TestContainerFileListTruncatesAndResumes(t *testing.T) {
 	for index := 0; index < containerFileListPageSize+2; index++ {
 		files[fmt.Sprintf("/data/f%05d", index)] = &fakeContainerFile{kind: agentv1.FileKind_FILE_KIND_FILE, data: []byte("x")}
 	}
-	server := containerFileService(newContainerFileEngine(files))
+	engine := newContainerFileEngine(files)
+	engine.shellErr = fmt.Errorf("%w: no shell", ErrDockerNoShell)
+	server := containerFileService(engine)
 	first, err := server.ListContainerFiles(context.Background(), &agentv1.ContainerFilesListRequest{ContainerId: "c1", Path: "/data"})
 	if err != nil {
 		t.Fatalf("first page: %v", err)
@@ -414,7 +658,9 @@ func TestContainerFileListByteCapCountsPastTheCursor(t *testing.T) {
 		files["/data/"+name] = &fakeContainerFile{kind: agentv1.FileKind_FILE_KIND_FILE, data: data}
 		want = append(want, name)
 	}
-	server := containerFileService(newContainerFileEngine(files))
+	engine := newContainerFileEngine(files)
+	engine.shellErr = fmt.Errorf("%w: no shell", ErrDockerNoShell)
+	server := containerFileService(engine)
 
 	got := make([]string, 0, fileCount)
 	cursor := ""

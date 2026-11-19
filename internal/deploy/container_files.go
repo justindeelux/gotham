@@ -161,6 +161,12 @@ func (s *Service) ListContainerFiles(ctx context.Context, userID, appID uuid.UUI
 		return ContainerFileListing{}, err
 	}
 	defer conn.Close()
+	// The agent's listing runs through exec, so it needs a running container.
+	// Refusing here keeps the reason stable for the web instead of a generic
+	// conflict from the RPC's FailedPrecondition.
+	if !strings.EqualFold(strings.TrimSpace(conn.container.State), "running") {
+		return ContainerFileListing{}, fmt.Errorf("%w: %s", ErrContainerNotRunning, conn.container.State)
+	}
 	callCtx, cancel := context.WithTimeout(ctx, s.controlTimeout)
 	defer cancel()
 	return conn.node.ListContainerFiles(callCtx, containerID, directory, cursor)
@@ -541,6 +547,10 @@ func (h *containerFileHandler) change(w http.ResponseWriter, r *http.Request, ac
 
 func (h *containerFileHandler) fail(w http.ResponseWriter, err error) {
 	status, message := containerFileStatus(err)
+	if errors.Is(err, ErrContainerNotRunning) {
+		writeJSON(w, status, errorBody{Message: message, Code: "not_running"})
+		return
+	}
 	if status == http.StatusInternalServerError && h.logger != nil {
 		h.logger.Warn("deploy: container file request failed", "error", err)
 	}
@@ -588,6 +598,8 @@ func containerFileStatus(err error) (int, string) {
 		return http.StatusNotFound, "the application or container was not found"
 	case errors.Is(err, ErrContainerNotFound):
 		return http.StatusNotFound, "the container is not part of this application"
+	case errors.Is(err, ErrContainerNotRunning):
+		return http.StatusConflict, "the container is not running; start it to browse its files"
 	case errors.Is(err, ErrServerNotFound):
 		return http.StatusNotFound, "the node was not found"
 	case errors.Is(err, ErrTooLarge):

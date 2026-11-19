@@ -281,6 +281,26 @@ a {
   }
 }
 
+/* Add resource: the card claims the viewport and its picker fills the body. */
+.add-resource-modal.n-modal.n-card {
+  height: calc(100vh - 64px);
+}
+
+.add-resource-modal.n-modal.n-card > .n-card-content {
+  flex: 1 1 auto;
+  overflow: hidden;
+  display: flex;
+  flex-direction: column;
+}
+
+.add-resource-modal .add-resource-body {
+  flex: 1 1 auto;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-3);
+}
+
 .wizard-modal.n-modal.n-card > .n-card-content {
   display: flex;
   flex-direction: column;

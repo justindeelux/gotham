@@ -344,6 +344,7 @@ onMounted(() => {
       role="tabpanel"
       :aria-labelledby="`${tabsId}-${activeTab}`"
       tabindex="0"
+      class="res-panel"
     >
       <div v-if="activeTab === 'application'" class="res-pane">
         <p class="pane-hint">{{ t("add-resource.panels.application") }}</p>
@@ -517,10 +518,20 @@ onMounted(() => {
   display: flex;
   flex-direction: column;
   gap: var(--space-3);
+  flex: 1 1 auto;
+  min-height: 0;
+}
+
+.res-panel {
+  display: flex;
+  flex-direction: column;
+  flex: 1 1 auto;
+  min-height: 0;
 }
 
 .res-pane {
-  height: min(calc(var(--space-12) * 8), calc(100dvh - var(--space-12) * 5));
+  flex: 1 1 auto;
+  min-height: 0;
   overflow-y: auto;
   display: flex;
   flex-direction: column;

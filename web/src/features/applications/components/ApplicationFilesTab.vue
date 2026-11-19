@@ -184,6 +184,8 @@ watch(
 );
 
 watch(containerId, async (value) => {
+  loadRun += 1;
+  loading.value = false;
   path.value = "/";
   entries.value = [];
   truncated.value = false;

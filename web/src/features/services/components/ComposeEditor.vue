@@ -110,9 +110,17 @@ function save(): void {
       :aria-label="labelText"
       @save="save"
     />
-    <pre v-else class="compose-editor__view mono">{{
-      modelValue || emptyLabel
-    }}</pre>
+    <CodeEditor
+      v-else
+      class="compose-editor__view"
+      :model-value="modelValue"
+      preset="yaml"
+      read-only
+      wrap
+      height="46vh"
+      :placeholder="emptyLabel"
+      :aria-label="labelText"
+    />
 
     <p class="compose-editor__hint">
       {{ t("services.compose.hint") }}
@@ -139,21 +147,6 @@ function save(): void {
 .compose-editor__label {
   font-size: var(--text-xs);
   color: var(--muted);
-}
-
-.compose-editor__view {
-  margin: 0;
-  background: var(--surface-warm);
-  border: 1px solid var(--border);
-  border-radius: var(--radius-md);
-  padding: var(--space-3);
-  font-size: var(--text-xs);
-  line-height: 1.6;
-  color: var(--fg);
-  overflow: auto;
-  max-height: 56vh;
-  white-space: pre-wrap;
-  word-break: break-word;
 }
 
 .compose-editor__hint {

@@ -18,6 +18,7 @@ import type {
   ApplicationSource,
 } from "@/features/applications/api/applications";
 import { getApplicationSource } from "@/features/applications/api/applications";
+import CodeEditor from "@/features/files/components/CodeEditor.vue";
 
 interface Props {
   application: Application;
@@ -101,11 +102,14 @@ function copySource(): void {
         </NRadioButton>
       </NRadioGroup>
       <NText depth="3" class="small">{{ hint }}</NText>
-      <pre
-        class="source-view"
-        tabindex="0"
+      <CodeEditor
+        :model-value="text"
+        :preset="source.kind === 'dockerfile' ? 'dockerfile' : 'yaml'"
+        read-only
+        wrap
+        height="46vh"
         :aria-label="t('applications.source.title')"
-      >{{ text }}</pre>
+      />
     </NSpace>
   </NCard>
 </template>
@@ -113,22 +117,5 @@ function copySource(): void {
 <style scoped>
 .small {
   font-size: var(--text-xs);
-}
-
-.source-view {
-  margin: 0;
-  background: var(--surface-warm);
-  border: 1px solid var(--border);
-  border-radius: var(--radius-md);
-  font-family: var(--font-mono);
-  font-size: var(--text-xs);
-  line-height: 1.55;
-  padding: var(--space-3);
-  overflow: auto;
-  min-height: 200px;
-  max-height: 46vh;
-  white-space: pre-wrap;
-  word-break: break-word;
-  color: var(--fg);
 }
 </style>

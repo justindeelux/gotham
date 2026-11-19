@@ -20,14 +20,17 @@ import (
 const (
 	// containerFileMaxBytes caps one read, download or write. Listings have
 	// their own, smaller cap so one page stays cheap.
-	containerFileMaxBytes      = 64 << 20
-	containerFileChunkSize     = 64 << 10
-	containerFileListPageSize  = 1000
-	containerFileListByteLimit = 32 << 20
-	containerFilePathLimit     = 4096
-	containerFileMaxHops       = 16
-	containerFileMaxMode       = 0o7777
+	containerFileMaxBytes     = 64 << 20
+	containerFileChunkSize    = 64 << 10
+	containerFileListPageSize = 1000
+	containerFilePathLimit    = 4096
+	containerFileMaxHops      = 16
+	containerFileMaxMode      = 0o7777
 )
+
+// containerFileListByteLimit caps the tar bytes one listing page may read. It
+// is a variable only so a test can lower it.
+var containerFileListByteLimit int64 = 32 << 20
 
 // containerFileDeniedPaths are never reachable through the file manager: they
 // are kernel interfaces rather than the container's own files. Docker socket
@@ -417,7 +420,7 @@ func containerFileSend(writer *io.PipeWriter, stream grpc.ClientStreamingServer[
 // containerFileList reads the archive of one directory and keeps its immediate
 // children. The archive walk is lexicographic, so a name cursor resumes a page
 // exactly. Bytes are counted, never buffered: each page is capped by entries
-// and by the tar bytes it may read.
+// and by the tar bytes it may read past the cursor.
 func (s *DockerServer) containerFileList(ctx context.Context, target containerFileTarget, directory, cursor string) ([]*agentv1.ContainerFileEntry, bool, string, error) {
 	body, err := s.docker.ExportArchive(ctx, target.id, directory)
 	if err != nil {
@@ -432,6 +435,10 @@ func (s *DockerServer) containerFileList(ctx context.Context, target containerFi
 	}
 	entries := make([]*agentv1.ContainerFileEntry, 0, 16)
 	last := ""
+	// The byte budget starts where the cursor is passed: the bytes skipped to
+	// reach it are not charged to this page.
+	budgetStart := int64(0)
+	cursorPassed := cursor == ""
 	for {
 		header, err := reader.Next()
 		if errors.Is(err, io.EOF) {
@@ -447,9 +454,12 @@ func (s *DockerServer) containerFileList(ctx context.Context, target containerFi
 		if cursor != "" && entry.GetName() <= cursor {
 			continue
 		}
+		if !cursorPassed {
+			budgetStart, cursorPassed = counted.read, true
+		}
 		entries = append(entries, entry)
 		last = entry.GetName()
-		if len(entries) >= containerFileListPageSize || counted.read >= containerFileListByteLimit {
+		if len(entries) >= containerFileListPageSize || counted.read-budgetStart >= containerFileListByteLimit {
 			return entries, true, last, nil
 		}
 	}

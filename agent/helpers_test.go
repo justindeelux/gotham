@@ -245,3 +245,7 @@ func (f *fakeDockerClient) ContainerShell(context.Context, string) (string, erro
 func (f *fakeDockerClient) RunContainerCommand(context.Context, string, []string) (string, int32, error) {
 	return "", 0, f.err
 }
+
+func (f *fakeDockerClient) RunContainerCommandLimited(context.Context, string, []string, int64) (string, int32, error) {
+	return "", 0, f.err
+}

@@ -268,6 +268,17 @@ func (f *fakeDockerClient) RunContainerCommand(_ context.Context, _ string, comm
 	return f.commandOutput, f.commandExit, f.commandErr
 }
 
+func (f *fakeDockerClient) RunContainerCommandLimited(_ context.Context, _ string, command []string, maxBytes int64) (string, int32, error) {
+	f.commands = append(f.commands, command)
+	if f.commandErr != nil {
+		return "", -1, f.commandErr
+	}
+	if int64(len(f.commandOutput)) > maxBytes {
+		return "", -1, fmt.Errorf("%w: more than %d bytes", ErrCommandOutputTooLarge, maxBytes)
+	}
+	return f.commandOutput, f.commandExit, nil
+}
+
 func wrapArchiveFile(name string, data []byte) []byte {
 	var buffer bytes.Buffer
 	writer := tar.NewWriter(&buffer)

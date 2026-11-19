@@ -348,3 +348,7 @@ func (f *e2eDockerClient) ContainerShell(context.Context, string) (string, error
 func (f *e2eDockerClient) RunContainerCommand(context.Context, string, []string) (string, int32, error) {
 	return "", 0, nil
 }
+
+func (f *e2eDockerClient) RunContainerCommandLimited(context.Context, string, []string, int64) (string, int32, error) {
+	return "", 0, nil
+}

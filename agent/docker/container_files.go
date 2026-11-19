@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"io"
 	"path"
+	"strconv"
 	"strings"
 	"time"
 
@@ -31,6 +32,34 @@ const (
 // containerFileListByteLimit caps the tar bytes one listing page may read. It
 // is a variable only so a test can lower it.
 var containerFileListByteLimit int64 = 32 << 20
+
+// containerFileExecByteLimit caps one exec listing. It is a variable only so a
+// test can lower it.
+var containerFileExecByteLimit int64 = 8 << 20
+
+// containerFileListScript lists one directory's immediate children as NUL
+// separated fields: E then name, raw mode in hex, size, uid, gid and mtime in
+// seconds; a symlink then adds L, its name and its target. NUL keeps every
+// name literal (spaces, quotes, newlines), and busybox find has no -printf, so
+// each entry is stat'ed and printed by the shell. The directory travels as a
+// separate argv item, never through the shell.
+const containerFileListScript = `dir=$1
+for p in "$dir"/* "$dir"/.[!.]* "$dir"/..?*; do
+  [ -e "$p" ] || [ -L "$p" ] || continue
+  fields=$(stat -c '%f %s %u %g %Y' "$p" 2>/dev/null) || continue
+  set -- $fields
+  [ $# -eq 5 ] || continue
+  printf 'E\0%s\0%s\0%s\0%s\0%s\0%s\0' "${p##*/}" "$1" "$2" "$3" "$4" "$5"
+  if [ -L "$p" ]; then
+    target=$(readlink "$p" 2>/dev/null)
+    printf 'L\0%s\0%s\0' "${p##*/}" "$target"
+  fi
+done`
+
+const (
+	containerFileExecEntryTag = "E"
+	containerFileExecLinkTag  = "L"
+)
 
 // containerFileDeniedPaths are never reachable through the file manager: they
 // are kernel interfaces rather than the container's own files. Docker socket
@@ -100,6 +129,13 @@ func (s *DockerServer) ListContainerFiles(ctx context.Context, req *agentv1.Cont
 	if err != nil {
 		return nil, containerFileError(err)
 	}
+	if !containerFileRunning(target.state) {
+		state := strings.TrimSpace(target.state)
+		if state == "" {
+			state = "stopped"
+		}
+		return nil, containerFileError(fmt.Errorf("%w: %s", ErrDockerContainerNotRunning, state))
+	}
 	directory, stat, err := s.containerFileResolve(ctx, target, req.GetPath())
 	if err != nil {
 		return nil, containerFileError(err)
@@ -107,6 +143,18 @@ func (s *DockerServer) ListContainerFiles(ctx context.Context, req *agentv1.Cont
 	if !containerFileIsDir(stat.Mode) {
 		return nil, containerFileError(fmt.Errorf("%w: %q is not a directory", errContainerFileInvalid, directory))
 	}
+	entries, execErr := s.containerFileExecList(ctx, target, directory)
+	if execErr == nil {
+		return &agentv1.ContainerFilesListResponse{
+			Directory: containerFileEntry(directory, stat),
+			Entries:   entries,
+		}, nil
+	}
+	if !errors.Is(execErr, ErrDockerNoShell) {
+		return nil, containerFileError(execErr)
+	}
+	// A running distroless or scratch container has no shell, so the archive
+	// is the only reader left. Its pages stay for that fallback.
 	entries, truncated, cursor, err := s.containerFileList(ctx, target, directory, strings.TrimSpace(req.GetCursor()))
 	if err != nil {
 		return nil, containerFileError(err)
@@ -117,6 +165,97 @@ func (s *DockerServer) ListContainerFiles(ctx context.Context, req *agentv1.Cont
 		Truncated: truncated,
 		Cursor:    cursor,
 	}, nil
+}
+
+func containerFileRunning(state string) bool {
+	return strings.EqualFold(strings.TrimSpace(state), "running")
+}
+
+// containerFileExecList lists one directory with a single exec. The output is
+// NUL separated so every name stays literal, and it is capped: a folder too
+// large to read in one call is reported, never silently cut.
+func (s *DockerServer) containerFileExecList(ctx context.Context, target containerFileTarget, directory string) ([]*agentv1.ContainerFileEntry, error) {
+	shell, err := s.docker.ContainerShell(ctx, target.id)
+	if err != nil {
+		return nil, err
+	}
+	command := []string{shell, "-c", containerFileListScript, "gotham", directory}
+	output, code, err := s.docker.RunContainerCommandLimited(ctx, target.id, command, containerFileExecByteLimit)
+	if err != nil {
+		return nil, err
+	}
+	if code != 0 {
+		message := strings.TrimSpace(output)
+		if message == "" {
+			message = fmt.Sprintf("exit code %d", code)
+		}
+		return nil, fmt.Errorf("container files: list %q: %s", directory, message)
+	}
+	return containerFileParseListing(directory, output, target.mounts)
+}
+
+// containerFileParseListing decodes the exec output described by
+// containerFileListScript. Any malformed record fails the whole listing, so a
+// partial answer is never shown as a complete folder.
+func containerFileParseListing(directory, output string, mounts []ContainerMount) ([]*agentv1.ContainerFileEntry, error) {
+	tokens := strings.Split(output, "\x00")
+	if len(tokens) > 0 && tokens[len(tokens)-1] == "" {
+		tokens = tokens[:len(tokens)-1]
+	}
+	entries := make([]*agentv1.ContainerFileEntry, 0, len(tokens)/7)
+	for index := 0; index < len(tokens); {
+		if tokens[index] != containerFileExecEntryTag || index+6 >= len(tokens) {
+			return nil, fmt.Errorf("container files: malformed listing of %q", directory)
+		}
+		name := tokens[index+1]
+		rawMode, modeErr := strconv.ParseUint(tokens[index+2], 16, 32)
+		size, sizeErr := strconv.ParseInt(tokens[index+3], 10, 64)
+		uid, uidErr := strconv.ParseUint(tokens[index+4], 10, 32)
+		gid, gidErr := strconv.ParseUint(tokens[index+5], 10, 32)
+		seconds, timeErr := strconv.ParseInt(tokens[index+6], 10, 64)
+		if name == "" || strings.Contains(name, "/") || modeErr != nil || sizeErr != nil ||
+			uidErr != nil || gidErr != nil || timeErr != nil {
+			return nil, fmt.Errorf("container files: malformed listing of %q", directory)
+		}
+		containerPath := path.Join(directory, name)
+		entry := &agentv1.ContainerFileEntry{
+			Name:       name,
+			Path:       containerPath,
+			Kind:       containerFileRawKind(uint32(rawMode)),
+			Size:       size,
+			Mode:       uint32(rawMode) & containerFileMaxMode,
+			Uid:        uint32(uid),
+			Gid:        uint32(gid),
+			ModifiedAt: timestamppb.New(time.Unix(seconds, 0)),
+		}
+		index += 7
+		if index < len(tokens) && tokens[index] == containerFileExecLinkTag {
+			if index+2 >= len(tokens) {
+				return nil, fmt.Errorf("container files: malformed listing of %q", directory)
+			}
+			entry.SymlinkTarget = tokens[index+2]
+			index += 3
+		}
+		if containerFileDenied(containerPath, mounts) {
+			continue
+		}
+		entries = append(entries, entry)
+	}
+	return entries, nil
+}
+
+// containerFileRawKind reads the POSIX file type bits that stat -c %f reports.
+func containerFileRawKind(mode uint32) agentv1.FileKind {
+	switch mode & 0o170000 {
+	case 0o040000:
+		return agentv1.FileKind_FILE_KIND_DIRECTORY
+	case 0o120000:
+		return agentv1.FileKind_FILE_KIND_SYMLINK
+	case 0o100000:
+		return agentv1.FileKind_FILE_KIND_FILE
+	default:
+		return agentv1.FileKind_FILE_KIND_SPECIAL
+	}
 }
 
 func (s *DockerServer) StatContainerFile(ctx context.Context, req *agentv1.ContainerFilesPathRequest) (*agentv1.ContainerFilesStatResponse, error) {
@@ -828,6 +967,8 @@ func containerFileError(err error) error {
 		return status.Errorf(codes.FailedPrecondition, "%s", err)
 	case errors.Is(err, ErrDockerUnavailable):
 		return status.Errorf(codes.Unavailable, "%s", err)
+	case errors.Is(err, ErrCommandOutputTooLarge):
+		return status.Errorf(codes.ResourceExhausted, "%s", err)
 	case errors.Is(err, context.Canceled):
 		return status.Error(codes.Canceled, err.Error())
 	case errors.Is(err, context.DeadlineExceeded):

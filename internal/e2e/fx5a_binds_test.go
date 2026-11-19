@@ -84,6 +84,10 @@ func (fakeBindDocker) RunContainerCommand(context.Context, string, []string) (st
 	return "", 0, nil
 }
 
+func (fakeBindDocker) RunContainerCommandLimited(context.Context, string, []string, int64) (string, int32, error) {
+	return "", 0, nil
+}
+
 func (fakeBindDocker) ImportArchive(context.Context, string, string, io.Reader) error {
 	return nil
 }

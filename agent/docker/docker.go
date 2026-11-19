@@ -47,6 +47,8 @@ var ErrDockerContainerNotRunning = errors.New("docker: container is not running"
 
 var ErrDockerNoShell = errors.New("docker: container has no supported shell")
 
+var ErrCommandOutputTooLarge = errors.New("docker: command output is too large")
+
 type DockerClient struct {
 	http             *http.Client
 	baseURL          string
@@ -590,8 +592,99 @@ func (c *DockerClient) ContainerShell(ctx context.Context, containerID string) (
 }
 
 // RunContainerCommand runs one command through exec and returns its combined
-// output and exit code. The container must be running.
+// output and exit code. The container must be running. Output past the probe
+// cap is cut, which is enough for a command that only reports a failure.
 func (c *DockerClient) RunContainerCommand(ctx context.Context, containerID string, command []string) (string, int32, error) {
+	return c.runContainerCommand(ctx, containerID, command, execProbeMaxBytes)
+}
+
+// RunContainerCommandLimited runs one command with an explicit output cap. It
+// uses a non-TTY exec on purpose: a TTY rewrites line endings, which would
+// corrupt a name that contains one, and a caller that parses the output must
+// get the exact bytes. Output past the cap is an error, never a silent cut.
+func (c *DockerClient) RunContainerCommandLimited(ctx context.Context, containerID string, command []string, maxBytes int64) (string, int32, error) {
+	if maxBytes <= 0 {
+		return "", -1, errors.New("docker: an output limit is required")
+	}
+	if strings.TrimSpace(containerID) == "" {
+		return "", -1, errors.New("docker: container id is required")
+	}
+	if len(command) == 0 {
+		return "", -1, errors.New("docker: a command is required")
+	}
+	execID, err := c.createExecCommand(ctx, containerID, command)
+	if err != nil {
+		return "", -1, err
+	}
+	stream, err := c.startExecWithTTY(ctx, execID, false)
+	if err != nil {
+		return "", -1, err
+	}
+	output, readErr := readExecStdout(stream, maxBytes+1)
+	_ = stream.Close()
+	if readErr != nil {
+		return string(output), -1, readErr
+	}
+	code, _, exitErr := c.execExitCodeWithin(ctx, execID, containerCommandTimeout)
+	if exitErr != nil {
+		return string(output), -1, exitErr
+	}
+	if int64(len(output)) > maxBytes {
+		return "", -1, fmt.Errorf("%w: the command wrote more than %d bytes", ErrCommandOutputTooLarge, maxBytes)
+	}
+	return string(output), code, nil
+}
+
+// readExecStdout drains a non-TTY exec stream and keeps at most limit stdout
+// bytes. stderr frames are dropped: they carry a command's complaints, not the
+// listing a caller parses.
+func readExecStdout(reader io.Reader, limit int64) ([]byte, error) {
+	var out bytes.Buffer
+	header := make([]byte, 8)
+	frame := make([]byte, 32<<10)
+	for int64(out.Len()) < limit {
+		if _, err := io.ReadFull(reader, header); err != nil {
+			return out.Bytes(), execStreamReadError(err)
+		}
+		remaining := int64(binary.BigEndian.Uint32(header[4:]))
+		if remaining > maxLogFrame {
+			return out.Bytes(), fmt.Errorf("docker: exec frame is %d bytes", remaining)
+		}
+		stderr := header[0] == 2
+		for remaining > 0 {
+			chunk := remaining
+			if chunk > int64(len(frame)) {
+				chunk = int64(len(frame))
+			}
+			n, err := io.ReadFull(reader, frame[:chunk])
+			remaining -= int64(n)
+			if !stderr && n > 0 {
+				room := limit - int64(out.Len())
+				if int64(n) > room {
+					n = int(room)
+				}
+				_, _ = out.Write(frame[:n])
+			}
+			if err != nil {
+				return out.Bytes(), execStreamReadError(err)
+			}
+		}
+	}
+	return out.Bytes(), nil
+}
+
+func execStreamReadError(err error) error {
+	switch {
+	case errors.Is(err, io.EOF):
+		return nil
+	case errors.Is(err, io.ErrUnexpectedEOF):
+		return errors.New("docker: the exec stream ended mid-frame")
+	default:
+		return err
+	}
+}
+
+func (c *DockerClient) runContainerCommand(ctx context.Context, containerID string, command []string, maxBytes int64) (string, int32, error) {
 	if strings.TrimSpace(containerID) == "" {
 		return "", -1, errors.New("docker: container id is required")
 	}
@@ -609,7 +702,7 @@ func (c *DockerClient) RunContainerCommand(ctx context.Context, containerID stri
 	var output bytes.Buffer
 	readDone := make(chan error, 1)
 	go func() {
-		_, readErr := io.Copy(&output, io.LimitReader(stream, execProbeMaxBytes))
+		_, readErr := io.Copy(&output, io.LimitReader(stream, maxBytes))
 		readDone <- readErr
 	}()
 	select {
@@ -1255,11 +1348,21 @@ func DisplayContainerUser(user string) string {
 // createExec creates a TTY-attached exec: one raw stream for output, which
 // every caller here reads as a whole.
 func (c *DockerClient) createExec(ctx context.Context, containerID string, command []string, user, workdir string, env []string) (string, error) {
+	return c.createExecRequest(ctx, containerID, command, user, workdir, env, true)
+}
+
+// createExecCommand prepares one non-interactive exec: no stdin and no TTY, so
+// its output bytes reach the caller unchanged.
+func (c *DockerClient) createExecCommand(ctx context.Context, containerID string, command []string) (string, error) {
+	return c.createExecRequest(ctx, containerID, command, "", "", nil, false)
+}
+
+func (c *DockerClient) createExecRequest(ctx context.Context, containerID string, command []string, user, workdir string, env []string, tty bool) (string, error) {
 	body := map[string]any{
-		"AttachStdin":  true,
+		"AttachStdin":  tty,
 		"AttachStdout": true,
 		"AttachStderr": true,
-		"Tty":          true,
+		"Tty":          tty,
 		"Cmd":          command,
 	}
 	if len(env) > 0 {
@@ -1285,7 +1388,11 @@ func (c *DockerClient) createExec(ctx context.Context, containerID string, comma
 }
 
 func (c *DockerClient) startExec(ctx context.Context, execID string) (io.ReadWriteCloser, error) {
-	encoded, err := json.Marshal(map[string]any{"Detach": false, "Tty": true})
+	return c.startExecWithTTY(ctx, execID, true)
+}
+
+func (c *DockerClient) startExecWithTTY(ctx context.Context, execID string, tty bool) (io.ReadWriteCloser, error) {
+	encoded, err := json.Marshal(map[string]any{"Detach": false, "Tty": tty})
 	if err != nil {
 		return nil, fmt.Errorf("docker: marshal exec start: %w", err)
 	}

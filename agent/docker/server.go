@@ -43,6 +43,7 @@ type Client interface {
 	StatArchive(ctx context.Context, containerID, source string) (ContainerPathStat, error)
 	ContainerShell(ctx context.Context, containerID string) (string, error)
 	RunContainerCommand(ctx context.Context, containerID string, command []string) (string, int32, error)
+	RunContainerCommandLimited(ctx context.Context, containerID string, command []string, maxBytes int64) (string, int32, error)
 }
 
 type DockerServer struct {

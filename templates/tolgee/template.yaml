@@ -23,9 +23,9 @@ fields:
   - key: jwt_secret
     label: JWT secret
     type: secret
-    required: true
-    pattern: ^[A-Za-z0-9]{32,}$
-    help: Signs API tokens with HS256; at least 32 characters. Generate one with openssl rand -hex 32. Changing it logs every user out.
+    generate:
+      length: 64
+      charset: hex
   - key: db_name
     label: Database name
     type: text

@@ -35,15 +35,15 @@ fields:
   - key: app_secret
     label: App secret
     type: secret
-    required: true
-    pattern: ^[A-Za-z0-9]{32,}$
-    help: Legacy session and token secret; at least 32 characters. Generate one with openssl rand -hex 32.
+    generate:
+      length: 64
+      charset: hex
   - key: encryption_key
     label: Encryption key
     type: secret
-    required: true
-    pattern: ^[A-Za-z0-9]{32,}$
-    help: Encrypts stored secrets; at least 32 characters. Generate one with openssl rand -hex 32. Losing it makes them unreadable.
+    generate:
+      length: 64
+      charset: hex
 routes:
   - service: twenty
     port: 3000

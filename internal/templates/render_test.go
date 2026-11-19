@@ -173,7 +173,7 @@ func TestRenderRejectsBadValues(t *testing.T) {
 		values map[string]any
 		want   string
 	}{
-		"missing required":     {values: map[string]any{"domain": "app.example.com"}, want: `field "password" is required`},
+		"missing required":     {values: map[string]any{"password": "x"}, want: `field "domain" is required`},
 		"unknown field":        {values: map[string]any{"domain": "app.example.com", "password": "x", "extra": "y"}, want: `unknown field "extra"`},
 		"pattern mismatch":     {values: map[string]any{"domain": "UPPER.example", "password": "x"}, want: "does not match"},
 		"max length":           {values: map[string]any{"domain": strings.Repeat("a", 300), "password": "x"}, want: "at most 253 characters"},

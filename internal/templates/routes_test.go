@@ -90,7 +90,7 @@ func TestRoutesGet(t *testing.T) {
 		t.Errorf("template metadata = %+v", detail.Template)
 	}
 	secret := detail.Template.Fields[4]
-	if secret.Key != "password" || secret.Type != FieldSecret || secret.Default != nil || !secret.Required || !secret.Generate {
+	if secret.Key != "password" || secret.Type != FieldSecret || secret.Default != nil || !secret.Required || secret.Generate == nil {
 		t.Errorf("secret field = %+v", secret)
 	}
 	if !strings.Contains(recorder.Body.String(), `"generate":true`) {
@@ -171,7 +171,7 @@ func TestRoutesRenderErrors(t *testing.T) {
 		body string
 		want string
 	}{
-		"missing required": {body: `{"values":{"domain":"app.example.com"}}`, want: "is required"},
+		"missing required": {body: `{"values":{"password":"x"}}`, want: "is required"},
 		"unknown field":    {body: `{"values":{"domain":"a.b","password":"x","typo":1}}`, want: "unknown field"},
 		"invalid value":    {body: `{"values":{"domain":"a.b","password":"x","count":"many"}}`, want: "whole number"},
 		"empty body":       {body: "", want: "request body is required"},

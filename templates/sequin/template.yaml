@@ -22,17 +22,15 @@ fields:
   - key: secret_key
     label: Application secret key
     type: secret
-    required: true
-    pattern: "^[A-Za-z0-9+/=_-]{64,}$"
-    max_length: 256
-    help: "Phoenix refuses a secret_key_base shorter than 64 bytes. Generate one with: openssl rand -base64 64"
+    generate:
+      length: 64
+      charset: base64
   - key: vault_key
     label: Vault key
     type: secret
-    required: true
-    pattern: "^[A-Za-z0-9+/]{43}=$"
-    max_length: 64
-    help: "Base64 of exactly 32 bytes. Generate one with: openssl rand -base64 32"
+    generate:
+      length: 32
+      charset: base64
 routes:
   - service: sequin
     port: 7376

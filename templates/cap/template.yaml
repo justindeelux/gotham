@@ -41,17 +41,15 @@ fields:
   - key: database_encryption_key
     label: Database encryption key
     type: secret
-    required: true
-    help: 64 hex characters; generate with openssl rand -hex 32. Losing it makes encrypted fields unreadable.
-    pattern: ^[0-9a-f]{64}$
-    max_length: 64
+    generate:
+      length: 64
+      charset: hex
   - key: nextauth_secret
     label: Session secret
     type: secret
-    required: true
-    help: 64 hex characters that sign login sessions; generate with openssl rand -hex 32.
-    pattern: ^[0-9a-f]{64}$
-    max_length: 64
+    generate:
+      length: 64
+      charset: hex
   - key: aws_access_key
     label: S3 access key
     type: secret

@@ -35,15 +35,15 @@ fields:
   - key: key_vaults_secret
     label: Key vaults secret
     type: secret
-    required: true
-    pattern: ^[A-Za-z0-9+/]{43}=$
-    help: Base64 of 32 bytes, for example openssl rand -base64 32.
+    generate:
+      length: 32
+      charset: base64
   - key: auth_secret
     label: Auth secret
     type: secret
-    required: true
-    pattern: ^[A-Za-z0-9+/]{43}=$
-    help: Base64 of 32 bytes, for example openssl rand -base64 32.
+    generate:
+      length: 32
+      charset: base64
 routes:
   - service: lobe-chat
     port: 3210

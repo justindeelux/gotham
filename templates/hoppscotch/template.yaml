@@ -16,9 +16,9 @@ fields:
   - key: data_key
     label: Encryption key
     type: secret
-    required: true
-    pattern: ^[A-Za-z0-9+/]{43}=$
-    help: "Run: openssl rand -base64 32. The API rejects any other format."
+    generate:
+      length: 32
+      charset: base64
   - key: db_name
     label: Database name
     type: text

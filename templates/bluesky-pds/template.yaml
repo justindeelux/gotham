@@ -35,9 +35,9 @@ fields:
   - key: rotation_key
     label: Rotation key
     type: secret
-    required: true
-    pattern: ^[0-9a-f]{64}$
-    help: "Run: openssl rand -hex 32. The PDS rejects any other format."
+    generate:
+      length: 64
+      charset: hex
 routes:
   - service: pds
     port: 3000

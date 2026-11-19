@@ -17,10 +17,9 @@ fields:
   - key: project_secret
     label: Project secret
     type: secret
-    required: true
-    pattern: ^[a-f0-9]{64}$
-    max_length: 64
-    help: Must be 64 characters. Run `openssl rand -hex 32` and paste the result.
+    generate:
+      length: 64
+      charset: hex
   - key: db_name
     label: Database name
     type: text

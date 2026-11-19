@@ -17,10 +17,10 @@ fields:
   - key: app_key
     label: Application key
     type: secret
-    required: true
-    pattern: ^base64:[A-Za-z0-9+/]{43}=$
-    max_length: 51
-    help: Laravel needs a base64-encoded 32-byte key. Run `openssl rand -base64 32` and prefix the result with `base64:`.
+    generate:
+      length: 32
+      charset: base64
+      prefix: "base64:"
   - key: db_name
     label: Database name
     type: text

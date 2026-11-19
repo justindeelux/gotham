@@ -28,10 +28,9 @@ fields:
   - key: app_secret
     label: Application secret
     type: secret
-    required: true
-    pattern: ^[0-9a-f]{64}$
-    max_length: 64
-    help: Exactly 64 hexadecimal characters from `openssl rand -hex 32`. Signs sessions.
+    generate:
+      length: 64
+      charset: hex
 routes:
   - service: docmost
     port: 3000

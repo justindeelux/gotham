@@ -33,10 +33,9 @@ fields:
   - key: session_password
     label: Session password
     type: secret
-    required: true
-    pattern: ^[A-Za-z0-9+/=_-]{32,}$
-    max_length: 512
-    help: At least 32 characters from `openssl rand -base64 32`; signs sessions.
+    generate:
+      length: 32
+      charset: base64
 routes:
   - service: leantime
     port: 8080

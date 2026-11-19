@@ -147,6 +147,9 @@ func builtinValues(template Template) map[string]any {
 		if _, ok := values[field.Key]; ok {
 			continue
 		}
+		if field.Generate != nil {
+			continue
+		}
 		if field.Default != nil {
 			values[field.Key] = *field.Default
 			continue
@@ -349,7 +352,7 @@ func TestBuiltinSecretFieldsAreNotBakedIn(t *testing.T) {
 	}
 	for _, template := range catalog.List() {
 		for _, field := range template.Fields {
-			if field.Type == FieldSecret && (field.Default != nil || !field.Required) {
+			if field.Type == FieldSecret && (field.Default != nil || (!field.Required && field.Generate == nil)) {
 				t.Errorf("%s: secret field %q has a default or is optional", template.Slug, field.Key)
 			}
 		}
@@ -363,7 +366,7 @@ func TestBuiltinGeneratableFieldsAreTextOrSecret(t *testing.T) {
 	}
 	for _, template := range catalog.List() {
 		for _, field := range template.Fields {
-			if field.Generate && field.Type != FieldSecret && field.Type != FieldText {
+			if field.Generate != nil && field.Type != FieldSecret && field.Type != FieldText {
 				t.Errorf("%s: generatable field %q is not text or secret", template.Slug, field.Key)
 			}
 		}

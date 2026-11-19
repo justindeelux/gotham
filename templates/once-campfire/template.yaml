@@ -17,9 +17,9 @@ fields:
   - key: secret_key_base
     label: Secret key base
     type: secret
-    required: true
-    pattern: ^[A-Za-z0-9+/=_-]{32,128}$
-    help: At least 32 characters, for example from openssl rand -hex 32. Changing it signs every user out.
+    generate:
+      length: 64
+      charset: hex
 routes:
   - service: campfire
     port: 80

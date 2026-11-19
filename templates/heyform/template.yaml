@@ -17,17 +17,15 @@ fields:
   - key: session_secret
     label: Session key
     type: secret
-    required: true
-    pattern: ^[A-Za-z0-9+/=_-]{32,}$
-    max_length: 512
-    help: At least 32 characters from `openssl rand -base64 32`; signs sessions.
+    generate:
+      length: 32
+      charset: base64
   - key: form_secret
     label: Form encryption key
     type: secret
-    required: true
-    pattern: ^[A-Za-z0-9+/=_-]{32,}$
-    max_length: 512
-    help: At least 32 characters from `openssl rand -base64 32`; encrypts saved form data.
+    generate:
+      length: 32
+      charset: base64
   - key: keydb_password
     label: KeyDB password
     type: secret

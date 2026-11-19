@@ -1,6 +1,7 @@
 package templates
 
 import (
+	"encoding/json"
 	"errors"
 	"fmt"
 	"strings"
@@ -121,7 +122,7 @@ func TestLoadSample(t *testing.T) {
 	if field := template.Fields[3]; field.Type != FieldBool || field.Default == nil || *field.Default != "false" {
 		t.Errorf("debug field = %+v", field)
 	}
-	if field := template.Fields[4]; field.Type != FieldSecret || field.Default != nil || !field.Required || !field.Generate {
+	if field := template.Fields[4]; field.Type != FieldSecret || field.Default != nil || !field.Required || field.Generate == nil {
 		t.Errorf("password field = %+v", field)
 	}
 	if _, ok := catalog.Get("nope"); ok {
@@ -156,8 +157,36 @@ func TestLoadAllowsGenerateOnText(t *testing.T) {
 		t.Fatal("Get(demo) not found")
 	}
 	field := template.Fields[5]
-	if field.Type != FieldText || !field.Generate || field.MaxLength != 12 {
+	if field.Type != FieldText || field.Generate == nil || field.MaxLength != 12 {
 		t.Errorf("note field = %+v", field)
+	}
+}
+
+func TestLoadGenerateObject(t *testing.T) {
+	files := sampleFiles()
+	files["demo/template.yaml"] = strings.Replace(
+		sampleTemplateYAML,
+		"    required: true\n    generate: true\n",
+		"    generate:\n      length: 64\n      charset: hex\n",
+		1,
+	)
+	template, ok := mustCatalog(t, files).Get("demo")
+	if !ok {
+		t.Fatal("Get(demo) not found")
+	}
+	generate := template.Fields[4].Generate
+	if generate == nil || generate.Length != 64 || generate.Charset != CharsetHex || generate.Prefix != "" {
+		t.Fatalf("generate = %+v", generate)
+	}
+	if template.Fields[4].Required {
+		t.Error("a generated secret should not need required")
+	}
+	encoded, err := json.Marshal(template.Fields[4])
+	if err != nil {
+		t.Fatalf("Marshal: %v", err)
+	}
+	if !strings.Contains(string(encoded), `"generate":{"length":64,"charset":"hex"}`) {
+		t.Errorf("field JSON = %s", encoded)
 	}
 }
 
@@ -306,7 +335,7 @@ func TestLoadRejectsBadDefinitions(t *testing.T) {
 			want:  "must declare a default",
 		},
 		"secret not required": {
-			files: map[string]string{"demo/template.yaml": strings.Replace(sampleTemplateYAML, "    type: secret\n    required: true\n", "    type: secret\n", 1), "demo/compose.yaml": sampleComposeYAML},
+			files: map[string]string{"demo/template.yaml": strings.Replace(sampleTemplateYAML, "    type: secret\n    required: true\n    generate: true\n", "    type: secret\n", 1), "demo/compose.yaml": sampleComposeYAML},
 			want:  "secret fields must be required",
 		},
 		"secret with default": {
@@ -328,6 +357,18 @@ func TestLoadRejectsBadDefinitions(t *testing.T) {
 		"generate with short max_length": {
 			files: map[string]string{"demo/template.yaml": strings.Replace(sampleTemplateYAML, "    required: true\n    generate: true\n", "    required: true\n    generate: true\n    max_length: 12\n", 1), "demo/compose.yaml": sampleComposeYAML},
 			want:  "generated secrets need max_length of at least 16",
+		},
+		"generate with unknown charset": {
+			files: map[string]string{"demo/template.yaml": strings.Replace(sampleTemplateYAML, "    generate: true\n", "    generate:\n      length: 32\n      charset: emoji\n", 1), "demo/compose.yaml": sampleComposeYAML},
+			want:  "generate charset must be",
+		},
+		"generate with short length": {
+			files: map[string]string{"demo/template.yaml": strings.Replace(sampleTemplateYAML, "    generate: true\n", "    generate:\n      length: 12\n      charset: hex\n", 1), "demo/compose.yaml": sampleComposeYAML},
+			want:  "generate length must be at least 16",
+		},
+		"generate with unknown key": {
+			files: map[string]string{"demo/template.yaml": strings.Replace(sampleTemplateYAML, "    generate: true\n", "    generate:\n      size: 32\n", 1), "demo/compose.yaml": sampleComposeYAML},
+			want:  `generate has no key "size"`,
 		},
 		"invalid number default": {
 			files: map[string]string{"demo/template.yaml": strings.Replace(sampleTemplateYAML, "default: 2", "default: two", 1), "demo/compose.yaml": sampleComposeYAML},

@@ -17,9 +17,9 @@ fields:
   - key: jwt_secret
     label: JWT secret
     type: secret
-    required: true
-    pattern: ^[A-Za-z0-9]{32,}$
-    help: Signs JWT sessions; at least 32 characters. Generate one with openssl rand -hex 32. Changing it logs every user out.
+    generate:
+      length: 64
+      charset: hex
 routes:
   - service: vikunja
     port: 3456

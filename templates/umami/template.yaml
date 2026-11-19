@@ -22,10 +22,9 @@ fields:
   - key: app_secret
     label: Application secret
     type: secret
-    required: true
-    pattern: "^[A-Za-z0-9+/=_-]{32,}$"
-    max_length: 256
-    help: "Signs session tokens with HS256, so it needs at least 32 characters. Generate one with: openssl rand -hex 32"
+    generate:
+      length: 64
+      charset: hex
 routes:
   - service: umami
     port: 3000

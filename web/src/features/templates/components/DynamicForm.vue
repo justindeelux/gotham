@@ -112,8 +112,9 @@ function setSecretInput(field: TemplateField, input: unknown): void {
 }
 
 function fillGenerated(field: TemplateField): void {
-  const length = field.max_length ? Math.min(24, field.max_length) : 24;
-  setValue(field.key, generateSecret(length));
+  const spec = typeof field.generate === "object" ? field.generate : null;
+  const length = spec?.length ?? (field.max_length ? Math.min(24, field.max_length) : 24);
+  setValue(field.key, generateSecret(length, spec?.charset, spec?.prefix));
   announcement.value = t("templates.secret.generated", { label: field.label });
   if (field.type !== "secret") {
     return;

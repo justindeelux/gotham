@@ -17,9 +17,9 @@ fields:
   - key: app_key
     label: App key
     type: secret
-    required: true
-    pattern: ^[A-Za-z0-9+/]{43}=$
-    help: Orbit needs a base64-encoded 32-byte key. Generate one with openssl rand -base64 32. Keep it safe; Orbit cannot read its stored secrets without it.
+    generate:
+      length: 32
+      charset: base64
 routes:
   - service: orbit
     port: 8080

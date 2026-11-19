@@ -17,36 +17,38 @@ import {
 // observer while naive-ui loads; jsdom has neither, and the observer must exist
 // before that import, so both stubs are hoisted with the module mocks.
 vi.hoisted(() => {
-  if (typeof window === "undefined") {
+  const view = globalThis.window as unknown as {
+    matchMedia?: unknown;
+    ResizeObserver?: unknown;
+  };
+  if (!view) {
     return;
   }
-  if (!window.matchMedia) {
-    window.matchMedia = (() => ({
+  if (!view.matchMedia) {
+    view.matchMedia = () => ({
       matches: false,
       media: "",
       addEventListener: () => {},
       removeEventListener: () => {},
-    })) as unknown as typeof window.matchMedia;
+    });
   }
-  if (!window.ResizeObserver) {
+  if (!view.ResizeObserver) {
     class ResizeObserverStub {
-      constructor(
-        private readonly callback: (entries: Array<{
-          target: Element;
-          contentRect: { width: number; height: number };
-        }>) => void,
-      ) {}
+      private readonly listener: (_entries: unknown[]) => void;
 
-      observe(target: Element): void {
-        this.callback([{ target, contentRect: { width: 1024, height: 420 } }]);
+      constructor(listener: (_entries: unknown[]) => void) {
+        this.listener = listener;
+      }
+
+      observe(target: unknown): void {
+        this.listener([{ target, contentRect: { width: 1024, height: 420 } }]);
       }
 
       unobserve(): void {}
 
       disconnect(): void {}
     }
-    window.ResizeObserver =
-      ResizeObserverStub as unknown as typeof window.ResizeObserver;
+    view.ResizeObserver = ResizeObserverStub;
   }
 });
 

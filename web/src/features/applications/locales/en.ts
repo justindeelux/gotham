@@ -47,10 +47,10 @@ const en = {
     containersError: "The containers could not be loaded.",
     noContainers: "No container for this application yet. Deploy it first.",
     empty: "This folder is empty.",
+    startContainer: "Start the container to browse its files.",
     upload: "Upload",
     newFolder: "New folder",
     truncated: "Only part of this folder could be read.",
-    loadMore: "Load more",
     table: {
       name: "Name",
       kind: "Type",

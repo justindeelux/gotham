@@ -29,6 +29,7 @@ import {
   describeContainerFileError,
   destinationExists,
   downloadContainerFile,
+  isContainerNotRunning,
   listContainerFiles,
   readContainerFile,
   uploadContainerFile,
@@ -61,6 +62,10 @@ interface PromptState {
 
 const TEXT_LIMIT = 1024 * 1024;
 
+// The tar fallback still pages a container without a shell; the ceiling keeps
+// a broken cursor from looping forever.
+const LISTING_PAGE_CEILING = 50;
+
 const props = defineProps<Props>();
 const { t } = useI18n();
 
@@ -73,7 +78,7 @@ const capabilities = ref<ContainerFileCapabilities | null>(null);
 const path = ref<string>("/");
 const entries = ref<ContainerFileEntry[]>([]);
 const truncated = ref(false);
-const cursor = ref("");
+const notRunning = ref(false);
 const loading = ref(false);
 const errorMessage = ref<string | null>(null);
 const busy = ref(false);
@@ -128,6 +133,14 @@ const showPicker = computed<boolean>(() => containers.value.length > 1);
 
 const canExec = computed<boolean>(() => capabilities.value?.exec_available === true);
 
+const containerRunning = computed<boolean>(() => capabilities.value?.state === "running");
+
+// A stopped container has no files to browse: the tab asks to start it
+// instead of listing, and Refresh re-checks the state.
+const needsStart = computed<boolean>(
+  () => notRunning.value || (capabilities.value !== null && !containerRunning.value),
+);
+
 const execBlockedReason = computed<string>(() => {
   const blocked = capabilities.value?.exec_blocked_by ?? "";
   if (blocked === "not_running") {
@@ -169,67 +182,90 @@ watch(
   { immediate: true },
 );
 
-watch(containerId, (value) => {
+watch(containerId, async (value) => {
   path.value = "/";
   entries.value = [];
-  cursor.value = "";
   truncated.value = false;
+  notRunning.value = false;
   capabilities.value = null;
-  if (value !== "") {
-    void loadCapabilities();
-    void load("/", "");
+  errorMessage.value = null;
+  if (value === "") {
+    return;
+  }
+  const current = await loadCapabilities();
+  if (current?.state === "running") {
+    await load("/");
   }
 });
 
-async function loadCapabilities(): Promise<void> {
+async function loadCapabilities(): Promise<ContainerFileCapabilities | null> {
   if (containerId.value === "") {
-    return;
+    return null;
   }
   try {
-    capabilities.value = await containerFileCapabilities(props.appId, containerId.value);
+    const next = await containerFileCapabilities(props.appId, containerId.value);
+    capabilities.value = next;
+    if (next.state === "running") {
+      notRunning.value = false;
+    }
+    return next;
   } catch (err) {
     capabilities.value = null;
     errorMessage.value = describeContainerFileError(err);
+    return null;
   }
 }
 
-async function load(directory: string, nextCursor: string): Promise<void> {
+async function load(directory: string): Promise<void> {
   if (containerId.value === "") {
     return;
   }
   loading.value = true;
   try {
-    const listing = await listContainerFiles(props.appId, containerId.value, directory, nextCursor);
-    if (nextCursor === "") {
-      entries.value = listing.entries;
-    } else {
-      entries.value = [...entries.value, ...listing.entries];
+    let listing = await listContainerFiles(props.appId, containerId.value, directory);
+    const collected = [...listing.entries];
+    // An exec listing returns the whole folder at once. Only the tar fallback
+    // (a container without a shell) still pages, so this loop follows its
+    // cursor to the end instead of asking the user to load more.
+    let pages = 1;
+    while (listing.truncated && listing.cursor && pages < LISTING_PAGE_CEILING) {
+      listing = await listContainerFiles(
+        props.appId,
+        containerId.value,
+        directory,
+        listing.cursor,
+      );
+      collected.push(...listing.entries);
+      pages += 1;
     }
     path.value = listing.directory?.path || directory || "/";
+    entries.value = collected;
     truncated.value = listing.truncated;
-    cursor.value = listing.cursor ?? "";
+    notRunning.value = false;
     errorMessage.value = null;
   } catch (err) {
-    errorMessage.value = describeContainerFileError(err);
+    if (isContainerNotRunning(err)) {
+      notRunning.value = true;
+      entries.value = [];
+      errorMessage.value = null;
+    } else {
+      errorMessage.value = describeContainerFileError(err);
+    }
   } finally {
     loading.value = false;
   }
 }
 
-function refresh(): void {
-  void loadContainers();
-  void load(path.value, "");
-  void loadCapabilities();
-}
-
-function loadMore(): void {
-  if (cursor.value !== "") {
-    void load(path.value, cursor.value);
+async function refresh(): Promise<void> {
+  await loadContainers();
+  const current = await loadCapabilities();
+  if (current?.state === "running") {
+    await load(path.value);
   }
 }
 
 function openDirectory(target: string): void {
-  void load(target, "");
+  void load(target);
 }
 
 function openEntry(entry: ContainerFileEntry): void {
@@ -272,7 +308,7 @@ async function saveEditor(): Promise<void> {
   try {
     await writeContainerFile(props.appId, containerId.value, entry.path, editor.value.content);
     editor.value.open = false;
-    await load(path.value, "");
+    await load(path.value);
   } catch (err) {
     editor.value.error = describeContainerFileError(err);
   } finally {
@@ -296,7 +332,7 @@ async function onFilesPicked(event: Event): Promise<void> {
     for (const file of files) {
       await uploadContainerFile(props.appId, containerId.value, path.value, file);
     }
-    await load(path.value, "");
+    await load(path.value);
   } catch (err) {
     errorMessage.value = describeContainerFileError(err);
   } finally {
@@ -393,7 +429,7 @@ async function submitPrompt(): Promise<void> {
       }
     }
     prompt.value.open = false;
-    await load(path.value, "");
+    await load(path.value);
   } catch (err) {
     state.error = describeContainerFileError(err);
   } finally {
@@ -410,7 +446,7 @@ async function confirmDelete(): Promise<void> {
   try {
     await changeContainerFiles(props.appId, containerId.value, "delete", { path: entry.path });
     deleteTarget.value = null;
-    await load(path.value, "");
+    await load(path.value);
   } catch (err) {
     errorMessage.value = describeContainerFileError(err);
   } finally {
@@ -745,7 +781,7 @@ const promptPlaceholder = computed<string>(() => {
 
     <template v-else>
       <NAlert
-        v-if="capabilities && !capabilities.exec_available"
+        v-if="capabilities && containerRunning && !capabilities.exec_available"
         type="info"
         :show-icon="true"
         class="app-files-note"
@@ -765,85 +801,86 @@ const promptPlaceholder = computed<string>(() => {
         {{ errorMessage }}
       </NAlert>
 
-      <div class="app-files-toolbar">
-        <nav class="app-files-breadcrumb" aria-label="breadcrumb">
-          <NButton
-            text
-            size="small"
-            data-testid="files-breadcrumb-root"
-            @click="openDirectory('/')"
-          >
-            /
-          </NButton>
-          <template v-for="segment in segments" :key="segment.path">
-            <span class="muted">/</span>
+      <NEmpty
+        v-if="needsStart"
+        data-testid="files-start-container"
+        :description="t('applications.files.startContainer')"
+      />
+
+      <template v-else>
+        <div class="app-files-toolbar">
+          <nav class="app-files-breadcrumb" aria-label="breadcrumb">
             <NButton
               text
               size="small"
-              :data-testid="`files-breadcrumb-${segment.name}`"
-              @click="openDirectory(segment.path)"
+              data-testid="files-breadcrumb-root"
+              @click="openDirectory('/')"
             >
-              {{ segment.name }}
+              /
             </NButton>
-          </template>
-        </nav>
+            <template v-for="segment in segments" :key="segment.path">
+              <span class="muted">/</span>
+              <NButton
+                text
+                size="small"
+                :data-testid="`files-breadcrumb-${segment.name}`"
+                @click="openDirectory(segment.path)"
+              >
+                {{ segment.name }}
+              </NButton>
+            </template>
+          </nav>
 
-        <NSpace v-if="canWrite" align="center" :size="8">
-          <NButton
-            size="small"
-            secondary
-            data-testid="files-upload"
-            :disabled="busy"
-            @click="pickFiles"
-          >
-            {{ t("applications.files.upload") }}
-          </NButton>
-          <NButton
-            size="small"
-            secondary
-            data-testid="files-new-folder"
-            :disabled="busy || !canExec"
-            :title="!canExec ? execBlockedReason : t('applications.files.newFolder')"
-            @click="openPrompt('mkdir', null)"
-          >
-            {{ t("applications.files.newFolder") }}
-          </NButton>
-          <input
-            ref="fileInput"
-            class="app-files-input"
-            type="file"
-            multiple
-            data-testid="files-input"
-            @change="onFilesPicked"
-          />
-        </NSpace>
-      </div>
+          <NSpace v-if="canWrite" align="center" :size="8">
+            <NButton
+              size="small"
+              secondary
+              data-testid="files-upload"
+              :disabled="busy"
+              @click="pickFiles"
+            >
+              {{ t("applications.files.upload") }}
+            </NButton>
+            <NButton
+              size="small"
+              secondary
+              data-testid="files-new-folder"
+              :disabled="busy || !canExec"
+              :title="!canExec ? execBlockedReason : t('applications.files.newFolder')"
+              @click="openPrompt('mkdir', null)"
+            >
+              {{ t("applications.files.newFolder") }}
+            </NButton>
+            <input
+              ref="fileInput"
+              class="app-files-input"
+              type="file"
+              multiple
+              data-testid="files-input"
+              @change="onFilesPicked"
+            />
+          </NSpace>
+        </div>
 
-      <NDataTable
-        :columns="columns"
-        :data="entries"
-        :loading="loading"
-        :row-key="rowKey"
-        :bordered="false"
-        :max-height="420"
-      >
-        <template #empty>
-          <NEmpty :description="t('applications.files.empty')" />
-        </template>
-      </NDataTable>
-
-      <div v-if="truncated" class="app-files-truncated">
-        <span class="muted">{{ t("applications.files.truncated") }}</span>
-        <NButton
-          v-if="cursor"
-          size="small"
-          secondary
-          data-testid="files-load-more"
-          @click="loadMore"
+        <NDataTable
+          :columns="columns"
+          :data="entries"
+          :loading="loading"
+          :row-key="rowKey"
+          :bordered="false"
+          :max-height="420"
+          :min-row-height="36"
+          :virtual-scroll="true"
         >
-          {{ t("applications.files.loadMore") }}
-        </NButton>
-      </div>
+          <template #empty>
+            <NEmpty :description="t('applications.files.empty')" />
+          </template>
+        </NDataTable>
+
+        <div v-if="truncated" class="app-files-truncated">
+          <span class="muted">{{ t("applications.files.truncated") }}</span>
+        </div>
+      </template>
     </template>
   </NCard>
 

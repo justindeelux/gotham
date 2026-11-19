@@ -124,6 +124,12 @@ export function destinationExists(error: unknown): boolean {
   return isApiError(error) && error.status === 409 && /already exists/i.test(error.message);
 }
 
+// isContainerNotRunning reads the stable code the control plane adds when the
+// listing needs a running container.
+export function isContainerNotRunning(error: unknown): boolean {
+  return isApiError(error) && error.code === "not_running";
+}
+
 export async function writeContainerFile(
   appId: string,
   containerId: string,

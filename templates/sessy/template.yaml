@@ -28,10 +28,9 @@ fields:
   - key: secret_key
     label: Application secret key
     type: secret
-    required: true
-    pattern: "^[A-Za-z0-9+/=_-]{30,}$"
-    max_length: 256
-    help: "Rails refuses a secret shorter than 30 characters. Generate one with: openssl rand -hex 32"
+    generate:
+      length: 64
+      charset: hex
 routes:
   - service: sessy
     port: 80

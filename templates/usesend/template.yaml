@@ -27,9 +27,9 @@ fields:
   - key: nextauth_secret
     label: NextAuth secret
     type: secret
-    required: true
-    pattern: ^[A-Za-z0-9+/=_-]{32,128}$
-    help: At least 32 characters, for example from openssl rand -hex 32.
+    generate:
+      length: 64
+      charset: hex
   - key: aws_access_key
     label: AWS access key
     type: secret

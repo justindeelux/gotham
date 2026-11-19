@@ -39,10 +39,9 @@ fields:
   - key: analytics_salt
     label: Analytics salt
     type: secret
-    required: true
-    help: Exactly 64 random characters that hash listener IPs; generate with openssl rand -base64 48. Rotating it resets episode stats.
-    pattern: ^[A-Za-z0-9+/=]{64}$
-    max_length: 64
+    generate:
+      length: 48
+      charset: base64
 routes:
   - service: castopod
     port: 8080

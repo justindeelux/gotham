@@ -36,9 +36,9 @@ fields:
   - key: core_secret
     label: Core secret
     type: secret
-    required: true
-    help: At least 32 characters that sign sessions and share links; generate with openssl rand -hex 32.
-    pattern: ^[A-Za-z0-9]{32,}$
+    generate:
+      length: 64
+      charset: hex
 routes:
   - service: zipline
     port: 3000

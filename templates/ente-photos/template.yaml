@@ -44,24 +44,21 @@ fields:
   - key: encryption_key
     label: Encryption key
     type: secret
-    required: true
-    help: Base64 of exactly 32 bytes; generate with openssl rand -base64 32. Losing it makes the library unrecoverable.
-    pattern: ^[A-Za-z0-9+/]{43}=$
-    max_length: 44
+    generate:
+      length: 32
+      charset: base64
   - key: hash_key
     label: Hash key
     type: secret
-    required: true
-    help: Base64 of exactly 32 bytes; generate with openssl rand -base64 32. Every server needs it.
-    pattern: ^[A-Za-z0-9+/]{43}=$
-    max_length: 44
+    generate:
+      length: 32
+      charset: base64
   - key: jwt_secret
     label: JWT secret
     type: secret
-    required: true
-    help: At least 32 URL-safe characters that sign login tokens; generate with openssl rand -hex 32.
-    pattern: ^[A-Za-z0-9_-]{32,256}$
-    max_length: 256
+    generate:
+      length: 64
+      charset: hex
   - key: s3_access_key
     label: S3 access key
     type: secret

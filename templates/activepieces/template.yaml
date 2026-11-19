@@ -22,9 +22,9 @@ fields:
   - key: encryption_key
     label: Encryption key
     type: secret
-    required: true
-    pattern: ^[0-9a-f]{32}$
-    help: Exactly 32 hex characters; generate with openssl rand -hex 16.
+    generate:
+      length: 32
+      charset: hex
   - key: jwt_secret
     label: JWT secret
     type: secret

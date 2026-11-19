@@ -263,16 +263,29 @@ giao dịch, nên host đã bị chiếm sẽ làm hỏng toàn bộ lần tạo
 
 ### Tạo giá trị bí mật
 
-Các trường bí mật được đánh dấu có thể tạo sẽ hiện nút **Tạo ngẫu nhiên** bên cạnh
-ô nhập. Nút này điền một giá trị gồm 24 chữ cái và chữ số, được tạo ngay trong trình
-duyệt; không có gì được gửi đi trước khi bạn tạo dịch vụ. Dùng **Sao chép** để lưu
-giá trị ở nơi an toàn — bí mật chỉ ghi được một lần sau khi tạo — nhưng bạn vẫn có
-thể tự nhập giá trị của mình.
+Các trường được đánh dấu có thể tạo sẽ hiện nút **Tạo ngẫu nhiên** bên cạnh ô nhập.
+Nút này điền một giá trị ngẫu nhiên theo định dạng của trường, được tạo ngay trong
+trình duyệt; không có gì được gửi đi trước khi bạn tạo dịch vụ. Dùng **Sao chép** để
+lưu giá trị ở nơi an toàn — bí mật chỉ ghi được một lần sau khi tạo — nhưng bạn vẫn
+có thể tự nhập giá trị của mình. Nếu để trống, nền tảng tạo giá trị lúc tạo dịch vụ.
 
-Tác giả template bật tính năng này cho từng trường bằng `generate: true` trên một
-trường `secret`. Trường đó không được khai báo `pattern`, và `max_length` nếu có phải
-lớn hơn hoặc bằng 16. Khai báo `generate` trên bất kỳ loại trường nào khác là lỗi khi
-tải.
+Tác giả template bật tính năng này cho từng trường bằng `generate: true` để có giá
+trị 24 ký tự chữ và số, hoặc bằng dạng đối tượng:
+
+```yaml
+generate:
+  length: 64
+  charset: hex
+  prefix: ""
+```
+
+`charset` là `alphanumeric` (mặc định), `hex` hoặc `base64`. Với hai loại đầu,
+`length` là số ký tự đầu ra; với `base64`, `length` là số byte ngẫu nhiên và giá trị
+là base64 chuẩn có padding của số byte đó, nên 32 byte cho 44 ký tự. `prefix` là
+chuỗi tuỳ chọn được ghép vào trước sau khi mã hoá, ví dụ cho khoá dạng `base64:...`.
+`length` phải lớn hơn hoặc bằng 16. Trường được tạo không được khai báo `pattern`, và
+`generate` chỉ áp dụng cho trường `text` và `secret`; khai báo ở loại trường khác là
+lỗi khi tải. Trường bí mật được tạo không cần `required`.
 
 ### Việc dựng tạo ra gì
 

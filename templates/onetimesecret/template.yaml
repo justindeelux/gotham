@@ -17,10 +17,9 @@ fields:
   - key: secret
     label: Application secret
     type: secret
-    required: true
-    help: A long random hex string; generate with "openssl rand -hex 32". Encrypts stored secrets, so back it up.
-    pattern: ^[0-9a-f]{64,128}$
-    max_length: 128
+    generate:
+      length: 64
+      charset: hex
   - key: redis_password
     label: Redis password
     type: secret

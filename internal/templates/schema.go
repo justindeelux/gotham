@@ -16,6 +16,14 @@ import (
 )
 
 const (
+	// CharsetAlphanumeric, CharsetHex and CharsetBase64 name the alphabets a
+	// generated value can use.
+	CharsetAlphanumeric = "alphanumeric"
+	CharsetHex          = "hex"
+	CharsetBase64       = "base64"
+
+	defaultGeneratedLength = 24
+
 	MaxTemplateYAML      = 64 << 10
 	MaxNameLength        = 80
 	MaxDescriptionLength = 280
@@ -62,7 +70,7 @@ type Field struct {
 	Min         *int64    `json:"min,omitempty"`
 	Max         *int64    `json:"max,omitempty"`
 	Options     []string  `json:"options,omitempty"`
-	Generate    bool      `json:"generate,omitempty"`
+	Generate    *Generate `json:"generate,omitempty"`
 
 	compiled *regexp.Regexp
 }
@@ -105,19 +113,19 @@ type routeDocument struct {
 }
 
 type fieldDocument struct {
-	Key         string   `yaml:"key"`
-	Label       string   `yaml:"label"`
-	Type        string   `yaml:"type"`
-	Required    bool     `yaml:"required"`
-	Default     any      `yaml:"default"`
-	Placeholder string   `yaml:"placeholder"`
-	Help        string   `yaml:"help"`
-	Pattern     string   `yaml:"pattern"`
-	MaxLength   int      `yaml:"max_length"`
-	Min         *int64   `yaml:"min"`
-	Max         *int64   `yaml:"max"`
-	Options     []string `yaml:"options"`
-	Generate    bool     `yaml:"generate"`
+	Key         string          `yaml:"key"`
+	Label       string          `yaml:"label"`
+	Type        string          `yaml:"type"`
+	Required    bool            `yaml:"required"`
+	Default     any             `yaml:"default"`
+	Placeholder string          `yaml:"placeholder"`
+	Help        string          `yaml:"help"`
+	Pattern     string          `yaml:"pattern"`
+	MaxLength   int             `yaml:"max_length"`
+	Min         *int64          `yaml:"min"`
+	Max         *int64          `yaml:"max"`
+	Options     []string        `yaml:"options"`
+	Generate    generateSetting `yaml:"generate"`
 }
 
 func parseTemplate(slug string, document []byte) (Template, error) {
@@ -276,7 +284,7 @@ func parseField(raw fieldDocument) (Field, error) {
 		MaxLength:   raw.MaxLength,
 		Min:         raw.Min,
 		Max:         raw.Max,
-		Generate:    raw.Generate,
+		Generate:    raw.Generate.spec,
 	}
 	field.Type = FieldType(strings.TrimSpace(raw.Type))
 	if field.Label == "" {
@@ -295,12 +303,15 @@ func parseField(raw fieldDocument) (Field, error) {
 	hasPattern := field.Pattern != ""
 	hasBounds := field.Min != nil || field.Max != nil
 	hasOptions := len(raw.Options) > 0
-	if field.Generate {
+	if field.Generate != nil {
 		if field.Type != FieldSecret && field.Type != FieldText {
 			return Field{}, fmt.Errorf("%w: field %q: generate applies to text and secret fields only", ErrValidation, key)
 		}
 		if hasPattern {
 			return Field{}, fmt.Errorf("%w: field %q: generated fields must not declare a pattern", ErrValidation, key)
+		}
+		if err := field.Generate.validate(); err != nil {
+			return Field{}, fmt.Errorf("%w: field %q: %v", ErrValidation, key, err)
 		}
 		if field.Type == FieldSecret && field.MaxLength != 0 && field.MaxLength < minGeneratedLength {
 			return Field{}, fmt.Errorf("%w: field %q: generated secrets need max_length of at least %d", ErrValidation, key, minGeneratedLength)
@@ -362,7 +373,7 @@ func parseField(raw fieldDocument) (Field, error) {
 	}
 
 	if field.Type == FieldSecret {
-		if !field.Required {
+		if !field.Required && field.Generate == nil {
 			return Field{}, fmt.Errorf("%w: field %q: secret fields must be required, a secret is never pre-filled", ErrValidation, key)
 		}
 		if raw.Default != nil {
@@ -378,7 +389,7 @@ func parseField(raw fieldDocument) (Field, error) {
 			return Field{}, fmt.Errorf("%w: field %q: invalid default: %v", ErrValidation, key, err)
 		}
 		field.Default = &text
-	} else if !field.Required {
+	} else if !field.Required && field.Generate == nil {
 		return Field{}, fmt.Errorf("%w: field %q: a field that is not required must declare a default", ErrValidation, key)
 	}
 	return field, nil

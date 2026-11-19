@@ -17,10 +17,9 @@ fields:
   - key: secret_key_base
     label: Rails secret key base
     type: secret
-    required: true
-    pattern: ^[a-f0-9]{128}$
-    max_length: 128
-    help: Rails rejects short values. Run `openssl rand -hex 64` and paste the 128 characters.
+    generate:
+      length: 128
+      charset: hex
   - key: db_name
     label: Database name
     type: text

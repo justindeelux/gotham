@@ -50,7 +50,7 @@ fields:                         # 1-32 fields
   - key: db_password
     type: secret
     required: true
-    generate: true             # secret only: offer a generated value in the console
+    generate: true              # text/secret: make a value when none is given
 routes:                         # optional; declares the routes the platform creates
   - service: wordpress          # must exist in compose.yaml
     port: 80                    # container port, 1-65535
@@ -67,14 +67,25 @@ Rules the loader enforces:
 - `category` is optional; when present it lists 1-3 unique lowercase slugs
   (letters, digits and `-`, starting with a letter). An older template without
   either key keeps loading unchanged.
-- A field that is not `required` must declare a `default`; every default must
-  itself pass the field's type rules (so `default: 20` with `max: 10` fails at
-  load).
-- `secret` fields must be `required` and must not declare a `default`: a
-  password is never baked into a template.
-- `generate: true` is allowed on `secret` fields only and makes the console
-  offer a generated value. A generated field must not declare `pattern`; when
-  `max_length` is set it must be at least 16.
+- A field that is not `required` must declare a `default` unless it declares
+  `generate`; every default must itself pass the field's type rules (so
+  `default: 20` with `max: 10` fails at load).
+- `secret` fields must be `required` unless they declare `generate`, and must
+  not declare a `default`: a password is never baked into a template.
+- `generate` is allowed on `text` and `secret` fields only and makes the
+  platform create a value when the field is left empty. `generate: true` means
+  24 alphanumeric characters; the object form sizes it:
+
+  ```yaml
+  generate:
+    length: 64      # output characters, or random bytes for base64
+    charset: hex    # alphanumeric (default), hex or base64
+    prefix: ""      # optional literal before the value, e.g. "base64:"
+  ```
+
+  `base64` is standard padded base64 of `length` random bytes. `length` must be
+  at least 16. A generated field must not declare `pattern`; for a generated
+  secret, `max_length` when set must be at least 16.
 - `pattern`/`max_length` apply to `text` and `secret`, `min`/`max` to
   `number`, `options` to `select`; anything else is an error.
 - Every declared field must be referenced by `compose.yaml` at least once or

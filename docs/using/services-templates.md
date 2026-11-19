@@ -272,15 +272,31 @@ service in one transaction, so a host already taken fails the whole create.
 
 ### Generating secret values
 
-Secret fields marked generatable show a **Generate** button next to the input.
-It fills the field with a fresh 24-character value made of letters and digits,
-generated in the browser; nothing is sent anywhere until you create the service.
-Use **Copy** to store the value somewhere safe — a secret is write-only after
-creation — but you can still type your own value instead.
+Fields marked generatable show a **Generate** button next to the input. It fills
+the field with a fresh random value in the field's format, generated in the
+browser; nothing is sent anywhere until you create the service. Use **Copy** to
+store the value somewhere safe — a secret is write-only after creation — but you
+can still type your own value instead. Leave the field empty and the platform
+generates the value when the service is created.
 
-Template authors opt in per field with `generate: true` on a `secret` field. Such
-a field must not declare `pattern`, and `max_length`, when set, must be at least
-16. Declaring `generate` on any other field type is a load error.
+Template authors opt in per field with `generate: true` for a 24-character value
+made of letters and digits, or with the object form:
+
+```yaml
+generate:
+  length: 64
+  charset: hex
+  prefix: ""
+```
+
+`charset` is `alphanumeric` (the default), `hex` or `base64`. For the first two,
+`length` counts output characters; for `base64` it counts random bytes and the
+value is standard padded base64 of them, so 32 bytes give 44 characters.
+`prefix` is an optional literal prepended after encoding, for keys such as
+`base64:...`. `length` must be at least 16. A generated field must not declare
+`pattern`, and `generate` applies to `text` and `secret` fields only; declaring
+it on any other field type is a load error. A generated secret field does not
+need `required`.
 
 ### What rendering produces
 

@@ -29,15 +29,15 @@ fields:
   - key: secret_key
     label: Secret key
     type: secret
-    required: true
-    pattern: ^[A-Za-z0-9]{32,}$
-    help: Signs sessions and tokens; at least 32 characters. Generate one with openssl rand -hex 32. Changing it logs every user out.
+    generate:
+      length: 64
+      charset: hex
   - key: live_secret
     label: Live server secret
     type: secret
-    required: true
-    pattern: ^[A-Za-z0-9]{32,}$
-    help: Secures the realtime collaboration server; at least 32 characters. Generate one with openssl rand -hex 32.
+    generate:
+      length: 64
+      charset: hex
   - key: minio_user
     label: Object storage user
     type: text

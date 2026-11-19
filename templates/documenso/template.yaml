@@ -28,24 +28,21 @@ fields:
   - key: auth_secret
     label: Authentication secret
     type: secret
-    required: true
-    pattern: ^[A-Za-z0-9+/=_-]{32,}$
-    max_length: 512
-    help: At least 32 characters from `openssl rand -base64 32`. Signs login sessions.
+    generate:
+      length: 32
+      charset: base64
   - key: encryption_key
     label: Encryption key
     type: secret
-    required: true
-    pattern: ^[A-Za-z0-9+/=_-]{32,}$
-    max_length: 512
-    help: At least 32 characters from `openssl rand -base64 32`. Encrypts stored data.
+    generate:
+      length: 32
+      charset: base64
   - key: secondary_encryption_key
     label: Secondary encryption key
     type: secret
-    required: true
-    pattern: ^[A-Za-z0-9+/=_-]{32,}$
-    max_length: 512
-    help: A second key from `openssl rand -base64 32`; it decrypts data written with the previous key.
+    generate:
+      length: 32
+      charset: base64
   - key: signing_passphrase
     label: Signing passphrase
     type: secret

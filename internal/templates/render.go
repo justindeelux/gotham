@@ -135,6 +135,13 @@ func (f Field) resolve(values map[string]any) (string, error) {
 		if f.Default != nil {
 			return f.check(*f.Default)
 		}
+		if f.Generate != nil {
+			generated, err := f.Generate.value()
+			if err != nil {
+				return "", fmt.Errorf("%w: field %q: generate value: %v", ErrValidation, f.Key, err)
+			}
+			return f.check(generated)
+		}
 		return "", fmt.Errorf("%w: field %q is required", ErrValidation, f.Key)
 	}
 	text, err := scalarValue(raw)

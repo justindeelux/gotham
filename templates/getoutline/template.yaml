@@ -33,10 +33,9 @@ fields:
   - key: secret_key
     label: Secret key
     type: secret
-    required: true
-    pattern: ^[0-9a-f]{64}$
-    max_length: 64
-    help: Exactly 64 hexadecimal characters from `openssl rand -hex 32`. Encrypts stored data; losing it makes existing content unreadable.
+    generate:
+      length: 64
+      charset: hex
   - key: utils_secret
     label: Utilities secret
     type: secret

@@ -37,15 +37,15 @@ fields:
   - key: creds_key
     label: Credentials key
     type: secret
-    required: true
-    pattern: ^[0-9a-f]{64}$
-    help: 64 hex characters, for example openssl rand -hex 32.
+    generate:
+      length: 64
+      charset: hex
   - key: creds_iv
     label: Credentials IV
     type: secret
-    required: true
-    pattern: ^[0-9a-f]{32}$
-    help: 32 hex characters, for example openssl rand -hex 16.
+    generate:
+      length: 32
+      charset: hex
   - key: db_password
     label: Vector database password
     type: secret

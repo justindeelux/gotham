@@ -16,10 +16,9 @@ fields:
   - key: encryption_key
     label: Encryption key
     type: secret
-    required: true
-    help: A 32-byte base64 key; generate with "openssl rand -base64 32". Losing it makes stored tokens unreadable.
-    pattern: ^[A-Za-z0-9+/]{43}=$
-    max_length: 44
+    generate:
+      length: 32
+      charset: base64
 routes:
   - service: pocket-id
     port: 1411

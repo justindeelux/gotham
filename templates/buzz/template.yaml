@@ -44,15 +44,15 @@ fields:
   - key: relay_private_key
     label: Relay private key
     type: secret
-    required: true
-    pattern: ^[0-9a-f]{64}$
-    help: 64 lowercase hex characters, for example from openssl rand -hex 32. Keep it stable; changing it changes the relay's public key.
+    generate:
+      length: 64
+      charset: hex
   - key: git_hmac_secret
     label: Git hook HMAC secret
     type: secret
-    required: true
-    pattern: ^[0-9a-f]{64}$
-    help: 64 lowercase hex characters, for example from openssl rand -hex 32. Signs git hook callbacks between the relay and the git service.
+    generate:
+      length: 64
+      charset: hex
   - key: s3_bucket
     label: Media bucket
     type: text

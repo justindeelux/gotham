@@ -6,6 +6,12 @@ import { checkTemplateField, validateTemplateFields } from "@/features/templates
 
 export type TemplateFieldType = "text" | "secret" | "number" | "select" | "bool";
 
+export interface TemplateGenerateSpec {
+  length: number;
+  charset: "alphanumeric" | "hex" | "base64";
+  prefix?: string;
+}
+
 export interface TemplateField {
   key: string;
   label: string;
@@ -19,7 +25,8 @@ export interface TemplateField {
   min?: number;
   max?: number;
   options?: string[];
-  generate?: boolean;
+  // true keeps the legacy 24-character alphanumeric default.
+  generate?: boolean | TemplateGenerateSpec;
 }
 
 export interface TemplateSummary {

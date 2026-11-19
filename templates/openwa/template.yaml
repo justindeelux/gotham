@@ -17,9 +17,9 @@ fields:
   - key: api_master_key
     label: API master key
     type: secret
-    required: true
-    pattern: ^[A-Za-z0-9+/=_-]{32,128}$
-    help: At least 32 characters, for example from openssl rand -hex 32. Authenticates API clients.
+    generate:
+      length: 64
+      charset: hex
   - key: db_user
     label: Database user
     type: text

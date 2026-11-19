@@ -13,51 +13,37 @@ import (
 
 // Values for fields whose pattern rejects the generic generated secret.
 const (
-	testBatch222Secret32  = "0123456789abcdef0123456789abcdef"
-	testBatch222Hex64     = "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef"
-	testBatch222Base64Key = "MDEyMzQ1Njc4OWFiY2RlZjAxMjM0NTY3ODlhYmNkZWY="
+	testBatch222Secret32 = "0123456789abcdef0123456789abcdef"
 )
 
 func init() {
 	for slug, values := range map[string]map[string]any{
-		"orbit": {"app_key": testBatch222Base64Key},
 		"plane": {
 			"db_password":       testBatch222Secret32,
-			"secret_key":        testBatch222Secret32,
-			"live_secret":       testBatch222Secret32,
 			"minio_password":    testBatch222Secret32,
 			"rabbitmq_password": testBatch222Secret32,
 		},
 		"reactive-resume": {
-			"db_password":       testBatch222Secret32,
-			"auth_secret":       testBatch222Secret32,
-			"encryption_secret": testBatch222Secret32,
+			"db_password": testBatch222Secret32,
 		},
 		"redmine": {
-			"db_password":     testBatch222Secret32,
-			"secret_key_base": testBatch222Hex64,
+			"db_password": testBatch222Secret32,
 		},
 		"snipe-it": {
-			"app_key":          "base64:" + testBatch222Base64Key,
 			"db_password":      testBatch222Secret32,
 			"db_root_password": testBatch222Secret32,
 		},
 		"teable": {
 			"db_password":    testBatch222Secret32,
 			"redis_password": testBatch222Secret32,
-			"secret_key":     testBatch222Secret32,
 		},
 		"tolgee": {
 			"admin_password": testBatch222Secret32,
-			"jwt_secret":     testBatch222Secret32,
 			"db_password":    testBatch222Secret32,
 		},
 		"twenty": {
-			"db_password":    testBatch222Secret32,
-			"app_secret":     testBatch222Secret32,
-			"encryption_key": testBatch222Secret32,
+			"db_password": testBatch222Secret32,
 		},
-		"vikunja": {"jwt_secret": testBatch222Secret32},
 	} {
 		builtinSamples[slug] = values
 	}

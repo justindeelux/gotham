@@ -17,17 +17,15 @@ fields:
   - key: encryption_key
     label: Encryption key
     type: secret
-    required: true
-    help: A 16-byte hex string; generate with "openssl rand -hex 16". Losing it makes every stored secret unreadable.
-    pattern: ^[0-9a-f]{32}$
-    max_length: 32
+    generate:
+      length: 32
+      charset: hex
   - key: auth_secret
     label: Auth secret
     type: secret
-    required: true
-    help: A 32-byte base64 string; generate with "openssl rand -base64 32". Signs session tokens and JWTs.
-    pattern: ^[A-Za-z0-9+/]{43}=$
-    max_length: 44
+    generate:
+      length: 32
+      charset: base64
   - key: db_user
     label: Database user
     type: text

@@ -17,10 +17,9 @@ fields:
   - key: secret_key
     label: Secret key
     type: secret
-    required: true
-    help: At least 50 random characters; generate with "openssl rand -hex 32". Signs sessions and tokens.
-    pattern: ^[A-Za-z0-9+/=_-]{50,128}$
-    max_length: 128
+    generate:
+      length: 64
+      charset: hex
   - key: db_user
     label: Database user
     type: text

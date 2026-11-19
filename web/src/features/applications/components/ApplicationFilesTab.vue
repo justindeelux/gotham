@@ -1,22 +1,30 @@
 <script setup lang="ts">
+import { ChevronRight, MoreVertical } from "@lucide/vue";
 import {
   NAlert,
   NButton,
   NCard,
   NDataTable,
+  NDropdown,
   NEmpty,
   NInput,
   NModal,
   NSelect,
   NSpace,
   NSpin,
-  NTag,
 } from "naive-ui";
-import type { DataTableColumns } from "naive-ui";
+import type { DataTableColumns, DropdownOption } from "naive-ui";
 import { resolveValidationMessage } from "@/shared/i18n";
 import { computed, h, onMounted, ref, watch } from "vue";
-import type { VNode } from "vue";
+import type { HTMLAttributes, VNode } from "vue";
 import { useI18n } from "vue-i18n";
+
+import CodeEditor from "@/features/files/components/CodeEditor.vue";
+import FileTypeIcon from "@/features/files/components/FileTypeIcon.vue";
+import { detectLanguage } from "@/features/files/utils/editor";
+import type { EditorLanguageId } from "@/features/files/utils/editor";
+import { entryIconKind } from "@/features/files/utils/files";
+import type { FilesIconKind } from "@/features/files/utils/files";
 
 import type {
   ContainerFileAction,
@@ -42,6 +50,7 @@ import {
   containerFileModeSchema,
   containerFileNameSchema,
 } from "@/features/applications/schemas/containerFiles";
+import { containerFileMenuOptions } from "@/features/applications/utils/containerFileMenu";
 
 interface Props {
   appId: string;
@@ -506,186 +515,175 @@ function formatTime(entry: ContainerFileEntry): string {
   return Number.isNaN(parsed.getTime()) ? "—" : parsed.toLocaleString();
 }
 
-function rowAction(
-  entry: ContainerFileEntry,
-  action: ContainerFileAction,
-  label: string,
-  options: { requiresExec?: boolean; primary?: boolean } = {},
-): VNode {
-  const requiresExec = options.requiresExec !== false;
+const selectedPath = ref("");
+
+const menuEntry = ref<ContainerFileEntry | null>(null);
+const menuOpen = ref(false);
+const menuX = ref(0);
+const menuY = ref(0);
+
+const editorLanguage = computed<EditorLanguageId>(() =>
+  editor.value.entry === null ? "plain" : detectLanguage(editor.value.entry.path),
+);
+
+const menuOptions = computed<DropdownOption[]>(() => {
+  const entry = menuEntry.value;
+  if (entry === null) {
+    return [];
+  }
+  return containerFileMenuOptions(entry, {
+    canWrite: props.canWrite,
+    canExec: canExec.value,
+    execReason: execBlockedReason.value,
+    t: (key: string) => String(t(key)),
+  });
+});
+
+function openMenu(entry: ContainerFileEntry, x: number, y: number): void {
+  menuEntry.value = entry;
+  menuX.value = x;
+  menuY.value = y;
+  menuOpen.value = true;
+}
+
+function onMenuSelect(key: string): void {
+  menuOpen.value = false;
+  const entry = menuEntry.value;
+  if (entry === null) {
+    return;
+  }
+  if (key === "open") {
+    openDirectory(entry.path);
+  } else if (key === "edit") {
+    void openEditor(entry);
+  } else if (key === "download") {
+    void download(entry);
+  } else {
+    changeAction(key as ContainerFileAction, entry);
+  }
+}
+
+function iconKind(entry: ContainerFileEntry): FilesIconKind {
+  // entryIconKind reads the kind and the name; the rest fills the server entry
+  // shape the shared helper expects.
+  return entryIconKind({ ...entry, modified_at: "", etag: "" });
+}
+
+// The row's own handlers must not swallow events aimed at the row controls:
+// Enter on the "..." button and a double click on it belong to the menu.
+const ROW_CONTROL_SELECTOR = ".app-files-more";
+
+function isRowControl(event: Event): boolean {
+  return (
+    event.target instanceof Element &&
+    event.target.closest(ROW_CONTROL_SELECTOR) !== null
+  );
+}
+
+function rowProps(entry: ContainerFileEntry): HTMLAttributes {
+  return {
+    class: [
+      "app-files-row",
+      entry.path === selectedPath.value ? "is-selected" : "",
+    ],
+    tabindex: 0,
+    onClick: () => {
+      selectedPath.value = entry.path;
+    },
+    onDblclick: (event: MouseEvent) => {
+      if (isRowControl(event)) {
+        return;
+      }
+      openEntry(entry);
+    },
+    onKeydown: (event: KeyboardEvent) => {
+      if (event.key !== "Enter" || isRowControl(event)) {
+        return;
+      }
+      event.preventDefault();
+      openEntry(entry);
+    },
+    onContextmenu: (event: MouseEvent) => {
+      event.preventDefault();
+      openMenu(entry, event.clientX, event.clientY);
+    },
+  };
+}
+
+function nameCell(entry: ContainerFileEntry): VNode {
+  return h("div", { class: "app-files-cell-name", "data-entry": entry.path }, [
+    h(FileTypeIcon, { kind: iconKind(entry) }),
+    h("span", { class: "app-files-entry mono", title: entry.name }, entry.name),
+    entry.kind === "symlink" && entry.symlink_target
+      ? h(
+          "span",
+          { class: "app-files-target mono muted", title: entry.symlink_target },
+          ` → ${entry.symlink_target}`,
+        )
+      : null,
+  ]);
+}
+
+function moreCell(entry: ContainerFileEntry): VNode {
   return h(
     NButton,
     {
       size: "tiny",
-      secondary: true,
-      "data-testid": `files-action-${action}`,
-      disabled: busy.value || (requiresExec && !canExec.value),
-      title: requiresExec && !canExec.value ? execBlockedReason.value : label,
+      quaternary: true,
+      class: "app-files-more",
+      "aria-haspopup": "menu",
+      "aria-label": String(t("applications.files.rowMenu", { name: entry.name })),
       onClick: (event: MouseEvent) => {
-        event.stopPropagation();
-        changeAction(action, entry);
+        const box = (event.currentTarget as HTMLElement).getBoundingClientRect();
+        openMenu(entry, box.left, box.bottom);
       },
     },
-    { default: () => label },
+    { icon: () => h(MoreVertical, { size: 16, "aria-hidden": "true" }) },
   );
 }
 
-function actionsCell(entry: ContainerFileEntry): VNode {
-  const controls: VNode[] = [];
-  if (entry.kind === "directory") {
-    controls.push(
-      h(
-        NButton,
-        {
-          size: "tiny",
-          secondary: true,
-          "data-testid": "files-action-open",
-          onClick: (event: MouseEvent) => {
-            event.stopPropagation();
-            openDirectory(entry.path);
-          },
-        },
-        { default: () => String(t("applications.files.actions.open")) },
-      ),
-    );
-  }
-  if (entry.kind === "file" || entry.kind === "symlink") {
-    controls.push(
-      h(
-        NButton,
-        {
-          size: "tiny",
-          secondary: true,
-          "data-testid": "files-action-edit",
-          onClick: (event: MouseEvent) => {
-            event.stopPropagation();
-            void openEditor(entry);
-          },
-        },
-        { default: () => String(t("applications.files.actions.edit")) },
-      ),
-    );
-  }
-  if (entry.kind !== "special") {
-    controls.push(
-      h(
-        NButton,
-        {
-          size: "tiny",
-          secondary: true,
-          "data-testid": "files-action-download",
-          disabled: busy.value,
-          onClick: (event: MouseEvent) => {
-            event.stopPropagation();
-            void download(entry);
-          },
-        },
-        { default: () => String(t("applications.files.actions.download")) },
-      ),
-    );
-  }
-  if (props.canWrite) {
-    controls.push(rowAction(entry, "rename", String(t("applications.files.actions.rename"))));
-    controls.push(rowAction(entry, "copy", String(t("applications.files.actions.copy"))));
-    controls.push(rowAction(entry, "move", String(t("applications.files.actions.move"))));
-    controls.push(rowAction(entry, "chmod", String(t("applications.files.actions.chmod"))));
-    controls.push(
-      h(
-        NButton,
-        {
-          size: "tiny",
-          secondary: true,
-          type: "error",
-          "data-testid": "files-action-delete",
-          disabled: busy.value || !canExec.value,
-          title: !canExec.value ? execBlockedReason.value : String(t("applications.files.actions.delete")),
-          onClick: (event: MouseEvent) => {
-            event.stopPropagation();
-            changeAction("delete", entry);
-          },
-        },
-        { default: () => String(t("applications.files.actions.delete")) },
-      ),
-    );
-  }
-  return h(NSpace, { size: 4, wrap: true }, { default: () => controls });
-}
-
-function kindCell(entry: ContainerFileEntry): VNode {
-  const label =
-    entry.kind === "directory"
-      ? String(t("applications.files.kinds.directory"))
-      : entry.kind === "symlink"
-        ? String(t("applications.files.kinds.symlink"))
-        : entry.kind === "special"
-          ? String(t("applications.files.kinds.special"))
-          : String(t("applications.files.kinds.file"));
-  const type = entry.kind === "directory" ? "info" : entry.kind === "special" ? "warning" : "default";
-  return h(NTag, { size: "small", type, round: true }, { default: () => label });
-}
-
-const columns = computed<DataTableColumns<ContainerFileEntry>>(() => {
-  const rows: DataTableColumns<ContainerFileEntry> = [
-    {
-      title: t("applications.files.table.name"),
-      key: "name",
-      minWidth: 220,
-      ellipsis: { tooltip: true },
-      render: (entry) =>
-        h(
-          "button",
-          {
-            class: "app-files-name",
-            type: "button",
-            onClick: () => openEntry(entry),
-          },
-          [
-            h("span", { class: "mono" }, entry.name),
-            entry.kind === "symlink" && entry.symlink_target
-              ? h("span", { class: "app-files-target mono muted" }, ` → ${entry.symlink_target}`)
-              : null,
-          ],
-        ),
-    },
-    {
-      title: t("applications.files.table.kind"),
-      key: "kind",
-      width: 120,
-      render: kindCell,
-    },
-    {
-      title: t("applications.files.table.size"),
-      key: "size",
-      width: 110,
-      render: (entry) => h("span", { class: "mono muted" }, formatSize(entry)),
-    },
-    {
-      title: t("applications.files.table.mode"),
-      key: "mode",
-      width: 90,
-      render: (entry) => h("span", { class: "mono" }, formatMode(entry.mode)),
-    },
-    {
-      title: t("applications.files.table.owner"),
-      key: "owner",
-      width: 100,
-      render: (entry) => h("span", { class: "mono muted" }, `${entry.uid}:${entry.gid}`),
-    },
-    {
-      title: t("applications.files.table.modified"),
-      key: "modified",
-      width: 170,
-      render: (entry) => h("span", { class: "muted" }, formatTime(entry)),
-    },
-    {
-      title: t("applications.files.table.actions"),
-      key: "actions",
-      minWidth: 280,
-      render: actionsCell,
-    },
-  ];
-  return rows;
-});
+const columns = computed<DataTableColumns<ContainerFileEntry>>(() => [
+  {
+    title: t("applications.files.table.name"),
+    key: "name",
+    minWidth: 220,
+    render: nameCell,
+  },
+  {
+    title: t("applications.files.table.size"),
+    key: "size",
+    width: 110,
+    render: (entry) =>
+      h("span", { class: "mono muted app-files-cell" }, formatSize(entry)),
+  },
+  {
+    title: t("applications.files.table.mode"),
+    key: "mode",
+    width: 90,
+    render: (entry) =>
+      h("span", { class: "mono app-files-cell" }, formatMode(entry.mode)),
+  },
+  {
+    title: t("applications.files.table.owner"),
+    key: "owner",
+    width: 100,
+    render: (entry) =>
+      h("span", { class: "mono muted app-files-cell" }, `${entry.uid}:${entry.gid}`),
+  },
+  {
+    title: t("applications.files.table.modified"),
+    key: "modified",
+    width: 170,
+    render: (entry) =>
+      h("span", { class: "muted app-files-cell" }, formatTime(entry)),
+  },
+  {
+    title: "",
+    key: "actions",
+    width: 52,
+    render: moreCell,
+  },
+]);
 
 function rowKey(entry: ContainerFileEntry): string {
   return entry.path;
@@ -832,7 +830,7 @@ const promptPlaceholder = computed<string>(() => {
               /
             </NButton>
             <template v-for="segment in segments" :key="segment.path">
-              <span class="muted">/</span>
+              <ChevronRight class="app-files-crumb-sep" :size="14" aria-hidden="true" />
               <NButton
                 text
                 size="small"
@@ -876,14 +874,17 @@ const promptPlaceholder = computed<string>(() => {
         </div>
 
         <NDataTable
+          class="app-files-table"
           :columns="columns"
           :data="entries"
           :loading="loading"
           :row-key="rowKey"
+          :row-props="rowProps"
           :bordered="false"
           :max-height="420"
-          :min-row-height="36"
+          :min-row-height="40"
           :virtual-scroll="true"
+          data-testid="files-table"
         >
           <template #empty>
             <NEmpty :description="t('applications.files.empty')" />
@@ -897,10 +898,23 @@ const promptPlaceholder = computed<string>(() => {
     </template>
   </NCard>
 
+  <NDropdown
+    trigger="manual"
+    placement="bottom-start"
+    :show="menuOpen"
+    :x="menuX"
+    :y="menuY"
+    :options="menuOptions"
+    @select="onMenuSelect"
+    @clickoutside="menuOpen = false"
+  >
+    <span class="app-files-menu-anchor" aria-hidden="true"></span>
+  </NDropdown>
+
   <NModal
     :show="editor.open"
     preset="card"
-    class="app-modal"
+    class="app-modal standard-width"
     :title="t('applications.files.editor.title', { name: editor.entry?.name ?? '' })"
     :mask-closable="!editor.saving"
     @update:show="editor.open = $event"
@@ -908,13 +922,14 @@ const promptPlaceholder = computed<string>(() => {
     <NAlert v-if="editor.error" type="error" :show-icon="true" class="app-files-note">
       {{ editor.error }}
     </NAlert>
-    <NInput
-      v-model:value="editor.content"
-      type="textarea"
-      class="app-files-editor"
-      :autosize="{ minRows: 12, maxRows: 24 }"
-      :disabled="editor.saving || !hasText"
+    <CodeEditor
+      v-if="editor.open"
+      v-model="editor.content"
+      :language="editorLanguage"
+      :read-only="editor.saving || !hasText"
+      height="min(60vh, 480px)"
       data-testid="files-editor-input"
+      @save="saveEditor"
     />
     <template #footer>
       <NSpace justify="end" :size="8">
@@ -937,7 +952,7 @@ const promptPlaceholder = computed<string>(() => {
   <NModal
     :show="prompt.open"
     preset="card"
-    class="app-modal"
+    class="app-modal standard-width"
     :title="promptTitle"
     :mask-closable="!prompt.saving"
     @update:show="prompt.open = $event"
@@ -974,7 +989,7 @@ const promptPlaceholder = computed<string>(() => {
   <NModal
     :show="deleteTarget !== null"
     preset="card"
-    class="app-modal"
+    class="app-modal standard-width"
     :title="t('applications.files.delete.title')"
     :mask-closable="!deleting"
     @update:show="deleteTarget = null"
@@ -1035,26 +1050,62 @@ const promptPlaceholder = computed<string>(() => {
   min-width: 0;
 }
 
-.app-files-name {
-  display: inline-flex;
-  align-items: baseline;
-  gap: var(--space-1);
-  padding: 0;
-  border: 0;
-  background: transparent;
-  color: var(--text);
-  font: inherit;
-  cursor: pointer;
-  text-align: left;
+.app-files-crumb-sep {
+  color: var(--muted);
 }
 
-.app-files-name:hover,
-.app-files-name:focus-visible {
-  text-decoration: underline;
+.app-files-table {
+  --fm-mark-size: var(--space-6);
 }
 
-.app-files-target {
+.app-files-table :deep(.app-files-row) {
+  cursor: default;
+}
+
+.app-files-table :deep(.app-files-row.is-selected) {
+  background: var(--hover-row);
+}
+
+.app-files-table :deep(.app-files-cell-name) {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  min-width: 0;
+}
+
+.app-files-table :deep(.app-files-entry),
+.app-files-table :deep(.app-files-target),
+.app-files-table :deep(.app-files-cell) {
+  overflow: hidden;
+  white-space: nowrap;
+  text-overflow: ellipsis;
+}
+
+.app-files-table :deep(.app-files-target) {
   font-size: var(--text-xs);
+}
+
+.app-files-table :deep(.app-files-more) {
+  opacity: 0;
+  transition: opacity var(--motion-base) var(--ease-standard);
+}
+
+.app-files-table :deep(.app-files-row:hover .app-files-more),
+.app-files-table :deep(.app-files-row:focus-within .app-files-more) {
+  opacity: 1;
+}
+
+/* No hover on touch, so the row menu button must always be visible there. */
+@media (hover: none) {
+  .app-files-table :deep(.app-files-more) {
+    opacity: 1;
+  }
+}
+
+.app-files-menu-anchor {
+  position: fixed;
+  width: 0;
+  height: 0;
 }
 
 .app-files-truncated {
@@ -1067,11 +1118,5 @@ const promptPlaceholder = computed<string>(() => {
 
 .app-files-input {
   display: none;
-}
-
-.app-files-editor :deep(textarea) {
-  font-family: var(--font-mono);
-  font-size: var(--text-sm);
-  line-height: 1.5;
 }
 </style>

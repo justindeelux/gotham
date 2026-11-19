@@ -53,20 +53,13 @@ const vi: ApplicationsMessages = {
     upload: "Tải lên",
     newFolder: "Thư mục mới",
     truncated: "Chỉ đọc được một phần thư mục này.",
+    rowMenu: "Thao tác cho {name}",
     table: {
       name: "Tên",
-      kind: "Loại",
       size: "Kích thước",
       mode: "Quyền",
       owner: "Chủ sở hữu",
       modified: "Sửa đổi",
-      actions: "Thao tác",
-    },
-    kinds: {
-      file: "Tệp",
-      directory: "Thư mục",
-      symlink: "Liên kết",
-      special: "Đặc biệt",
     },
     actions: {
       open: "Mở",

@@ -51,20 +51,13 @@ const en = {
     upload: "Upload",
     newFolder: "New folder",
     truncated: "Only part of this folder could be read.",
+    rowMenu: "Actions for {name}",
     table: {
       name: "Name",
-      kind: "Type",
       size: "Size",
       mode: "Mode",
       owner: "Owner",
       modified: "Modified",
-      actions: "Actions",
-    },
-    kinds: {
-      file: "File",
-      directory: "Folder",
-      symlink: "Link",
-      special: "Special",
     },
     actions: {
       open: "Open",

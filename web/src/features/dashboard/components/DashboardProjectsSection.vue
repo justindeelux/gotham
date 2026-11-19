@@ -43,7 +43,7 @@ function retry(): void {
     <template v-if="!store.loaded && !store.error">
       <NText depth="3" class="meta">{{ $t("dashboard.projects.loading") }}</NText>
       <div class="project-grid" aria-busy="true">
-        <NSkeleton v-for="index in 2" :key="index" height="116px" />
+        <NSkeleton v-for="index in 2" :key="index" height="138px" />
       </div>
     </template>
 

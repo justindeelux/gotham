@@ -7,7 +7,7 @@ import { fileURLToPath } from "node:url";
 import { expect, test } from "@playwright/test";
 import type { Page } from "@playwright/test";
 
-/* global URL, getComputedStyle, window:readonly */
+/* global URL, HTMLElement:readonly, getComputedStyle, window:readonly */
 
 const testsDir = dirname(fileURLToPath(import.meta.url));
 const webdistRoot = resolve(testsDir, "../../internal/server/webdist");
@@ -56,6 +56,25 @@ const projects = [
     updated_at: "2026-10-01T00:00:00Z",
     environment_count: 1,
     resource_counts: { applications: 2, services: 2, databases: 0 },
+  },
+  {
+    id: "44444444-4444-4444-8444-444444444444",
+    name: "analytics-pipeline-with-a-name-long-enough-to-truncate",
+    description: "",
+    created_at: "2026-10-01T00:00:00Z",
+    updated_at: "2026-10-01T00:00:00Z",
+    environment_count: 4,
+    resource_counts: { applications: 1, services: 1, databases: 1 },
+  },
+  {
+    id: "55555555-5555-4555-8555-555555555555",
+    name: "warehouse",
+    description:
+      "A deliberately long description that runs well past two lines so the card clamps it instead of growing, keeping every card in the grid the same height no matter how much text a project carries.",
+    created_at: "2026-10-01T00:00:00Z",
+    updated_at: "2026-10-01T00:00:00Z",
+    environment_count: 1,
+    resource_counts: { applications: 0, services: 0, databases: 2 },
   },
 ];
 
@@ -166,8 +185,68 @@ test("projects grid shows three columns at 1280px", async ({ page }) => {
     "the projects page keeps environment and resource counts",
   ).toContainText("2 environments");
   await expect(page.locator(".project-card-link").first()).toContainText(
-    "6 resources total",
+    "6 resources",
   );
+});
+
+test("project cards keep one height with and without a description", async ({
+  page,
+}) => {
+  for (const width of [1366, 390]) {
+    await page.setViewportSize({ width, height: 900 });
+    await mockApi(page);
+    await page.goto(`${baseURL}/projects`);
+    await page.locator(".project-card-link").first().waitFor();
+
+    const cards = await page.locator(".project-card-link").evaluateAll((links) =>
+      links.map((link) => {
+        const box = link.getBoundingClientRect();
+        const name = link.querySelector<HTMLElement>(".project-card__name")!;
+        const desc = link.querySelector<HTMLElement>(".project-card__desc")!;
+        const stats = link.querySelector<HTMLElement>(".project-card__stats")!;
+        return {
+          height: box.height,
+          right: box.right,
+          overflow: link.scrollWidth > link.clientWidth + 1,
+          nameHeight: name.getBoundingClientRect().height,
+          nameLineHeight: parseFloat(getComputedStyle(name).lineHeight),
+          nameEllipsized: name.scrollWidth > name.clientWidth + 1,
+          descLines: Math.round(
+            desc.getBoundingClientRect().height /
+              parseFloat(getComputedStyle(desc).lineHeight),
+          ),
+          statsHeight: stats.getBoundingClientRect().height,
+        };
+      }),
+    );
+
+    expect(cards, `four cards at ${width}px`).toHaveLength(4);
+    expect(
+      new Set(cards.map((card) => Math.round(card.height))).size,
+      `one card height at ${width}px`,
+    ).toBe(1);
+    for (const card of cards) {
+      expect(card.overflow, `card fits its track at ${width}px`).toBe(false);
+      expect(
+        card.right,
+        `card stays in the viewport at ${width}px`,
+      ).toBeLessThanOrEqual(width);
+      expect(
+        card.nameHeight,
+        `the long name stays on one line at ${width}px`,
+      ).toBeLessThanOrEqual(card.nameLineHeight + 1);
+      expect(
+        card.descLines,
+        `the description is clamped to two lines at ${width}px`,
+      ).toBe(2);
+      expect(
+        card.statsHeight,
+        `the stats row keeps its height at ${width}px`,
+      ).toBeGreaterThan(0);
+    }
+    const longest = cards[2]!;
+    expect(longest.nameEllipsized, `the long name truncates at ${width}px`).toBe(true);
+  }
 });
 
 test("projects grid collapses to one column at 480px", async ({ page }) => {

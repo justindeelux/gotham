@@ -569,6 +569,17 @@ function iconKind(entry: ContainerFileEntry): FilesIconKind {
   return entryIconKind({ ...entry, modified_at: "", etag: "" });
 }
 
+// The row's own handlers must not swallow events aimed at the row controls:
+// Enter on the "..." button and a double click on it belong to the menu.
+const ROW_CONTROL_SELECTOR = ".app-files-more";
+
+function isRowControl(event: Event): boolean {
+  return (
+    event.target instanceof Element &&
+    event.target.closest(ROW_CONTROL_SELECTOR) !== null
+  );
+}
+
 function rowProps(entry: ContainerFileEntry): HTMLAttributes {
   return {
     class: [
@@ -579,9 +590,14 @@ function rowProps(entry: ContainerFileEntry): HTMLAttributes {
     onClick: () => {
       selectedPath.value = entry.path;
     },
-    onDblclick: () => openEntry(entry),
+    onDblclick: (event: MouseEvent) => {
+      if (isRowControl(event)) {
+        return;
+      }
+      openEntry(entry);
+    },
     onKeydown: (event: KeyboardEvent) => {
-      if (event.key !== "Enter") {
+      if (event.key !== "Enter" || isRowControl(event)) {
         return;
       }
       event.preventDefault();
@@ -898,7 +914,7 @@ const promptPlaceholder = computed<string>(() => {
   <NModal
     :show="editor.open"
     preset="card"
-    class="app-modal"
+    class="app-modal standard-width"
     :title="t('applications.files.editor.title', { name: editor.entry?.name ?? '' })"
     :mask-closable="!editor.saving"
     @update:show="editor.open = $event"
@@ -936,7 +952,7 @@ const promptPlaceholder = computed<string>(() => {
   <NModal
     :show="prompt.open"
     preset="card"
-    class="app-modal"
+    class="app-modal standard-width"
     :title="promptTitle"
     :mask-closable="!prompt.saving"
     @update:show="prompt.open = $event"
@@ -973,7 +989,7 @@ const promptPlaceholder = computed<string>(() => {
   <NModal
     :show="deleteTarget !== null"
     preset="card"
-    class="app-modal"
+    class="app-modal standard-width"
     :title="t('applications.files.delete.title')"
     :mask-closable="!deleting"
     @update:show="deleteTarget = null"
@@ -1077,6 +1093,13 @@ const promptPlaceholder = computed<string>(() => {
 .app-files-table :deep(.app-files-row:hover .app-files-more),
 .app-files-table :deep(.app-files-row:focus-within .app-files-more) {
   opacity: 1;
+}
+
+/* No hover on touch, so the row menu button must always be visible there. */
+@media (hover: none) {
+  .app-files-table :deep(.app-files-more) {
+    opacity: 1;
+  }
 }
 
 .app-files-menu-anchor {

@@ -1,3 +1,7 @@
+import { readFileSync } from "node:fs";
+import { dirname, resolve } from "node:path";
+import { fileURLToPath } from "node:url";
+
 import { flushPromises, mount } from "@vue/test-utils";
 import { NDropdown, NSelect } from "naive-ui";
 import type { DropdownOption } from "naive-ui";
@@ -17,6 +21,11 @@ import {
   resetLocaleState,
   syncComposerLocale,
 } from "@/shared/i18n";
+
+const tabSourcePath = resolve(
+  dirname(fileURLToPath(import.meta.url)),
+  "../src/features/applications/components/ApplicationFilesTab.vue",
+);
 
 // The table virtualizes its rows, and vueuc reads media queries and a resize
 // observer while naive-ui loads; jsdom has neither, and the observer must exist
@@ -485,6 +494,60 @@ describe("ApplicationFilesTab", () => {
     await openRowMenu(wrapper, 1);
     expect(menuKeys(wrapper)).toEqual(["edit", "download"]);
     wrapper.unmount();
+  });
+
+  it("leaves Enter and double click on the row menu button to the menu", async () => {
+    const api = await import("@/features/applications/api/containerFiles");
+    const list = vi.mocked(api.listContainerFiles);
+    const wrapper = await mountTab();
+    list.mockClear();
+    vi.mocked(api.readContainerFile).mockClear();
+
+    await wrapper.findAll(".app-files-more")[0].trigger("keydown", { key: "Enter" });
+    await flushPromises();
+    await wrapper.findAll(".app-files-more")[0].trigger("dblclick");
+    await flushPromises();
+    await wrapper.findAll(".app-files-more")[1].trigger("dblclick");
+    await flushPromises();
+    expect(list).not.toHaveBeenCalled();
+    expect(api.readContainerFile).not.toHaveBeenCalled();
+    expect(wrapper.findComponent(CodeEditor).exists()).toBe(false);
+    expect(wrapper.find('[data-testid="files-prompt-input"]').exists()).toBe(false);
+    expect(wrapper.find('[data-testid="files-delete-body"]').exists()).toBe(false);
+
+    await wrapper.findAll(".app-files-row")[0].trigger("keydown", { key: "Enter" });
+    await flushPromises();
+    expect(list).toHaveBeenCalledWith("app-1", "c1", "/app");
+    wrapper.unmount();
+  });
+
+  it("keeps every dialog on the shared standard width", async () => {
+    const editorWrapper = await mountTab();
+    await openRowMenu(editorWrapper, 1);
+    await selectMenu(editorWrapper, "edit");
+    expect(editorWrapper.findAll(".n-modal.app-modal.standard-width")).toHaveLength(1);
+    editorWrapper.unmount();
+
+    const promptWrapper = await mountTab();
+    await promptWrapper.find('[data-testid="files-new-folder"]').trigger("click");
+    await nextTick();
+    expect(promptWrapper.findAll(".n-modal.app-modal.standard-width")).toHaveLength(1);
+    promptWrapper.unmount();
+
+    const deleteWrapper = await mountTab();
+    await openRowMenu(deleteWrapper, 1);
+    await selectMenu(deleteWrapper, "delete");
+    expect(deleteWrapper.findAll(".n-modal.app-modal.standard-width")).toHaveLength(1);
+    deleteWrapper.unmount();
+  });
+
+  it("keeps the row menu button visible without hover", () => {
+    const source = readFileSync(tabSourcePath, "utf8");
+    const mediaAt = source.indexOf("@media (hover: none)");
+    expect(mediaAt).toBeGreaterThan(-1);
+    const rule = source.slice(mediaAt, source.indexOf("}", mediaAt));
+    expect(rule).toContain(".app-files-more");
+    expect(rule).toContain("opacity: 1");
   });
 
   it("opens a folder on double click and on Enter", async () => {

@@ -92,6 +92,7 @@ owner GET /api/v1/private-keys/{id}
 project GET /api/v1/projects
 project GET /api/v1/projects/{id}
 project GET /api/v1/projects/{id}/environments
+project GET /api/v1/projects/{id}/icon
 owner GET /api/v1/projects/{id}/members
 project GET /api/v1/projects/{id}/variables
 owner GET /api/v1/providers
@@ -238,6 +239,7 @@ owner POST /api/v1/private-keys/generate
 owner POST /api/v1/private-keys/{id}/reveal
 owner POST /api/v1/projects
 project POST /api/v1/projects/{id}/environments
+project POST /api/v1/projects/{id}/icon
 owner POST /api/v1/providers
 owner POST /api/v1/providers/github-app/callback
 owner POST /api/v1/providers/github-app/manifest
@@ -304,6 +306,7 @@ project PUT /api/v1/environments/{id}/variables
 owner PUT /api/v1/instance/settings/cleanup
 owner PUT /api/v1/instance/settings/general
 owner PUT /api/v1/monitoring/settings
+project PUT /api/v1/projects/{id}/icon
 owner PUT /api/v1/projects/{id}/members
 project PUT /api/v1/projects/{id}/variables
 project PUT /api/v1/services/{id}/domains/{domainId}

@@ -73,6 +73,11 @@ func (s *Server) projectAccess(next http.Handler) http.Handler {
 			hideResource(w)
 			return
 		}
+		// Binary routes carry no project references and must not be JSON-buffered.
+		if policy.binary {
+			next.ServeHTTP(w, r)
+			return
+		}
 		if !s.authorizeProjectReferences(r, userID, policy) {
 			hideResource(w)
 			return

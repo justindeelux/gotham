@@ -36,6 +36,9 @@ type ProjectService interface {
 	CreateProject(ctx context.Context, userID uuid.UUID, name, description string) (Project, Environment, error)
 	GetProject(ctx context.Context, userID, projectID uuid.UUID) (Project, []Environment, error)
 	UpdateProject(ctx context.Context, userID, projectID uuid.UUID, name, description *string) (Project, error)
+	SetProjectIcon(ctx context.Context, userID, projectID uuid.UUID, icon string) (Project, error)
+	UploadProjectIcon(ctx context.Context, userID, projectID uuid.UUID, data []byte) (Project, error)
+	GetProjectIcon(ctx context.Context, userID, projectID uuid.UUID) ([]byte, error)
 	DeleteProject(ctx context.Context, userID, projectID uuid.UUID) error
 	ListEnvironments(ctx context.Context, userID, projectID uuid.UUID) ([]Environment, error)
 	CreateEnvironment(ctx context.Context, userID, projectID uuid.UUID, name string) (Environment, error)
@@ -228,6 +231,54 @@ func (s *Service) UpdateProject(ctx context.Context, userID, projectID uuid.UUID
 		return Project{}, err
 	}
 	return s.withProjectCounts(ctx, updated)
+}
+
+func (s *Service) SetProjectIcon(ctx context.Context, userID, projectID uuid.UUID, icon string) (Project, error) {
+	if err := s.ready(); err != nil {
+		return Project{}, err
+	}
+	if userID == uuid.Nil || projectID == uuid.Nil {
+		return Project{}, ErrNotFound
+	}
+	if icon != "" {
+		key, ok := strings.CutPrefix(icon, "preset:")
+		if !ok || !IsProjectIconPreset(key) {
+			return Project{}, fmt.Errorf("%w: icon must be empty or a known preset", ErrValidation)
+		}
+	}
+	updated, err := s.repo.SetProjectIcon(ctx, projectID, icon)
+	if err != nil {
+		return Project{}, err
+	}
+	return s.withProjectCounts(ctx, updated)
+}
+
+func (s *Service) UploadProjectIcon(ctx context.Context, userID, projectID uuid.UUID, data []byte) (Project, error) {
+	if err := s.ready(); err != nil {
+		return Project{}, err
+	}
+	if userID == uuid.Nil || projectID == uuid.Nil {
+		return Project{}, ErrNotFound
+	}
+	encoded, err := normalizeProjectIcon(data)
+	if err != nil {
+		return Project{}, err
+	}
+	updated, err := s.repo.SetProjectIconUpload(ctx, projectID, encoded)
+	if err != nil {
+		return Project{}, err
+	}
+	return s.withProjectCounts(ctx, updated)
+}
+
+func (s *Service) GetProjectIcon(ctx context.Context, userID, projectID uuid.UUID) ([]byte, error) {
+	if err := s.ready(); err != nil {
+		return nil, err
+	}
+	if userID == uuid.Nil || projectID == uuid.Nil {
+		return nil, ErrNotFound
+	}
+	return s.repo.GetProjectIcon(ctx, projectID)
 }
 
 func (s *Service) DeleteProject(ctx context.Context, userID, projectID uuid.UUID) error {

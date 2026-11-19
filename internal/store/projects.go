@@ -55,6 +55,18 @@ func (s *Store) UpdateProject(ctx context.Context, params sqlc.UpdateProjectPara
 	return s.queries.UpdateProject(ctx, params)
 }
 
+func (s *Store) SetProjectIcon(ctx context.Context, id pgtype.UUID, icon string) (sqlc.SetProjectIconRow, error) {
+	return s.queries.SetProjectIcon(ctx, sqlc.SetProjectIconParams{ID: id, Icon: icon})
+}
+
+func (s *Store) SetProjectIconUpload(ctx context.Context, id pgtype.UUID, data []byte) (sqlc.SetProjectIconUploadRow, error) {
+	return s.queries.SetProjectIconUpload(ctx, sqlc.SetProjectIconUploadParams{ID: id, Data: data})
+}
+
+func (s *Store) GetProjectIcon(ctx context.Context, id pgtype.UUID) ([]byte, error) {
+	return s.queries.GetProjectIcon(ctx, id)
+}
+
 func (s *Store) DeleteProject(ctx context.Context, id pgtype.UUID) (int64, []string, error) {
 	tx, err := s.DB.Begin(ctx)
 	if err != nil {

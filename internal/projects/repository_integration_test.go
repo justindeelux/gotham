@@ -1,6 +1,7 @@
 package projects
 
 import (
+	"bytes"
 	"context"
 	"database/sql"
 	"errors"
@@ -148,6 +149,83 @@ func TestStoreRepositoryRoundtrip(t *testing.T) {
 	}
 	if _, err := repo.GetEnvironment(ctx, production.ID); !errors.Is(err, ErrNotFound) {
 		t.Fatalf("production survived its project delete: %v", err)
+	}
+}
+
+func TestStoreRepositoryProjectIcon(t *testing.T) {
+	ctx, cancel := context.WithTimeout(context.Background(), 60*time.Second)
+	defer cancel()
+
+	st := newScratchStore(t)
+	repo := newStoreRepository(st)
+	seedUser(t, ctx, st, fmt.Sprintf("icon-%d@example.com", time.Now().UnixNano()))
+
+	project, _, err := repo.CreateProject(ctx, "Shop", "")
+	if err != nil {
+		t.Fatalf("CreateProject: %v", err)
+	}
+	if project.Icon != "" {
+		t.Fatalf("new project icon = %q, want empty", project.Icon)
+	}
+
+	preset, err := repo.SetProjectIcon(ctx, project.ID, "preset:rocket")
+	if err != nil || preset.Icon != "preset:rocket" {
+		t.Fatalf("SetProjectIcon = %+v, %v", preset, err)
+	}
+	if _, err := repo.GetProjectIcon(ctx, project.ID); !errors.Is(err, ErrNotFound) {
+		t.Fatalf("preset icon bytes = %v, want ErrNotFound", err)
+	}
+
+	first := iconPNG(t, 24, 24)
+	uploaded, err := repo.SetProjectIconUpload(ctx, project.ID, first)
+	if err != nil || uploaded.Icon != ProjectIconUpload {
+		t.Fatalf("SetProjectIconUpload = %+v, %v", uploaded, err)
+	}
+	stored, err := repo.GetProjectIcon(ctx, project.ID)
+	if err != nil || !bytes.Equal(stored, first) {
+		t.Fatalf("GetProjectIcon = %d bytes, %v", len(stored), err)
+	}
+	listed, err := repo.ListProjects(ctx)
+	if err != nil || len(listed) != 1 || listed[0].Icon != ProjectIconUpload {
+		t.Fatalf("ListProjects icon = %+v, %v", listed, err)
+	}
+
+	replaced := iconPNG(t, 32, 32)
+	if _, err := repo.SetProjectIconUpload(ctx, project.ID, replaced); err != nil {
+		t.Fatalf("replace upload: %v", err)
+	}
+	stored, err = repo.GetProjectIcon(ctx, project.ID)
+	if err != nil || !bytes.Equal(stored, replaced) {
+		t.Fatalf("replaced icon = %d bytes, %v", len(stored), err)
+	}
+
+	cleared, err := repo.SetProjectIcon(ctx, project.ID, "")
+	if err != nil || cleared.Icon != "" {
+		t.Fatalf("clear icon = %+v, %v", cleared, err)
+	}
+	if _, err := repo.GetProjectIcon(ctx, project.ID); !errors.Is(err, ErrNotFound) {
+		t.Fatalf("cleared icon bytes = %v, want ErrNotFound", err)
+	}
+
+	if _, err := repo.SetProjectIconUpload(ctx, project.ID, first); err != nil {
+		t.Fatalf("upload before delete: %v", err)
+	}
+	if _, err := repo.DeleteProject(ctx, project.ID); err != nil {
+		t.Fatalf("DeleteProject: %v", err)
+	}
+	var remaining int
+	if err := st.DB.QueryRow(ctx, `SELECT count(*) FROM project_icons WHERE project_id = $1`, project.ID).Scan(&remaining); err != nil {
+		t.Fatalf("count icon rows: %v", err)
+	}
+	if remaining != 0 {
+		t.Fatalf("icon rows after project delete = %d, want 0", remaining)
+	}
+
+	if _, err := repo.SetProjectIcon(ctx, uuid.New(), "preset:rocket"); !errors.Is(err, ErrNotFound) {
+		t.Fatalf("SetProjectIcon(missing) = %v, want ErrNotFound", err)
+	}
+	if _, err := repo.SetProjectIconUpload(ctx, uuid.New(), first); !errors.Is(err, ErrNotFound) {
+		t.Fatalf("SetProjectIconUpload(missing) = %v, want ErrNotFound", err)
 	}
 }
 

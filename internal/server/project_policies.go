@@ -6,13 +6,17 @@ type projectPolicy struct {
 	listKey   string
 	create    bool
 	ownerOnly bool
+	binary    bool
 }
 
 var projectPolicies = map[string]projectPolicy{
 	"GET /api/v1/projects":                                              {kind: "project", listKey: "projects"},
 	"POST /api/v1/mcp/projects/{id}/environments":                       {kind: "project"},
 	"GET /api/v1/projects/{id}":                                         {kind: "project"},
+	"GET /api/v1/projects/{id}/icon":                                    {kind: "project", binary: true},
 	"PATCH /api/v1/projects/{id}":                                       {kind: "project"},
+	"PUT /api/v1/projects/{id}/icon":                                    {kind: "project"},
+	"POST /api/v1/projects/{id}/icon":                                   {kind: "project", binary: true},
 	"GET /api/v1/projects/{id}/environments":                            {kind: "project"},
 	"POST /api/v1/projects/{id}/environments":                           {kind: "project"},
 	"PATCH /api/v1/environments/{id}":                                   {kind: "environment"},

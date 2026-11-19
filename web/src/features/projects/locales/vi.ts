@@ -55,6 +55,28 @@ const vi = {
     nameHint: "Duy nhất trong instance. 1-64 ký tự.",
     submit: "Lưu",
   },
+  icon: {
+    title: "Biểu tượng dự án",
+    presetsLabel: "Biểu tượng có sẵn",
+    upload: "Tải ảnh lên",
+    uploading: "Đang tải lên…",
+    remove: "Xóa biểu tượng",
+    hint: "PNG, JPEG hoặc GIF tối đa 512 KB và 512×512 pixel.",
+    presets: {
+      rocket: "Tên lửa",
+      box: "Hộp",
+      globe: "Địa cầu",
+      database: "Cơ sở dữ liệu",
+      server: "Máy chủ",
+      terminal: "Dòng lệnh",
+      cloud: "Đám mây",
+      layers: "Lớp",
+      code: "Mã",
+      package: "Gói",
+      zap: "Tia chớp",
+      star: "Ngôi sao",
+    },
+  },
   delete: {
     title: "Xóa dự án",
     blocked:

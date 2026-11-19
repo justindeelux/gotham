@@ -22,6 +22,8 @@ export interface Project {
   id: string;
   name: string;
   description: string;
+  icon: string;
+  icon_version: number;
   created_at: string;
   updated_at: string;
   environment_count: number;
@@ -133,6 +135,41 @@ export async function renameProject(
 ): Promise<Project> {
   const response = await http.patch<unknown>(`/projects/${id}`, input);
   return parseProject(response.data).project;
+}
+
+export async function setProjectIcon(
+  id: string,
+  icon: string,
+): Promise<Project> {
+  const response = await http.put<unknown>(`/projects/${id}/icon`, { icon });
+  return parseProject(response.data).project;
+}
+
+export async function clearProjectIcon(id: string): Promise<Project> {
+  return setProjectIcon(id, "");
+}
+
+export async function uploadProjectIcon(
+  id: string,
+  file: File,
+): Promise<Project> {
+  const response = await http.post<unknown>(
+    `/projects/${id}/icon`,
+    await file.arrayBuffer(),
+    { headers: { "Content-Type": file.type } },
+  );
+  return parseProject(response.data).project;
+}
+
+export async function getProjectIcon(
+  id: string,
+  version: number,
+): Promise<Blob> {
+  const response = await http.get<Blob>(`/projects/${id}/icon`, {
+    params: { v: version },
+    responseType: "blob",
+  });
+  return response.data;
 }
 
 export async function deleteProject(id: string): Promise<void> {

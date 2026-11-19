@@ -26,6 +26,31 @@ RETURNING *;
 -- name: DeleteProject :execrows
 DELETE FROM projects WHERE id = $1;
 
+-- name: SetProjectIcon :one
+-- SetProjectIcon stores a preset (or clears the icon with an empty string),
+-- drops any uploaded bytes and bumps updated_at so clients refetch a version.
+WITH updated AS (
+    UPDATE projects SET icon = $2, updated_at = now() WHERE id = $1 RETURNING *
+), cleared AS (
+    DELETE FROM project_icons WHERE project_id = $1
+)
+SELECT * FROM updated;
+
+-- name: SetProjectIconUpload :one
+-- SetProjectIconUpload replaces the uploaded image and marks the icon as an
+-- upload. The insert reads the updated row so a missing project stores nothing.
+WITH updated AS (
+    UPDATE projects SET icon = 'upload', updated_at = now() WHERE id = $1 RETURNING *
+), stored AS (
+    INSERT INTO project_icons (project_id, data)
+    SELECT $1, sqlc.arg(data)::bytea FROM updated
+    ON CONFLICT (project_id) DO UPDATE SET data = EXCLUDED.data, updated_at = now()
+)
+SELECT * FROM updated;
+
+-- name: GetProjectIcon :one
+SELECT data FROM project_icons WHERE project_id = $1;
+
 -- name: ListEnvironmentsByProject :many
 SELECT * FROM environments
 WHERE project_id = $1

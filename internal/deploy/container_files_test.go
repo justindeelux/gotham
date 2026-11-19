@@ -171,6 +171,24 @@ func TestContainerFileListingPassesCursorAndClosesNode(t *testing.T) {
 	}
 }
 
+func TestContainerFilesRefuseStoppedContainer(t *testing.T) {
+	userID := uuid.New()
+	app := testApplication(userID)
+	node := newFakeContainerFileNode()
+	svc := containerFileTestService(t, userID, app, node)
+	svc.containers = &fakeApplicationContainers{listed: []containers.Container{
+		{ID: "mine", State: "exited", Labels: map[string]string{labelAppID: app.ID.String()}},
+	}}
+
+	_, err := svc.ListContainerFiles(context.Background(), userID, app.ID, "mine", "/", "")
+	if !errors.Is(err, ErrContainerNotRunning) {
+		t.Fatalf("err = %v, want ErrContainerNotRunning", err)
+	}
+	if node.listPath != "" {
+		t.Errorf("the node was asked for %q, want no call", node.listPath)
+	}
+}
+
 func TestContainerFileReadRefusesDirectory(t *testing.T) {
 	userID := uuid.New()
 	app := testApplication(userID)
@@ -405,6 +423,26 @@ func TestRouteContainerFilesForeignContainerIs404(t *testing.T) {
 	srv.ServeHTTP(rec, httptest.NewRequest(http.MethodGet, containerFilesPath(uuid.New(), "?path=/"), nil))
 	if rec.Code != http.StatusNotFound {
 		t.Fatalf("status = %d, want 404 (body %s)", rec.Code, rec.Body.String())
+	}
+}
+
+func TestRouteContainerFilesNotRunningCarriesTheStableCode(t *testing.T) {
+	svc := &fakeContainerFileService{err: fmt.Errorf("%w: exited", ErrContainerNotRunning)}
+	srv := newContainerFileRouter(svc, uuid.New())
+	rec := httptest.NewRecorder()
+	srv.ServeHTTP(rec, httptest.NewRequest(http.MethodGet, containerFilesPath(uuid.New(), "?path=/"), nil))
+	if rec.Code != http.StatusConflict {
+		t.Fatalf("status = %d, want 409 (body %s)", rec.Code, rec.Body.String())
+	}
+	var body struct {
+		Message string `json:"message"`
+		Code    string `json:"code"`
+	}
+	if err := json.Unmarshal(rec.Body.Bytes(), &body); err != nil {
+		t.Fatalf("decode: %v", err)
+	}
+	if body.Code != "not_running" {
+		t.Fatalf("code = %q, want not_running (body %s)", body.Code, rec.Body.String())
 	}
 }
 

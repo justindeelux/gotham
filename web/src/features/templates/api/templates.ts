@@ -163,15 +163,6 @@ export function describeTemplateError(error: unknown): string {
   return text("common.errors.unexpected");
 }
 
-export function templateOverlayDescription(template: TemplateSummary): string {
-  void activeLocale.value;
-  const key = `templates.overlay.${template.slug}.description`;
-  if (i18n.global.te(key)) {
-    return String(i18n.global.t(key));
-  }
-  return template.description;
-}
-
 export function templateOverlayFieldHelp(
   slug: string,
   field: TemplateField,

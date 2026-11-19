@@ -16,7 +16,6 @@ import { useImportService } from "@/features/services/composables/useImportServi
 import {
   checkTemplateValue,
   describeTemplateError,
-  templateOverlayDescription,
   templateOverlayFieldHelp,
   validateTemplateValues,
 } from "@/features/templates/api/templates";
@@ -25,6 +24,7 @@ import type {
   TemplateSummary,
 } from "@/features/templates/api/templates";
 import { useTemplateWizard } from "@/features/templates/composables/useTemplateWizard";
+import { templateDescription } from "@/features/templates/utils/templateDescription";
 import servicesEn from "@/features/services/locales/en";
 import servicesVi from "@/features/services/locales/vi";
 import templatesEn from "@/features/templates/locales/en";
@@ -220,7 +220,7 @@ describe("template validation switches without accepting invalid values", () => 
   });
 });
 
-describe("template overlay falls back to provider metadata", () => {
+describe("template descriptions use the Vietnamese catalog", () => {
   const bundled: TemplateSummary = {
     slug: "n8n",
     name: "n8n",
@@ -235,13 +235,13 @@ describe("template overlay falls back to provider metadata", () => {
   };
 
   it("translates bundled descriptions and keeps unknown slugs on provider copy", () => {
-    expect(templateOverlayDescription(bundled)).toBe(bundled.description);
-    expect(templateOverlayDescription(foreign)).toBe(foreign.description);
+    expect(templateDescription(bundled)).toBe(bundled.description);
+    expect(templateDescription(foreign)).toBe(foreign.description);
     setLocale("vi", null);
-    expect(templateOverlayDescription(bundled)).toBe(
-      "Tự động hóa quy trình n8n với volume có tên bền vững và tên miền định tuyến không bắt buộc.",
+    expect(templateDescription(bundled)).toBe(
+      "Tự động hóa công việc giữa các ứng dụng với n8n.",
     );
-    expect(templateOverlayDescription(foreign)).toBe(foreign.description);
+    expect(templateDescription(foreign)).toBe(foreign.description);
   });
 
   it("translates curated field help and falls back per field", () => {

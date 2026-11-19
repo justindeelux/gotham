@@ -452,8 +452,10 @@ describe("project detail page states", () => {
     wrapper.unmount();
   });
 
-  it("shows a saved icon in the header", async () => {
+  it("shows a saved icon in the header and on the project list entry", async () => {
     setActivePinia(createPinia());
+    const store = useProjectsStore();
+    store.projects = [projectRow()];
     vi.mocked(getProject).mockResolvedValue({
       project: projectRow(),
       environments: [],
@@ -470,6 +472,8 @@ describe("project detail page states", () => {
     await nextTick();
     expect(vi.mocked(setProjectIcon)).toHaveBeenCalledWith(id, "preset:box");
     expect(wrapper.find(".title-row .project-icon__glyph").exists()).toBe(true);
+    expect(store.projects[0]?.icon).toBe("preset:box");
+    expect(store.projects[0]?.icon_version).toBe(1);
     wrapper.unmount();
   });
 

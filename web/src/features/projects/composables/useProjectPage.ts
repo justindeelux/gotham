@@ -167,9 +167,7 @@ export function useProjectPage(
   }
 
   function applyProject(project: Project): void {
-    if (projectsStore.detail?.id === project.id) {
-      projectsStore.detail = project;
-    }
+    projectsStore.applyProject(project);
   }
 
   async function handleDelete(): Promise<void> {

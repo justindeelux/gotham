@@ -139,13 +139,17 @@ export const useProjectsStore = defineStore("projects", () => {
 
   async function rename(id: string, input: UpdateProjectInput): Promise<Project> {
     const project = await renameProjectRequest(id, input);
+    applyProject(project);
+    return project;
+  }
+
+  function applyProject(project: Project): void {
     projects.value = projects.value.map((item) =>
-      item.id === id ? project : item,
+      item.id === project.id ? project : item,
     );
-    if (detail.value?.id === id) {
+    if (detail.value?.id === project.id) {
       detail.value = project;
     }
-    return project;
   }
 
   async function remove(id: string): Promise<void> {
@@ -211,6 +215,7 @@ export const useProjectsStore = defineStore("projects", () => {
     fetchDetail,
     create,
     rename,
+    applyProject,
     remove,
     addEnvironment,
     renameEnvironmentEntry,

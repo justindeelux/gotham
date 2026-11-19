@@ -21,6 +21,8 @@ import { onUnmounted, ref } from "vue";
 import { createVisibleValidation } from "@/features/auth";
 
 import ProjectBreadcrumb from "@/features/projects/components/ProjectBreadcrumb.vue";
+import ProjectIcon from "@/features/projects/components/ProjectIcon.vue";
+import ProjectIconPicker from "@/features/projects/components/ProjectIconPicker.vue";
 import SharedVariablesEditor from "@/features/projects/components/SharedVariablesEditor.vue";
 import {
   environmentResourceTotal,
@@ -31,8 +33,9 @@ import { useSharedVariables } from "@/features/projects/composables/useSharedVar
 import {
   environmentNameRules,
   isEnvironmentNameValid,
+  isProjectDescriptionValid,
   isProjectNameValid,
-  projectNameRules,
+  projectFormRules,
 } from "@/features/projects/schemas/projects";
 import { useProjectsStore } from "@/features/projects/stores/projects";
 import { activeLocale, i18n, onLocaleChange } from "@/shared/i18n";
@@ -47,11 +50,11 @@ const projectVariables = useSharedVariables(() => ({
 }));
 const {
   tab,
-  renameOpen,
-  renameName,
-  renameBusy,
-  renameError,
-  renameConflict,
+  configName,
+  configDescription,
+  configBusy,
+  configError,
+  configConflict,
   deleteOpen,
   deleting,
   deleteError,
@@ -70,8 +73,8 @@ const {
   envDeleteError,
   hasResources,
   canWrite,
-  openRename,
-  handleRename,
+  handleConfigSave,
+  applyProject,
   handleDelete,
   openEnvCreate,
   handleEnvCreate,
@@ -81,18 +84,18 @@ const {
   handleEnvDelete,
   reload,
 } = page;
-const renameVisible = createVisibleValidation();
+const configVisible = createVisibleValidation();
 const envCreateVisible = createVisibleValidation();
 const envRenameVisible = createVisibleValidation();
-const renameRules = renameVisible.trackRules(projectNameRules());
+const configRules = configVisible.trackRules(projectFormRules());
 const envCreateRules = envCreateVisible.trackRules(environmentNameRules());
 const envRenameRules = envRenameVisible.trackRules(environmentNameRules());
-const renameFormRef = ref<FormInst | null>(null);
+const configFormRef = ref<FormInst | null>(null);
 const envCreateFormRef = ref<FormInst | null>(null);
 const envRenameFormRef = ref<FormInst | null>(null);
 
 const stopDetailLocaleWatch = onLocaleChange(() => {
-  renameVisible.refreshVisible(renameFormRef);
+  configVisible.refreshVisible(configFormRef);
   envCreateVisible.refreshVisible(envCreateFormRef);
   envRenameVisible.refreshVisible(envRenameFormRef);
 });
@@ -125,18 +128,15 @@ function t(key: string, params?: Record<string, string | number>): string {
             :project-name="projectsStore.detail.name"
             :project-id="projectsStore.detail.id"
           />
-          <h1 class="title" :title="projectsStore.detail.name">
-            {{ projectsStore.detail.name }}
-          </h1>
+          <div class="title-row">
+            <ProjectIcon :project="projectsStore.detail" size="lg" />
+            <h1 class="title" :title="projectsStore.detail.name">
+              {{ projectsStore.detail.name }}
+            </h1>
+          </div>
           <p v-if="projectsStore.detail.description" class="page-desc">
             {{ projectsStore.detail.description }}
           </p>
-        </div>
-        <div v-if="canWrite" class="page-actions">
-          <NButton @click="openRename()">{{ t("projects.detail.rename") }}</NButton>
-          <NButton @click="deleteOpen = true">
-            {{ t("projects.detail.deleteProject") }}
-          </NButton>
         </div>
       </div>
 
@@ -216,6 +216,82 @@ function t(key: string, params?: Record<string, string | number>): string {
           </NCard>
         </NTabPane>
 
+        <NTabPane
+          v-if="canWrite"
+          name="configuration"
+          :tab="t('projects.detail.tabs.configuration')"
+        >
+          <NSpace vertical :size="16">
+            <NCard :title="t('projects.configuration.generalTitle')">
+              <NForm
+                ref="configFormRef"
+                :model="{ name: configName, description: configDescription }"
+                :rules="configRules"
+              >
+                <NSpace vertical :size="12">
+                  <NFormItem
+                    :label="t('projects.configuration.nameLabel')"
+                    path="name"
+                    :feedback="configConflict.feedback.value"
+                    :validation-status="configConflict.status.value"
+                  >
+                    <NInput
+                      v-model:value="configName"
+                      maxlength="64"
+                      show-count
+                      :input-props="{ id: 'project-config-name', 'aria-label': t('projects.configuration.nameAria') }"
+                      @update:value="configConflict.clear()"
+                      @keydown.enter="(event: KeyboardEvent) => submitOnEnter(event, handleConfigSave)"
+                    />
+                  </NFormItem>
+                  <NText depth="3">{{ t("projects.configuration.nameHint") }}</NText>
+                  <NFormItem
+                    :label="t('projects.configuration.descriptionLabel')"
+                    path="description"
+                  >
+                    <NInput
+                      v-model:value="configDescription"
+                      type="textarea"
+                      maxlength="500"
+                      show-count
+                      :autosize="{ minRows: 2, maxRows: 5 }"
+                      :input-props="{ id: 'project-config-description', 'aria-label': t('projects.configuration.descriptionAria') }"
+                    />
+                  </NFormItem>
+                  <ProjectIconPicker
+                    :project="projectsStore.detail"
+                    @updated="applyProject"
+                  />
+                  <NAlert v-if="configError" type="error" :show-icon="true">
+                    {{ configError }}
+                  </NAlert>
+                  <NSpace>
+                    <NButton
+                      type="primary"
+                      :loading="configBusy"
+                      :disabled="!isProjectNameValid(configName) || !isProjectDescriptionValid(configDescription)"
+                      @click="void handleConfigSave()"
+                    >
+                      {{ t("common.actions.save") }}
+                    </NButton>
+                  </NSpace>
+                </NSpace>
+              </NForm>
+            </NCard>
+
+            <NCard :title="t('projects.configuration.dangerTitle')">
+              <NSpace vertical :size="12">
+                <NText depth="3">{{ t("projects.configuration.dangerHint") }}</NText>
+                <NSpace>
+                  <NButton type="error" ghost @click="deleteOpen = true">
+                    {{ t("projects.delete.submit") }}
+                  </NButton>
+                </NSpace>
+              </NSpace>
+            </NCard>
+          </NSpace>
+        </NTabPane>
+
         <NTabPane name="variables" :tab="t('projects.detail.tabs.variables')">
           <SharedVariablesEditor
             :draft="projectVariables.draft.value"
@@ -235,51 +311,6 @@ function t(key: string, params?: Record<string, string | number>): string {
         </NTabPane>
       </NTabs>
     </template>
-
-    <NModal
-      v-model:show="renameOpen"
-      preset="card"
-      :title="t('projects.rename.title')"
-      @after-leave="renameVisible.reset()"
-      style="width: 460px; max-width: 94vw"
-    >
-      <NForm ref="renameFormRef" :model="{ name: renameName }" :rules="renameRules">
-        <NSpace vertical :size="12">
-          <NFormItem
-            :label="t('projects.rename.nameLabel')"
-            path="name"
-            :feedback="renameConflict.feedback.value"
-            :validation-status="renameConflict.status.value"
-          >
-            <NInput
-              v-model:value="renameName"
-              maxlength="64"
-              show-count
-              :input-props="{ id: 'project-rename-name', 'aria-label': t('projects.rename.nameAria') }"
-              @update:value="renameConflict.clear()"
-              @keydown.enter="(event: KeyboardEvent) => submitOnEnter(event, handleRename)"
-            />
-          </NFormItem>
-          <NText depth="3">{{ t("projects.rename.nameHint") }}</NText>
-          <NAlert v-if="renameError" type="error" :show-icon="true">
-            {{ renameError }}
-          </NAlert>
-        </NSpace>
-      </NForm>
-      <template #footer>
-        <NSpace justify="end" :size="8">
-          <NButton @click="renameOpen = false">{{ t("common.actions.cancel") }}</NButton>
-          <NButton
-            type="primary"
-            :loading="renameBusy"
-            :disabled="!isProjectNameValid(renameName)"
-            @click="void handleRename()"
-          >
-            {{ t("projects.rename.submit") }}
-          </NButton>
-        </NSpace>
-      </template>
-    </NModal>
 
     <NModal
       v-model:show="deleteOpen"
@@ -404,7 +435,7 @@ function t(key: string, params?: Record<string, string | number>): string {
             :disabled="!isEnvironmentNameValid(envRenameName)"
             @click="void handleEnvRename()"
           >
-            {{ t("projects.rename.submit") }}
+            {{ t("common.actions.save") }}
           </NButton>
         </NSpace>
       </template>
@@ -467,11 +498,19 @@ function t(key: string, params?: Record<string, string | number>): string {
   flex: 1 1 auto;
 }
 
+.title-row {
+  display: flex;
+  align-items: center;
+  gap: var(--space-3);
+  min-width: 0;
+  margin-bottom: var(--space-2);
+}
+
 .title {
   font-size: var(--text-2xl);
   line-height: 1.25;
   color: var(--fg-2);
-  margin: 0 0 var(--space-2);
+  margin: 0;
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
@@ -481,14 +520,6 @@ function t(key: string, params?: Record<string, string | number>): string {
   color: var(--muted);
   margin: 0;
   max-width: 72ch;
-}
-
-.page-actions {
-  margin-left: auto;
-  display: flex;
-  align-items: center;
-  gap: var(--space-3);
-  flex-wrap: wrap;
 }
 
 .toolbar {
@@ -550,10 +581,6 @@ function t(key: string, params?: Record<string, string | number>): string {
 }
 
 @container (max-width: 560px) {
-  .page-actions {
-    margin-left: 0;
-  }
-
   .env-table thead {
     position: absolute;
     width: 1px;

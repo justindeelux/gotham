@@ -3,7 +3,7 @@ import { computed, onMounted, ref, toValue, watch } from "vue";
 import type { ComputedRef, Ref } from "vue";
 import { useRouter } from "vue-router";
 
-import type { Environment } from "@/features/projects/api/projects";
+import type { Environment, Project } from "@/features/projects/api/projects";
 import {
   describeProjectError,
   environmentResourceTotal,
@@ -11,21 +11,22 @@ import {
 import { i18n } from "@/shared/i18n";
 import {
   isEnvironmentNameValid,
+  isProjectDescriptionValid,
   isProjectNameValid,
 } from "@/features/projects/schemas/projects";
 import { useNameConflict } from "@/features/projects/composables/useNameConflict";
 import type { NameConflictState } from "@/features/projects/composables/useNameConflict";
 import { useProjectsStore } from "@/features/projects/stores/projects";
 
-export type ProjectTab = "environments" | "variables";
+export type ProjectTab = "environments" | "configuration" | "variables";
 
 export interface ProjectPageState {
   tab: Ref<ProjectTab>;
-  renameOpen: Ref<boolean>;
-  renameName: Ref<string>;
-  renameBusy: Ref<boolean>;
-  renameError: ComputedRef<string | null>;
-  renameConflict: NameConflictState;
+  configName: Ref<string>;
+  configDescription: Ref<string>;
+  configBusy: Ref<boolean>;
+  configError: ComputedRef<string | null>;
+  configConflict: NameConflictState;
   deleteOpen: Ref<boolean>;
   deleting: Ref<boolean>;
   deleteError: ComputedRef<string | null>;
@@ -44,8 +45,8 @@ export interface ProjectPageState {
   envDeleteError: ComputedRef<string | null>;
   hasResources: ComputedRef<boolean>;
   canWrite: ComputedRef<boolean>;
-  openRename(): void;
-  handleRename(): Promise<void>;
+  handleConfigSave(): Promise<void>;
+  applyProject(_project: Project): void;
   handleDelete(): Promise<void>;
   openEnvCreate(): void;
   handleEnvCreate(): Promise<void>;
@@ -67,16 +68,16 @@ export function useProjectPage(
 
   const tab = ref<ProjectTab>("environments");
 
-  const renameOpen = ref(false);
-  const renameName = ref("");
-  const renameBusy = ref(false);
-  const renameFailure: Ref<unknown> = ref(null);
-  const renameError = computed<string | null>(() =>
-    renameFailure.value === null
+  const configName = ref("");
+  const configDescription = ref("");
+  const configBusy = ref(false);
+  const configFailure: Ref<unknown> = ref(null);
+  const configError = computed<string | null>(() =>
+    configFailure.value === null
       ? null
-      : describeProjectError(renameFailure.value),
+      : describeProjectError(configFailure.value),
   );
-  const renameConflict = useNameConflict();
+  const configConflict = useNameConflict();
 
   const deleteOpen = ref(false);
   const deleting = ref(false);
@@ -124,33 +125,50 @@ export function useProjectPage(
     ),
   );
 
-  function openRename(): void {
-    renameName.value = projectsStore.detail?.name ?? "";
-    renameFailure.value = null;
-    renameConflict.clear();
-    renameOpen.value = true;
-  }
+  watch(
+    () => projectsStore.detail?.id,
+    () => {
+      configName.value = projectsStore.detail?.name ?? "";
+      configDescription.value = projectsStore.detail?.description ?? "";
+    },
+    { immediate: true },
+  );
 
-  async function handleRename(): Promise<void> {
+  async function handleConfigSave(): Promise<void> {
     const detail = projectsStore.detail;
-    if (renameBusy.value || !detail || !isProjectNameValid(renameName.value)) {
+    if (
+      configBusy.value ||
+      !detail ||
+      !isProjectNameValid(configName.value) ||
+      !isProjectDescriptionValid(configDescription.value)
+    ) {
       return;
     }
     const projectId = currentId();
-    renameBusy.value = true;
-    renameFailure.value = null;
+    configBusy.value = true;
+    configFailure.value = null;
     try {
-      await projectsStore.rename(detail.id, { name: renameName.value.trim() });
-      message.success(String(i18n.global.t("projects.toast.projectRenamed")));
+      const saved = await projectsStore.rename(detail.id, {
+        name: configName.value.trim(),
+        description: configDescription.value.trim(),
+      });
+      message.success(String(i18n.global.t("projects.toast.projectUpdated")));
       if (currentId() === projectId) {
-        renameOpen.value = false;
+        configName.value = saved.name;
+        configDescription.value = saved.description;
       }
     } catch (error) {
-      if (!renameConflict.take(error)) {
-        renameFailure.value = error;
+      if (!configConflict.take(error)) {
+        configFailure.value = error;
       }
     } finally {
-      renameBusy.value = false;
+      configBusy.value = false;
+    }
+  }
+
+  function applyProject(project: Project): void {
+    if (projectsStore.detail?.id === project.id) {
+      projectsStore.detail = project;
     }
   }
 
@@ -293,9 +311,8 @@ export function useProjectPage(
   }
 
   function resetDialogs(): void {
-    renameOpen.value = false;
-    renameFailure.value = null;
-    renameConflict.clear();
+    configFailure.value = null;
+    configConflict.clear();
     deleteOpen.value = false;
     deleteFailure.value = null;
     envCreateOpen.value = false;
@@ -322,11 +339,11 @@ export function useProjectPage(
 
   return {
     tab,
-    renameOpen,
-    renameName,
-    renameBusy,
-    renameError,
-    renameConflict,
+    configName,
+    configDescription,
+    configBusy,
+    configError,
+    configConflict,
     deleteOpen,
     deleting,
     deleteError,
@@ -345,8 +362,8 @@ export function useProjectPage(
     envDeleteError,
     hasResources,
     canWrite,
-    openRename,
-    handleRename,
+    handleConfigSave,
+    applyProject,
     handleDelete,
     openEnvCreate,
     handleEnvCreate,

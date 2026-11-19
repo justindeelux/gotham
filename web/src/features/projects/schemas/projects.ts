@@ -89,7 +89,7 @@ export function projectNameRules(): FormRules {
   };
 }
 
-export function projectCreateRules(): FormRules {
+export function projectFormRules(): FormRules {
   return {
     name: [
       { ...ruleFrom(projectNameSchema, { required: true }), trigger: ["input", "blur"] },

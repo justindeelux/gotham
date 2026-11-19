@@ -31,11 +31,11 @@ const vi = {
   },
   detail: {
     rename: "Đổi tên",
-    deleteProject: "Xóa dự án",
     open: "Mở",
     delete: "Xóa",
     tabs: {
       environments: "Môi trường",
+      configuration: "Cấu hình",
       variables: "Biến dùng chung",
     },
     noEnvironments: "Chưa có môi trường nào. Hãy thêm một môi trường để bắt đầu triển khai.",
@@ -48,12 +48,16 @@ const vi = {
       actions: "Thao tác",
     },
   },
-  rename: {
-    title: "Đổi tên dự án",
+  configuration: {
+    generalTitle: "Chung",
     nameLabel: "Tên",
     nameAria: "Tên dự án",
     nameHint: "Duy nhất trong instance. 1-64 ký tự.",
-    submit: "Lưu",
+    descriptionLabel: "Mô tả",
+    descriptionAria: "Mô tả dự án",
+    dangerTitle: "Vùng nguy hiểm",
+    dangerHint:
+      "Xóa dự án cũng xóa các môi trường và biến dùng chung của dự án.",
   },
   icon: {
     title: "Biểu tượng dự án",
@@ -274,7 +278,7 @@ const vi = {
   },
   toast: {
     createdProject: "Đã tạo dự án {name}",
-    projectRenamed: "Đã đổi tên dự án",
+    projectUpdated: "Đã cập nhật dự án",
     deletedProject: "Đã xóa dự án {name}",
     addedEnvironment: "Đã thêm môi trường {name}",
     environmentRenamed: "Đã đổi tên môi trường",

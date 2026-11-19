@@ -81,7 +81,7 @@ export {
   parseProject,
   parseProjectDetail,
   parseProjectList,
-  projectCreateRules,
+  projectFormRules,
   projectDescriptionSchema,
   projectDetailEnvelopeSchema,
   projectEnvelopeSchema,

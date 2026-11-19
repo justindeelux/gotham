@@ -20,7 +20,7 @@ import { useProjectsPage } from "@/features/projects/composables/useProjectsPage
 import {
   isProjectDescriptionValid,
   isProjectNameValid,
-  projectCreateRules,
+  projectFormRules,
 } from "@/features/projects/schemas/projects";
 import { useProjectsStore } from "@/features/projects/stores/projects";
 import { activeLocale, i18n, onLocaleChange } from "@/shared/i18n";
@@ -43,7 +43,7 @@ const {
   reload,
 } = page;
 const createVisible = createVisibleValidation();
-const createRules = createVisible.trackRules(projectCreateRules());
+const createRules = createVisible.trackRules(projectFormRules());
 const createFormRef = ref<FormInst | null>(null);
 
 const stopCreateLocaleWatch = onLocaleChange(() => {

@@ -21,6 +21,7 @@ const vi: typeof en = {
   },
   field: {
     optionalLabel: "{label} (tùy chọn)",
+    generatedHelp: "Để trống để tự động tạo giá trị.",
   },
   wizard: {
     title: "Triển khai mẫu {name}",

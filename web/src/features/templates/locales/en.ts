@@ -19,6 +19,7 @@ const en = {
   },
   field: {
     optionalLabel: "{label} (optional)",
+    generatedHelp: "Leave empty to generate it automatically.",
   },
   wizard: {
     title: "Deploy template {name}",

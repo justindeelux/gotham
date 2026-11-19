@@ -168,3 +168,80 @@ describe("DynamicForm secret generation", () => {
     wrapper.unmount();
   });
 });
+
+describe("DynamicForm generated field labels", () => {
+  function labelOf(wrapper: ReturnType<typeof mountForm>, key: string): string {
+    return wrapper.find(`.field-${key} .n-form-item-label`).text();
+  }
+
+  function feedbackOf(wrapper: ReturnType<typeof mountForm>, key: string): string {
+    const feedback = wrapper.find(`.field-${key} .n-form-item-feedback`);
+    return feedback.exists() ? feedback.text() : "";
+  }
+
+  function hasAsterisk(wrapper: ReturnType<typeof mountForm>, key: string): boolean {
+    return wrapper.find(`.field-${key} .n-form-item-label__asterisk`).exists();
+  }
+
+  it("marks a generated field as automatic, never required or optional", () => {
+    const wrapper = mountForm({ db_password: "", root_password: "", domain: "" });
+
+    expect(labelOf(wrapper, "db_password")).toBe("Database password");
+    expect(hasAsterisk(wrapper, "db_password")).toBe(false);
+    expect(feedbackOf(wrapper, "db_password")).toBe(
+      "Leave empty to generate it automatically.",
+    );
+    // A required field without generate is untouched.
+    expect(labelOf(wrapper, "root_password")).toContain("Root password");
+    expect(hasAsterisk(wrapper, "root_password")).toBe(true);
+    expect(feedbackOf(wrapper, "root_password")).toBe("");
+    wrapper.unmount();
+  });
+
+  it("drops the optional suffix on a generated field that is not required", () => {
+    const wrapper = mountForm({}, [
+      {
+        key: "cron_token",
+        label: "Cron token",
+        type: "secret",
+        required: false,
+        generate: true,
+      },
+      { key: "nickname", label: "Nickname", type: "text", required: false },
+    ]);
+
+    expect(labelOf(wrapper, "cron_token")).toBe("Cron token");
+    expect(feedbackOf(wrapper, "cron_token")).toBe(
+      "Leave empty to generate it automatically.",
+    );
+    expect(labelOf(wrapper, "nickname")).toBe("Nickname (optional)");
+    wrapper.unmount();
+  });
+
+  it("keeps the field's own help beside the generated hint", () => {
+    const wrapper = mountForm({}, [
+      {
+        key: "encryption_key",
+        label: "Encryption key",
+        type: "secret",
+        required: true,
+        generate: true,
+        help: "Losing it locks the stored credentials.",
+      },
+    ]);
+
+    expect(feedbackOf(wrapper, "encryption_key")).toBe(
+      "Losing it locks the stored credentials. Leave empty to generate it automatically.",
+    );
+    wrapper.unmount();
+  });
+
+  it("drops the generated hint once a value is set", async () => {
+    const wrapper = mountForm({ db_password: "", root_password: "", domain: "" });
+    await wrapper.find('[aria-label="Generate Database password"]').trigger("click");
+    await flushPromises();
+
+    expect(feedbackOf(wrapper, "db_password")).toBe("");
+    wrapper.unmount();
+  });
+});

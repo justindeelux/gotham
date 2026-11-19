@@ -136,4 +136,45 @@ describe("template field schemas match recorded outcomes", () => {
   it("reproduces validateTemplateValues first-message-per-field", () => {
     expect(validateTemplateValues(fields, {"title": "", "count": "abc", "mode": "", "flag": "maybe"})).toEqual({"title": "This field is required.", "secret": "This field is required.", "count": "Must be a whole number.", "flag": "Must be true or false.", "mode": "This field is required.", "optsel": "Must be one of: a, b."});
   });
+
+  it("lets an empty generated field pass even when it is required", () => {
+    const shorthand: TemplateField = {
+      key: "db_password",
+      label: "Database password",
+      type: "secret",
+      required: true,
+      generate: true,
+    };
+    const objectForm: TemplateField = {
+      key: "app_key",
+      label: "Application key",
+      type: "secret",
+      required: true,
+      generate: { length: 32, charset: "base64", prefix: "base64:" },
+    };
+    const optionalForm: TemplateField = {
+      key: "cron_token",
+      label: "Cron token",
+      type: "secret",
+      required: false,
+      generate: true,
+    };
+    for (const field of [shorthand, objectForm, optionalForm]) {
+      expect(checkTemplateValue(field, "")).toBeNull();
+    }
+    expect(validateTemplateValues([shorthand, objectForm], {})).toEqual({});
+  });
+
+  it("keeps required validation for a field without generate", () => {
+    const plain: TemplateField = {
+      key: "admin_password",
+      label: "Admin password",
+      type: "secret",
+      required: true,
+    };
+    expect(checkTemplateValue(plain, "")).toBe("This field is required.");
+    expect(validateTemplateValues([plain], { admin_password: "" })).toEqual({
+      admin_password: "This field is required.",
+    });
+  });
 });

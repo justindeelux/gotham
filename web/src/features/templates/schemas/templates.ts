@@ -28,7 +28,8 @@ export function templateFieldSchema(field: TemplateField): z.ZodType<string, str
     case "text":
     case "secret":
       return z.string().superRefine((value, ctx) => {
-        if (field.required && value.trim() === "") {
+        // A generated field may stay empty: the engine fills it at render time.
+        if (field.required && !field.generate && value.trim() === "") {
           ctx.addIssue({ code: z.ZodIssueCode.custom, message: templateMessages.required });
           return;
         }

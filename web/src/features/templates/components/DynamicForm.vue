@@ -65,8 +65,14 @@ function fieldValue(field: TemplateField): string {
   return props.modelValue[field.key] ?? "";
 }
 
+// A generated field is filled by the engine when left empty, so it is never
+// presented as required or optional.
+function isGeneratedField(field: TemplateField): boolean {
+  return Boolean(field.generate);
+}
+
 function fieldLabel(field: TemplateField): string {
-  if (field.required) {
+  if (field.required || isGeneratedField(field)) {
     return field.label;
   }
   return t("templates.field.optionalLabel", { label: field.label });
@@ -89,7 +95,16 @@ function helpText(field: TemplateField): string | undefined {
 }
 
 function feedbackText(field: TemplateField): string {
-  return props.errors[field.key] ?? helpText(field) ?? "";
+  const error = props.errors[field.key];
+  if (error !== undefined) {
+    return error;
+  }
+  const help = helpText(field);
+  if (!isGeneratedField(field) || fieldValue(field) !== "") {
+    return help ?? "";
+  }
+  const hint = t("templates.field.generatedHelp");
+  return help ? `${help} ${hint}` : hint;
 }
 
 function validationStatus(field: TemplateField): "error" | undefined {
@@ -145,7 +160,7 @@ async function copyValue(field: TemplateField): Promise<void> {
       v-for="field in fields"
       :key="field.key"
       :label="fieldLabel(field)"
-      :required="field.required"
+      :required="field.required && !isGeneratedField(field)"
       :feedback="feedbackText(field)"
       :validation-status="validationStatus(field)"
       class="dynamic-form__item"

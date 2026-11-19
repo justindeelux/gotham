@@ -130,9 +130,10 @@ export function buildEnvironmentRows(
   }
   const applicationRow = (application: EnvironmentResourceApplication, preview: boolean): EnvironmentRow => {
     const state = applicationStates[application.id] ?? null;
+    const desiredStopped = application.runtime_health?.desired_state === "stopped";
     const view = applicationStatusView(
       state === null && applicationStatesFailed ? "unknown" : state,
-      application.runtime_health?.desired_state === "stopped",
+      desiredStopped,
     );
     return {
       kind: "application",
@@ -147,7 +148,11 @@ export function buildEnvironmentRows(
       serverName: application.server_name || statusText("projects.environment.unassigned"),
       statusText: view.text,
       statusTag: view.tag,
-      runtimeState: application.runtime_health?.state,
+      // The status tag already says stopped when the user stopped it.
+      runtimeState:
+        desiredStopped && application.runtime_health?.state === "stopped"
+          ? undefined
+          : application.runtime_health?.state,
       runtimeReason: application.runtime_health?.reason,
       preview,
       to: { name: "application-detail", params: { projectId, environmentId, id: application.id } },
@@ -192,7 +197,11 @@ export function buildEnvironmentRows(
       serverName: database.server_name,
       statusText: view.text,
       statusTag: view.tag,
-      runtimeState: database.runtime_health?.state,
+      // The status tag already says stopped when the database is stopped.
+      runtimeState:
+        database.status === "stopped" && database.runtime_health?.state === "stopped"
+          ? undefined
+          : database.runtime_health?.state,
       runtimeReason: database.runtime_health?.reason,
       preview: false,
       to: { name: "database-detail", params: { projectId, environmentId, id: database.id } },

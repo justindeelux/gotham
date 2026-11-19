@@ -295,6 +295,46 @@ describe("buildEnvironmentRows", () => {
     const resources = envelope({ applications: [stopped] }) as unknown as EnvironmentResources;
     const rows = buildEnvironmentRows(resources, { [stopped.id]: "running" }, false, "p", "e");
     expect(rows[0]).toMatchObject({ statusText: "stopped", statusTag: "default" });
+    expect(rows[0]!.runtimeState).toBeUndefined();
+  });
+
+  it("keeps the health tag on an unexpected stop", () => {
+    const base = envelope().applications[0];
+    const stopped = {
+      ...base,
+      runtime_health: {
+        state: "stopped",
+        coverage: "full",
+        enabled: true,
+        grace_seconds: 0,
+        desired_state: "running",
+        reason: "stopped",
+        affected: [],
+      },
+    };
+    const resources = envelope({ applications: [stopped] }) as unknown as EnvironmentResources;
+    const rows = buildEnvironmentRows(resources, { [stopped.id]: "running" }, false, "p", "e");
+    expect(rows[0]).toMatchObject({ statusText: "running", runtimeState: "stopped" });
+  });
+
+  it("does not repeat the health tag on a stopped database", () => {
+    const stopped = {
+      ...envelope().databases[0],
+      status: "stopped",
+      runtime_health: {
+        state: "stopped",
+        coverage: "full",
+        enabled: true,
+        grace_seconds: 0,
+        desired_state: "stopped",
+        affected: [],
+      },
+    };
+    const resources = envelope({ databases: [stopped] }) as unknown as EnvironmentResources;
+    const rows = buildEnvironmentRows(resources, {}, false, "p", "e");
+    const databaseRow = rows.find((row) => row.kind === "database");
+    expect(databaseRow).toMatchObject({ statusText: "stopped" });
+    expect(databaseRow!.runtimeState).toBeUndefined();
   });
 
   it("keeps a running application on its running deployment", () => {

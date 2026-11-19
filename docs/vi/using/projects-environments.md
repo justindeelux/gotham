@@ -16,12 +16,13 @@ và mô tả tùy chọn.
 Một môi trường **production** được tạo cùng với dự án, nên dự án mới dùng được
 ngay. Mở nó để xem các môi trường và số tài nguyên của từng môi trường.
 
-## Đổi tên hoặc xóa dự án
+## Chỉnh sửa hoặc xóa dự án
 
-Trên trang dự án, **Đổi tên** thay đổi tên. **Xóa dự án** chỉ dành cho chủ sở hữu
-và gỡ nó. Dự án còn chứa tài nguyên thì không thể xóa: hãy di chuyển hoặc xóa mọi
-tài nguyên trong mọi môi trường trước. Xóa sẽ gỡ dự án, toàn bộ môi trường và biến
-dùng chung của nó, và không thể hoàn tác.
+Trên trang dự án, mở tab **Cấu hình**. Tab này đổi tên, mô tả và biểu tượng của dự
+án, và chứa **Xóa dự án**, chỉ dành cho chủ sở hữu và gỡ nó. Dự án còn chứa tài
+nguyên thì không thể xóa: hãy di chuyển hoặc xóa mọi tài nguyên trong mọi môi
+trường trước. Xóa sẽ gỡ dự án, toàn bộ môi trường và biến dùng chung của nó, và
+không thể hoàn tác.
 
 ## Môi trường
 

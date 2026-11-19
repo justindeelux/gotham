@@ -341,16 +341,33 @@ export function useServiceDetail(): ServiceDetailContext {
   }
 
   async function loadContainers(): Promise<void> {
+    const id = serviceId.value;
     containersLoading.value = true;
     containersFailure.value = null;
     try {
-      containers.value = await listServiceContainers(serviceId.value);
+      const rows = await listServiceContainers(id);
+      if (id !== serviceId.value) {
+        return;
+      }
+      containers.value = rows;
       containersLoaded.value = true;
     } catch (err) {
+      if (id !== serviceId.value) {
+        return;
+      }
       containers.value = [];
       containersFailure.value = err;
     } finally {
       containersLoading.value = false;
+    }
+  }
+
+  // Lifecycle actions change the container rows; reload them for a user who has
+  // the list open instead of making them press Refresh. A deploy is async, so it
+  // refreshes from refreshDeployState once the deploy row is terminal.
+  function refreshLoadedContainers(): void {
+    if (containersLoaded.value) {
+      void loadContainers();
     }
   }
 
@@ -373,6 +390,7 @@ export function useServiceDetail(): ServiceDetailContext {
     try {
       await servicesStore.stop(serviceId.value);
       message.success(String(i18n.global.t("services.toast.stopped")));
+      refreshLoadedContainers();
     } catch (err) {
       actionFailure.value = err;
     } finally {
@@ -386,6 +404,7 @@ export function useServiceDetail(): ServiceDetailContext {
     try {
       await servicesStore.restart(serviceId.value);
       message.success(String(i18n.global.t("services.toast.restartSent")));
+      refreshLoadedContainers();
     } catch (err) {
       actionFailure.value = err;
     } finally {
@@ -399,6 +418,7 @@ export function useServiceDetail(): ServiceDetailContext {
     try {
       await servicesStore.restart(serviceId.value);
       message.success(String(i18n.global.t("services.toast.started")));
+      refreshLoadedContainers();
     } catch (err) {
       actionFailure.value = err;
     } finally {
@@ -553,8 +573,12 @@ export function useServiceDetail(): ServiceDetailContext {
     if (id === "") {
       return;
     }
+    const wasDeploying = isDeploying.value;
     await servicesStore.fetchService(id).catch(() => undefined);
     await servicesStore.fetchDeploys(id).catch(() => undefined);
+    if (wasDeploying && !isDeploying.value) {
+      refreshLoadedContainers();
+    }
   }
 
   // Follow a background deploy until its row is terminal; the server holds the

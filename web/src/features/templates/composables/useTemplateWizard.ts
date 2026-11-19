@@ -38,6 +38,7 @@ export function useTemplateWizard(
   detailError: Ref<string | null>;
   values: Ref<TemplateValues>;
   showErrors: Ref<boolean>;
+  invalidAttempt: Ref<number>;
   render: Ref<TemplateRender | null>;
   renderLoading: Ref<boolean>;
   renderError: Ref<string | null>;
@@ -73,6 +74,8 @@ export function useTemplateWizard(
   const detailError = retained(detailFailure, describeTemplateError);
   const values = ref<TemplateValues>({});
   const showErrors = ref(false);
+  // Bumped on every blocked Next so the form can reveal the first error.
+  const invalidAttempt = ref(0);
 
   const render = ref<TemplateRender | null>(null);
   const renderLoading = ref(false);
@@ -209,6 +212,7 @@ export function useTemplateWizard(
     if (step.value === 1) {
       showErrors.value = true;
       if (Object.keys(allErrors.value).length > 0) {
+        invalidAttempt.value += 1;
         return;
       }
       step.value = 2;
@@ -307,6 +311,7 @@ export function useTemplateWizard(
     detailError,
     values,
     showErrors,
+    invalidAttempt,
     render,
     renderLoading,
     renderError,

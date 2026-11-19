@@ -83,6 +83,7 @@ function t(key: string, params?: Record<string, string | number>): string {
           :fields="wizard.fields.value"
           :values="wizard.values.value"
           :errors="wizard.formErrors.value"
+          :invalid-attempt="wizard.invalidAttempt.value"
           @update:values="(next) => (wizard.values.value = next)"
         />
 

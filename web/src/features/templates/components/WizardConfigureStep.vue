@@ -10,9 +10,10 @@ interface Props {
   fields: TemplateField[];
   values: TemplateValues;
   errors: Record<string, string>;
+  invalidAttempt?: number;
 }
 
-defineProps<Props>();
+withDefaults(defineProps<Props>(), { invalidAttempt: 0 });
 
 const emit = defineEmits<{
   "update:values": [values: TemplateValues];
@@ -26,6 +27,7 @@ const emit = defineEmits<{
       :fields="fields"
       :errors="errors"
       :slug="slug"
+      :invalid-attempt="invalidAttempt"
       @update:model-value="(next) => emit('update:values', next)"
     />
   </section>

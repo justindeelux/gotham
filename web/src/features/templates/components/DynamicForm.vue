@@ -10,7 +10,7 @@ import {
   NSwitch,
   useMessage,
 } from "naive-ui";
-import { computed, nextTick, ref } from "vue";
+import { computed, nextTick, ref, watch } from "vue";
 
 import type { TemplateField, TemplateValues } from "@/features/templates/api/templates";
 import { templateOverlayFieldHelp } from "@/features/templates/api/templates";
@@ -27,12 +27,14 @@ interface Props {
   errors?: Record<string, string>;
   disabled?: boolean;
   slug?: string;
+  invalidAttempt?: number;
 }
 
 const props = withDefaults(defineProps<Props>(), {
   errors: () => ({}),
   disabled: false,
   slug: "",
+  invalidAttempt: 0,
 });
 
 const emit = defineEmits<{
@@ -42,6 +44,7 @@ const emit = defineEmits<{
 const message = useMessage();
 const secretInputs = new Map<string, SecretInput>();
 const announcement = ref("");
+const formEl = ref<InstanceType<typeof NForm> | null>(null);
 
 function t(key: string, params?: Record<string, string | number>): string {
   void activeLocale.value;
@@ -151,10 +154,37 @@ async function copyValue(field: TemplateField): Promise<void> {
     message.warning(t("templates.secret.copyFailed", { label: field.label }));
   }
 }
+
+// Next was blocked: scroll to the first invalid field and focus it so the
+// error is not lost below the fold of a long template form.
+async function revealFirstError(): Promise<void> {
+  await nextTick();
+  const key = props.fields.find((field) => props.errors[field.key] !== undefined)?.key;
+  const root = formEl.value?.$el as HTMLElement | undefined;
+  const item = key === undefined ? null : root?.querySelector<HTMLElement>(`.field-${key}`);
+  if (!item) {
+    return;
+  }
+  if (typeof item.scrollIntoView === "function") {
+    item.scrollIntoView({ behavior: "smooth", block: "center" });
+  }
+  item
+    .querySelector<HTMLElement>("input, textarea, [tabindex]")
+    ?.focus({ preventScroll: true });
+}
+
+watch(
+  () => props.invalidAttempt,
+  (attempt) => {
+    if (attempt > 0) {
+      void revealFirstError();
+    }
+  },
+);
 </script>
 
 <template>
-  <NForm label-placement="top" class="dynamic-form form--grid">
+  <NForm ref="formEl" label-placement="top" class="dynamic-form form--grid">
     <p class="sr-only" role="status" aria-live="polite">{{ announcement }}</p>
     <NFormItem
       v-for="field in fields"

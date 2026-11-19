@@ -140,14 +140,21 @@ describe("step gating", () => {
     wizard?.next();
     expect(wizard?.step.value).toBe(1);
     expect(wizard?.showErrors.value).toBe(true);
+    expect(wizard?.invalidAttempt.value).toBe(1);
+    expect(Object.keys(wizard?.formErrors.value ?? {})).toEqual(["password"]);
+    wizard?.next();
+    expect(wizard?.step.value).toBe(1);
+    expect(wizard?.invalidAttempt.value).toBe(2);
   });
 
   it("advances to preview and create once valid", async () => {
     await openWizard();
+    expect(wizard?.invalidAttempt.value).toBe(0);
     if (wizard) {
       wizard.values.value = { password: "hunter2", port: "6379" };
     }
     wizard?.next();
+    expect(wizard?.invalidAttempt.value).toBe(0);
     expect(wizard?.step.value).toBe(2);
     await flushPromises();
     expect(wizard?.render.value?.compose_yaml).toContain("redis");

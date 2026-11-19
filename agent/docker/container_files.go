@@ -43,12 +43,18 @@ var containerFileExecByteLimit int64 = 8 << 20
 // name literal (spaces, quotes, newlines), and busybox find has no -printf, so
 // each entry is stat'ed and printed by the shell. The directory travels as a
 // separate argv item, never through the shell.
+//
+// A listing never degrades to an empty one: a missing stat (127) or a folder
+// the exec user cannot read (126) falls back to the archive listing, and any
+// failed stat fails the listing (3) instead of dropping the entry.
 const containerFileListScript = `dir=$1
+command -v stat >/dev/null 2>&1 || exit 127
+[ -r "$dir" ] && [ -x "$dir" ] || exit 126
 for p in "$dir"/* "$dir"/.[!.]* "$dir"/..?*; do
   [ -e "$p" ] || [ -L "$p" ] || continue
-  fields=$(stat -c '%f %s %u %g %Y' "$p" 2>/dev/null) || continue
+  fields=$(stat -c '%f %s %u %g %Y' "$p" 2>/dev/null) || exit 3
   set -- $fields
-  [ $# -eq 5 ] || continue
+  [ $# -eq 5 ] || exit 3
   printf 'E\0%s\0%s\0%s\0%s\0%s\0%s\0' "${p##*/}" "$1" "$2" "$3" "$4" "$5"
   if [ -L "$p" ]; then
     target=$(readlink "$p" 2>/dev/null)
@@ -60,6 +66,18 @@ const (
 	containerFileExecEntryTag = "E"
 	containerFileExecLinkTag  = "L"
 )
+
+// The listing script's own exit codes. The first two hand the folder to the
+// archive reader, which runs in the daemon and can read what the exec user
+// cannot; every other code is a real failure.
+const (
+	containerFileListExitUnreadable = 126
+	containerFileListExitNoStat     = 127
+)
+
+// errContainerFileArchiveFallback marks an exec listing that the container
+// cannot answer but the daemon's archive API can.
+var errContainerFileArchiveFallback = errors.New("container files: the exec listing cannot read this folder")
 
 // containerFileDeniedPaths are never reachable through the file manager: they
 // are kernel interfaces rather than the container's own files. Docker socket
@@ -150,11 +168,12 @@ func (s *DockerServer) ListContainerFiles(ctx context.Context, req *agentv1.Cont
 			Entries:   entries,
 		}, nil
 	}
-	if !errors.Is(execErr, ErrDockerNoShell) {
+	if !errors.Is(execErr, ErrDockerNoShell) && !errors.Is(execErr, errContainerFileArchiveFallback) {
 		return nil, containerFileError(execErr)
 	}
-	// A running distroless or scratch container has no shell, so the archive
-	// is the only reader left. Its pages stay for that fallback.
+	// A running distroless container has no shell, and a folder the exec user
+	// cannot read still opens to the daemon, so the archive is the reader
+	// left. Its pages stay for that fallback.
 	entries, truncated, cursor, err := s.containerFileList(ctx, target, directory, strings.TrimSpace(req.GetCursor()))
 	if err != nil {
 		return nil, containerFileError(err)
@@ -185,6 +204,10 @@ func (s *DockerServer) containerFileExecList(ctx context.Context, target contain
 		return nil, err
 	}
 	if code != 0 {
+		switch code {
+		case containerFileListExitUnreadable, containerFileListExitNoStat:
+			return nil, fmt.Errorf("%w: %q (exit %d)", errContainerFileArchiveFallback, directory, code)
+		}
 		message := strings.TrimSpace(output)
 		if message == "" {
 			message = fmt.Sprintf("exit code %d", code)

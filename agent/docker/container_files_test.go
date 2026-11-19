@@ -40,6 +40,9 @@ type containerFileEngine struct {
 	// importErr makes ImportArchive fail without reading the body, the way the
 	// engine rejects a PUT on a read-only root or a missing parent directory.
 	importErr error
+	// listExit makes the listing script fail with this exit code instead of
+	// printing entries, the way a missing stat or an unreadable folder does.
+	listExit int32
 }
 
 type commandCall struct {
@@ -283,6 +286,9 @@ func (e *containerFileEngine) RunContainerCommandLimited(_ context.Context, _ st
 	if len(command) < 5 || command[2] != containerFileListScript {
 		return "", 1, nil
 	}
+	if e.listExit != 0 {
+		return "", e.listExit, nil
+	}
 	output := e.listOutput(command[4])
 	if int64(len(output)) > maxBytes {
 		return "", -1, fmt.Errorf("%w: more than %d bytes", ErrCommandOutputTooLarge, maxBytes)
@@ -428,6 +434,53 @@ func TestContainerFileListFallsBackToTheArchiveWithoutAShell(t *testing.T) {
 	}
 	if len(engine.commands) != 0 {
 		t.Fatalf("commands ran without a shell: %v", engine.commands)
+	}
+}
+
+func TestContainerFileListFallsBackWhenTheExecUserCannotRead(t *testing.T) {
+	cases := []struct {
+		name string
+		exit int32
+	}{
+		{"no stat", containerFileListExitNoStat},
+		{"folder unreadable", containerFileListExitUnreadable},
+	}
+	for _, testCase := range cases {
+		t.Run(testCase.name, func(t *testing.T) {
+			engine := newContainerFileEngine(sampleContainerFiles())
+			engine.listExit = testCase.exit
+			server := containerFileService(engine)
+			response, err := server.ListContainerFiles(context.Background(), &agentv1.ContainerFilesListRequest{
+				ContainerId: "c1",
+				Path:        "/etc",
+			})
+			if err != nil {
+				t.Fatalf("list: %v", err)
+			}
+			names := make([]string, 0, len(response.GetEntries()))
+			for _, entry := range response.GetEntries() {
+				names = append(names, entry.GetName())
+			}
+			if strings.Join(names, ",") != "app.conf,certs,hosts" {
+				t.Fatalf("fallback entries = %v", names)
+			}
+		})
+	}
+}
+
+func TestContainerFileListReportsAFailedStat(t *testing.T) {
+	engine := newContainerFileEngine(sampleContainerFiles())
+	engine.listExit = 3
+	server := containerFileService(engine)
+	_, err := server.ListContainerFiles(context.Background(), &agentv1.ContainerFilesListRequest{
+		ContainerId: "c1",
+		Path:        "/etc",
+	})
+	if status.Code(err) != codes.Internal {
+		t.Fatalf("failed stat: %v, want Internal", err)
+	}
+	if !strings.Contains(err.Error(), "exit code 3") {
+		t.Fatalf("failed stat = %v, want the exit code in the error", err)
 	}
 }
 

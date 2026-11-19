@@ -1,5 +1,7 @@
 import { flushPromises, mount } from "@vue/test-utils";
-import { NSelect } from "naive-ui";
+import { NDropdown, NSelect } from "naive-ui";
+import type { DropdownOption } from "naive-ui";
+import { createPinia, setActivePinia } from "pinia";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { nextTick } from "vue";
 
@@ -8,6 +10,7 @@ import type {
   ContainerFileEntry,
   ContainerFileListing,
 } from "@/features/applications/api/containerFiles";
+import CodeEditor from "@/features/files/components/CodeEditor.vue";
 import {
   i18n,
   registerDiscoveredCatalogs,
@@ -54,14 +57,61 @@ vi.hoisted(() => {
   }
 });
 
+// CodeMirror needs layout APIs jsdom does not have; the session is faked the
+// same way the code editor tests do.
+const codeMirror = vi.hoisted(() => {
+  function fakeSession(doc: string) {
+    let current = doc;
+    const status = { total: 0, current: 0, capped: false };
+    return {
+      getDoc: vi.fn(() => current),
+      setDoc: vi.fn((next: string) => {
+        current = next;
+      }),
+      setLanguage: vi.fn(),
+      setSettings: vi.fn(),
+      setReadOnly: vi.fn(),
+      setAccessibility: vi.fn(),
+      focus: vi.fn(),
+      requestMeasure: vi.fn(),
+      search: {
+        setOptions: vi.fn(() => status),
+        status: vi.fn(() => status),
+        next: vi.fn(() => status),
+        previous: vi.fn(() => status),
+        replace: vi.fn(() => status),
+        replaceAll: vi.fn(() => status),
+        clear: vi.fn(),
+      },
+      lineInfo: vi.fn(() => ({ line: 1, total: 1 })),
+      gotoLine: vi.fn(() => null),
+      destroy: vi.fn(),
+    };
+  }
+
+  return {
+    createEditorSession: vi.fn(async (options: { doc: string }) =>
+      fakeSession(options.doc),
+    ),
+  };
+});
+
+vi.mock("@/features/files/composables/useCodeMirror", () => ({
+  createEditorSession: codeMirror.createEditorSession,
+}));
+
 const capabilities = vi.hoisted(() => ({
   value: null as ContainerFileCapabilities | null,
 }));
 
-vi.mock("@/features/applications/api/containers", () => ({
-  listApplicationContainers: vi.fn(async () => [
+const containers = vi.hoisted(() => ({
+  value: [
     { id: "c1", name: "demo-web", image: "gotham/demo:1", state: "exited", status: "Exited" },
-  ]),
+  ] as Array<Record<string, string>>,
+}));
+
+vi.mock("@/features/applications/api/containers", () => ({
+  listApplicationContainers: vi.fn(async () => containers.value),
   applicationContainerAction: vi.fn(async () => "c1"),
 }));
 
@@ -95,6 +145,7 @@ const { default: ApplicationFilesTab } = await import(
 );
 
 beforeEach(() => {
+  setActivePinia(createPinia());
   registerDiscoveredCatalogs();
   resetLocaleState();
   syncComposerLocale("en");
@@ -103,15 +154,19 @@ beforeEach(() => {
     exec_available: true,
     state: "running",
   };
+  containers.value = [
+    { id: "c1", name: "demo-web", image: "gotham/demo:1", state: "exited", status: "Exited" },
+  ];
+  codeMirror.createEditorSession.mockClear();
 });
 
-async function mountTab() {
+async function mountTab(canWrite = true) {
   const wrapper = mount(ApplicationFilesTab, {
     props: {
       appId: "app-1",
-      canWrite: true,
+      canWrite,
     },
-    global: { plugins: [i18n] },
+    global: { plugins: [i18n], stubs: { teleport: true } },
   });
   await nextTick();
   await flushPromises();
@@ -155,6 +210,31 @@ function fileEntry(path: string): ContainerFileEntry {
   };
 }
 
+function rowMenu(wrapper: ReturnType<typeof mount>): DropdownOption[] {
+  return wrapper.findComponent(NDropdown).props("options") as DropdownOption[];
+}
+
+function menuKeys(wrapper: ReturnType<typeof mount>): string[] {
+  return rowMenu(wrapper).map((option) => String(option.key));
+}
+
+async function openRowMenu(
+  wrapper: ReturnType<typeof mount>,
+  rowIndex: number,
+): Promise<void> {
+  await wrapper.findAll(".app-files-more")[rowIndex].trigger("click");
+  await nextTick();
+}
+
+async function selectMenu(
+  wrapper: ReturnType<typeof mount>,
+  key: string,
+): Promise<void> {
+  wrapper.findComponent(NDropdown).vm.$emit("select", key);
+  await flushPromises();
+  await nextTick();
+}
+
 describe("ApplicationFilesTab", () => {
   it("always shows the redeploy warning", async () => {
     const wrapper = await mountTab();
@@ -187,6 +267,27 @@ describe("ApplicationFilesTab", () => {
     expect(wrapper.find('[data-testid="files-upload"]').exists()).toBe(false);
     expect(wrapper.find('[data-testid="files-breadcrumb-root"]').exists()).toBe(false);
     expect(api.listContainerFiles).not.toHaveBeenCalled();
+    wrapper.unmount();
+  });
+
+  it("clears the container picker spinner in the stopped state", async () => {
+    containers.value = [
+      { id: "c1", name: "demo-web", image: "gotham/demo:1", state: "exited", status: "Exited" },
+      { id: "c2", name: "demo-worker", image: "gotham/demo:1", state: "exited", status: "Exited" },
+    ];
+    capabilities.value = {
+      readable: true,
+      exec_available: false,
+      exec_blocked_by: "not_running",
+      state: "exited",
+    };
+    const wrapper = await mountTab();
+    expect(wrapper.findComponent(NSelect).props("loading")).toBe(false);
+    await wrapper.find('[data-testid="files-refresh"]').trigger("click");
+    await flushPromises();
+    await nextTick();
+    expect(wrapper.findComponent(NSelect).props("loading")).toBe(false);
+    expect(wrapper.find('[data-testid="files-start-container"]').exists()).toBe(true);
     wrapper.unmount();
   });
 
@@ -243,8 +344,8 @@ describe("ApplicationFilesTab", () => {
     const fast = deferred<ContainerFileListing>();
     list.mockReturnValueOnce(slow.promise).mockReturnValueOnce(fast.promise);
 
-    await widgetByTestId(wrapper, "files-action-open")[0].trigger("click");
-    await widgetByTestId(wrapper, "files-breadcrumb-root")[0].trigger("click");
+    await wrapper.findAll(".app-files-row")[0].trigger("dblclick");
+    await wrapper.find('[data-testid="files-breadcrumb-root"]').trigger("click");
 
     fast.resolve(listing("/", [fileEntry("/config.yml")]));
     await flushPromises();
@@ -259,11 +360,10 @@ describe("ApplicationFilesTab", () => {
   });
 
   it("never sends an old cursor to a newly selected container", async () => {
-    const containers = await import("@/features/applications/api/containers");
-    vi.mocked(containers.listApplicationContainers).mockResolvedValueOnce([
+    containers.value = [
       { id: "c1", name: "demo-web", image: "gotham/demo:1", state: "running", status: "Up" },
       { id: "c2", name: "demo-worker", image: "gotham/demo:1", state: "running", status: "Up" },
-    ]);
+    ];
     const wrapper = await mountTab();
     expect(wrapper.find('[data-testid="files-container-picker"]').exists()).toBe(true);
 
@@ -274,7 +374,7 @@ describe("ApplicationFilesTab", () => {
     list.mockReturnValueOnce(slow.promise);
     list.mockResolvedValueOnce(listing("/", [fileEntry("/c2-marker.txt")]));
 
-    await widgetByTestId(wrapper, "files-action-open")[0].trigger("click");
+    await wrapper.findAll(".app-files-row")[0].trigger("dblclick");
     wrapper.findComponent(NSelect).vm.$emit("update:value", "c2");
     await flushPromises();
 
@@ -304,12 +404,166 @@ describe("ApplicationFilesTab", () => {
     wrapper.unmount();
   });
 
-  it("shows the folder and file rows", async () => {
+  it("shows an icon and the compact columns without a text-button row", async () => {
     const wrapper = await mountTab();
+    const rows = wrapper.findAll(".app-files-row");
+    expect(rows).toHaveLength(2);
+    expect(rows[0].text()).toContain("app");
+    expect(rows[1].text()).toContain("config.yml");
+    expect(wrapper.find(".app-files-cell-name .fm-mark").exists()).toBe(true);
     const text = wrapper.text();
-    expect(text).toContain("app");
-    expect(text).toContain("config.yml");
     expect(text).toContain("644");
+    expect(text).toContain("1000:1000");
+    expect(text).not.toContain("Download");
+    expect(text).not.toContain("Permissions");
+    expect(wrapper.findAll('[data-testid^="files-action-"]')).toHaveLength(0);
+    wrapper.unmount();
+  });
+
+  it("offers every action from the row menu", async () => {
+    const wrapper = await mountTab();
+    await openRowMenu(wrapper, 0);
+    expect(menuKeys(wrapper)).toEqual([
+      "open",
+      "download",
+      "rename",
+      "copy",
+      "move",
+      "chmod",
+      "delete",
+    ]);
+    await openRowMenu(wrapper, 1);
+    expect(menuKeys(wrapper)).toEqual([
+      "edit",
+      "download",
+      "rename",
+      "copy",
+      "move",
+      "chmod",
+      "delete",
+    ]);
+    wrapper.unmount();
+  });
+
+  it("opens the row menu on right click", async () => {
+    const wrapper = await mountTab();
+    await wrapper.findAll(".app-files-row")[1].trigger("contextmenu");
+    await nextTick();
+    expect(menuKeys(wrapper)).toContain("edit");
+    expect(wrapper.findComponent(NDropdown).props("show")).toBe(true);
+    wrapper.unmount();
+  });
+
+  it("disables the exec actions with the reason when exec is unavailable", async () => {
+    capabilities.value = {
+      readable: true,
+      exec_available: false,
+      exec_blocked_by: "no_shell",
+      state: "running",
+    };
+    const wrapper = await mountTab();
+    await openRowMenu(wrapper, 1);
+    const options = rowMenu(wrapper);
+    const writeOptions = options.filter((option) =>
+      ["rename", "copy", "move", "chmod", "delete"].includes(String(option.key)),
+    );
+    expect(writeOptions).toHaveLength(5);
+    for (const option of writeOptions) {
+      expect(option.disabled).toBe(true);
+      expect(String(option.props?.title)).toContain("no shell");
+    }
+    const edit = options.find((option) => option.key === "edit");
+    expect(edit?.disabled).toBe(false);
+    wrapper.unmount();
+  });
+
+  it("hides the write actions from a reader", async () => {
+    const wrapper = await mountTab(false);
+    expect(wrapper.find('[data-testid="files-upload"]').exists()).toBe(false);
+    expect(wrapper.find('[data-testid="files-new-folder"]').exists()).toBe(false);
+    expect(wrapper.text()).toContain("Only the owner can browse and change");
+    await openRowMenu(wrapper, 1);
+    expect(menuKeys(wrapper)).toEqual(["edit", "download"]);
+    wrapper.unmount();
+  });
+
+  it("opens a folder on double click and on Enter", async () => {
+    const api = await import("@/features/applications/api/containerFiles");
+    const list = vi.mocked(api.listContainerFiles);
+    const wrapper = await mountTab();
+    list.mockClear();
+    await wrapper.findAll(".app-files-row")[0].trigger("dblclick");
+    await flushPromises();
+    expect(list).toHaveBeenCalledWith("app-1", "c1", "/app");
+
+    list.mockClear();
+    await wrapper.findAll(".app-files-row")[0].trigger("keydown", { key: "Enter" });
+    await flushPromises();
+    expect(list).toHaveBeenCalledWith("app-1", "c1", "/app");
+    wrapper.unmount();
+  });
+
+  it("shows the breadcrumb without a double slash", async () => {
+    const api = await import("@/features/applications/api/containerFiles");
+    vi.mocked(api.listContainerFiles).mockResolvedValueOnce(
+      listing("/app", [fileEntry("/app/main.go")]),
+    );
+    const wrapper = await mountTab();
+    await wrapper.findAll(".app-files-row")[0].trigger("dblclick");
+    await flushPromises();
+    const crumbs = wrapper.find(".app-files-breadcrumb");
+    expect(crumbs.text().replace(/\s+/g, "")).toBe("/app");
+    expect(crumbs.text()).not.toContain("//");
+    expect(wrapper.text()).toContain("main.go");
+    wrapper.unmount();
+  });
+
+  it("refuses to edit a file above the text limit", async () => {
+    const api = await import("@/features/applications/api/containerFiles");
+    vi.mocked(api.listContainerFiles).mockResolvedValueOnce(
+      listing("/", [
+        {
+          path: "/big.log",
+          name: "big.log",
+          kind: "file",
+          size: 2 * 1024 * 1024,
+          mode: 0o644,
+          uid: 0,
+          gid: 0,
+        },
+      ]),
+    );
+    const wrapper = await mountTab();
+    await wrapper.findAll(".app-files-row")[0].trigger("dblclick");
+    await flushPromises();
+    expect(wrapper.text()).toContain("too large");
+    expect(api.readContainerFile).not.toHaveBeenCalled();
+    expect(wrapper.findComponent(CodeEditor).exists()).toBe(false);
+    wrapper.unmount();
+  });
+
+  it("opens a text file in the code editor and saves through the API", async () => {
+    const api = await import("@/features/applications/api/containerFiles");
+    const wrapper = await mountTab();
+    await openRowMenu(wrapper, 1);
+    await selectMenu(wrapper, "edit");
+    const editor = wrapper.findComponent(CodeEditor);
+    expect(editor.exists()).toBe(true);
+    expect(editor.props("modelValue")).toBe("port: 8080\n");
+    expect(editor.props("language")).toBe("yaml");
+    expect(codeMirror.createEditorSession).toHaveBeenCalled();
+
+    editor.vm.$emit("update:modelValue", "port: 9090\n");
+    await nextTick();
+    await wrapper.find('[data-testid="files-editor-save"]').trigger("click");
+    await flushPromises();
+    expect(api.writeContainerFile).toHaveBeenCalledWith(
+      "app-1",
+      "c1",
+      "/app/config.yml",
+      "port: 9090\n",
+    );
+    expect(wrapper.findComponent(CodeEditor).exists()).toBe(false);
     wrapper.unmount();
   });
 
@@ -320,6 +574,11 @@ describe("ApplicationFilesTab", () => {
     expect(note.text()).toContain("sẽ mất khi triển khai lại ứng dụng");
     expect(wrapper.text()).not.toContain("applications.files.");
     expect(wrapper.text()).toContain("Tệp");
+    expect(wrapper.text()).toContain("Kích thước");
+    expect(wrapper.text()).not.toContain("Size");
+    await openRowMenu(wrapper, 1);
+    const labels = rowMenu(wrapper).map((option) => String(option.label));
+    expect(labels).toEqual(["Sửa", "Tải xuống", "Đổi tên", "Sao chép", "Di chuyển", "Quyền", "Xoá"]);
     syncComposerLocale("en");
     wrapper.unmount();
   });
@@ -344,33 +603,10 @@ describe("ApplicationFilesTab", () => {
     const api = await import("@/features/applications/api/containerFiles");
     vi.mocked(api.readContainerFile).mockResolvedValueOnce({ text: "", isText: false });
     const wrapper = await mountTab();
-    await widgetByTestId(wrapper, "files-action-edit")[0].trigger("click");
-    await flushPromises();
+    await openRowMenu(wrapper, 1);
+    await selectMenu(wrapper, "edit");
     expect(wrapper.text()).toContain("not a text file");
-    expect(wrapper.find('[data-testid="files-editor-input"]').exists()).toBe(false);
-    wrapper.unmount();
-  });
-
-  it("hides the write controls for a reader", async () => {
-    const wrapper = mount(ApplicationFilesTab, {
-      props: { appId: "app-1", canWrite: false },
-      global: { plugins: [i18n] },
-    });
-    await nextTick();
-    await flushPromises();
-    await nextTick();
-    expect(wrapper.find('[data-testid="files-upload"]').exists()).toBe(false);
-    expect(wrapper.find('[data-testid="files-new-folder"]').exists()).toBe(false);
-    expect(wrapper.text()).toContain("Only the owner can browse and change");
+    expect(wrapper.findComponent(CodeEditor).exists()).toBe(false);
     wrapper.unmount();
   });
 });
-
-function widgetByTestId(
-  wrapper: ReturnType<typeof mount>,
-  testId: string,
-): ReturnType<typeof wrapper.findAll> {
-  return wrapper.findAll(`[data-testid="${testId}"]`);
-}
-
-void i18n;

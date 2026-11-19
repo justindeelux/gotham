@@ -396,6 +396,59 @@ func TestContainerFileListTruncatesAndResumes(t *testing.T) {
 	}
 }
 
+func TestContainerFileListByteCapCountsPastTheCursor(t *testing.T) {
+	previousLimit := containerFileListByteLimit
+	containerFileListByteLimit = 2048
+	defer func() { containerFileListByteLimit = previousLimit }()
+
+	// Each entry costs 1536 tar bytes (512 header + 1024 data), so every page
+	// stops on the byte cap long before the 1000-entry cap.
+	const fileCount = 12
+	data := bytes.Repeat([]byte("x"), 1024)
+	files := map[string]*fakeContainerFile{
+		"/data": {kind: agentv1.FileKind_FILE_KIND_DIRECTORY, mode: 0o755},
+	}
+	want := make([]string, 0, fileCount)
+	for index := 0; index < fileCount; index++ {
+		name := fmt.Sprintf("f%05d", index)
+		files["/data/"+name] = &fakeContainerFile{kind: agentv1.FileKind_FILE_KIND_FILE, data: data}
+		want = append(want, name)
+	}
+	server := containerFileService(newContainerFileEngine(files))
+
+	got := make([]string, 0, fileCount)
+	cursor := ""
+	for page := 1; ; page++ {
+		if page > fileCount {
+			t.Fatalf("paging did not finish after %d pages", page-1)
+		}
+		response, err := server.ListContainerFiles(context.Background(), &agentv1.ContainerFilesListRequest{
+			ContainerId: "c1",
+			Path:        "/data",
+			Cursor:      cursor,
+		})
+		if err != nil {
+			t.Fatalf("page %d: %v", page, err)
+		}
+		if len(response.GetEntries()) == 0 {
+			t.Fatalf("page %d returned no entries (truncated %v)", page, response.GetTruncated())
+		}
+		if page == 2 && len(response.GetEntries()) <= 1 {
+			t.Fatalf("page 2 returned %d entries, want more than one", len(response.GetEntries()))
+		}
+		for _, entry := range response.GetEntries() {
+			got = append(got, entry.GetName())
+		}
+		if !response.GetTruncated() {
+			break
+		}
+		cursor = response.GetCursor()
+	}
+	if strings.Join(got, ",") != strings.Join(want, ",") {
+		t.Fatalf("paged entries = %v, want %v", got, want)
+	}
+}
+
 func TestContainerFileRejectsDeniedPaths(t *testing.T) {
 	engine := newContainerFileEngine(sampleContainerFiles())
 	engine.mounts = []ContainerMount{{Type: "bind", Source: "/var/run/docker.sock", Destination: "/socket/docker.sock"}}

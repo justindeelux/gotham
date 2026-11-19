@@ -620,8 +620,7 @@ func (c *DockerClient) RunContainerCommandLimited(ctx context.Context, container
 	if err != nil {
 		return "", -1, err
 	}
-	output, readErr := readExecStdout(stream, maxBytes+1)
-	_ = stream.Close()
+	output, readErr := readExecStdoutWithin(ctx, stream, maxBytes+1)
 	if readErr != nil {
 		return string(output), -1, readErr
 	}
@@ -633,6 +632,30 @@ func (c *DockerClient) RunContainerCommandLimited(ctx context.Context, container
 		return "", -1, fmt.Errorf("%w: the command wrote more than %d bytes", ErrCommandOutputTooLarge, maxBytes)
 	}
 	return string(output), code, nil
+}
+
+// readExecStdoutWithin reads one exec's stdout until it ends or ctx is done.
+// The upgraded connection ignores the request context, so closing the stream
+// is what unblocks a command that hangs inside the container.
+func readExecStdoutWithin(ctx context.Context, stream io.ReadWriteCloser, limit int64) ([]byte, error) {
+	type result struct {
+		output []byte
+		err    error
+	}
+	done := make(chan result, 1)
+	go func() {
+		output, err := readExecStdout(stream, limit)
+		done <- result{output: output, err: err}
+	}()
+	select {
+	case value := <-done:
+		_ = stream.Close()
+		return value.output, value.err
+	case <-ctx.Done():
+		_ = stream.Close()
+		<-done
+		return nil, ctx.Err()
+	}
 }
 
 // readExecStdout drains a non-TTY exec stream and keeps at most limit stdout

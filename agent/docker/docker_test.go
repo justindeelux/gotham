@@ -1040,3 +1040,62 @@ func TestParsePortSpec(t *testing.T) {
 		})
 	}
 }
+
+// TestRunContainerCommandLimitedStopsOnCancel covers a command that never
+// finishes: the upgraded connection ignores the request context, so the call
+// has to close the stream to return and free the exec.
+func TestRunContainerCommandLimitedStopsOnCancel(t *testing.T) {
+	started := make(chan struct{})
+	closed := make(chan struct{})
+	var startOnce, closeOnce sync.Once
+	mux := http.NewServeMux()
+	mux.HandleFunc("POST /containers/c1/exec", func(w http.ResponseWriter, _ *http.Request) {
+		writeJSON(t, w, map[string]string{"Id": "exec1"})
+	})
+	mux.HandleFunc("POST /exec/exec1/start", func(w http.ResponseWriter, _ *http.Request) {
+		hijacker, ok := w.(http.Hijacker)
+		if !ok {
+			http.Error(w, "hijacking is unavailable", http.StatusInternalServerError)
+			return
+		}
+		conn, _, err := hijacker.Hijack()
+		if err != nil {
+			return
+		}
+		defer func() { _ = conn.Close() }()
+		_, _ = conn.Write([]byte("HTTP/1.1 101 Switching Protocols\r\nConnection: Upgrade\r\nUpgrade: tcp\r\n\r\n"))
+		startOnce.Do(func() { close(started) })
+		_, _ = conn.Read(make([]byte, 1))
+		closeOnce.Do(func() { close(closed) })
+	})
+	server := httptest.NewServer(mux)
+	defer server.Close()
+	client := newFakeDockerClient(t, server.URL)
+
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	done := make(chan error, 1)
+	go func() {
+		_, _, err := client.RunContainerCommandLimited(ctx, "c1", []string{"/bin/sh", "-c", "true"}, 1024)
+		done <- err
+	}()
+	select {
+	case <-started:
+	case <-time.After(5 * time.Second):
+		t.Fatal("the exec stream never started")
+	}
+	cancel()
+	select {
+	case err := <-done:
+		if !errors.Is(err, context.Canceled) {
+			t.Fatalf("err = %v, want context.Canceled", err)
+		}
+	case <-time.After(5 * time.Second):
+		t.Fatal("the call did not return after cancellation")
+	}
+	select {
+	case <-closed:
+	case <-time.After(5 * time.Second):
+		t.Fatal("the exec stream was not closed")
+	}
+}

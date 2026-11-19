@@ -399,7 +399,7 @@ test("service picker renders overlay copy at every width, en and vi", async ({
           "Chọn template service, hoặc nhập tệp Docker Compose.",
         );
         await expect(picker).toContainText(
-          "Tự động hóa quy trình n8n với volume có tên bền vững và tên miền định tuyến không bắt buộc.",
+          "Tự động hóa công việc giữa các ứng dụng với n8n.",
         );
       }
       await expect(picker).toContainText(

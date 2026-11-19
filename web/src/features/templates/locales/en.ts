@@ -66,8 +66,6 @@ const en = {
   },
   overlay: {
     n8n: {
-      description:
-        "n8n workflow automation with a persistent named volume and an optional routed domain.",
       fields: {
         domain: {
           help: "Optional. Leave empty to add a domain later from the service page. Webhook URLs need a domain.",
@@ -87,8 +85,6 @@ const en = {
       },
     },
     nextcloud: {
-      description:
-        "Nextcloud with PostgreSQL and Redis, persistent named volumes and a routed domain.",
       fields: {
         domain: {
           help: "Required for the first install; the official image only reads its trusted-domain list then. Add more domains from the service page after the install.",
@@ -102,8 +98,6 @@ const en = {
       },
     },
     "uptime-kuma": {
-      description:
-        "Uptime Kuma monitoring with a persistent named volume and an optional routed domain.",
       fields: {
         domain: {
           help: "Optional. Leave empty to add a domain later from the service page.",
@@ -114,8 +108,6 @@ const en = {
       },
     },
     wordpress: {
-      description:
-        "WordPress with a MySQL database, persistent named volumes and an optional routed domain.",
       fields: {
         domain: {
           help: "Optional. Leave empty to add a domain later from the service page.",

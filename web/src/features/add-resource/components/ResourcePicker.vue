@@ -9,11 +9,9 @@ import CreateDatabaseWizard from "@/features/databases/components/CreateDatabase
 import type { CreatedDatabase } from "@/features/databases/api/databases";
 import { ENGINES, engineByValue } from "@/features/databases/utils/databaseEngines";
 import TemplateWizard from "@/features/templates/components/TemplateWizard.vue";
-import {
-  templateOverlayDescription,
-} from "@/features/templates/api/templates";
 import type { TemplateSummary } from "@/features/templates/api/templates";
 import { useTemplatesStore } from "@/features/templates/stores/templates";
+import { templateDescription } from "@/features/templates/utils/templateDescription";
 import { activeLocale, i18n } from "@/shared/i18n";
 import HomepageLink from "@/shared/components/HomepageLink.vue";
 import BrandIcon from "./BrandIcon.vue";
@@ -119,7 +117,7 @@ const filteredTemplates = computed<TemplateSummary[]>(() => {
   }
   return templatesStore.templates.filter((template) => {
     const haystack =
-      `${template.name} ${template.description} ${templateOverlayDescription(template)}`.toLowerCase();
+      `${template.name} ${template.description} ${templateDescription(template)}`.toLowerCase();
     return haystack.includes(needle);
   });
 });
@@ -435,7 +433,7 @@ onMounted(() => {
                     <BrandIcon v-bind="templateBrand(template.icon, template.name)" />
                     <span class="res-name">{{ template.name }}</span>
                   </span>
-                  <span class="res-desc">{{ templateOverlayDescription(template) }}</span>
+                  <span class="res-desc">{{ templateDescription(template) }}</span>
                 </button>
                 <HomepageLink
                   :href="template.homepage"

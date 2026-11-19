@@ -29,12 +29,18 @@ vi.mock("@/features/projects/api/projects", async (importOriginal) => {
     createEnvironment: vi.fn(),
     renameEnvironment: vi.fn(),
     deleteEnvironment: vi.fn(),
+    setProjectIcon: vi.fn(),
+    clearProjectIcon: vi.fn(),
+    uploadProjectIcon: vi.fn(),
+    getProjectIcon: vi.fn(),
   };
 });
 import {
   createProject,
   getProject,
   listProjects,
+  renameProject,
+  setProjectIcon,
 } from "@/features/projects/api/projects";
 import type {
   Environment,
@@ -142,6 +148,16 @@ async function clickButton(wrapper: VueWrapper, label: string): Promise<void> {
   const target = buttons.find((button) => button.text() === label);
   expect(target, `expected a button labelled ${label}`).toBeDefined();
   await target!.trigger("click");
+  await flushPromises();
+  await nextTick();
+}
+
+async function openConfigurationTab(wrapper: VueWrapper): Promise<void> {
+  const tab = wrapper
+    .findAll(".n-tabs-tab")
+    .find((item) => item.text() === "Configuration");
+  expect(tab, "expected a Configuration tab").toBeDefined();
+  await tab!.trigger("click");
   await flushPromises();
   await nextTick();
 }
@@ -294,6 +310,7 @@ describe("project detail page states", () => {
     expect(wrapper.text()).toContain("Projects");
     expect(wrapper.text()).toContain("production");
     expect(wrapper.text()).toContain("Shared variables");
+    expect(wrapper.find(".page-head").findAllComponents(NButton)).toHaveLength(0);
     const open = wrapper
       .findAllComponents(NButton)
       .find((button) => button.text() === "Open");
@@ -329,6 +346,7 @@ describe("project detail page states", () => {
     });
 
     const { wrapper } = await mountDetail(id);
+    await openConfigurationTab(wrapper);
     await clickButton(wrapper, "Delete project");
     expect(wrapper.text()).toContain("Move or delete every resource");
     const confirm = wrapper
@@ -361,18 +379,6 @@ describe("project detail page states", () => {
     });
 
     const { wrapper } = await mountDetail(id);
-    const renames = () =>
-      wrapper
-        .findAllComponents(NButton)
-        .filter((button) => button.text() === "Rename");
-
-    await renames()[0]!.trigger("click");
-    await flushPromises();
-    await nextTick();
-    expect(wrapper.find("#project-rename-name").attributes("aria-label")).toBe(
-      "Project name",
-    );
-    await clickButton(wrapper, "Cancel");
 
     await clickButton(wrapper, "Add environment");
     expect(
@@ -380,35 +386,117 @@ describe("project detail page states", () => {
     ).toBe("Environment name");
     await clickButton(wrapper, "Cancel");
 
-    await renames()[1]!.trigger("click");
-    await flushPromises();
-    await nextTick();
+    await clickButton(wrapper, "Rename");
     expect(
       wrapper.find("#environment-rename-name").attributes("aria-label"),
     ).toBe("Environment name");
+    await clickButton(wrapper, "Cancel");
+
+    await openConfigurationTab(wrapper);
+    expect(wrapper.find("#project-config-name").attributes("aria-label")).toBe(
+      "Project name",
+    );
+    expect(
+      wrapper.find("#project-config-description").attributes("aria-label"),
+    ).toBe("Project description");
     wrapper.unmount();
   });
 
-  it("submits renames on keydown Enter, never on keyup", async () => {
+  it("saves the configuration on keydown Enter, never on keyup", async () => {
     setActivePinia(createPinia());
     vi.mocked(getProject).mockResolvedValue({
       project: projectRow(),
       environments: [environmentRow(emptyCounts)],
     });
-    const { renameProject } = await import("@/features/projects/api/projects");
     vi.mocked(renameProject).mockResolvedValue(projectRow({ name: "renamed" }));
 
     const { wrapper } = await mountDetail(id);
-    await clickButton(wrapper, "Rename");
-    const input = wrapper.find(".n-modal input");
+    await openConfigurationTab(wrapper);
+    const input = wrapper.find("#project-config-name");
     expect(input.exists()).toBe(true);
+    await input.setValue("renamed");
     await input.trigger("keyup.enter");
     await flushPromises();
     expect(vi.mocked(renameProject)).not.toHaveBeenCalled();
     await input.trigger("keydown.enter");
     await flushPromises();
     await nextTick();
-    expect(vi.mocked(renameProject)).toHaveBeenCalledTimes(1);
+    expect(vi.mocked(renameProject)).toHaveBeenCalledWith(id, {
+      name: "renamed",
+      description: "Online shop",
+    });
+    wrapper.unmount();
+  });
+
+  it("saves name and description together and shows them in the header", async () => {
+    setActivePinia(createPinia());
+    vi.mocked(getProject).mockResolvedValue({
+      project: projectRow(),
+      environments: [],
+    });
+    vi.mocked(renameProject).mockResolvedValue(
+      projectRow({ name: "shop", description: "New blurb" }),
+    );
+
+    const { wrapper } = await mountDetail(id);
+    await openConfigurationTab(wrapper);
+    await wrapper.find("#project-config-name").setValue("shop");
+    await wrapper.find("#project-config-description").setValue("New blurb");
+    await clickButton(wrapper, "Save");
+    expect(vi.mocked(renameProject)).toHaveBeenCalledWith(id, {
+      name: "shop",
+      description: "New blurb",
+    });
+    expect(wrapper.find(".title").text()).toBe("shop");
+    expect(wrapper.find(".page-desc").text()).toBe("New blurb");
+    wrapper.unmount();
+  });
+
+  it("shows a saved icon in the header and on the project list entry", async () => {
+    setActivePinia(createPinia());
+    const store = useProjectsStore();
+    store.projects = [projectRow()];
+    vi.mocked(getProject).mockResolvedValue({
+      project: projectRow(),
+      environments: [],
+    });
+    vi.mocked(setProjectIcon).mockResolvedValue(
+      projectRow({ icon: "preset:box", icon_version: 1 }),
+    );
+
+    const { wrapper } = await mountDetail(id);
+    await openConfigurationTab(wrapper);
+    expect(wrapper.find(".title-row .project-icon__letter").exists()).toBe(true);
+    await wrapper.findAll(".project-icon-picker__preset")[1]!.trigger("click");
+    await flushPromises();
+    await nextTick();
+    expect(vi.mocked(setProjectIcon)).toHaveBeenCalledWith(id, "preset:box");
+    expect(wrapper.find(".title-row .project-icon__glyph").exists()).toBe(true);
+    expect(store.projects[0]?.icon).toBe("preset:box");
+    expect(store.projects[0]?.icon_version).toBe(1);
+    wrapper.unmount();
+  });
+
+  it("renders the configuration tab in Vietnamese without raw keys", async () => {
+    setActivePinia(createPinia());
+    vi.mocked(getProject).mockResolvedValue({
+      project: projectRow(),
+      environments: [],
+    });
+
+    const { wrapper } = await mountDetail(id);
+    setLocale("vi", null);
+    await nextTick();
+    const tab = wrapper
+      .findAll(".n-tabs-tab")
+      .find((item) => item.text() === "Cấu hình");
+    expect(tab, "expected a Vietnamese configuration tab").toBeDefined();
+    await tab!.trigger("click");
+    await flushPromises();
+    await nextTick();
+    expect(wrapper.text()).toContain("Vùng nguy hiểm");
+    expect(wrapper.text()).toContain("Xóa dự án");
+    expect(wrapper.text()).not.toContain("projects.");
     wrapper.unmount();
   });
 
@@ -496,7 +584,6 @@ describe("project detail page states", () => {
       project: projectRow({ id: pid, name: pid === id ? "storefront" : "other" }),
       environments: [],
     }));
-    const { renameProject } = await import("@/features/projects/api/projects");
     let resolveRename!: (_value: Project) => void;
     vi.mocked(renameProject).mockReturnValue(
       new Promise<Project>((resolvePromise) => {
@@ -505,25 +592,24 @@ describe("project detail page states", () => {
     );
 
     const { wrapper, router } = await mountDetail(id);
-    await clickButton(wrapper, "Rename");
-    const input = wrapper.find(".n-modal input");
-    await input.setValue("renamed");
-    await input.trigger("keydown.enter");
+    await openConfigurationTab(wrapper);
+    await wrapper.find("#project-config-name").setValue("renamed");
+    await wrapper.find("#project-config-name").trigger("keydown.enter");
     await flushPromises();
     expect(vi.mocked(renameProject)).toHaveBeenCalledTimes(1);
     await router.push(`/projects/${otherId}`);
     await flushPromises();
     await nextTick();
-    await clickButton(wrapper, "Rename");
-    const otherInput = wrapper.find(".n-modal input");
-    await otherInput.setValue("renamed-b");
-    await otherInput.trigger("keydown.enter");
+    await openConfigurationTab(wrapper);
+    await wrapper.find("#project-config-name").setValue("renamed-b");
+    await wrapper.find("#project-config-name").trigger("keydown.enter");
     await flushPromises();
     expect(vi.mocked(renameProject)).toHaveBeenCalledTimes(1);
     resolveRename(projectRow({ id, name: "renamed" }));
     await flushPromises();
     await nextTick();
     expect(vi.mocked(renameProject)).toHaveBeenCalledTimes(1);
+    expect(wrapper.find(".title").text()).toBe("other");
     wrapper.unmount();
   });
 
@@ -544,14 +630,13 @@ describe("project detail page states", () => {
     wrapper.unmount();
   });
 
-  it("late rename success does not close another project's dialog", async () => {
+  it("late save does not overwrite another project's configuration form", async () => {
     setActivePinia(createPinia());
     const otherId = "33333333-3333-4333-8333-333333333333";
     vi.mocked(getProject).mockImplementation(async (pid: string) => ({
       project: projectRow({ id: pid, name: pid === id ? "storefront" : "other" }),
       environments: [],
     }));
-    const { renameProject } = await import("@/features/projects/api/projects");
     let resolveRename!: (_value: Project) => void;
     vi.mocked(renameProject).mockReturnValue(
       new Promise<Project>((resolvePromise) => {
@@ -560,21 +645,20 @@ describe("project detail page states", () => {
     );
 
     const { wrapper, router } = await mountDetail(id);
-    await clickButton(wrapper, "Rename");
-    await wrapper.find(".n-modal input").setValue("renamed");
-    await wrapper.find(".n-modal input").trigger("keydown.enter");
+    await openConfigurationTab(wrapper);
+    await wrapper.find("#project-config-name").setValue("renamed");
+    await wrapper.find("#project-config-name").trigger("keydown.enter");
     await flushPromises();
     expect(vi.mocked(renameProject)).toHaveBeenCalledTimes(1);
     await router.push(`/projects/${otherId}`);
     await flushPromises();
     await nextTick();
-    await clickButton(wrapper, "Rename");
     resolveRename(projectRow({ id, name: "renamed" }));
     await flushPromises();
     await nextTick();
-    expect(wrapper.find(".n-modal").exists()).toBe(true);
+    expect(wrapper.find(".title").text()).toBe("other");
     expect(
-      (wrapper.find(".n-modal input").element as unknown as { value: string })
+      (wrapper.find("#project-config-name").element as unknown as { value: string })
         .value,
     ).toBe("other");
     wrapper.unmount();
@@ -596,6 +680,7 @@ describe("project detail page states", () => {
     );
 
     const { wrapper, router } = await mountDetail(id);
+    await openConfigurationTab(wrapper);
     await clickButton(wrapper, "Delete project");
     const confirm = wrapper
       .find(".n-modal")

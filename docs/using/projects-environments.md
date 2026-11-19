@@ -17,13 +17,14 @@ A **production** environment is created together with the project, so the new
 project is immediately usable. Open it to see its environments and their
 resource counts.
 
-## Rename or delete a project
+## Edit or delete a project
 
-On the project page, **Rename** changes the name. **Delete project** is
-owner-only and removes it. A project that still holds resources cannot be
-deleted: move or delete every resource in every environment first. Deleting
-removes the project, all of its environments and its shared variables, and
-cannot be undone.
+On the project page, open the **Configuration** tab. It changes the project
+name, description and icon, and holds **Delete project**, which is owner-only
+and removes it. A project that still holds resources cannot be deleted: move
+or delete every resource in every environment first. Deleting removes the
+project, all of its environments and its shared variables, and cannot be
+undone.
 
 ## Environments
 

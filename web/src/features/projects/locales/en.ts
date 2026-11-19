@@ -31,11 +31,11 @@ const en = {
   },
   detail: {
     rename: "Rename",
-    deleteProject: "Delete project",
     open: "Open",
     delete: "Delete",
     tabs: {
       environments: "Environments",
+      configuration: "Configuration",
       variables: "Shared variables",
     },
     noEnvironments: "No environments yet. Add one to start deploying.",
@@ -48,12 +48,16 @@ const en = {
       actions: "Actions",
     },
   },
-  rename: {
-    title: "Rename project",
+  configuration: {
+    generalTitle: "General",
     nameLabel: "Name",
     nameAria: "Project name",
     nameHint: "Unique within the instance. 1-64 characters.",
-    submit: "Save",
+    descriptionLabel: "Description",
+    descriptionAria: "Project description",
+    dangerTitle: "Danger zone",
+    dangerHint:
+      "Deleting the project also removes its environments and its shared variables.",
   },
   icon: {
     title: "Project icon",
@@ -274,7 +278,7 @@ const en = {
   },
   toast: {
     createdProject: "Created project {name}",
-    projectRenamed: "Project renamed",
+    projectUpdated: "Project updated",
     deletedProject: "Deleted project {name}",
     addedEnvironment: "Added environment {name}",
     environmentRenamed: "Environment renamed",

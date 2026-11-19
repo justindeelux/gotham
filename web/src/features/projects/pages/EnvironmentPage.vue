@@ -345,11 +345,11 @@ function afterServiceCreate(service: Service): void {
       :title="t('projects.environment.addResource')"
       :segmented="true"
       display-directive="show"
-      class="app-modal"
+      class="app-modal add-resource-modal"
       style="width: 1040px; max-width: 96vw"
       @update:show="(value: boolean) => (page.addOpen.value = value)"
     >
-      <NSpace vertical :size="12">
+      <div class="add-resource-body">
         <NText depth="3">
           {{ t("projects.environment.creatingIn", { project: page.resources.value?.project.name ?? "", environment: page.resources.value?.environment.name ?? "" }) }}
         </NText>
@@ -361,7 +361,7 @@ function afterServiceCreate(service: Service): void {
           @wizard-open="wizardOpen = $event"
           @compose-import="openImport"
         />
-      </NSpace>
+      </div>
     </NModal>
 
     <ImportComposeDialog

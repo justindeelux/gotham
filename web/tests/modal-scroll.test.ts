@@ -69,6 +69,24 @@ describe("JUS-69 plain card modals scroll only the body", () => {
   });
 });
 
+describe("GOTHAM-234 the Add resource modal fills the viewport", () => {
+  it("gives the card a viewport height and one scroll region", () => {
+    const card = ruleBody(mainCss, ".add-resource-modal.n-modal.n-card");
+    expect(card).toMatch(/height:\s*calc\(100vh\s*-\s*\d+px\)/);
+    const content = ruleBody(
+      mainCss,
+      ".add-resource-modal.n-modal.n-card > .n-card-content",
+    );
+    expect(content).toMatch(/overflow:\s*hidden/);
+    expect(content).toMatch(/flex:\s*1\s*1\s*auto/);
+  });
+
+  it("puts the extra class on the Add resource modal only", () => {
+    const source = readSfc("src/features/projects/pages/EnvironmentPage.vue");
+    expect(source).toContain('class="app-modal add-resource-modal"');
+  });
+});
+
 describe("JUS-69 wizard modals pin the footer and scroll the step body", () => {
   it("fixes the card body and lets only .wizard-body scroll", () => {
     const body = ruleBody(mainCss, ".wizard-modal.n-modal.n-card > .n-card-content");

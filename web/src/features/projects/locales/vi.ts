@@ -120,6 +120,7 @@ const vi = {
       running: "đang chạy",
       failed: "thất bại",
       deploying: "đang triển khai",
+      stopped: "đã dừng",
       creating: "đang tạo",
       error: "lỗi",
     },

@@ -120,6 +120,7 @@ const en = {
       running: "running",
       failed: "failed",
       deploying: "deploying",
+      stopped: "stopped",
       creating: "creating",
       error: "error",
     },

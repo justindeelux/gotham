@@ -203,6 +203,13 @@ describe("applicationStatusView", () => {
     expect(applicationStatusView(null)).toEqual({ text: "not deployed", tag: "default" });
     expect(applicationStatusView("unknown")).toEqual({ text: "unknown", tag: "default" });
   });
+
+  it("reports a stopped application over its last deployment state", () => {
+    expect(applicationStatusView("running", true)).toEqual({ text: "stopped", tag: "default" });
+    expect(applicationStatusView("failed", true)).toEqual({ text: "stopped", tag: "default" });
+    setLocale("vi", null);
+    expect(applicationStatusView("running", true)).toEqual({ text: "đã dừng", tag: "default" });
+  });
 });
 
 describe("databaseStatusView", () => {
@@ -270,6 +277,42 @@ describe("buildEnvironmentRows", () => {
     const resources = envelope() as unknown as EnvironmentResources;
     const rows = buildEnvironmentRows(resources, {}, true, "p", "e");
     expect(rows[0]!.statusText).toBe("unknown");
+  });
+
+  it("shows a stopped application as stopped, even with a running deployment", () => {
+    const base = envelope().applications[0];
+    const stopped = {
+      ...base,
+      runtime_health: {
+        state: "stopped",
+        coverage: "full",
+        enabled: true,
+        grace_seconds: 0,
+        desired_state: "stopped",
+        affected: [],
+      },
+    };
+    const resources = envelope({ applications: [stopped] }) as unknown as EnvironmentResources;
+    const rows = buildEnvironmentRows(resources, { [stopped.id]: "running" }, false, "p", "e");
+    expect(rows[0]).toMatchObject({ statusText: "stopped", statusTag: "default" });
+  });
+
+  it("keeps a running application on its running deployment", () => {
+    const base = envelope().applications[0];
+    const running = {
+      ...base,
+      runtime_health: {
+        state: "healthy",
+        coverage: "full",
+        enabled: true,
+        grace_seconds: 0,
+        desired_state: "running",
+        affected: [],
+      },
+    };
+    const resources = envelope({ applications: [running] }) as unknown as EnvironmentResources;
+    const rows = buildEnvironmentRows(resources, { [running.id]: "running" }, false, "p", "e");
+    expect(rows[0]).toMatchObject({ statusText: "running", statusTag: "success" });
   });
 
   it("nests previews under their base and keeps them out of the counts", () => {

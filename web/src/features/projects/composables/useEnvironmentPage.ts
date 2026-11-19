@@ -54,7 +54,12 @@ function statusText(key: string): string {
 
 export function applicationStatusView(
   state: DeploymentState | null | "unknown",
+  stopped = false,
 ): { text: string; tag: EnvironmentRow["statusTag"] } {
+  // Stopping creates no deployment, so the stop request outranks the last state.
+  if (stopped) {
+    return { text: statusText("projects.environment.status.stopped"), tag: "default" };
+  }
   if (state === "unknown") {
     return { text: statusText("projects.environment.status.unknown"), tag: "default" };
   }
@@ -127,6 +132,7 @@ export function buildEnvironmentRows(
     const state = applicationStates[application.id] ?? null;
     const view = applicationStatusView(
       state === null && applicationStatesFailed ? "unknown" : state,
+      application.runtime_health?.desired_state === "stopped",
     );
     return {
       kind: "application",

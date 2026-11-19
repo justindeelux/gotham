@@ -83,6 +83,7 @@ const loading = ref(false);
 const errorMessage = ref<string | null>(null);
 const busy = ref(false);
 const fileInput = ref<HTMLInputElement | null>(null);
+let loadRun = 0;
 
 const editor = ref<{
   open: boolean;
@@ -217,24 +218,29 @@ async function loadCapabilities(): Promise<ContainerFileCapabilities | null> {
 }
 
 async function load(directory: string): Promise<void> {
-  if (containerId.value === "") {
+  const id = containerId.value;
+  if (id === "") {
     return;
   }
+  // A newer load (another folder or another container) owns the view; this
+  // one stops writing, and never sends its cursor to the newer container.
+  const run = ++loadRun;
   loading.value = true;
   try {
-    let listing = await listContainerFiles(props.appId, containerId.value, directory);
+    let listing = await listContainerFiles(props.appId, id, directory);
+    if (run !== loadRun) {
+      return;
+    }
     const collected = [...listing.entries];
     // An exec listing returns the whole folder at once. Only the tar fallback
     // (a container without a shell) still pages, so this loop follows its
     // cursor to the end instead of asking the user to load more.
     let pages = 1;
     while (listing.truncated && listing.cursor && pages < LISTING_PAGE_CEILING) {
-      listing = await listContainerFiles(
-        props.appId,
-        containerId.value,
-        directory,
-        listing.cursor,
-      );
+      listing = await listContainerFiles(props.appId, id, directory, listing.cursor);
+      if (run !== loadRun) {
+        return;
+      }
       collected.push(...listing.entries);
       pages += 1;
     }
@@ -244,6 +250,9 @@ async function load(directory: string): Promise<void> {
     notRunning.value = false;
     errorMessage.value = null;
   } catch (err) {
+    if (run !== loadRun) {
+      return;
+    }
     if (isContainerNotRunning(err)) {
       notRunning.value = true;
       entries.value = [];
@@ -252,7 +261,9 @@ async function load(directory: string): Promise<void> {
       errorMessage.value = describeContainerFileError(err);
     }
   } finally {
-    loading.value = false;
+    if (run === loadRun) {
+      loading.value = false;
+    }
   }
 }
 

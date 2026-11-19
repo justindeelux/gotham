@@ -1,5 +1,6 @@
 import { flushPromises, mount } from "@vue/test-utils";
 import { NMessageProvider } from "naive-ui";
+import { createPinia, setActivePinia } from "pinia";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { defineComponent, h, nextTick } from "vue";
 
@@ -17,6 +18,7 @@ import type {
   ApplicationSource,
 } from "@/features/applications/api/applications";
 import ApplicationSourceViewer from "@/features/applications/components/ApplicationSourceViewer.vue";
+import CodeEditor from "@/features/files/components/CodeEditor.vue";
 import {
   i18n,
   registerDiscoveredCatalogs,
@@ -26,6 +28,7 @@ import {
 } from "@/shared/i18n";
 
 beforeEach(() => {
+  setActivePinia(createPinia());
   registerDiscoveredCatalogs();
   resetLocaleState();
   syncComposerLocale("en");
@@ -79,16 +82,18 @@ describe("ApplicationSourceViewer", () => {
     });
     await flushPromises();
 
-    expect(wrapper.find(".source-view").element.textContent).toBe(
-      "services:\n  web:\n    image: nginx\n",
-    );
+    const viewer = wrapper.findComponent(CodeEditor);
+    expect(viewer.props("preset")).toBe("yaml");
+    expect(viewer.props("readOnly")).toBe(true);
+    expect(viewer.props("wrap")).toBe(true);
+    expect(viewer.props("modelValue")).toBe("services:\n  web:\n    image: nginx\n");
 
     const radios = wrapper.findAll('input[type="radio"]');
     expect(radios).toHaveLength(2);
     await radios[1].setValue();
     await nextTick();
 
-    expect(wrapper.find(".source-view").text()).toContain(
+    expect(wrapper.findComponent(CodeEditor).props("modelValue")).toContain(
       "DB_PASSWORD: <redacted>",
     );
   });
@@ -101,8 +106,11 @@ describe("ApplicationSourceViewer", () => {
     });
     await flushPromises();
 
+    const viewer = wrapper.findComponent(CodeEditor);
+    expect(viewer.props("preset")).toBe("dockerfile");
+    expect(viewer.props("readOnly")).toBe(true);
     expect(wrapper.find("textarea").exists()).toBe(false);
-    expect(wrapper.find("[contenteditable]").exists()).toBe(false);
+    expect(wrapper.find('[contenteditable="true"]').exists()).toBe(false);
   });
 
   it("renders the Vietnamese labels from the catalog", async () => {
@@ -128,7 +136,7 @@ describe("ApplicationSourceViewer", () => {
     );
     await flushPromises();
 
-    expect(wrapper.find(".source-view").exists()).toBe(false);
+    expect(wrapper.findComponent(CodeEditor).exists()).toBe(false);
     expect(wrapper.text()).toContain("no Dockerfile or compose source");
     expect(wrapper.text()).not.toContain("could not be read");
   });

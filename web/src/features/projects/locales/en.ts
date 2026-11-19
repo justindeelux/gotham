@@ -55,6 +55,28 @@ const en = {
     nameHint: "Unique within the instance. 1-64 characters.",
     submit: "Save",
   },
+  icon: {
+    title: "Project icon",
+    presetsLabel: "Preset icons",
+    upload: "Upload image",
+    uploading: "Uploading…",
+    remove: "Remove icon",
+    hint: "PNG, JPEG or GIF up to 512 KB and 512×512 pixels.",
+    presets: {
+      rocket: "Rocket",
+      box: "Box",
+      globe: "Globe",
+      database: "Database",
+      server: "Server",
+      terminal: "Terminal",
+      cloud: "Cloud",
+      layers: "Layers",
+      code: "Code",
+      package: "Package",
+      zap: "Zap",
+      star: "Star",
+    },
+  },
   delete: {
     title: "Delete project",
     blocked:

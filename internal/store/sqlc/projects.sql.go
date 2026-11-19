@@ -50,7 +50,7 @@ func (q *Queries) CreateEnvironment(ctx context.Context, arg CreateEnvironmentPa
 const createProject = `-- name: CreateProject :one
 INSERT INTO projects (id, name, description)
 VALUES ($1, $2, $3)
-RETURNING id, name, description, created_at, updated_at
+RETURNING id, name, description, created_at, updated_at, icon
 `
 
 type CreateProjectParams struct {
@@ -68,6 +68,7 @@ func (q *Queries) CreateProject(ctx context.Context, arg CreateProjectParams) (P
 		&i.Description,
 		&i.CreatedAt,
 		&i.UpdatedAt,
+		&i.Icon,
 	)
 	return i, err
 }
@@ -131,7 +132,7 @@ func (q *Queries) GetEnvironment(ctx context.Context, id pgtype.UUID) (Environme
 }
 
 const getProject = `-- name: GetProject :one
-SELECT id, name, description, created_at, updated_at FROM projects WHERE id = $1
+SELECT id, name, description, created_at, updated_at, icon FROM projects WHERE id = $1
 `
 
 func (q *Queries) GetProject(ctx context.Context, id pgtype.UUID) (Project, error) {
@@ -143,12 +144,13 @@ func (q *Queries) GetProject(ctx context.Context, id pgtype.UUID) (Project, erro
 		&i.Description,
 		&i.CreatedAt,
 		&i.UpdatedAt,
+		&i.Icon,
 	)
 	return i, err
 }
 
 const getProjectForUpdate = `-- name: GetProjectForUpdate :one
-SELECT id, name, description, created_at, updated_at FROM projects WHERE id = $1 FOR UPDATE
+SELECT id, name, description, created_at, updated_at, icon FROM projects WHERE id = $1 FOR UPDATE
 `
 
 // GetProjectForUpdate locks the project row for the duration of a guarded
@@ -163,8 +165,20 @@ func (q *Queries) GetProjectForUpdate(ctx context.Context, id pgtype.UUID) (Proj
 		&i.Description,
 		&i.CreatedAt,
 		&i.UpdatedAt,
+		&i.Icon,
 	)
 	return i, err
+}
+
+const getProjectIcon = `-- name: GetProjectIcon :one
+SELECT data FROM project_icons WHERE project_id = $1
+`
+
+func (q *Queries) GetProjectIcon(ctx context.Context, projectID pgtype.UUID) ([]byte, error) {
+	row := q.db.QueryRow(ctx, getProjectIcon, projectID)
+	var data []byte
+	err := row.Scan(&data)
+	return data, err
 }
 
 const insertSharedVariable = `-- name: InsertSharedVariable :one
@@ -276,7 +290,7 @@ func (q *Queries) ListPreviewBases(ctx context.Context, previewAppIds []pgtype.U
 }
 
 const listProjects = `-- name: ListProjects :many
-SELECT id, name, description, created_at, updated_at FROM projects
+SELECT id, name, description, created_at, updated_at, icon FROM projects
 ORDER BY created_at DESC, id DESC
 `
 
@@ -295,6 +309,7 @@ func (q *Queries) ListProjects(ctx context.Context) ([]Project, error) {
 			&i.Description,
 			&i.CreatedAt,
 			&i.UpdatedAt,
+			&i.Icon,
 		); err != nil {
 			return nil, err
 		}
@@ -394,6 +409,86 @@ func (q *Queries) ListSharedVariablesForEnvironment(ctx context.Context, arg Lis
 	return items, nil
 }
 
+const setProjectIcon = `-- name: SetProjectIcon :one
+WITH updated AS (
+    UPDATE projects SET icon = $2, updated_at = now() WHERE id = $1 RETURNING id, name, description, created_at, updated_at, icon
+), cleared AS (
+    DELETE FROM project_icons WHERE project_id = $1
+)
+SELECT id, name, description, created_at, updated_at, icon FROM updated
+`
+
+type SetProjectIconParams struct {
+	ID   pgtype.UUID `json:"id"`
+	Icon string      `json:"icon"`
+}
+
+type SetProjectIconRow struct {
+	ID          pgtype.UUID        `json:"id"`
+	Name        string             `json:"name"`
+	Description string             `json:"description"`
+	CreatedAt   pgtype.Timestamptz `json:"created_at"`
+	UpdatedAt   pgtype.Timestamptz `json:"updated_at"`
+	Icon        string             `json:"icon"`
+}
+
+// SetProjectIcon stores a preset (or clears the icon with an empty string),
+// drops any uploaded bytes and bumps updated_at so clients refetch a version.
+func (q *Queries) SetProjectIcon(ctx context.Context, arg SetProjectIconParams) (SetProjectIconRow, error) {
+	row := q.db.QueryRow(ctx, setProjectIcon, arg.ID, arg.Icon)
+	var i SetProjectIconRow
+	err := row.Scan(
+		&i.ID,
+		&i.Name,
+		&i.Description,
+		&i.CreatedAt,
+		&i.UpdatedAt,
+		&i.Icon,
+	)
+	return i, err
+}
+
+const setProjectIconUpload = `-- name: SetProjectIconUpload :one
+WITH updated AS (
+    UPDATE projects SET icon = 'upload', updated_at = now() WHERE id = $1 RETURNING id, name, description, created_at, updated_at, icon
+), stored AS (
+    INSERT INTO project_icons (project_id, data)
+    SELECT $1, $2::bytea FROM updated
+    ON CONFLICT (project_id) DO UPDATE SET data = EXCLUDED.data, updated_at = now()
+)
+SELECT id, name, description, created_at, updated_at, icon FROM updated
+`
+
+type SetProjectIconUploadParams struct {
+	ID   pgtype.UUID `json:"id"`
+	Data []byte      `json:"data"`
+}
+
+type SetProjectIconUploadRow struct {
+	ID          pgtype.UUID        `json:"id"`
+	Name        string             `json:"name"`
+	Description string             `json:"description"`
+	CreatedAt   pgtype.Timestamptz `json:"created_at"`
+	UpdatedAt   pgtype.Timestamptz `json:"updated_at"`
+	Icon        string             `json:"icon"`
+}
+
+// SetProjectIconUpload replaces the uploaded image and marks the icon as an
+// upload. The insert reads the updated row so a missing project stores nothing.
+func (q *Queries) SetProjectIconUpload(ctx context.Context, arg SetProjectIconUploadParams) (SetProjectIconUploadRow, error) {
+	row := q.db.QueryRow(ctx, setProjectIconUpload, arg.ID, arg.Data)
+	var i SetProjectIconUploadRow
+	err := row.Scan(
+		&i.ID,
+		&i.Name,
+		&i.Description,
+		&i.CreatedAt,
+		&i.UpdatedAt,
+		&i.Icon,
+	)
+	return i, err
+}
+
 const updateEnvironment = `-- name: UpdateEnvironment :one
 UPDATE environments
 SET name = $2,
@@ -426,7 +521,7 @@ SET name = $2,
     description = $3,
     updated_at = now()
 WHERE id = $1
-RETURNING id, name, description, created_at, updated_at
+RETURNING id, name, description, created_at, updated_at, icon
 `
 
 type UpdateProjectParams struct {
@@ -444,6 +539,7 @@ func (q *Queries) UpdateProject(ctx context.Context, arg UpdateProjectParams) (P
 		&i.Description,
 		&i.CreatedAt,
 		&i.UpdatedAt,
+		&i.Icon,
 	)
 	return i, err
 }

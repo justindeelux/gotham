@@ -34,6 +34,8 @@ type projectResponse struct {
 	ID               string                 `json:"id"`
 	Name             string                 `json:"name"`
 	Description      string                 `json:"description"`
+	Icon             string                 `json:"icon"`
+	IconVersion      int64                  `json:"icon_version"`
 	CreatedAt        time.Time              `json:"created_at"`
 	UpdatedAt        time.Time              `json:"updated_at"`
 	EnvironmentCount int                    `json:"environment_count"`
@@ -82,6 +84,9 @@ type (
 	updateProjectRequest struct {
 		Name        *string `json:"name"`
 		Description *string `json:"description"`
+	}
+	updateProjectIconRequest struct {
+		Icon *string `json:"icon"`
 	}
 	createEnvironmentRequest struct {
 		Name string `json:"name"`
@@ -173,6 +178,9 @@ func Mount(r chi.Router, auth func(http.Handler) http.Handler, userID UserIDFunc
 		protected.With(requestreplay.RequireStrict).Post("/v1/mcp/projects/{id}/environments", h.createEnvironment)
 		protected.Get("/v1/projects/{id}", h.getProject)
 		protected.Patch("/v1/projects/{id}", h.updateProject)
+		protected.Put("/v1/projects/{id}/icon", h.setProjectIcon)
+		protected.Post("/v1/projects/{id}/icon", h.uploadProjectIcon)
+		protected.Get("/v1/projects/{id}/icon", h.getProjectIcon)
 		protected.Delete("/v1/projects/{id}", h.deleteProject)
 		protected.Get("/v1/projects/{id}/environments", h.listEnvironments)
 		protected.Post("/v1/projects/{id}/environments", h.createEnvironment)
@@ -262,6 +270,61 @@ func (h *handler) updateProject(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	writeJSON(w, http.StatusOK, projectEnvelope{Project: newProjectResponse(project)})
+}
+
+func (h *handler) setProjectIcon(w http.ResponseWriter, r *http.Request) {
+	userID, projectID, ok := h.projectParams(w, r)
+	if !ok {
+		return
+	}
+	var req updateProjectIconRequest
+	if !decodeBody(w, r, &req) {
+		return
+	}
+	if req.Icon == nil {
+		writeJSON(w, http.StatusBadRequest, errorBody{Message: "icon is required"})
+		return
+	}
+	project, err := h.svc.SetProjectIcon(r.Context(), userID, projectID, *req.Icon)
+	if err != nil {
+		h.writeServiceError(w, err)
+		return
+	}
+	writeJSON(w, http.StatusOK, projectEnvelope{Project: newProjectResponse(project)})
+}
+
+func (h *handler) uploadProjectIcon(w http.ResponseWriter, r *http.Request) {
+	userID, projectID, ok := h.projectParams(w, r)
+	if !ok {
+		return
+	}
+	data, err := io.ReadAll(io.LimitReader(r.Body, MaxProjectIconBytes+1))
+	if err != nil {
+		writeJSON(w, http.StatusBadRequest, errorBody{Message: "invalid request body"})
+		return
+	}
+	project, err := h.svc.UploadProjectIcon(r.Context(), userID, projectID, data)
+	if err != nil {
+		h.writeServiceError(w, err)
+		return
+	}
+	writeJSON(w, http.StatusOK, projectEnvelope{Project: newProjectResponse(project)})
+}
+
+func (h *handler) getProjectIcon(w http.ResponseWriter, r *http.Request) {
+	userID, projectID, ok := h.projectParams(w, r)
+	if !ok {
+		return
+	}
+	data, err := h.svc.GetProjectIcon(r.Context(), userID, projectID)
+	if err != nil {
+		h.writeServiceError(w, err)
+		return
+	}
+	w.Header().Set("Content-Type", "image/png")
+	w.Header().Set("Cache-Control", "private, max-age=3600")
+	w.WriteHeader(http.StatusOK)
+	_, _ = w.Write(data)
 }
 
 func (h *handler) deleteProject(w http.ResponseWriter, r *http.Request) {
@@ -506,6 +569,8 @@ func newProjectResponse(project Project) projectResponse {
 		ID:               project.ID.String(),
 		Name:             project.Name,
 		Description:      project.Description,
+		Icon:             project.Icon,
+		IconVersion:      project.UpdatedAt.UnixMilli(),
 		CreatedAt:        project.CreatedAt,
 		UpdatedAt:        project.UpdatedAt,
 		EnvironmentCount: project.EnvironmentCount,

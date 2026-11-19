@@ -14,6 +14,8 @@ export const projectSchema = z.object({
   id: z.string().uuid(),
   name: z.string(),
   description: z.string(),
+  icon: z.string().default(""),
+  icon_version: z.number().int().nonnegative().default(0),
   created_at: z.string(),
   updated_at: z.string(),
   environment_count: z.number().int().nonnegative(),

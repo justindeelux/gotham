@@ -671,6 +671,13 @@ type Project struct {
 	Description string             `json:"description"`
 	CreatedAt   pgtype.Timestamptz `json:"created_at"`
 	UpdatedAt   pgtype.Timestamptz `json:"updated_at"`
+	Icon        string             `json:"icon"`
+}
+
+type ProjectIcon struct {
+	ProjectID pgtype.UUID        `json:"project_id"`
+	Data      []byte             `json:"data"`
+	UpdatedAt pgtype.Timestamptz `json:"updated_at"`
 }
 
 type ProjectMember struct {

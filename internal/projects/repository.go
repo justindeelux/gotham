@@ -19,6 +19,9 @@ type Repository interface {
 	ListProjects(ctx context.Context) ([]Project, error)
 	GetProject(ctx context.Context, projectID uuid.UUID) (Project, error)
 	UpdateProject(ctx context.Context, projectID uuid.UUID, name, description string) (Project, error)
+	SetProjectIcon(ctx context.Context, projectID uuid.UUID, icon string) (Project, error)
+	SetProjectIconUpload(ctx context.Context, projectID uuid.UUID, data []byte) (Project, error)
+	GetProjectIcon(ctx context.Context, projectID uuid.UUID) ([]byte, error)
 	DeleteProject(ctx context.Context, projectID uuid.UUID) (orphanVolumes []string, err error)
 	CreateEnvironment(ctx context.Context, projectID uuid.UUID, name string) (Environment, error)
 	ListEnvironments(ctx context.Context, projectID uuid.UUID) ([]Environment, error)
@@ -95,6 +98,39 @@ func (r *storeRepository) UpdateProject(ctx context.Context, projectID uuid.UUID
 		return Project{}, fmt.Errorf("projects: update project: %w", err)
 	}
 	return projectFromRow(row), nil
+}
+
+func (r *storeRepository) SetProjectIcon(ctx context.Context, projectID uuid.UUID, icon string) (Project, error) {
+	row, err := r.store.SetProjectIcon(ctx, pgUUID(projectID), icon)
+	if err != nil {
+		if errors.Is(err, pgx.ErrNoRows) {
+			return Project{}, ErrNotFound
+		}
+		return Project{}, fmt.Errorf("projects: set project icon: %w", err)
+	}
+	return projectFromIconRow(row.ID, row.Name, row.Description, row.Icon, row.CreatedAt, row.UpdatedAt), nil
+}
+
+func (r *storeRepository) SetProjectIconUpload(ctx context.Context, projectID uuid.UUID, data []byte) (Project, error) {
+	row, err := r.store.SetProjectIconUpload(ctx, pgUUID(projectID), data)
+	if err != nil {
+		if errors.Is(err, pgx.ErrNoRows) || isForeignKeyViolation(err) {
+			return Project{}, ErrNotFound
+		}
+		return Project{}, fmt.Errorf("projects: upload project icon: %w", err)
+	}
+	return projectFromIconRow(row.ID, row.Name, row.Description, row.Icon, row.CreatedAt, row.UpdatedAt), nil
+}
+
+func (r *storeRepository) GetProjectIcon(ctx context.Context, projectID uuid.UUID) ([]byte, error) {
+	data, err := r.store.GetProjectIcon(ctx, pgUUID(projectID))
+	if err != nil {
+		if errors.Is(err, pgx.ErrNoRows) {
+			return nil, ErrNotFound
+		}
+		return nil, fmt.Errorf("projects: get project icon: %w", err)
+	}
+	return data, nil
 }
 
 func (r *storeRepository) DeleteProject(ctx context.Context, projectID uuid.UUID) ([]string, error) {
@@ -224,8 +260,20 @@ func projectFromRow(row sqlc.Project) Project {
 		ID:          uuidFromPG(row.ID),
 		Name:        row.Name,
 		Description: row.Description,
+		Icon:        row.Icon,
 		CreatedAt:   row.CreatedAt.Time,
 		UpdatedAt:   row.UpdatedAt.Time,
+	}
+}
+
+func projectFromIconRow(id pgtype.UUID, name, description, icon string, createdAt, updatedAt pgtype.Timestamptz) Project {
+	return Project{
+		ID:          uuidFromPG(id),
+		Name:        name,
+		Description: description,
+		Icon:        icon,
+		CreatedAt:   createdAt.Time,
+		UpdatedAt:   updatedAt.Time,
 	}
 }
 

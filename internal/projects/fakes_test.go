@@ -18,6 +18,7 @@ func discardLogger() *slog.Logger {
 type fakeRepository struct {
 	mu           sync.Mutex
 	projects     map[uuid.UUID]Project
+	icons        map[uuid.UUID][]byte
 	environments map[uuid.UUID]Environment
 	variables    map[uuid.UUID]map[uuid.UUID][]SharedVariable
 	previewBases map[uuid.UUID]uuid.UUID
@@ -26,6 +27,7 @@ type fakeRepository struct {
 func newFakeRepository() *fakeRepository {
 	return &fakeRepository{
 		projects:     make(map[uuid.UUID]Project),
+		icons:        make(map[uuid.UUID][]byte),
 		environments: make(map[uuid.UUID]Environment),
 		variables:    make(map[uuid.UUID]map[uuid.UUID][]SharedVariable),
 		previewBases: make(map[uuid.UUID]uuid.UUID),
@@ -91,12 +93,49 @@ func (f *fakeRepository) DeleteProject(_ context.Context, projectID uuid.UUID) (
 		return nil, ErrNotFound
 	}
 	delete(f.projects, projectID)
+	delete(f.icons, projectID)
 	for id, environment := range f.environments {
 		if environment.ProjectID == projectID {
 			delete(f.environments, id)
 		}
 	}
 	return nil, nil
+}
+
+func (f *fakeRepository) SetProjectIcon(_ context.Context, projectID uuid.UUID, icon string) (Project, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	project, ok := f.projects[projectID]
+	if !ok {
+		return Project{}, ErrNotFound
+	}
+	project.Icon = icon
+	f.projects[projectID] = project
+	delete(f.icons, projectID)
+	return project, nil
+}
+
+func (f *fakeRepository) SetProjectIconUpload(_ context.Context, projectID uuid.UUID, data []byte) (Project, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	project, ok := f.projects[projectID]
+	if !ok {
+		return Project{}, ErrNotFound
+	}
+	project.Icon = ProjectIconUpload
+	f.projects[projectID] = project
+	f.icons[projectID] = append([]byte(nil), data...)
+	return project, nil
+}
+
+func (f *fakeRepository) GetProjectIcon(_ context.Context, projectID uuid.UUID) ([]byte, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	data, ok := f.icons[projectID]
+	if !ok {
+		return nil, ErrNotFound
+	}
+	return append([]byte(nil), data...), nil
 }
 
 func (f *fakeRepository) CreateEnvironment(_ context.Context, projectID uuid.UUID, name string) (Environment, error) {

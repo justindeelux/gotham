@@ -20,6 +20,7 @@ type Project struct {
 	ID               uuid.UUID
 	Name             string
 	Description      string
+	Icon             string
 	EnvironmentCount int
 	Resources        ResourceCounts
 	CreatedAt        time.Time

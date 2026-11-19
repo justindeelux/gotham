@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { NAlert, NButton, NCard, NDataTable, NEmpty, NSpace, NText } from "naive-ui";
+import { NAlert, NButton, NCard, NDataTable, NEmpty, NSpace, NSpin, NText } from "naive-ui";
 import type { DataTableColumns } from "naive-ui";
 
 import type { ComposeServiceContainer } from "@/features/services/api/services";
@@ -62,16 +62,15 @@ const containerColumns = computed<DataTableColumns<ComposeServiceContainer>>(() 
         :scroll-x="1000"
         size="small"
       />
+      <NSpin v-else-if="containersLoading" size="small" />
       <NEmpty
-        v-else-if="!containersLoading"
+        v-else-if="containersLoaded"
         :description="t('services.containers.empty')"
       >
         <template #extra>
           <p class="empty-hint">
             {{ t("services.containers.hint") }}
-            <template v-if="containersLoaded">
-              {{ t("services.containers.emptyAfterRead") }}
-            </template>
+            {{ t("services.containers.emptyAfterRead") }}
           </p>
         </template>
       </NEmpty>

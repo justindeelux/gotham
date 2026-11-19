@@ -1,6 +1,6 @@
 <script setup lang="ts">
 import { NAlert, NButton, NEmpty, NSpace, NTabPane, NTabs } from "naive-ui";
-import { computed, provide, ref } from "vue";
+import { computed, provide, ref, watch } from "vue";
 import { RouterLink } from "vue-router";
 
 import ResourceBackupsTab from "@/features/backups/components/ResourceBackupsTab.vue";
@@ -42,10 +42,26 @@ const {
   busy,
   deploys,
   isDeploying,
+  containersLoaded,
+  loadContainers,
 } = page;
 
 const activeTab = ref("overview");
 const domainCreateTicket = ref(0);
+
+// The container list is read from the node agent on demand: once when its tab
+// opens, and again when the page moves to another service under that tab.
+watch(activeTab, (tab) => {
+  if (tab === "containers" && !containersLoaded.value) {
+    void loadContainers();
+  }
+});
+
+watch(serviceId, () => {
+  if (activeTab.value === "containers") {
+    void loadContainers();
+  }
+});
 
 const domainsPending = computed<boolean>(
   () => service.value?.pending_changes?.includes("domains") ?? false,

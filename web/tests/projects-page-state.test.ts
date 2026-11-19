@@ -63,6 +63,8 @@ function projectRow(overrides: Partial<Project> = {}): Project {
     id: "11111111-1111-4111-8111-111111111111",
     name: "storefront",
     description: "Online shop",
+    icon: "",
+    icon_version: 0,
     created_at: "2026-10-01T00:00:00Z",
     updated_at: "2026-10-02T00:00:00Z",
     environment_count: 2,
@@ -155,7 +157,7 @@ describe("projects list page states", () => {
 
     let wrapper = await mountList();
     expect(wrapper.text()).toContain("storefront");
-    expect(wrapper.text()).toContain("3 applications");
+    expect(wrapper.text()).toContain("2 environments · 6 resources");
 
     const search = wrapper.find('.toolbar .n-input input');
     await search.setValue("storefront");

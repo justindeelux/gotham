@@ -14,8 +14,8 @@ const en = {
     openProject: "Open project {name}",
     environmentsOne: "{count} environment",
     environmentsOther: "{count} environments",
-    resourcesTotalOne: "{count} resource total",
-    resourcesTotalOther: "{count} resources total",
+    resourcesOne: "{count} resource",
+    resourcesOther: "{count} resources",
   },
   create: {
     title: "New project",

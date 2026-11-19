@@ -14,8 +14,8 @@ const vi = {
     openProject: "Mở dự án {name}",
     environmentsOne: "{count} môi trường",
     environmentsOther: "{count} môi trường",
-    resourcesTotalOne: "tổng {count} tài nguyên",
-    resourcesTotalOther: "tổng {count} tài nguyên",
+    resourcesOne: "{count} tài nguyên",
+    resourcesOther: "{count} tài nguyên",
   },
   create: {
     title: "Dự án mới",

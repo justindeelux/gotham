@@ -86,7 +86,6 @@ export {
   projectDetailEnvelopeSchema,
   projectEnvelopeSchema,
   projectListEnvelopeSchema,
-  projectNameRules,
   projectNameSchema,
   projectSchema,
   resourceCountsSchema,

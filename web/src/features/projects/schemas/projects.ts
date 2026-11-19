@@ -81,14 +81,6 @@ export function isProjectDescriptionValid(value: unknown): boolean {
   return projectDescriptionSchema.safeParse(value).success;
 }
 
-export function projectNameRules(): FormRules {
-  return {
-    name: [
-      { ...ruleFrom(projectNameSchema, { required: true }), trigger: ["input", "blur"] },
-    ],
-  };
-}
-
 export function projectFormRules(): FormRules {
   return {
     name: [

@@ -14,6 +14,18 @@ export function hasCommitSha(sha: string | undefined | null): boolean {
   return Boolean(sha?.trim());
 }
 
+export function commitLineText(
+  sha: string | undefined | null,
+  message: string | undefined | null,
+): string {
+  const short = shortCommitSha(sha);
+  if (!short) {
+    return "—";
+  }
+  const subject = commitSubject(message);
+  return subject ? `${short} ${subject}` : short;
+}
+
 function githubRepoFromClone(cloneUrl: string): string {
   const raw = cloneUrl.trim();
   if (!raw) {

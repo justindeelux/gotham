@@ -7,6 +7,7 @@ import type { Deployment } from "@/features/applications/api/applications";
 import ApplicationLogsTab from "@/features/applications/components/ApplicationLogsTab.vue";
 import DeploymentCommitCard from "@/features/applications/components/DeploymentCommitCard.vue";
 import {
+  commitLineText,
   commitSubject,
   commitUrl,
   hasCommitSha,
@@ -85,6 +86,14 @@ describe("deploymentCommit helpers", () => {
     expect(hasCommitSha("abc")).toBe(true);
     expect(hasCommitSha("")).toBe(false);
     expect(hasCommitSha(undefined)).toBe(false);
+  });
+
+  it("builds the one-line commit summary", () => {
+    expect(commitLineText("0123456789abcdef", "Add checkout flow\n\nBody")).toBe(
+      "0123456 Add checkout flow",
+    );
+    expect(commitLineText("0123456", "")).toBe("0123456");
+    expect(commitLineText("", "Add checkout flow")).toBe("—");
   });
 
   it("links github.com remotes and nothing else", () => {

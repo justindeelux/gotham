@@ -225,7 +225,6 @@ describe("image detail page", () => {
         application: imageApp(),
         latest: null,
         deployments: [],
-        pipelineSteps: [],
         descColumns: 2,
         acting: false,
       },

@@ -15,11 +15,9 @@ import type { Application, Deployment } from "@/features/applications/api/applic
 import ApplicationSourceViewer from "@/features/applications/components/ApplicationSourceViewer.vue";
 import ComposeEditor from "@/features/applications/components/ComposeEditor.vue";
 import DeploymentHistoryTable from "@/features/applications/components/DeploymentHistoryTable.vue";
-import DeploymentStatusTag from "@/features/applications/components/DeploymentStatusTag.vue";
 import DockerfileEditor from "@/features/applications/components/DockerfileEditor.vue";
 import GitPrivateSourcePanel from "@/features/applications/components/GitPrivateSourcePanel.vue";
-import type { PipelineStep } from "@/features/applications/utils/deployPipeline";
-import { commitSubject, shortCommitSha } from "@/features/applications/utils/deploymentCommit";
+import { commitLineText } from "@/features/applications/utils/deploymentCommit";
 import { durationText } from "@/features/applications/utils/deploymentDuration";
 import { relativeTime } from "@/shared/utils/format";
 
@@ -27,7 +25,6 @@ interface Props {
   application: Application | null;
   latest: Deployment | null;
   deployments: Deployment[];
-  pipelineSteps: PipelineStep[];
   descColumns: number;
   acting: boolean;
   canWrite?: boolean;
@@ -61,14 +58,9 @@ const sourceLabel = computed<string>(() => {
   return key ? String(t(key)) : (props.application?.source_type ?? "—");
 });
 
-const commitLine = computed<string>(() => {
-  const sha = props.latest?.commit_sha ?? "";
-  if (!sha) {
-    return "—";
-  }
-  const subject = commitSubject(props.latest?.commit_message);
-  return subject ? `${shortCommitSha(sha)} ${subject}` : shortCommitSha(sha);
-});
+const commitLine = computed<string>(() =>
+  commitLineText(props.latest?.commit_sha, props.latest?.commit_message),
+);
 
 const isCompose = computed<boolean>(() => props.application?.source_type === "compose");
 
@@ -125,22 +117,6 @@ const isCompose = computed<boolean>(() => props.application?.source_type === "co
       :application="props.application"
     />
     <NCard v-if="props.latest" :title="t('applications.overview.deployTitle', { id: props.latest.id.slice(0, 8) })">
-      <template #header-extra>
-        <DeploymentStatusTag :state="props.latest.state" />
-      </template>
-      <div class="pipeline" role="list" :aria-label="t('applications.overview.pipeline')">
-        <template v-for="(step, index) in props.pipelineSteps" :key="step.name">
-          <span
-            v-if="index > 0"
-            class="pipeline__arrow"
-            aria-hidden="true"
-          >→</span>
-          <span class="pipeline__node" :class="step.mood" role="listitem">
-            <span class="dot" aria-hidden="true" />
-            {{ t(`applications.status.${step.name}`) }}
-          </span>
-        </template>
-      </div>
       <NDescriptions :column="props.descColumns" bordered label-placement="left">
         <NDescriptionsItem :label="t('applications.overview.kind')">
           <span class="mono">{{ props.latest.kind }}</span>
@@ -218,74 +194,5 @@ const isCompose = computed<boolean>(() => props.application?.source_type === "co
 .error-prewrap {
   white-space: pre-wrap;
   overflow-wrap: anywhere;
-}
-
-.pipeline {
-  display: flex;
-  align-items: center;
-  gap: var(--space-2);
-  flex-wrap: wrap;
-  margin-bottom: var(--space-4);
-}
-
-.pipeline__arrow {
-  color: var(--meta);
-}
-
-.pipeline__node {
-  display: inline-flex;
-  align-items: center;
-  gap: var(--space-2);
-  font-family: var(--font-mono);
-  font-size: var(--text-xs);
-  color: var(--muted);
-  background: var(--surface-warm);
-  border: 1px solid var(--border);
-  border-radius: var(--radius-pill);
-  padding: 4px 12px;
-}
-
-.pipeline__node .dot {
-  width: 8px;
-  height: 8px;
-  border-radius: var(--radius-pill);
-  background: var(--meta);
-}
-
-.pipeline__node.is-done {
-  color: var(--fg);
-}
-
-.pipeline__node.is-done .dot {
-  background: var(--success);
-}
-
-.pipeline__node.is-active {
-  color: var(--fg-2);
-  border-color: var(--accent);
-}
-
-.pipeline__node.is-active .dot {
-  background: var(--accent);
-  animation: pipeline-pulse 1.2s ease-in-out infinite;
-}
-
-.pipeline__node.is-failed {
-  color: var(--danger);
-  border-color: var(--danger);
-}
-
-.pipeline__node.is-failed .dot {
-  background: var(--danger);
-}
-
-@keyframes pipeline-pulse {
-  0%,
-  100% {
-    opacity: 1;
-  }
-  50% {
-    opacity: 0.35;
-  }
 }
 </style>

@@ -31,7 +31,7 @@ type ApplicationContainer struct {
 // ApplicationContainerService is the slice of containers.ContainerService the
 // application containers view uses.
 type ApplicationContainerService interface {
-	ListFresh(ctx context.Context, serverID uuid.UUID) ([]containers.Container, error)
+	ListFreshByLabel(ctx context.Context, serverID uuid.UUID, labels map[string]string) ([]containers.Container, error)
 	Start(ctx context.Context, serverID uuid.UUID, containerID string) error
 	Stop(ctx context.Context, serverID uuid.UUID, containerID string) error
 	Restart(ctx context.Context, serverID uuid.UUID, containerID string) error
@@ -103,7 +103,7 @@ func (s *Service) applicationContainers(ctx context.Context, app Application) ([
 	if s.containers == nil {
 		return nil, fmt.Errorf("%w: container operations are not configured", ErrAgentUnavailable)
 	}
-	listed, err := s.containers.ListFresh(ctx, app.ServerID)
+	listed, err := s.containers.ListFreshByLabel(ctx, app.ServerID, applicationContainerLabels(app))
 	if err != nil {
 		return nil, mapApplicationContainerError(err)
 	}
@@ -134,6 +134,17 @@ func (s *Service) applicationContainers(ctx context.Context, app Application) ([
 		return rows[i].ID < rows[j].ID
 	})
 	return rows, nil
+}
+
+// applicationContainerLabels is the ownership label the node filters on: one
+// Docker filter keeps the list to this application instead of every container
+// the node has ever run, and applicationOwnsContainer still checks each row in
+// case an older agent ignores the filter.
+func applicationContainerLabels(app Application) map[string]string {
+	if isComposeApp(app) {
+		return map[string]string{composeProjectLabel: services.ProjectName(app.ID)}
+	}
+	return map[string]string{labelAppID: app.ID.String()}
 }
 
 func applicationOwnsContainer(app Application, container containers.Container) bool {

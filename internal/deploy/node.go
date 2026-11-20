@@ -219,6 +219,7 @@ func (n *agentNode) ComposeUp(ctx context.Context, projectName string, composeYA
 		ProjectName: projectName,
 		ComposeYaml: composeYAML,
 		Unconfined:  false,
+		Managed:     true,
 	})
 	if err != nil {
 		return mapRPCError(err)

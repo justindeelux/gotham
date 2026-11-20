@@ -2031,6 +2031,12 @@ message ComposeUpRequest {
   // like ComposeValidateRequest.unconfined. The deploy control plane leaves
   // it unset for application projects; service projects set it.
   bool unconfined = 4;
+  // managed asks the agent to label every service of the project with the
+  // ownership labels (gotham.managed, gotham.app_id) through a generated
+  // compose override, so resource samples are attributed to the application.
+  // The deploy control plane sets it for application projects; service
+  // projects leave it unset.
+  bool managed = 5;
 }
 
 // ComposeUpResponse is empty: the observable result of an up is the project's

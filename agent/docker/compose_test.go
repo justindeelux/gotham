@@ -18,6 +18,7 @@ import (
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/status"
+	"gopkg.in/yaml.v3"
 )
 
 const composeTestProject = "gotham-3f2a4b6c-8d0e-4f1a-9b2c-3d4e5f607182"
@@ -222,6 +223,162 @@ func TestComposeUpDownCommands(t *testing.T) {
 			!strings.Contains(call, "-f ") {
 			t.Errorf("call missing -f: %q", call)
 		}
+	}
+}
+
+func TestComposeUpWritesOwnershipOverride(t *testing.T) {
+	fakeDockerCLI(t, "exit 0")
+	server := newTestComposeServer(t, ComposeServerConfig{})
+
+	// The merge key, the null labels and the list labels are the shapes an
+	// in-place rewrite would get wrong; the override must not touch the file.
+	document := `x-defaults: &common
+  labels:
+    example.com/inherited: "yes"
+services:
+  web:
+    image: nginx:1.23
+    labels:
+      example.com/role: web
+  api:
+    <<: *common
+    image: nginx:1.24
+  cache:
+    image: redis:7
+    labels:
+  worker:
+    image: busybox:1.36
+    labels:
+      - example.com/role=worker
+  plain:
+    image: alpine:3
+`
+	if _, err := server.ComposeUp(context.Background(), &agentv1.ComposeUpRequest{
+		ProjectName: composeTestProject,
+		ComposeYaml: []byte(document),
+		Unconfined:  true,
+		Managed:     true,
+	}); err != nil {
+		t.Fatalf("ComposeUp: %v", err)
+	}
+
+	main, err := os.ReadFile(server.composeFile(composeTestProject))
+	if err != nil {
+		t.Fatalf("read stored document: %v", err)
+	}
+	if string(main) != document {
+		t.Errorf("the user document changed:\n%s", main)
+	}
+	override, err := os.ReadFile(server.overrideFile(composeTestProject))
+	if err != nil {
+		t.Fatalf("read override: %v", err)
+	}
+	var stored struct {
+		Services map[string]struct {
+			Labels map[string]string `yaml:"labels"`
+		} `yaml:"services"`
+	}
+	if err := yaml.Unmarshal(override, &stored); err != nil {
+		t.Fatalf("override is not valid YAML: %v", err)
+	}
+	appID := strings.TrimPrefix(composeTestProject, composeProjectPrefix)
+	for _, name := range []string{"web", "api", "cache", "worker", "plain"} {
+		labels := stored.Services[name].Labels
+		if labels["gotham.managed"] != "true" || labels["gotham.app_id"] != appID {
+			t.Errorf("service %s labels = %v, want the ownership labels", name, labels)
+		}
+		if len(labels) != 2 {
+			t.Errorf("service %s labels = %v, want only the ownership labels", name, labels)
+		}
+	}
+	if len(stored.Services) != 5 {
+		t.Errorf("override services = %d, want 5", len(stored.Services))
+	}
+}
+
+func TestComposeUpRejectsOwnershipLabels(t *testing.T) {
+	for _, body := range []string{
+		"    labels:\n      gotham.app_id: 00000000-0000-0000-0000-000000000000\n",
+		"    labels:\n      gotham.managed: \"true\"\n",
+	} {
+		t.Run(body, func(t *testing.T) {
+			logPath := fakeDockerCLI(t, "exit 0")
+			server := newTestComposeServer(t, ComposeServerConfig{})
+			_, err := server.ComposeUp(context.Background(), &agentv1.ComposeUpRequest{
+				ProjectName: composeTestProject,
+				ComposeYaml: []byte("services:\n  web:\n    image: x\n" + body),
+				Managed:     true,
+			})
+			if status.Code(err) != codes.InvalidArgument {
+				t.Fatalf("code = %v, want InvalidArgument (%v)", status.Code(err), err)
+			}
+			for _, file := range []string{server.composeFile(composeTestProject), server.overrideFile(composeTestProject)} {
+				if _, statErr := os.Stat(file); !errors.Is(statErr, os.ErrNotExist) {
+					t.Errorf("%s written before validation (%v)", file, statErr)
+				}
+			}
+			if calls := composeCalls(t, logPath); len(calls) != 0 {
+				t.Errorf("docker invocations = %v, want none before validation", calls)
+			}
+		})
+	}
+}
+
+func TestComposeUpOverrideIsStableAcrossDeploys(t *testing.T) {
+	fakeDockerCLI(t, "exit 0")
+	server := newTestComposeServer(t, ComposeServerConfig{})
+	request := func() *agentv1.ComposeUpRequest {
+		return &agentv1.ComposeUpRequest{
+			ProjectName: composeTestProject,
+			ComposeYaml: []byte(composeTestDocument),
+			Managed:     true,
+		}
+	}
+	if _, err := server.ComposeUp(context.Background(), request()); err != nil {
+		t.Fatalf("first ComposeUp: %v", err)
+	}
+	first, err := os.ReadFile(server.overrideFile(composeTestProject))
+	if err != nil {
+		t.Fatalf("read override: %v", err)
+	}
+	if _, err := server.ComposeUp(context.Background(), request()); err != nil {
+		t.Fatalf("second ComposeUp: %v", err)
+	}
+	second, err := os.ReadFile(server.overrideFile(composeTestProject))
+	if err != nil {
+		t.Fatalf("read override: %v", err)
+	}
+	if string(first) != string(second) {
+		t.Errorf("override changed between deploys:\n%s\n---\n%s", first, second)
+	}
+}
+
+func TestComposeUpWithoutManagedRemovesOverride(t *testing.T) {
+	logPath := fakeDockerCLI(t, "exit 0")
+	server := newTestComposeServer(t, ComposeServerConfig{})
+	if _, err := server.ComposeUp(context.Background(), &agentv1.ComposeUpRequest{
+		ProjectName: composeTestProject,
+		ComposeYaml: []byte(composeTestDocument),
+		Managed:     true,
+	}); err != nil {
+		t.Fatalf("managed ComposeUp: %v", err)
+	}
+	if _, err := os.Stat(server.overrideFile(composeTestProject)); err != nil {
+		t.Fatalf("managed up wrote no override: %v", err)
+	}
+	if _, err := server.ComposeUp(context.Background(), &agentv1.ComposeUpRequest{
+		ProjectName: composeTestProject,
+		ComposeYaml: []byte(composeTestDocument),
+	}); err != nil {
+		t.Fatalf("unmanaged ComposeUp: %v", err)
+	}
+	if _, err := os.Stat(server.overrideFile(composeTestProject)); !errors.Is(err, os.ErrNotExist) {
+		t.Errorf("override still present after an unmanaged up: %v", err)
+	}
+	calls := composeCalls(t, logPath)
+	last := calls[len(calls)-1]
+	if strings.Contains(last, composeOverrideFileName) {
+		t.Errorf("unmanaged up read the override: %q", last)
 	}
 }
 

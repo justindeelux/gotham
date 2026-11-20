@@ -588,6 +588,15 @@ describe("ApplicationFilesTab", () => {
     expect(rule).toContain("flex-wrap: wrap");
   });
 
+  it("keeps the picker label on one line", () => {
+    const source = readFileSync(tabSourcePath, "utf8");
+    const labelAt = source.indexOf(".app-files-picker-label {");
+    expect(labelAt).toBeGreaterThan(-1);
+    const rule = source.slice(labelAt, source.indexOf("}", labelAt));
+    expect(rule).toContain("white-space: nowrap");
+    expect(rule).toContain("flex: none");
+  });
+
   it("opens a folder on double click and on Enter", async () => {
     const api = await import("@/features/applications/api/containerFiles");
     const list = vi.mocked(api.listContainerFiles);

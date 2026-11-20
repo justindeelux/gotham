@@ -1060,21 +1060,21 @@ const promptPlaceholder = computed<string>(() => {
 
 .app-files-picker {
   display: flex;
-  flex: 1 1 12rem;
+  flex: 0 1 18rem;
   align-items: center;
   gap: var(--space-2);
-  min-width: 0;
-  max-width: 18rem;
 }
 
 .app-files-picker-label {
+  flex: none;
   font-size: var(--text-xs);
   color: var(--muted);
+  white-space: nowrap;
 }
 
 .app-files-picker-select {
   flex: 1 1 auto;
-  min-width: 0;
+  min-width: 10rem;
 }
 
 .app-files-toolbar {

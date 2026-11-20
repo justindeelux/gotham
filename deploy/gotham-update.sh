@@ -199,6 +199,10 @@ log() {
     echo "gotham-update: $*" >&2
 }
 
+if [ "${IS_AGENT}" -eq 0 ] && [ -z "${MIGRATE_DSN}" ]; then
+    log "no GOTHAM_DATABASE_DSN in ${SERVICE_ENV}; skipping database migrations"
+fi
+
 # remove_nonregular_pending deletes the pending marker when it is not a regular
 # file (a planted FIFO, device, directory or symlink). Such a marker can hang a
 # reader, and it never carries a staged update, so removing it is safe; a
@@ -458,7 +462,7 @@ migrations_settled() {
         log "could not read the migration status: ${output}"
         return 1
     fi
-    pending=$(printf '%s\n' "${output}" | grep -E '^[0-9]+[[:space:]]+Pending([[:space:]]|$)')
+    pending=$(printf '%s\n' "${output}" | grep -Ei '^[0-9]+[[:space:]]+pending([[:space:]]|$)')
     if [ -n "${pending}" ]; then
         log "migrations are still pending: $(printf '%s\n' "${pending}" | awk '{print $1}' | tr '\n' ' ')"
         return 1

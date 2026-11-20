@@ -514,7 +514,7 @@ func TestWrapperRollsBackWhenMigrationsRemainPending(t *testing.T) {
 		health:        healthAlwaysOK,
 		setup: func(_, target, _ string) {
 			writeMigrateBinary(t, target, 0,
-				"1  Applied  2026-01-01T00:00:00Z  00001_init.go\\n2  Pending  -                       00002_later.go\\n")
+				"VERSION  STATE    APPLIED AT            PATH\\n1        applied  2026-01-01T00:00:00Z  00001_init.go\\n2        pending  -                     00002_later.go\\n")
 		},
 	})
 
@@ -567,6 +567,9 @@ func TestWrapperSkipsMigrationsWithoutConfiguredDSN(t *testing.T) {
 	}
 	if strings.Contains(result.log, "migrate") {
 		t.Fatalf("the wrapper migrated without a configured DSN (log %q)", result.log)
+	}
+	if !strings.Contains(result.output, "skipping database migrations") {
+		t.Errorf("output = %q, want the skipped migration logged", result.output)
 	}
 	if !strings.Contains(result.status, "result=ok") {
 		t.Errorf("status = %q, want ok", result.status)

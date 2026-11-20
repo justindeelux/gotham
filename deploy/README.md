@@ -119,6 +119,12 @@ default config. Root-only steps: restart the fixed unit, probe the loopback
 `/healthz`, roll back to the previous binary on failure, write the status. Both
 names also fetch, verify and apply the release's signed host-helper payload, and
 the agent name additionally refreshes the agent unit and its sudoers rules.
+The control-plane name also runs `<new binary> migrate up` as the `gotham`
+service user with the DSN from `/etc/gotham/gotham.env` before the restart, and
+checks `migrate status` afterwards: a failing or still-pending migration rolls
+back to the previous binary like a failed health check (`gotham serve` never
+migrates, so a release that ships a migration would otherwise run the old
+schema). The agent name never migrates.
 Exit codes: `0` healthy, `1` rolled back or rollback failed, `2` invalid config.
 Under sudo it ignores every `GOTHAM_*` override; the root-owned config is the
 only source of paths.

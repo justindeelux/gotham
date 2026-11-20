@@ -23,12 +23,22 @@ type wrapperResult struct {
 	output       string
 	statusDir    string
 	systemctlLog string
+	log          string
 }
 
 const (
 	healthAlwaysOK    = "ok"
 	healthAlwaysFail  = "fail"
 	healthAfterBackup = "after-rollback"
+)
+
+// The fake staged ("new") and previous ("old") binaries are shell scripts, so
+// the wrapper can run `<binary> migrate ...` against them like it does in
+// production. The new one records its argv so a test can assert that the
+// migrations ran before the restart.
+const (
+	fakeNewBinary = "#!/bin/sh\n# new\nprintf 'new %s\\n' \"$*\" >>\"${WRAPPER_TEST_LOG:-/dev/null}\"\nexit 0\n"
+	fakeOldBinary = "#!/bin/sh\n# old\n"
 )
 
 const (
@@ -40,6 +50,7 @@ type wrapperEnv struct {
 	health        string
 	systemctlMode string
 	flockShim     string
+	agent         bool
 	setup         func(dir, target, statusPath string)
 }
 
@@ -76,13 +87,19 @@ func runWrapper(t *testing.T, env wrapperEnv) wrapperResult {
 	if err := os.MkdirAll(filepath.Dir(target), 0o755); err != nil {
 		t.Fatalf("mkdir bin: %v", err)
 	}
-	if err := os.WriteFile(target, []byte("new"), 0o755); err != nil {
+	if err := os.WriteFile(target, []byte(fakeNewBinary), 0o755); err != nil {
 		t.Fatalf("write target: %v", err)
 	}
 	backup := target + OldSuffix
-	if err := os.WriteFile(backup, []byte("old"), 0o755); err != nil {
+	if err := os.WriteFile(backup, []byte(fakeOldBinary), 0o755); err != nil {
 		t.Fatalf("write backup: %v", err)
 	}
+	// The unit's environment file holds the database DSN migrations use.
+	serviceEnv := filepath.Join(dir, "gotham.env")
+	if err := os.WriteFile(serviceEnv, []byte("GOTHAM_DATABASE_DSN=postgres://gotham:test@127.0.0.1:1/gotham\n"), 0o640); err != nil {
+		t.Fatalf("write service env: %v", err)
+	}
+	wrapperLog := filepath.Join(dir, "wrapper.log")
 	statusDir := filepath.Join(dir, "statusdir")
 	if err := os.MkdirAll(statusDir, 0o755); err != nil {
 		t.Fatalf("mkdir statusdir: %v", err)
@@ -118,14 +135,28 @@ func runWrapper(t *testing.T, env wrapperEnv) wrapperResult {
 	if err != nil {
 		t.Fatalf("resolve script: %v", err)
 	}
+	if env.agent {
+		// The wrapper's installed name selects the node-agent behaviour.
+		data, err := os.ReadFile(script)
+		if err != nil {
+			t.Fatalf("read wrapper: %v", err)
+		}
+		agentScript := filepath.Join(dir, "gotham-agent-update")
+		if err := os.WriteFile(agentScript, data, 0o755); err != nil {
+			t.Fatalf("write agent wrapper: %v", err)
+		}
+		script = agentScript
+	}
 	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 	defer cancel()
 	cmd := exec.CommandContext(ctx, "sh", script)
 	cmd.Env = append(sanitizedEnv(),
 		"GOTHAM_UPDATER_CONF="+conf,
+		"GOTHAM_SERVICE_ENV="+serviceEnv,
 		"WRAPPER_TEST_TARGET="+target,
 		"WRAPPER_TEST_LOCK="+lock,
 		"WRAPPER_TEST_STATUS_DIR="+statusDir,
+		"WRAPPER_TEST_LOG="+wrapperLog,
 		"PATH="+fakeBin+string(os.PathListSeparator)+os.Getenv("PATH"),
 	)
 	output, runErr := cmd.CombinedOutput()
@@ -143,6 +174,7 @@ func runWrapper(t *testing.T, env wrapperEnv) wrapperResult {
 	result.status = readRegularOrEmpty(status)
 	result.pending = readRegularOrEmpty(pending)
 	result.systemctlLog = readRegularOrEmpty(systemctlLog)
+	result.log = readRegularOrEmpty(wrapperLog)
 	return result
 }
 
@@ -222,6 +254,7 @@ func writeShim(t *testing.T, path string, code int) {
 func writeSystemctlShim(t *testing.T, path string, code int) {
 	t.Helper()
 	script := "#!/bin/sh\n" +
+		"if [ -n \"${WRAPPER_TEST_LOG:-}\" ]; then printf 'systemctl %s\\n' \"$*\" >>\"${WRAPPER_TEST_LOG}\"; fi\n" +
 		"if [ -n \"${WRAPPER_TEST_STATUS_LIST:-}\" ] && [ -n \"${WRAPPER_TEST_STATUS_DIR:-}\" ]; then\n" +
 		"  ls -A \"${WRAPPER_TEST_STATUS_DIR}\" > \"${WRAPPER_TEST_STATUS_LIST}\" 2>/dev/null || true\n" +
 		"fi\n" +
@@ -280,7 +313,7 @@ func writeCurlShim(t *testing.T, path, health string) {
 		script = "#!/bin/sh\nexit 1\n"
 	case healthAfterBackup:
 		script = "#!/bin/sh\n" +
-			"if [ -n \"${WRAPPER_TEST_TARGET:-}\" ] && grep -q '^old$' \"${WRAPPER_TEST_TARGET}\" 2>/dev/null; then exit 0; fi\n" +
+			"if [ -n \"${WRAPPER_TEST_TARGET:-}\" ] && grep -q '^# old$' \"${WRAPPER_TEST_TARGET}\" 2>/dev/null; then exit 0; fi\n" +
 			"exit 1\n"
 	default:
 		t.Fatalf("unknown health mode %q", health)
@@ -296,7 +329,7 @@ func TestWrapperRollsBackWhenRestartFails(t *testing.T) {
 	if result.exitCode == 0 {
 		t.Fatalf("exit = 0, want nonzero (output %q)", result.output)
 	}
-	if result.target != "old" {
+	if result.target != fakeOldBinary {
 		t.Fatalf("binary = %q, want the restored old binary (output %q)", result.target, result.output)
 	}
 	if result.backup != "" {
@@ -316,7 +349,7 @@ func TestWrapperRestartFailRollbackUnhealthy(t *testing.T) {
 	if result.exitCode == 0 {
 		t.Fatalf("exit = 0, want nonzero (output %q)", result.output)
 	}
-	if result.target != "old" {
+	if result.target != fakeOldBinary {
 		t.Fatalf("binary = %q, want the restored old binary (output %q)", result.target, result.output)
 	}
 	if !strings.Contains(result.status, "result=rollback_failed") {
@@ -345,7 +378,7 @@ func TestWrapperClearsRateLimitOnRollback(t *testing.T) {
 	if strings.Contains(result.status, "rollback_failed") {
 		t.Fatalf("status = %q, want a successful rollback (output %q)", result.status, result.output)
 	}
-	if result.target != "old" {
+	if result.target != fakeOldBinary {
 		t.Fatalf("binary = %q, want the restored old binary (output %q)", result.target, result.output)
 	}
 	if result.pending != "" {
@@ -359,7 +392,7 @@ func TestWrapperRollsBackWhenHealthFails(t *testing.T) {
 	if result.exitCode == 0 {
 		t.Fatalf("exit = 0, want nonzero (output %q)", result.output)
 	}
-	if result.target != "old" {
+	if result.target != fakeOldBinary {
 		t.Fatalf("binary = %q, want the restored old binary (output %q)", result.target, result.output)
 	}
 	if !strings.Contains(result.status, "result=rolled_back") {
@@ -384,11 +417,159 @@ func TestWrapperKeepsHealthyBinary(t *testing.T) {
 	if result.exitCode != 0 {
 		t.Fatalf("exit = %d, want 0 (output %q)", result.exitCode, result.output)
 	}
-	if result.target != "new" {
+	if result.target != fakeNewBinary {
 		t.Fatalf("binary = %q, want the new binary", result.target)
 	}
-	if result.backup != "old" {
+	if result.backup != fakeOldBinary {
 		t.Errorf("backup = %q, want the retained previous binary", result.backup)
+	}
+	if !strings.Contains(result.status, "result=ok") {
+		t.Errorf("status = %q, want ok", result.status)
+	}
+}
+
+// writeMigrateBinary replaces the staged binary with one that records every
+// call and answers `migrate up` / `migrate status` as the test asks.
+func writeMigrateBinary(t *testing.T, target string, upExit int, statusOutput string) {
+	t.Helper()
+	script := "#!/bin/sh\n# new\nprintf 'new %s\\n' \"$*\" >>\"${WRAPPER_TEST_LOG:-/dev/null}\"\n" +
+		"case \"$1 $2\" in\n" +
+		"  'migrate up')\n" +
+		"    printf 'dsn=%s\\n' \"${GOTHAM_DATABASE_DSN:-}\" >>\"${WRAPPER_TEST_LOG:-/dev/null}\"\n" +
+		"    exit " + strconv.Itoa(upExit) + " ;;\n" +
+		"  'migrate status') printf '%b' '" + statusOutput + "'; exit 0 ;;\n" +
+		"esac\n" +
+		"exit 0\n"
+	if err := os.WriteFile(target, []byte(script), 0o755); err != nil {
+		t.Fatalf("write migrate binary: %v", err)
+	}
+}
+
+func TestWrapperAppliesMigrationsBeforeRestart(t *testing.T) {
+	result := runWrapper(t, wrapperEnv{
+		systemctlExit: 0,
+		health:        healthAlwaysOK,
+		setup: func(_, target, _ string) {
+			writeMigrateBinary(t, target, 0, "1  Applied  2026-01-01T00:00:00Z  00001_init.go\\n")
+		},
+	})
+
+	if result.exitCode != 0 {
+		t.Fatalf("exit = %d, want 0 (output %q)", result.exitCode, result.output)
+	}
+	migrateAt := strings.Index(result.log, "new migrate up")
+	restartAt := strings.Index(result.log, "systemctl restart fake")
+	if migrateAt < 0 {
+		t.Fatalf("the wrapper never applied migrations (log %q)", result.log)
+	}
+	if restartAt < 0 || migrateAt > restartAt {
+		t.Fatalf("migrate up did not run before the restart (log %q)", result.log)
+	}
+	statusAt := strings.Index(result.log, "new migrate status")
+	if statusAt < restartAt {
+		t.Fatalf("the pending check did not run after the restart (log %q)", result.log)
+	}
+	// The DSN reached the migration through stdin and the wrapper never echoed
+	// it: it is absent from the wrapper's own output.
+	if !strings.Contains(result.log, "dsn=postgres://gotham:test@127.0.0.1:1/gotham") {
+		t.Fatalf("migrate did not receive the DSN from the unit environment (log %q)", result.log)
+	}
+	if strings.Contains(result.output, "postgres://gotham:test") {
+		t.Fatalf("the wrapper output leaked the DSN: %q", result.output)
+	}
+	if !strings.Contains(result.status, "result=ok") {
+		t.Errorf("status = %q, want ok", result.status)
+	}
+}
+
+func TestWrapperRollsBackWhenMigrationFails(t *testing.T) {
+	result := runWrapper(t, wrapperEnv{
+		systemctlExit: 0,
+		health:        healthAlwaysOK,
+		setup: func(_, target, _ string) {
+			writeMigrateBinary(t, target, 1, "")
+		},
+	})
+
+	if result.exitCode == 0 {
+		t.Fatalf("exit = 0, want nonzero (output %q)", result.output)
+	}
+	if strings.Contains(result.log, "systemctl restart") {
+		t.Fatalf("the wrapper restarted onto a failed migration (log %q)", result.log)
+	}
+	if result.target != fakeOldBinary {
+		t.Fatalf("binary = %q, want the restored old binary (output %q)", result.target, result.output)
+	}
+	if !strings.Contains(result.status, "result=rolled_back") {
+		t.Fatalf("status = %q, want rolled_back (output %q)", result.status, result.output)
+	}
+	if !strings.Contains(result.status, "detail=database migration failed") {
+		t.Fatalf("status = %q, want the migration failure explained", result.status)
+	}
+}
+
+func TestWrapperRollsBackWhenMigrationsRemainPending(t *testing.T) {
+	result := runWrapper(t, wrapperEnv{
+		systemctlExit: 0,
+		health:        healthAlwaysOK,
+		setup: func(_, target, _ string) {
+			writeMigrateBinary(t, target, 0,
+				"VERSION  STATE    APPLIED AT            PATH\\n1        applied  2026-01-01T00:00:00Z  00001_init.go\\n2        pending  -                     00002_later.go\\n")
+		},
+	})
+
+	if result.exitCode == 0 {
+		t.Fatalf("exit = 0, want nonzero (output %q)", result.output)
+	}
+	restartAt := strings.Index(result.log, "systemctl restart fake")
+	statusAt := strings.Index(result.log, "new migrate status")
+	if restartAt < 0 || statusAt < restartAt {
+		t.Fatalf("the pending check did not run after the restart (log %q)", result.log)
+	}
+	if result.target != fakeOldBinary {
+		t.Fatalf("binary = %q, want the restored old binary (output %q)", result.target, result.output)
+	}
+	if !strings.Contains(result.status, "result=rolled_back") {
+		t.Fatalf("status = %q, want rolled_back (output %q)", result.status, result.output)
+	}
+	if !strings.Contains(result.status, "detail=migrations are still pending") {
+		t.Fatalf("status = %q, want the pending migrations reported", result.status)
+	}
+}
+
+func TestAgentWrapperNeverMigrates(t *testing.T) {
+	result := runWrapper(t, wrapperEnv{systemctlExit: 0, health: healthAlwaysOK, agent: true})
+
+	if result.exitCode != 0 {
+		t.Fatalf("exit = %d, want 0 (output %q)", result.exitCode, result.output)
+	}
+	if strings.Contains(result.log, "migrate") {
+		t.Fatalf("the agent wrapper ran a migration (log %q)", result.log)
+	}
+	if !strings.Contains(result.status, "result=ok") {
+		t.Errorf("status = %q, want ok", result.status)
+	}
+}
+
+func TestWrapperSkipsMigrationsWithoutConfiguredDSN(t *testing.T) {
+	result := runWrapper(t, wrapperEnv{
+		systemctlExit: 0,
+		health:        healthAlwaysOK,
+		setup: func(dir, _, _ string) {
+			if err := os.Remove(filepath.Join(dir, "gotham.env")); err != nil {
+				t.Fatalf("remove service env: %v", err)
+			}
+		},
+	})
+
+	if result.exitCode != 0 {
+		t.Fatalf("exit = %d, want 0 (output %q)", result.exitCode, result.output)
+	}
+	if strings.Contains(result.log, "migrate") {
+		t.Fatalf("the wrapper migrated without a configured DSN (log %q)", result.log)
+	}
+	if !strings.Contains(result.output, "skipping database migrations") {
+		t.Errorf("output = %q, want the skipped migration logged", result.output)
 	}
 	if !strings.Contains(result.status, "result=ok") {
 		t.Errorf("status = %q, want ok", result.status)
@@ -409,7 +590,7 @@ func TestWrapperRecoversMissingTarget(t *testing.T) {
 	if result.exitCode == 0 {
 		t.Fatalf("exit = 0, want nonzero (recovered, output %q)", result.output)
 	}
-	if result.target != "old" {
+	if result.target != fakeOldBinary {
 		t.Fatalf("binary = %q, want the recovered old binary (output %q)", result.target, result.output)
 	}
 	if !strings.Contains(result.output, "restoring") {
@@ -596,7 +777,7 @@ func TestWrapperRefusesLockSwappedWhileWaiting(t *testing.T) {
 	if !strings.Contains(result.status, "result=wrapper_failed") {
 		t.Fatalf("status = %q, want wrapper_failed", result.status)
 	}
-	if result.target != "new" {
+	if result.target != fakeNewBinary {
 		t.Errorf("binary = %q, want the update refused before any restart/rollback", result.target)
 	}
 	entries, err := os.ReadDir(result.statusDir)

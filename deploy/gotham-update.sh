@@ -12,7 +12,10 @@
 #
 # This script always attempts to restore the previous binary when the restart or
 # the health check fails, releases the pending marker, and records the durable
-# outcome in a root-owned status file the control plane reads.
+# outcome in a root-owned status file the control plane reads. The control-plane
+# name also applies the release's pending database migrations with the new
+# binary before the restart and rolls back when they fail (see
+# apply_migrations); the agent name has no database and never migrates.
 #
 # Configuration (root-owned, mode 0644): /etc/gotham/updater.conf
 #   GOTHAM_BINARY=/var/lib/gotham/bin/gotham
@@ -42,7 +45,7 @@ if [ -n "${SUDO_USER:-}" ] || [ -n "${SUDO_UID:-}" ]; then
     for variable in GOTHAM_UPDATER_CONF GOTHAM_BINARY GOTHAM_SERVICE GOTHAM_HEALTH \
         GOTHAM_TIMEOUT GOTHAM_STATUS GOTHAM_PENDING GOTHAM_LOCK GOTHAM_GRACE \
         GOTHAM_HOST_BOOTSTRAP_ROOT GOTHAM_RELEASE_BASE GOTHAM_STAGING \
-        GOTHAM_SERVICE_ENV; do
+        GOTHAM_SERVICE_ENV GOTHAM_DATABASE_DSN GOTHAM_LEGACY_LOCAL_NODE_ID; do
         unset "${variable}" 2>/dev/null || true
     done
 fi
@@ -84,6 +87,9 @@ fi
 BINARY="${GOTHAM_BINARY:-/var/lib/gotham/bin/gotham}"
 BACKUP="${BINARY}.old"
 SERVICE="${GOTHAM_SERVICE:-gotham}"
+# The control-plane unit runs as this user, and install.sh applies the
+# migrations as it, so an update does the same (see apply_migrations).
+SERVICE_USER="gotham"
 TIMEOUT="${GOTHAM_TIMEOUT:-30}"
 STATUS="${GOTHAM_STATUS:-/var/lib/gotham-updater/update.status}"
 STATUS_DIR=$(dirname "${STATUS}")
@@ -153,6 +159,23 @@ if [ -n "${PANEL_PORT}" ]; then
     HEALTH="http://127.0.0.1:${PANEL_PORT}/healthz"
 fi
 
+# The database the unit is configured with, read once from its root-owned
+# environment file (the one systemd passes to the service; the service user
+# cannot write it). An empty DSN means there is nothing to migrate — the node
+# agent has no database, and a hand-written install with no DSN in that file
+# is left exactly as it was. The DSN goes to `migrate` on stdin, never on a
+# command line or in the logs.
+MIGRATE_DSN=""
+MIGRATE_LEGACY_NODE_ID=""
+if [ "${IS_AGENT}" -eq 0 ] && [ -f "${SERVICE_ENV}" ] && [ ! -L "${SERVICE_ENV}" ]; then
+    MIGRATE_DSN=$(sed -n 's/^[[:space:]]*GOTHAM_DATABASE_DSN=//p' "${SERVICE_ENV}" 2>/dev/null | head -n 1)
+    MIGRATE_LEGACY_NODE_ID=$(sed -n 's/^[[:space:]]*GOTHAM_AGENT_NODE_ID=//p' \
+        "${ROOT}/etc/gotham/agent.env" 2>/dev/null | tail -n 1)
+fi
+case "${MIGRATE_LEGACY_NODE_ID}" in
+    "" | *[!A-Za-z0-9._-]*) MIGRATE_LEGACY_NODE_ID="" ;;
+esac
+
 # pin_legacy_port keeps an install from before the 9074 default on the port it
 # already serves on. The old installer never wrote GOTHAM_SERVER_PORT, so those
 # hosts listen on 8000; without the pin the new binary would move to 9074 and
@@ -175,6 +198,10 @@ pin_legacy_port() {
 log() {
     echo "gotham-update: $*" >&2
 }
+
+if [ "${IS_AGENT}" -eq 0 ] && [ -z "${MIGRATE_DSN}" ]; then
+    log "no GOTHAM_DATABASE_DSN in ${SERVICE_ENV}; skipping database migrations"
+fi
 
 # remove_nonregular_pending deletes the pending marker when it is not a regular
 # file (a planted FIFO, device, directory or symlink). Such a marker can hang a
@@ -380,6 +407,67 @@ wait_healthy() {
         fi
         sleep 1
     done
+}
+
+# migrate_binary runs "<binary> migrate <verb>" the way deploy/install.sh does:
+# as the service user, with the DSN and the legacy node id from the unit's
+# environment files. Root drops to the service user; an unprivileged run (the
+# tests) executes it directly. Returns the command's exit status.
+migrate_binary() {
+    # $1 verb. The child only sees what this function hands it: the verb comes
+    # from the caller, the binary from the root-owned config.
+    # shellcheck disable=SC2016 # the child script reads these at run time
+    child='IFS= read -r dsn || dsn=""
+if [ -n "${dsn}" ]; then
+    GOTHAM_DATABASE_DSN="${dsn}"
+    export GOTHAM_DATABASE_DSN
+fi
+if [ -n "$3" ]; then
+    GOTHAM_LEGACY_LOCAL_NODE_ID="$3"
+    export GOTHAM_LEGACY_LOCAL_NODE_ID
+fi
+cd / && exec "$1" migrate "$2"'
+    if [ "$(id -u)" -eq 0 ]; then
+        if ! command -v runuser >/dev/null 2>&1; then
+            log "runuser is required to apply migrations as ${SERVICE_USER}"
+            return 1
+        fi
+        printf '%s\n' "${MIGRATE_DSN}" | runuser -u "${SERVICE_USER}" -- \
+            sh -c "${child}" gotham-migrate "${BINARY}" "$1" "${MIGRATE_LEGACY_NODE_ID}"
+    else
+        printf '%s\n' "${MIGRATE_DSN}" | \
+            sh -c "${child}" gotham-migrate "${BINARY}" "$1" "${MIGRATE_LEGACY_NODE_ID}"
+    fi
+}
+
+# apply_migrations applies the release's database migrations with the new
+# binary before the service is restarted onto it. `gotham serve` never migrates,
+# so without this an update that ships a migration keeps the previous schema and
+# the panel breaks (GOTHAM-252). Nothing to do without a configured DSN (the
+# node agent, or an install that does not use one).
+#
+# Migrations stay forward-only. A rollback runs the previous binary against the
+# migrated schema, so every migration must keep working for one release.
+apply_migrations() {
+    [ -n "${MIGRATE_DSN}" ] || return 0
+    log "applying database migrations with ${BINARY}"
+    migrate_binary up
+}
+
+# migrations_settled reports whether `migrate status` lists no pending
+# migration, i.e. the schema the new binary needs is fully applied.
+migrations_settled() {
+    [ -n "${MIGRATE_DSN}" ] || return 0
+    if ! output=$(migrate_binary status 2>&1); then
+        log "could not read the migration status: ${output}"
+        return 1
+    fi
+    pending=$(printf '%s\n' "${output}" | grep -Ei '^[0-9]+[[:space:]]+pending([[:space:]]|$)')
+    if [ -n "${pending}" ]; then
+        log "migrations are still pending: $(printf '%s\n' "${pending}" | awk '{print $1}' | tr '\n' ' ')"
+        return 1
+    fi
+    return 0
 }
 
 restart_service() {
@@ -589,6 +677,21 @@ pin_legacy_port
 refresh_host_helpers
 sleep "${GRACE}"
 
+# Apply the release's migrations before the new binary serves. A failure keeps
+# the previous binary and turns the update into a rollback: never restart onto a
+# half-migrated schema. The previous process was never stopped, so there is
+# nothing to restart after restoring its binary.
+if ! apply_migrations; then
+    log "database migration failed; restoring ${BACKUP}"
+    if ! restore; then
+        finish no_backup "database migration failed and no backup could be restored" 1
+    fi
+    if wait_healthy; then
+        finish rolled_back "database migration failed; previous binary restored" 1
+    fi
+    finish rollback_failed "database migration failed; the running binary is unhealthy" 1
+fi
+
 # A failed restart must still attempt a rollback; never exit before that.
 if ! restart_service; then
     if restore; then
@@ -602,19 +705,23 @@ if ! restart_service; then
     finish no_backup "restart failed and no backup could be restored" 1
 fi
 
+REASON="health check failed"
 if wait_healthy; then
-    write_status ok "${VERSION}" "new binary healthy"
-    rm -f "${PENDING}" 2>/dev/null || true
-    log "new binary healthy"
-    exit 0
+    if migrations_settled; then
+        write_status ok "${VERSION}" "new binary healthy"
+        rm -f "${PENDING}" 2>/dev/null || true
+        log "new binary healthy"
+        exit 0
+    fi
+    REASON="migrations are still pending after the restart"
 fi
 
-log "health check failed; restoring ${BACKUP}"
+log "${REASON}; restoring ${BACKUP}"
 if ! restore; then
-    finish no_backup "health check failed and no backup could be restored" 1
+    finish no_backup "${REASON} and no backup could be restored" 1
 fi
 restart_service || log "restart on the previous binary failed"
 if wait_healthy; then
-    finish rolled_back "health check failed; previous binary restored" 1
+    finish rolled_back "${REASON}; previous binary restored" 1
 fi
-finish rollback_failed "previous binary is also unhealthy" 1
+finish rollback_failed "${REASON}; previous binary is also unhealthy" 1

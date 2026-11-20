@@ -96,10 +96,6 @@ const stepIcons: Record<DeploymentState, Component> = {
   flex-grow: 0;
 }
 
-.step:last-child {
-  flex-grow: 0;
-}
-
 .step__body {
   display: flex;
   flex-direction: column;

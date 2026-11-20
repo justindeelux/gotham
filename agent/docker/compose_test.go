@@ -18,6 +18,7 @@ import (
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/status"
+	"gopkg.in/yaml.v3"
 )
 
 const composeTestProject = "gotham-3f2a4b6c-8d0e-4f1a-9b2c-3d4e5f607182"
@@ -222,6 +223,96 @@ func TestComposeUpDownCommands(t *testing.T) {
 			!strings.Contains(call, "-f ") {
 			t.Errorf("call missing -f: %q", call)
 		}
+	}
+}
+
+func TestComposeUpLabelsEveryService(t *testing.T) {
+	const deploymentID = "4c1a2b7e-8d3f-4a6b-9c0d-1e2f3a4b5c6d"
+	fakeDockerCLI(t, "exit 0")
+	server := newTestComposeServer(t, ComposeServerConfig{})
+
+	document := `services:
+  web:
+    image: nginx:1.23
+    labels:
+      example.com/role: web
+  worker:
+    image: busybox:1.36
+    labels:
+      - example.com/role=worker
+`
+	if _, err := server.ComposeUp(context.Background(), &agentv1.ComposeUpRequest{
+		ProjectName:  composeTestProject,
+		ComposeYaml:  []byte(document),
+		DeploymentId: deploymentID,
+	}); err != nil {
+		t.Fatalf("ComposeUp: %v", err)
+	}
+
+	content, err := os.ReadFile(server.composeFile(composeTestProject))
+	if err != nil {
+		t.Fatalf("read stored document: %v", err)
+	}
+	var stored struct {
+		Services map[string]struct {
+			Labels yaml.Node `yaml:"labels"`
+		} `yaml:"services"`
+	}
+	if err := yaml.Unmarshal(content, &stored); err != nil {
+		t.Fatalf("stored document is not valid YAML: %v", err)
+	}
+	appID := strings.TrimPrefix(composeTestProject, composeProjectPrefix)
+	for _, name := range []string{"web", "worker"} {
+		service := stored.Services[name]
+		for key, want := range map[string]string{
+			"gotham.managed":       "true",
+			"gotham.app_id":        appID,
+			"gotham.deployment_id": deploymentID,
+		} {
+			if got := composeLabelValue(&service.Labels, key); got != want {
+				t.Errorf("service %s label %s = %q, want %q", name, key, got, want)
+			}
+		}
+		if got := composeLabelValue(&service.Labels, "example.com/role"); got != name {
+			t.Errorf("service %s lost its own label: %q", name, got)
+		}
+	}
+}
+
+func composeLabelValue(labels *yaml.Node, key string) string {
+	switch labels.Kind {
+	case yaml.MappingNode:
+		for index := 0; index+1 < len(labels.Content); index += 2 {
+			if labels.Content[index].Value == key {
+				return labels.Content[index+1].Value
+			}
+		}
+	case yaml.SequenceNode:
+		for _, entry := range labels.Content {
+			if label, value, ok := strings.Cut(entry.Value, "="); ok && label == key {
+				return value
+			}
+		}
+	}
+	return ""
+}
+
+func TestComposeUpWithoutDeploymentKeepsDocument(t *testing.T) {
+	fakeDockerCLI(t, "exit 0")
+	server := newTestComposeServer(t, ComposeServerConfig{})
+
+	if _, err := server.ComposeUp(context.Background(), &agentv1.ComposeUpRequest{
+		ProjectName: composeTestProject,
+		ComposeYaml: []byte(composeTestDocument),
+	}); err != nil {
+		t.Fatalf("ComposeUp: %v", err)
+	}
+	content, err := os.ReadFile(server.composeFile(composeTestProject))
+	if err != nil {
+		t.Fatalf("read stored document: %v", err)
+	}
+	if string(content) != composeTestDocument {
+		t.Errorf("document changed without a deployment id:\n%s", content)
 	}
 }
 

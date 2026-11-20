@@ -16,6 +16,7 @@ import (
 
 	"github.com/justindeelux/gotham/composeguard"
 	"github.com/justindeelux/gotham/internal/providers"
+	"github.com/justindeelux/gotham/internal/services"
 	agentv1 "github.com/justindeelux/gotham/proto/agent/v1"
 )
 
@@ -1014,6 +1015,9 @@ func TestOrchestratorComposePastedHappyPath(t *testing.T) {
 	if node.composeUpCalls != 1 {
 		t.Fatalf("compose up calls = %d, want 1", node.composeUpCalls)
 	}
+	if len(node.composeDeploymentIDs) != 1 || node.composeDeploymentIDs[0] != dep.ID.String() {
+		t.Errorf("compose up deployment ids = %v, want %s", node.composeDeploymentIDs, dep.ID)
+	}
 	if len(node.composeDocuments) != 1 {
 		t.Fatalf("compose documents = %d, want 1", len(node.composeDocuments))
 	}
@@ -1032,6 +1036,39 @@ func TestOrchestratorComposePastedHappyPath(t *testing.T) {
 	}
 	if node.buildCalls != 0 {
 		t.Errorf("build calls = %d, want 0 for a compose deploy", node.buildCalls)
+	}
+}
+
+func TestOrchestratorComposeRedeployKeepsOtherServices(t *testing.T) {
+	userID := uuid.New()
+	app := testComposeApp(userID)
+	repo := &fakeRepository{app: app}
+	envVars, secrets := testEnv(t)
+	repo.envVars, repo.secrets = envVars, secrets
+	dep := seedDeployment(t, repo, app, Deployment{Kind: KindDeploy})
+
+	project := services.ProjectName(app.ID)
+	node := newMockNode()
+	node.composeContainers = []ComposeContainer{{ID: "new-web", Service: "web", State: "running", Status: "Up 1 second"}}
+	node.listed = []*agentv1.ContainerInfo{
+		{Id: "new-web", State: "running", Labels: map[string]string{
+			labelAppID: app.ID.String(), composeProjectLabel: project,
+		}},
+		{Id: "worker-container", State: "running", Labels: map[string]string{
+			labelAppID: app.ID.String(), composeProjectLabel: project,
+		}},
+	}
+	o := newTestOrchestrator(Config{
+		Repository: repo,
+		Source:     &fakeSource{},
+		Dial:       dialAlways(node),
+		Emitter:    NewEmitter(&recordPublisher{}),
+	})
+
+	o.run(context.Background(), job{app: app, dep: dep, previous: "old-web"})
+
+	if len(node.removed) != 1 || node.removed[0] != "old-web" {
+		t.Errorf("removed = %v, want only the previous web container", node.removed)
 	}
 }
 

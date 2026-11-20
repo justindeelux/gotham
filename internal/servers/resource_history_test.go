@@ -163,6 +163,50 @@ func TestBuildResourceSampleRowsSumsCompleteReplicas(t *testing.T) {
 	}
 }
 
+func TestBuildResourceSampleRowsGroupsComposeServices(t *testing.T) {
+	serverID := uuid.New()
+	appID := uuid.New()
+	at := time.Unix(1000, 0).UTC()
+	web := containerID(20)
+	worker := containerID(21)
+	unlabeled := containerID(22)
+	observation := NodeObservation{
+		Inventory: ContainerInventory{
+			Complete: true,
+			Containers: []ContainerObservation{
+				{ID: web, Managed: true, State: "running", AppID: appID.String(), ComposeService: "web", DeploymentID: "d1", Replica: "1"},
+				{ID: worker, Managed: true, State: "running", AppID: appID.String(), ComposeService: "worker", DeploymentID: "d1", Replica: "1"},
+				// A compose container without the Gotham labels is not owned.
+				{ID: unlabeled, Managed: false, State: "running", ComposeService: "db", Replica: "1"},
+			},
+		},
+	}
+	samples := make([]containerResourceSample, 0, 3)
+	for _, id := range []string{web, worker, unlabeled} {
+		samples = append(samples, containerResourceSample{
+			ContainerID: id, ObservedAt: at, CPUCores: floatPtr(0.1), hasAnyValue: true,
+		})
+	}
+
+	rows := buildResourceSampleRows(serverID, observation, samples)
+	if len(rows) != 2 {
+		t.Fatalf("rows = %d; want one per labeled service", len(rows))
+	}
+	services := map[string]bool{}
+	for _, row := range rows {
+		if row.ResourceType != ResourceTypeApplication || row.ApplicationID.Bytes != appID {
+			t.Errorf("ownership = %s %v", row.ResourceType, row.ApplicationID)
+		}
+		if row.DeploymentID != "d1" {
+			t.Errorf("deployment = %q, want d1", row.DeploymentID)
+		}
+		services[row.Service] = true
+	}
+	if !services["web"] || !services["worker"] || services["db"] {
+		t.Errorf("services = %v; want web and worker only", services)
+	}
+}
+
 func TestResourceSeriesSumsReplicasAndKeepsGaps(t *testing.T) {
 	series := make(map[string]*ResourceHistorySeries)
 	at := time.Unix(1000, 0).UTC().Truncate(30 * time.Second)

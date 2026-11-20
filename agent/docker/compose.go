@@ -1,6 +1,7 @@
 package docker
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"errors"
@@ -17,6 +18,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/google/uuid"
 	"github.com/justindeelux/gotham/agent/proxy"
 	"github.com/justindeelux/gotham/composeguard"
 	agentv1 "github.com/justindeelux/gotham/proto/agent/v1"
@@ -175,6 +177,12 @@ func (s *ComposeServer) ComposeUp(ctx context.Context, req *agentv1.ComposeUpReq
 			return nil, err
 		}
 	}
+	// The ownership labels are generated here, after the document passed the
+	// reserved-label guards, so an application compose file can never set them
+	// itself.
+	if err := s.writeOwnershipLabels(project, req.GetComposeYaml(), req.GetDeploymentId()); err != nil {
+		return nil, err
+	}
 	if _, err := s.configList(ctx, project, "--services"); err != nil {
 		return nil, composeError("up", err)
 	}
@@ -189,6 +197,139 @@ func (s *ComposeServer) ComposeUp(ctx context.Context, req *agentv1.ComposeUpReq
 	}
 	s.log.Info("compose: project up", "project", project, "restart", req.GetRestart())
 	return &agentv1.ComposeUpResponse{}, nil
+}
+
+const composeProjectPrefix = "gotham-"
+
+// writeOwnershipLabels rewrites the project's compose file so every service
+// carries the ownership labels resource samples and container sweeps key on.
+// The labels are generated after the document passed the reserved-label
+// guards, so an application compose file can never set them itself. A request
+// without a deployment id keeps the document unchanged: service projects and
+// older control planes send none.
+func (s *ComposeServer) writeOwnershipLabels(project string, document []byte, deploymentID string) error {
+	deploymentID = strings.TrimSpace(deploymentID)
+	if deploymentID == "" {
+		return nil
+	}
+	if _, err := uuid.Parse(deploymentID); err != nil {
+		return status.Errorf(codes.InvalidArgument, "up: deployment_id is not a UUID")
+	}
+	labels := map[string]string{
+		"gotham.managed":       "true",
+		"gotham.app_id":        strings.TrimPrefix(project, composeProjectPrefix),
+		"gotham.deployment_id": deploymentID,
+	}
+	labeled, err := composeDocumentWithLabels(document, labels)
+	if err != nil {
+		return status.Errorf(codes.InvalidArgument, "up: %v", err)
+	}
+	return s.writeDocument(project, labeled)
+}
+
+// composeDocumentWithLabels adds the labels to every service, keeping the
+// labels a service already declares.
+func composeDocumentWithLabels(document []byte, labels map[string]string) ([]byte, error) {
+	var root yaml.Node
+	if err := yaml.Unmarshal(document, &root); err != nil {
+		return nil, fmt.Errorf("compose document is not valid YAML: %v", err)
+	}
+	if len(root.Content) == 0 || root.Content[0].Kind != yaml.MappingNode {
+		return nil, fmt.Errorf("compose document is not a mapping")
+	}
+	services := composeMappingValue(root.Content[0], "services")
+	if services == nil || services.Kind != yaml.MappingNode {
+		return nil, fmt.Errorf("compose document declares no services")
+	}
+	keys := make([]string, 0, len(labels))
+	for key := range labels {
+		keys = append(keys, key)
+	}
+	sort.Strings(keys)
+	for index := 0; index+1 < len(services.Content); index += 2 {
+		service := services.Content[index+1]
+		if service.Kind == yaml.AliasNode && service.Alias != nil {
+			service = service.Alias
+		}
+		if service.Kind != yaml.MappingNode {
+			return nil, fmt.Errorf("compose service %q is not a mapping", services.Content[index].Value)
+		}
+		setComposeLabels(service, labels, keys)
+	}
+	var buf bytes.Buffer
+	encoder := yaml.NewEncoder(&buf)
+	encoder.SetIndent(2)
+	if err := encoder.Encode(&root); err != nil {
+		return nil, fmt.Errorf("render compose document: %v", err)
+	}
+	if err := encoder.Close(); err != nil {
+		return nil, fmt.Errorf("render compose document: %v", err)
+	}
+	return buf.Bytes(), nil
+}
+
+func setComposeLabels(service *yaml.Node, labels map[string]string, keys []string) {
+	entry := composeMappingValue(service, "labels")
+	if entry != nil && entry.Kind == yaml.AliasNode && entry.Alias != nil {
+		entry = entry.Alias
+	}
+	switch {
+	case entry == nil:
+		mapping := &yaml.Node{Kind: yaml.MappingNode, Tag: "!!map"}
+		for _, key := range keys {
+			mapping.Content = append(mapping.Content,
+				&yaml.Node{Kind: yaml.ScalarNode, Tag: "!!str", Value: key},
+				&yaml.Node{Kind: yaml.ScalarNode, Tag: "!!str", Value: labels[key]})
+		}
+		service.Content = append(service.Content,
+			&yaml.Node{Kind: yaml.ScalarNode, Tag: "!!str", Value: "labels"}, mapping)
+	case entry.Kind == yaml.MappingNode:
+		for _, key := range keys {
+			setComposeMappingValue(entry, key, labels[key])
+		}
+	case entry.Kind == yaml.SequenceNode:
+		for _, key := range keys {
+			if composeLabelListed(entry, key) {
+				continue
+			}
+			entry.Content = append(entry.Content,
+				&yaml.Node{Kind: yaml.ScalarNode, Tag: "!!str", Value: key + "=" + labels[key]})
+		}
+	}
+}
+
+func composeLabelListed(entries *yaml.Node, key string) bool {
+	for _, entry := range entries.Content {
+		label, _, _ := strings.Cut(entry.Value, "=")
+		if strings.TrimSpace(label) == key {
+			return true
+		}
+	}
+	return false
+}
+
+func composeMappingValue(node *yaml.Node, key string) *yaml.Node {
+	if node == nil || node.Kind != yaml.MappingNode {
+		return nil
+	}
+	for index := 0; index+1 < len(node.Content); index += 2 {
+		if node.Content[index].Value == key {
+			return node.Content[index+1]
+		}
+	}
+	return nil
+}
+
+func setComposeMappingValue(node *yaml.Node, key, value string) {
+	scalar := &yaml.Node{Kind: yaml.ScalarNode, Tag: "!!str", Value: value}
+	for index := 0; index+1 < len(node.Content); index += 2 {
+		if node.Content[index].Value == key {
+			node.Content[index+1] = scalar
+			return
+		}
+	}
+	node.Content = append(node.Content,
+		&yaml.Node{Kind: yaml.ScalarNode, Tag: "!!str", Value: key}, scalar)
 }
 
 func (s *ComposeServer) ComposeDown(ctx context.Context, req *agentv1.ComposeDownRequest) (*agentv1.ComposeDownResponse, error) {

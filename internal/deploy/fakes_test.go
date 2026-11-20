@@ -1205,6 +1205,7 @@ type mockNode struct {
 	composeValidateCalls  int
 	composeProjects       []string
 	composeDocuments      []string
+	composeDeploymentIDs  []string
 	composeDownProjects   []string
 	composeDownDocuments  []string
 	composeDownRemoveVols []bool
@@ -1456,12 +1457,13 @@ func (m *mockNode) Close() error {
 	return nil
 }
 
-func (m *mockNode) ComposeUp(_ context.Context, projectName string, composeYAML []byte) error {
+func (m *mockNode) ComposeUp(_ context.Context, projectName string, composeYAML []byte, deploymentID string) error {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	m.composeUpCalls++
 	m.composeProjects = append(m.composeProjects, projectName)
 	m.composeDocuments = append(m.composeDocuments, string(composeYAML))
+	m.composeDeploymentIDs = append(m.composeDeploymentIDs, deploymentID)
 	return m.composeUpErr
 }
 

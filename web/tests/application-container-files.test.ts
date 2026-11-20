@@ -3,7 +3,7 @@ import { dirname, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 
 import { flushPromises, mount } from "@vue/test-utils";
-import { NDropdown, NSelect } from "naive-ui";
+import { NDataTable, NDropdown, NSelect } from "naive-ui";
 import type { DropdownOption } from "naive-ui";
 import { createPinia, setActivePinia } from "pinia";
 import { beforeEach, describe, expect, it, vi } from "vitest";
@@ -250,6 +250,35 @@ describe("ApplicationFilesTab", () => {
     const note = wrapper.find('[data-testid="files-persistent-note"]');
     expect(note.exists()).toBe(true);
     expect(note.text()).toContain("lost when the application is redeployed");
+    wrapper.unmount();
+  });
+
+  it("puts the note and the container picker on one row", async () => {
+    containers.value = [
+      { id: "c1", name: "demo-web", image: "gotham/demo:1", state: "running", status: "Up" },
+      { id: "c2", name: "demo-worker", image: "gotham/demo:1", state: "running", status: "Up" },
+    ];
+    const wrapper = await mountTab();
+    const row = wrapper.find(".app-files-note-row");
+    expect(row.exists()).toBe(true);
+    expect(row.find('[data-testid="files-persistent-note"]').exists()).toBe(true);
+    expect(row.find('[data-testid="files-container-picker"]').exists()).toBe(true);
+    expect(wrapper.findComponent(NSelect).props("size")).toBe("small");
+    expect(wrapper.findAll(".app-files-note-row")).toHaveLength(1);
+    wrapper.unmount();
+  });
+
+  it("shows the note alone when the container picker is hidden", async () => {
+    const wrapper = await mountTab();
+    const row = wrapper.find(".app-files-note-row");
+    expect(row.find('[data-testid="files-persistent-note"]').exists()).toBe(true);
+    expect(row.find('[data-testid="files-container-picker"]').exists()).toBe(false);
+    wrapper.unmount();
+  });
+
+  it("keeps the file list rows compact", async () => {
+    const wrapper = await mountTab();
+    expect(wrapper.findComponent(NDataTable).props("minRowHeight")).toBeLessThan(40);
     wrapper.unmount();
   });
 
@@ -548,6 +577,15 @@ describe("ApplicationFilesTab", () => {
     const rule = source.slice(mediaAt, source.indexOf("}", mediaAt));
     expect(rule).toContain(".app-files-more");
     expect(rule).toContain("opacity: 1");
+  });
+
+  it("wraps the note row on narrow screens", () => {
+    const source = readFileSync(tabSourcePath, "utf8");
+    const rowAt = source.indexOf(".app-files-note-row {");
+    expect(rowAt).toBeGreaterThan(-1);
+    const rule = source.slice(rowAt, source.indexOf("}", rowAt));
+    expect(rule).toContain("display: flex");
+    expect(rule).toContain("flex-wrap: wrap");
   });
 
   it("opens a folder on double click and on Enter", async () => {

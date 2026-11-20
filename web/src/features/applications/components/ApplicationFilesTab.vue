@@ -745,14 +745,33 @@ const promptPlaceholder = computed<string>(() => {
       </NSpace>
     </template>
 
-    <NAlert
-      type="warning"
-      :show-icon="true"
-      class="app-files-note"
-      data-testid="files-persistent-note"
-    >
-      {{ t("applications.files.persistentNote") }}
-    </NAlert>
+    <div class="app-files-note-row">
+      <NAlert
+        type="warning"
+        :show-icon="true"
+        class="app-files-note app-files-note-compact"
+        data-testid="files-persistent-note"
+      >
+        {{ t("applications.files.persistentNote") }}
+      </NAlert>
+
+      <div v-if="showPicker" class="app-files-picker">
+        <label class="app-files-picker-label" for="app-files-container">
+          {{ t("applications.files.containerLabel") }}
+        </label>
+        <NSelect
+          id="app-files-container"
+          size="small"
+          class="app-files-picker-select"
+          :value="containerId"
+          :options="containerOptions"
+          :loading="containersLoading"
+          :placeholder="t('applications.files.chooseContainer')"
+          data-testid="files-container-picker"
+          @update:value="containerId = $event"
+        />
+      </div>
+    </div>
 
     <NAlert v-if="!canWrite" type="info" :show-icon="true" class="app-files-note">
       {{ t("applications.files.ownerOnly") }}
@@ -767,21 +786,6 @@ const promptPlaceholder = computed<string>(() => {
     >
       {{ t("applications.files.containersError") }}
     </NAlert>
-
-    <div v-if="showPicker" class="app-files-picker">
-      <label class="app-files-picker-label" for="app-files-container">
-        {{ t("applications.files.containerLabel") }}
-      </label>
-      <NSelect
-        id="app-files-container"
-        :value="containerId"
-        :options="containerOptions"
-        :loading="containersLoading"
-        :placeholder="t('applications.files.chooseContainer')"
-        data-testid="files-container-picker"
-        @update:value="containerId = $event"
-      />
-    </div>
 
     <NEmpty
       v-if="containers.length === 0 && !containersLoading"
@@ -882,7 +886,7 @@ const promptPlaceholder = computed<string>(() => {
           :row-props="rowProps"
           :bordered="false"
           :max-height="420"
-          :min-row-height="40"
+          :min-row-height="34"
           :virtual-scroll="true"
           data-testid="files-table"
         >
@@ -1020,17 +1024,57 @@ const promptPlaceholder = computed<string>(() => {
   margin-bottom: var(--space-3);
 }
 
+.app-files-note-row {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--space-2);
+  margin-bottom: var(--space-2);
+}
+
+.app-files-note-row .app-files-note {
+  margin-bottom: 0;
+}
+
+.app-files-note-compact {
+  flex: 1 1 20rem;
+  min-width: 0;
+}
+
+.app-files-note-compact :deep(.n-alert-body) {
+  padding-top: var(--space-1);
+  padding-bottom: var(--space-1);
+}
+
+.app-files-note-compact :deep(.n-alert-body__content) {
+  font-size: var(--text-xs);
+  line-height: var(--leading-body);
+}
+
+/* The compact body is shorter than the default alert, so the icon has to sit
+   inside it instead of hanging below the top margin. */
+.app-files-note-compact :deep(.n-alert__icon) {
+  margin-top: 0;
+  font-size: var(--text-base);
+}
+
 .app-files-picker {
   display: flex;
-  flex-direction: column;
-  gap: var(--space-1);
-  margin-bottom: var(--space-3);
-  max-width: 32rem;
+  flex: 1 1 12rem;
+  align-items: center;
+  gap: var(--space-2);
+  min-width: 0;
+  max-width: 18rem;
 }
 
 .app-files-picker-label {
   font-size: var(--text-xs);
   color: var(--muted);
+}
+
+.app-files-picker-select {
+  flex: 1 1 auto;
+  min-width: 0;
 }
 
 .app-files-toolbar {
@@ -1039,7 +1083,7 @@ const promptPlaceholder = computed<string>(() => {
   align-items: center;
   justify-content: space-between;
   gap: var(--space-2);
-  margin-bottom: var(--space-2);
+  margin-bottom: var(--space-1);
 }
 
 .app-files-breadcrumb {
@@ -1056,6 +1100,12 @@ const promptPlaceholder = computed<string>(() => {
 
 .app-files-table {
   --fm-mark-size: var(--space-6);
+}
+
+.app-files-table :deep(.n-data-table-th),
+.app-files-table :deep(.n-data-table-td) {
+  padding: var(--space-1) var(--space-2);
+  font-size: var(--text-xs);
 }
 
 .app-files-table :deep(.app-files-row) {
@@ -1095,10 +1145,13 @@ const promptPlaceholder = computed<string>(() => {
   opacity: 1;
 }
 
-/* No hover on touch, so the row menu button must always be visible there. */
+/* No hover on touch, so the row menu button must always be visible there and
+   keep a finger-sized hit area in the smaller row. */
 @media (hover: none) {
   .app-files-table :deep(.app-files-more) {
     opacity: 1;
+    min-width: var(--space-8);
+    min-height: var(--space-8);
   }
 }
 
@@ -1113,7 +1166,7 @@ const promptPlaceholder = computed<string>(() => {
   flex-wrap: wrap;
   align-items: center;
   gap: var(--space-2);
-  margin-top: var(--space-2);
+  margin-top: var(--space-1);
 }
 
 .app-files-input {

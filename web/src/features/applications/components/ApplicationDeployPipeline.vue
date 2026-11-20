@@ -88,6 +88,7 @@ const stepIcons: Record<DeploymentState, Component> = {
 .pipeline-bar__steps {
   display: flex;
   align-items: center;
+  gap: var(--space-2);
   flex: 1 1 auto;
   min-width: 0;
   margin: 0;
@@ -135,8 +136,8 @@ const stepIcons: Record<DeploymentState, Component> = {
   display: grid;
   place-items: center;
   flex: 0 0 auto;
-  width: 24px;
-  height: 24px;
+  width: var(--space-6);
+  height: var(--space-6);
   border: 1px solid var(--border-soft);
   border-radius: var(--radius-pill);
   color: var(--meta);

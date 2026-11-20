@@ -226,7 +226,6 @@ describe("compose volumes notice", () => {
         application: composeApp(),
         latest: null,
         deployments: [],
-        pipelineSteps: [],
         descColumns: 2,
         acting: false,
       },

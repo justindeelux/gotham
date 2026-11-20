@@ -20,6 +20,7 @@ import { durationText } from "@/features/applications/utils/deploymentDuration";
 import type { Deployment } from "@/features/applications/api/applications";
 import { pipelineStepsFor } from "@/features/applications/utils/deployPipeline";
 import ApplicationOverviewTab from "@/features/applications/components/ApplicationOverviewTab.vue";
+import ApplicationDeployPipeline from "@/features/applications/components/ApplicationDeployPipeline.vue";
 import StorageEditor from "@/features/applications/components/StorageEditor.vue";
 import ApplicationDomainPanel from "@/features/applications/components/ApplicationDomainPanel.vue";
 import { checkCatalogParity } from "@/shared/i18n/catalog";
@@ -443,7 +444,6 @@ describe("deploy pipeline labels", () => {
         application,
         latest,
         deployments: [latest],
-        pipelineSteps: pipelineStepsFor(latest),
         descColumns: 2,
         acting: false,
       },
@@ -451,9 +451,16 @@ describe("deploy pipeline labels", () => {
     });
   }
 
+  function mountPipeline(latest: Deployment) {
+    return mount(ApplicationDeployPipeline, {
+      props: { latest, steps: pipelineStepsFor(latest) },
+      global: { plugins: [i18n] },
+    });
+  }
+
   it("renders running steps in English, then Vietnamese, keeping raw names", async () => {
     const latest = deployment({ state: "running" });
-    const wrapper = mountOverview(latest);
+    const wrapper = mountPipeline(latest);
     const steps = pipelineStepsFor(latest);
     expect(steps.every((step) => step.mood === "is-done")).toBe(true);
     expect(wrapper.text()).toContain("building");
@@ -469,24 +476,35 @@ describe("deploy pipeline labels", () => {
     wrapper.unmount();
   });
 
+  it("marks only the in-progress step as the current step", () => {
+    const latest = deployment({ state: "building" });
+    const wrapper = mountPipeline(latest);
+    const current = wrapper.findAll('[aria-current="step"]');
+    expect(current).toHaveLength(1);
+    expect(current[0].text()).toContain("building");
+    wrapper.unmount();
+  });
+
   it("renders the failed terminal node in both locales without marking stages done", async () => {
     const latest = deployment({ state: "failed", error: "build failed: exit status 1" });
-    const wrapper = mountOverview(latest);
+    const wrapper = mountPipeline(latest);
     const steps = pipelineStepsFor(latest);
     expect(steps.every((step) => step.mood !== "is-done")).toBe(true);
     expect(steps[steps.length - 1]).toEqual({ name: "failed", mood: "is-failed" });
     expect(wrapper.text()).toContain("failed");
-    expect(wrapper.text()).toContain("build failed: exit status 1");
+    const overview = mountOverview(latest);
+    expect(overview.text()).toContain("build failed: exit status 1");
     setLocale("vi", null);
     await wrapper.vm.$nextTick();
     expect(wrapper.text()).toContain("thất bại");
-    expect(wrapper.text()).toContain("build failed: exit status 1");
+    expect(overview.text()).toContain("build failed: exit status 1");
     wrapper.unmount();
+    overview.unmount();
   });
 
   it("renders rollback steps with skipped stages in both locales", async () => {
     const latest = deployment({ kind: "rollback", state: "starting" });
-    const wrapper = mountOverview(latest);
+    const wrapper = mountPipeline(latest);
     const names = pipelineStepsFor(latest).map((step) => step.name);
     expect(names).not.toContain("cloning");
     expect(names).not.toContain("building");
@@ -500,7 +518,7 @@ describe("deploy pipeline labels", () => {
 
   it("renders the queued first stage in both locales", async () => {
     const latest = deployment({ state: "queued" });
-    const wrapper = mountOverview(latest);
+    const wrapper = mountPipeline(latest);
     expect(wrapper.text()).toContain("queued");
     setLocale("vi", null);
     await wrapper.vm.$nextTick();

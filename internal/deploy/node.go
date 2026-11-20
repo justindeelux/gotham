@@ -50,7 +50,7 @@ type Node interface {
 	Build(ctx context.Context, meta BuildMeta, contextTar []byte, log func([]byte)) (BuildOutcome, error)
 	Pull(ctx context.Context, image string) error
 	PullWithAuth(ctx context.Context, image, username, password string) (string, error)
-	ComposeUp(ctx context.Context, projectName string, composeYAML []byte, deploymentID string) error
+	ComposeUp(ctx context.Context, projectName string, composeYAML []byte) error
 	ComposeValidate(ctx context.Context, projectName string, composeYAML []byte) (services []string, enforced bool, err error)
 	ComposeDown(ctx context.Context, projectName string, composeYAML []byte, removeVolumes bool) ([]string, error)
 	ComposePs(ctx context.Context, projectName string) ([]ComposeContainer, error)
@@ -208,7 +208,7 @@ func (n *agentNode) PullWithAuth(ctx context.Context, image, username, password 
 	return response.GetDigest(), nil
 }
 
-func (n *agentNode) ComposeUp(ctx context.Context, projectName string, composeYAML []byte, deploymentID string) error {
+func (n *agentNode) ComposeUp(ctx context.Context, projectName string, composeYAML []byte) error {
 	if strings.TrimSpace(projectName) == "" {
 		return fmt.Errorf("%w: compose project name is required", ErrValidation)
 	}
@@ -216,10 +216,10 @@ func (n *agentNode) ComposeUp(ctx context.Context, projectName string, composeYA
 		return fmt.Errorf("%w: compose document is required", ErrValidation)
 	}
 	_, err := n.compose.ComposeUp(ctx, &agentv1.ComposeUpRequest{
-		ProjectName:  projectName,
-		ComposeYaml:  composeYAML,
-		Unconfined:   false,
-		DeploymentId: deploymentID,
+		ProjectName: projectName,
+		ComposeYaml: composeYAML,
+		Unconfined:  false,
+		Managed:     true,
 	})
 	if err != nil {
 		return mapRPCError(err)

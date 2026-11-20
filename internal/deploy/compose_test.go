@@ -1015,9 +1015,6 @@ func TestOrchestratorComposePastedHappyPath(t *testing.T) {
 	if node.composeUpCalls != 1 {
 		t.Fatalf("compose up calls = %d, want 1", node.composeUpCalls)
 	}
-	if len(node.composeDeploymentIDs) != 1 || node.composeDeploymentIDs[0] != dep.ID.String() {
-		t.Errorf("compose up deployment ids = %v, want %s", node.composeDeploymentIDs, dep.ID)
-	}
 	if len(node.composeDocuments) != 1 {
 		t.Fatalf("compose documents = %d, want 1", len(node.composeDocuments))
 	}

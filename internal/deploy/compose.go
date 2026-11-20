@@ -394,7 +394,7 @@ func (o *Orchestrator) pushCompose(ctx context.Context, st *runState) error {
 				": " + truncateError(services.RedactError(err, st.composeEnv)))
 		}
 	}
-	if err := st.node.ComposeUp(ctx, project, []byte(st.composeYAML), st.dep.ID.String()); err != nil {
+	if err := st.node.ComposeUp(ctx, project, []byte(st.composeYAML)); err != nil {
 		return services.RedactError(err, st.composeEnv)
 	}
 	st.log("compose project up")

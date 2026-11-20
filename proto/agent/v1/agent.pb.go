@@ -11169,11 +11169,12 @@ type ComposeUpRequest struct {
 	// like ComposeValidateRequest.unconfined. The deploy control plane leaves
 	// it unset for application projects; service projects set it.
 	Unconfined bool `protobuf:"varint,4,opt,name=unconfined,proto3" json:"unconfined,omitempty"`
-	// deployment_id is the deployment these containers belong to. When it is
-	// set, the agent labels every service with the ownership labels
-	// (gotham.managed, gotham.app_id, gotham.deployment_id) so resource
-	// samples are attributed to the application. Unset for service projects.
-	DeploymentId  string `protobuf:"bytes,5,opt,name=deployment_id,json=deploymentId,proto3" json:"deployment_id,omitempty"`
+	// managed asks the agent to label every service of the project with the
+	// ownership labels (gotham.managed, gotham.app_id) through a generated
+	// compose override, so resource samples are attributed to the application.
+	// The deploy control plane sets it for application projects; service
+	// projects leave it unset.
+	Managed       bool `protobuf:"varint,5,opt,name=managed,proto3" json:"managed,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
 }
@@ -11236,11 +11237,11 @@ func (x *ComposeUpRequest) GetUnconfined() bool {
 	return false
 }
 
-func (x *ComposeUpRequest) GetDeploymentId() string {
+func (x *ComposeUpRequest) GetManaged() bool {
 	if x != nil {
-		return x.DeploymentId
+		return x.Managed
 	}
-	return ""
+	return false
 }
 
 // ComposeUpResponse is empty: the observable result of an up is the project's
@@ -14263,15 +14264,15 @@ const file_agent_v1_agent_proto_rawDesc = "" +
 	"\x17ComposeValidateResponse\x12\x1a\n" +
 	"\bservices\x18\x01 \x03(\tR\bservices\x12\x18\n" +
 	"\avolumes\x18\x02 \x03(\tR\avolumes\x12+\n" +
-	"\x11confined_enforced\x18\x03 \x01(\bR\x10confinedEnforced\"\xb7\x01\n" +
+	"\x11confined_enforced\x18\x03 \x01(\bR\x10confinedEnforced\"\xac\x01\n" +
 	"\x10ComposeUpRequest\x12!\n" +
 	"\fproject_name\x18\x01 \x01(\tR\vprojectName\x12!\n" +
 	"\fcompose_yaml\x18\x02 \x01(\fR\vcomposeYaml\x12\x18\n" +
 	"\arestart\x18\x03 \x01(\bR\arestart\x12\x1e\n" +
 	"\n" +
 	"unconfined\x18\x04 \x01(\bR\n" +
-	"unconfined\x12#\n" +
-	"\rdeployment_id\x18\x05 \x01(\tR\fdeploymentId\"\x13\n" +
+	"unconfined\x12\x18\n" +
+	"\amanaged\x18\x05 \x01(\bR\amanaged\"\x13\n" +
 	"\x11ComposeUpResponse\"\xa1\x01\n" +
 	"\x12ComposeDownRequest\x12!\n" +
 	"\fproject_name\x18\x01 \x01(\tR\vprojectName\x12!\n" +

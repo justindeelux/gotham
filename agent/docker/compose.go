@@ -1,7 +1,6 @@
 package docker
 
 import (
-	"bytes"
 	"context"
 	"encoding/json"
 	"errors"
@@ -18,7 +17,6 @@ import (
 	"sync"
 	"time"
 
-	"github.com/google/uuid"
 	"github.com/justindeelux/gotham/agent/proxy"
 	"github.com/justindeelux/gotham/composeguard"
 	agentv1 "github.com/justindeelux/gotham/proto/agent/v1"
@@ -29,10 +27,11 @@ import (
 )
 
 const (
-	DefaultComposeRoot    = "/var/lib/gotham-agent/compose"
-	defaultComposeBinary  = "docker"
-	composeFileName       = "compose.yaml"
-	defaultComposeTimeout = 10 * time.Minute
+	DefaultComposeRoot      = "/var/lib/gotham-agent/compose"
+	defaultComposeBinary    = "docker"
+	composeFileName         = "compose.yaml"
+	composeOverrideFileName = "compose.gotham.yaml"
+	defaultComposeTimeout   = 10 * time.Minute
 )
 
 const (
@@ -179,8 +178,9 @@ func (s *ComposeServer) ComposeUp(ctx context.Context, req *agentv1.ComposeUpReq
 	}
 	// The ownership labels are generated here, after the document passed the
 	// reserved-label guards, so an application compose file can never set them
-	// itself.
-	if err := s.writeOwnershipLabels(project, req.GetComposeYaml(), req.GetDeploymentId()); err != nil {
+	// itself. They live in an override file, so labels a service inherits
+	// through a YAML merge key survive the compose merge.
+	if err := s.writeOwnershipOverride(project, req.GetComposeYaml(), req.GetManaged()); err != nil {
 		return nil, err
 	}
 	if _, err := s.configList(ctx, project, "--services"); err != nil {
@@ -192,145 +192,76 @@ func (s *ComposeServer) ComposeUp(ctx context.Context, req *agentv1.ComposeUpReq
 	} else {
 		args = []string{"up", "-d", "--remove-orphans"}
 	}
-	if _, err := s.run(ctx, project, args...); err != nil {
+	if _, err := s.runWithFiles(ctx, project, s.upFiles(project), args...); err != nil {
 		return nil, composeError("up", err)
 	}
 	s.log.Info("compose: project up", "project", project, "restart", req.GetRestart())
 	return &agentv1.ComposeUpResponse{}, nil
 }
 
-const composeProjectPrefix = "gotham-"
-
-// writeOwnershipLabels rewrites the project's compose file so every service
-// carries the ownership labels resource samples and container sweeps key on.
-// The labels are generated after the document passed the reserved-label
-// guards, so an application compose file can never set them itself. A request
-// without a deployment id keeps the document unchanged: service projects and
-// older control planes send none.
-func (s *ComposeServer) writeOwnershipLabels(project string, document []byte, deploymentID string) error {
-	deploymentID = strings.TrimSpace(deploymentID)
-	if deploymentID == "" {
+// writeOwnershipOverride keeps the ownership labels out of the user document:
+// a second file merges them into every service, so labels a service inherits
+// through a YAML merge key, or declares as null, still apply. Service projects
+// and older control planes leave the request unmanaged and get no override.
+func (s *ComposeServer) writeOwnershipOverride(project string, document []byte, managed bool) error {
+	if !managed {
+		if err := os.Remove(s.overrideFile(project)); err != nil && !errors.Is(err, os.ErrNotExist) {
+			return status.Errorf(codes.Internal, "up: remove ownership override: %v", err)
+		}
 		return nil
 	}
-	if _, err := uuid.Parse(deploymentID); err != nil {
-		return status.Errorf(codes.InvalidArgument, "up: deployment_id is not a UUID")
-	}
-	labels := map[string]string{
-		"gotham.managed":       "true",
-		"gotham.app_id":        strings.TrimPrefix(project, composeProjectPrefix),
-		"gotham.deployment_id": deploymentID,
-	}
-	labeled, err := composeDocumentWithLabels(document, labels)
+	override, err := composeOwnershipOverride(document, strings.TrimPrefix(project, composeProjectPrefix))
 	if err != nil {
 		return status.Errorf(codes.InvalidArgument, "up: %v", err)
 	}
-	return s.writeDocument(project, labeled)
+	return s.writeComposeFile(project, composeOverrideFileName, override)
 }
 
-// composeDocumentWithLabels adds the labels to every service, keeping the
-// labels a service already declares.
-func composeDocumentWithLabels(document []byte, labels map[string]string) ([]byte, error) {
-	var root yaml.Node
-	if err := yaml.Unmarshal(document, &root); err != nil {
+// composeOwnershipOverride labels every service of the document. The labels
+// are static, so redeploying the same document keeps every service's compose
+// config hash unchanged and recreates nothing.
+func composeOwnershipOverride(document []byte, appID string) ([]byte, error) {
+	var doc struct {
+		Services map[string]any `yaml:"services"`
+	}
+	if err := yaml.Unmarshal(document, &doc); err != nil {
 		return nil, fmt.Errorf("compose document is not valid YAML: %v", err)
 	}
-	if len(root.Content) == 0 || root.Content[0].Kind != yaml.MappingNode {
-		return nil, fmt.Errorf("compose document is not a mapping")
-	}
-	services := composeMappingValue(root.Content[0], "services")
-	if services == nil || services.Kind != yaml.MappingNode {
+	if len(doc.Services) == 0 {
 		return nil, fmt.Errorf("compose document declares no services")
 	}
-	keys := make([]string, 0, len(labels))
-	for key := range labels {
-		keys = append(keys, key)
+	names := make([]string, 0, len(doc.Services))
+	for name := range doc.Services {
+		names = append(names, name)
 	}
-	sort.Strings(keys)
-	for index := 0; index+1 < len(services.Content); index += 2 {
-		service := services.Content[index+1]
-		if service.Kind == yaml.AliasNode && service.Alias != nil {
-			service = service.Alias
+	sort.Strings(names)
+	services := make(map[string]any, len(names))
+	for _, name := range names {
+		services[name] = map[string]any{
+			"labels": map[string]any{
+				"gotham.app_id":  appID,
+				"gotham.managed": "true",
+			},
 		}
-		if service.Kind != yaml.MappingNode {
-			return nil, fmt.Errorf("compose service %q is not a mapping", services.Content[index].Value)
-		}
-		setComposeLabels(service, labels, keys)
 	}
-	var buf bytes.Buffer
-	encoder := yaml.NewEncoder(&buf)
-	encoder.SetIndent(2)
-	if err := encoder.Encode(&root); err != nil {
-		return nil, fmt.Errorf("render compose document: %v", err)
+	out, err := yaml.Marshal(map[string]any{"services": services})
+	if err != nil {
+		return nil, fmt.Errorf("render compose override: %v", err)
 	}
-	if err := encoder.Close(); err != nil {
-		return nil, fmt.Errorf("render compose document: %v", err)
-	}
-	return buf.Bytes(), nil
+	return out, nil
 }
 
-func setComposeLabels(service *yaml.Node, labels map[string]string, keys []string) {
-	entry := composeMappingValue(service, "labels")
-	if entry != nil && entry.Kind == yaml.AliasNode && entry.Alias != nil {
-		entry = entry.Alias
+// upFiles adds the ownership override to the files compose reads for up. Only
+// up needs it: the labels are baked into the containers it creates.
+func (s *ComposeServer) upFiles(project string) []string {
+	files := []string{s.composeFile(project)}
+	if _, err := os.Stat(s.overrideFile(project)); err == nil {
+		files = append(files, s.overrideFile(project))
 	}
-	switch {
-	case entry == nil:
-		mapping := &yaml.Node{Kind: yaml.MappingNode, Tag: "!!map"}
-		for _, key := range keys {
-			mapping.Content = append(mapping.Content,
-				&yaml.Node{Kind: yaml.ScalarNode, Tag: "!!str", Value: key},
-				&yaml.Node{Kind: yaml.ScalarNode, Tag: "!!str", Value: labels[key]})
-		}
-		service.Content = append(service.Content,
-			&yaml.Node{Kind: yaml.ScalarNode, Tag: "!!str", Value: "labels"}, mapping)
-	case entry.Kind == yaml.MappingNode:
-		for _, key := range keys {
-			setComposeMappingValue(entry, key, labels[key])
-		}
-	case entry.Kind == yaml.SequenceNode:
-		for _, key := range keys {
-			if composeLabelListed(entry, key) {
-				continue
-			}
-			entry.Content = append(entry.Content,
-				&yaml.Node{Kind: yaml.ScalarNode, Tag: "!!str", Value: key + "=" + labels[key]})
-		}
-	}
+	return files
 }
 
-func composeLabelListed(entries *yaml.Node, key string) bool {
-	for _, entry := range entries.Content {
-		label, _, _ := strings.Cut(entry.Value, "=")
-		if strings.TrimSpace(label) == key {
-			return true
-		}
-	}
-	return false
-}
-
-func composeMappingValue(node *yaml.Node, key string) *yaml.Node {
-	if node == nil || node.Kind != yaml.MappingNode {
-		return nil
-	}
-	for index := 0; index+1 < len(node.Content); index += 2 {
-		if node.Content[index].Value == key {
-			return node.Content[index+1]
-		}
-	}
-	return nil
-}
-
-func setComposeMappingValue(node *yaml.Node, key, value string) {
-	scalar := &yaml.Node{Kind: yaml.ScalarNode, Tag: "!!str", Value: value}
-	for index := 0; index+1 < len(node.Content); index += 2 {
-		if node.Content[index].Value == key {
-			node.Content[index+1] = scalar
-			return
-		}
-	}
-	node.Content = append(node.Content,
-		&yaml.Node{Kind: yaml.ScalarNode, Tag: "!!str", Value: key}, scalar)
-}
+const composeProjectPrefix = "gotham-"
 
 func (s *ComposeServer) ComposeDown(ctx context.Context, req *agentv1.ComposeDownRequest) (*agentv1.ComposeDownResponse, error) {
 	project, release, err := s.prepare(ctx, req.GetProjectName(), req.GetComposeYaml(), req.GetUnconfined())
@@ -475,7 +406,7 @@ func (s *ComposeServer) ComposeLogs(req *agentv1.ComposeLogsRequest, stream grpc
 		commandCtx, cancelTimeout = context.WithTimeout(commandCtx, timeout)
 		defer cancelTimeout()
 	}
-	command := s.newCommand(commandCtx, project, args...)
+	command := s.newCommand(commandCtx, project, nil, args...)
 	stdout, err := command.StdoutPipe()
 	if err != nil {
 		return status.Errorf(codes.Internal, "logs: %v", err)
@@ -663,12 +594,16 @@ func (s *ComposeServer) ensureManagedVolumeDirs(project string, document []byte)
 }
 
 func (s *ComposeServer) writeDocument(project string, composeYAML []byte) error {
+	return s.writeComposeFile(project, composeFileName, composeYAML)
+}
+
+func (s *ComposeServer) writeComposeFile(project, name string, content []byte) error {
 	dir, err := proxy.OpenTrustedDir(filepath.Join(s.root, project), true)
 	if err != nil {
 		return status.Errorf(codes.Internal, "compose directory: %v", err)
 	}
 	defer func() { _ = dir.Close() }()
-	if err := proxy.WriteFileInDir(dir, composeFileName, composeYAML, 0o600); err != nil {
+	if err := proxy.WriteFileInDir(dir, name, content, 0o600); err != nil {
 		return status.Errorf(codes.Internal, "write compose file: %v", err)
 	}
 	return nil
@@ -694,7 +629,11 @@ func (s *ComposeServer) configList(ctx context.Context, project string, flag str
 }
 
 func (s *ComposeServer) run(ctx context.Context, project string, args ...string) ([]byte, error) {
-	command, cancel := s.command(ctx, project, s.timeout, args...)
+	return s.runWithFiles(ctx, project, nil, args...)
+}
+
+func (s *ComposeServer) runWithFiles(ctx context.Context, project string, files []string, args ...string) ([]byte, error) {
+	command, cancel := s.commandWithFiles(ctx, project, files, s.timeout, args...)
 	defer cancel()
 	verb := firstArg(args)
 	parsed := verb == "config" || verb == "ps"
@@ -752,16 +691,27 @@ func (b *boundedBuffer) Bytes() []byte { return b.buf }
 
 func (b *boundedBuffer) Overflowed() bool { return b.overflow }
 
-func (s *ComposeServer) command(ctx context.Context, project string, timeout time.Duration, args ...string) (*exec.Cmd, context.CancelFunc) {
+func (s *ComposeServer) commandWithFiles(ctx context.Context, project string, files []string, timeout time.Duration, args ...string) (*exec.Cmd, context.CancelFunc) {
 	if timeout > 0 {
 		ctx, cancel := context.WithTimeout(ctx, timeout)
-		return s.newCommand(ctx, project, args...), cancel
+		return s.newCommand(ctx, project, files, args...), cancel
 	}
-	return s.newCommand(ctx, project, args...), func() {}
+	return s.newCommand(ctx, project, files, args...), func() {}
 }
 
-func (s *ComposeServer) newCommand(ctx context.Context, project string, args ...string) *exec.Cmd {
-	full := append([]string{"compose", "-f", s.composeFile(project), "-p", project}, args...)
+// newCommand names the compose files explicitly. An empty list reads the
+// project's main file only; up adds the generated ownership override.
+func (s *ComposeServer) newCommand(ctx context.Context, project string, files []string, args ...string) *exec.Cmd {
+	if len(files) == 0 {
+		files = []string{s.composeFile(project)}
+	}
+	full := make([]string, 0, 2*len(files)+3+len(args))
+	full = append(full, "compose")
+	for _, file := range files {
+		full = append(full, "-f", file)
+	}
+	full = append(full, "-p", project)
+	full = append(full, args...)
 	command := exec.CommandContext(ctx, s.binary, full...)
 	command.Dir = filepath.Join(s.root, project)
 	if s.dockerHost != "" {
@@ -773,6 +723,10 @@ func (s *ComposeServer) newCommand(ctx context.Context, project string, args ...
 
 func (s *ComposeServer) composeFile(project string) string {
 	return filepath.Join(s.root, project, composeFileName)
+}
+
+func (s *ComposeServer) overrideFile(project string) string {
+	return filepath.Join(s.root, project, composeOverrideFileName)
 }
 
 func validateComposeProject(name string) (string, error) {

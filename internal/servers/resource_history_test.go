@@ -174,8 +174,8 @@ func TestBuildResourceSampleRowsGroupsComposeServices(t *testing.T) {
 		Inventory: ContainerInventory{
 			Complete: true,
 			Containers: []ContainerObservation{
-				{ID: web, Managed: true, State: "running", AppID: appID.String(), ComposeService: "web", DeploymentID: "d1", Replica: "1"},
-				{ID: worker, Managed: true, State: "running", AppID: appID.String(), ComposeService: "worker", DeploymentID: "d1", Replica: "1"},
+				{ID: web, Managed: true, State: "running", AppID: appID.String(), ComposeService: "web", Replica: "1"},
+				{ID: worker, Managed: true, State: "running", AppID: appID.String(), ComposeService: "worker", Replica: "1"},
 				// A compose container without the Gotham labels is not owned.
 				{ID: unlabeled, Managed: false, State: "running", ComposeService: "db", Replica: "1"},
 			},
@@ -197,8 +197,8 @@ func TestBuildResourceSampleRowsGroupsComposeServices(t *testing.T) {
 		if row.ResourceType != ResourceTypeApplication || row.ApplicationID.Bytes != appID {
 			t.Errorf("ownership = %s %v", row.ResourceType, row.ApplicationID)
 		}
-		if row.DeploymentID != "d1" {
-			t.Errorf("deployment = %q, want d1", row.DeploymentID)
+		if row.DeploymentID != "" {
+			t.Errorf("deployment = %q, want empty for compose containers", row.DeploymentID)
 		}
 		services[row.Service] = true
 	}

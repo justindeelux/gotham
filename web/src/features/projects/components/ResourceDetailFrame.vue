@@ -31,8 +31,8 @@ const props = withDefaults(
 <template>
   <NSpace vertical :size="16">
     <ProjectBreadcrumb v-if="props.breadcrumbs" v-bind="props.breadcrumbs" />
-    <nav v-else class="breadcrumb" :aria-label="props.breadcrumbLabel">
-      <span class="muted mono">{{ props.fallbackId }}</span>
+    <nav v-else class="crumb-trail" :aria-label="props.breadcrumbLabel">
+      <span>{{ props.fallbackId }}</span>
     </nav>
 
     <NSpin :show="props.loading">
@@ -59,22 +59,6 @@ const props = withDefaults(
 </template>
 
 <style scoped>
-.breadcrumb {
-  display: flex;
-  align-items: center;
-  gap: var(--space-2);
-  margin-bottom: var(--space-2);
-  font-size: var(--text-xs);
-}
-
-.muted {
-  color: var(--muted);
-}
-
-.mono {
-  font-family: var(--font-mono);
-}
-
 .frame-alert {
   margin-bottom: var(--space-3);
 }

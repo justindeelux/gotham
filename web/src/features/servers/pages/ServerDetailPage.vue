@@ -158,10 +158,10 @@ onMounted(() => {
 
 <template>
   <NSpace vertical :size="16">
-    <nav class="breadcrumb" :aria-label="$t('servers.detail.breadcrumbNav')">
+    <nav class="crumb-trail" :aria-label="$t('servers.detail.breadcrumbNav')">
       <RouterLink to="/servers">{{ $t("servers.detail.serversBreadcrumb") }}</RouterLink>
-      <span class="breadcrumb__sep">/</span>
-      <span class="muted">{{ server?.name ?? serverId }}</span>
+      <span class="crumb-trail__sep">/</span>
+      <span>{{ server?.name ?? serverId }}</span>
     </nav>
 
     <NSpin :show="loading">
@@ -285,21 +285,6 @@ onMounted(() => {
 </template>
 
 <style scoped>
-.breadcrumb {
-  display: flex;
-  align-items: center;
-  gap: var(--space-2);
-  font-size: var(--text-xs);
-}
-
-.breadcrumb__sep {
-  color: var(--meta);
-}
-
-.muted {
-  color: var(--muted);
-}
-
 .server-terminal {
   display: flex;
   flex-direction: column;

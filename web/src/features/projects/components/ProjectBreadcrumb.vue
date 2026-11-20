@@ -61,9 +61,9 @@ const crumbs = computed<Crumb[]>(() => {
 </script>
 
 <template>
-  <nav class="breadcrumb" :aria-label="landmarkLabel">
+  <nav class="crumb-trail" :aria-label="landmarkLabel">
     <template v-for="(crumb, index) in crumbs" :key="`${crumb.label}-${index}`">
-      <span v-if="index > 0" class="sep" aria-hidden="true">/</span>
+      <span v-if="index > 0" class="crumb-trail__sep" aria-hidden="true">/</span>
       <RouterLink
         v-if="crumb.to && !crumb.current"
         class="link"
@@ -80,23 +80,6 @@ const crumbs = computed<Crumb[]>(() => {
 </template>
 
 <style scoped>
-.breadcrumb {
-  display: flex;
-  align-items: center;
-  gap: var(--space-2);
-  font-family: var(--font-mono);
-  font-size: 11px;
-  letter-spacing: 0.08em;
-  text-transform: uppercase;
-  color: var(--muted);
-  margin: 0 0 var(--space-2);
-  min-width: 0;
-}
-
-.sep {
-  color: var(--meta);
-}
-
 .link {
   color: var(--muted);
   text-decoration: none;

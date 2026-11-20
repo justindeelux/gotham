@@ -5,10 +5,7 @@ import type { Component } from "vue";
 import { useI18n } from "vue-i18n";
 
 import type { Deployment, DeploymentState } from "@/features/applications/api/applications";
-import DeploymentStatusTag from "@/features/applications/components/DeploymentStatusTag.vue";
 import type { PipelineStep } from "@/features/applications/utils/deployPipeline";
-import { commitLineText } from "@/features/applications/utils/deploymentCommit";
-import { durationText } from "@/features/applications/utils/deploymentDuration";
 
 interface Props {
   latest: Deployment | null;
@@ -42,6 +39,7 @@ const stepIcons: Record<DeploymentState, Component> = {
         :aria-current="step.mood === 'is-active' ? 'step' : undefined"
       >
         <span class="step__line" aria-hidden="true" />
+        <span class="step__body">
         <span class="step__node">
           <NIcon :size="14" aria-hidden="true">
             <Check v-if="step.mood === 'is-done'" :stroke-width="2.4" />
@@ -55,20 +53,9 @@ const stepIcons: Record<DeploymentState, Component> = {
           </NIcon>
         </span>
         <span class="step__label">{{ t(`applications.status.${step.name}`) }}</span>
+        </span>
       </li>
     </ol>
-    <div class="pipeline-bar__meta">
-      <div class="pipeline-bar__row">
-        <DeploymentStatusTag :state="props.latest.state" />
-        <span class="mono meta-id">#{{ props.latest.id.slice(0, 8) }}</span>
-        <span class="mono" :title="t('applications.overview.duration')">
-          {{ durationText(props.latest) }}
-        </span>
-      </div>
-      <div class="mono meta-commit" :title="props.latest.commit_sha ?? ''">
-        {{ commitLineText(props.latest.commit_sha, props.latest.commit_message) }}
-      </div>
-    </div>
   </div>
 </template>
 
@@ -99,7 +86,7 @@ const stepIcons: Record<DeploymentState, Component> = {
 
 .step {
   display: flex;
-  align-items: center;
+  align-items: flex-start;
   gap: var(--space-2);
   flex: 1 0 auto;
   min-width: 0;
@@ -113,7 +100,17 @@ const stepIcons: Record<DeploymentState, Component> = {
   flex-grow: 0;
 }
 
+.step__body {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: var(--space-1);
+  flex: 0 0 auto;
+}
+
 .step__line {
+  align-self: flex-start;
+  margin-top: calc(var(--space-6) / 2);
   flex: 1 1 var(--space-6);
   min-width: var(--space-4);
   height: 1px;
@@ -186,40 +183,6 @@ const stepIcons: Record<DeploymentState, Component> = {
   color: var(--danger-ink);
 }
 
-.pipeline-bar__meta {
-  display: flex;
-  flex-direction: column;
-  gap: var(--space-1);
-  flex: 0 0 auto;
-  min-width: 0;
-  padding-left: var(--space-4);
-  border-left: 1px solid var(--border);
-}
-
-.pipeline-bar__row {
-  display: flex;
-  align-items: center;
-  gap: var(--space-2);
-  font-size: var(--text-xs);
-}
-
-.mono {
-  font-family: var(--font-mono);
-  color: var(--muted);
-}
-
-.meta-id {
-  color: var(--fg);
-}
-
-.meta-commit {
-  max-width: 34ch;
-  overflow: hidden;
-  font-size: var(--text-xs);
-  white-space: nowrap;
-  text-overflow: ellipsis;
-}
-
 @keyframes pipeline-ring {
   0%,
   100% {
@@ -237,10 +200,6 @@ const stepIcons: Record<DeploymentState, Component> = {
 }
 
 @media (max-width: 900px) {
-  .pipeline-bar__meta {
-    display: none;
-  }
-
   .step__label {
     display: none;
   }

@@ -6,7 +6,6 @@ import { useI18n } from "vue-i18n";
 import ResourceBackupsTab from "@/features/backups/components/ResourceBackupsTab.vue";
 import ApplicationContainersTab from "@/features/applications/components/ApplicationContainersTab.vue";
 import ApplicationDeleteDialog from "@/features/applications/components/ApplicationDeleteDialog.vue";
-import ApplicationDeployPipeline from "@/features/applications/components/ApplicationDeployPipeline.vue";
 import ApplicationDeploymentsTab from "@/features/applications/components/ApplicationDeploymentsTab.vue";
 import ApplicationEnvTab from "@/features/applications/components/ApplicationEnvTab.vue";
 import ApplicationFilesTab from "@/features/applications/components/ApplicationFilesTab.vue";
@@ -136,29 +135,23 @@ const activeTab = computed<string>({
     </template>
 
     <template #header>
-      <NSpace vertical :size="16">
-        <ApplicationHeader
-          :display-name="detail.displayName.value"
-          :app-id="detail.appId.value"
-          :brand="detail.brand.value"
-          :latest="detail.latest.value"
-          :container-stopped="detail.containerStopped.value"
-          :active-deploying="detail.active.value !== null"
-          :can-rollback="detail.runningDeployments.value.length > 0"
-          :acting="detail.appsStore.acting"
-          :control-hint="detail.controlHint.value"
-          :container-is-running="detail.containerIsRunning.value"
-          :can-write="detail.canWrite.value"
-          @deploy="detail.handleDeploy"
-          @rollback="detail.openRollback"
-          @stop="detail.handleStop"
-          @start="detail.handleStart"
-        />
-        <ApplicationDeployPipeline
-          :latest="detail.latest.value"
-          :steps="detail.pipelineSteps.value"
-        />
-      </NSpace>
+      <ApplicationHeader
+        :display-name="detail.displayName.value"
+        :app-id="detail.appId.value"
+        :brand="detail.brand.value"
+        :latest="detail.latest.value"
+        :container-stopped="detail.containerStopped.value"
+        :active-deploying="detail.active.value !== null"
+        :can-rollback="detail.runningDeployments.value.length > 0"
+        :acting="detail.appsStore.acting"
+        :control-hint="detail.controlHint.value"
+        :container-is-running="detail.containerIsRunning.value"
+        :can-write="detail.canWrite.value"
+        @deploy="detail.handleDeploy"
+        @rollback="detail.openRollback"
+        @stop="detail.handleStop"
+        @start="detail.handleStart"
+      />
     </template>
 
     <NTabs v-model:value="activeTab" type="line" animated>
@@ -166,6 +159,7 @@ const activeTab = computed<string>({
         <ApplicationOverviewTab
           :application="detail.application.value"
           :latest="detail.latest.value"
+          :pipeline-steps="detail.pipelineSteps.value"
           :deployments="detail.deployments.value"
           :desc-columns="detail.descColumns.value"
           :acting="detail.appsStore.acting"

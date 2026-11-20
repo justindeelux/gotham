@@ -518,6 +518,8 @@ const vi: ApplicationsMessages = {
       "Dockerfile Gotham build ở lần triển khai kế tiếp. Biến môi trường, nhãn và mạng được thêm khi container chạy, không nằm trong tệp này.",
     copy: "Sao chép",
     copied: "Đã sao chép",
+    expand: "Mở rộng",
+    collapse: "Thu gọn",
     empty:
       "Ứng dụng này không có Dockerfile hay tệp compose: ứng dụng dùng image dựng sẵn hoặc được build bởi build pack.",
     loadError: "Không đọc được mã nguồn triển khai.",

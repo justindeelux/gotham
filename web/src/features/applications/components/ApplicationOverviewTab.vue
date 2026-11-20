@@ -12,11 +12,13 @@ import { computed } from "vue";
 import { useI18n } from "vue-i18n";
 
 import type { Application, Deployment } from "@/features/applications/api/applications";
+import ApplicationDeployPipeline from "@/features/applications/components/ApplicationDeployPipeline.vue";
 import ApplicationSourceViewer from "@/features/applications/components/ApplicationSourceViewer.vue";
 import ComposeEditor from "@/features/applications/components/ComposeEditor.vue";
 import DeploymentHistoryTable from "@/features/applications/components/DeploymentHistoryTable.vue";
 import DockerfileEditor from "@/features/applications/components/DockerfileEditor.vue";
 import GitPrivateSourcePanel from "@/features/applications/components/GitPrivateSourcePanel.vue";
+import type { PipelineStep } from "@/features/applications/utils/deployPipeline";
 import { commitLineText } from "@/features/applications/utils/deploymentCommit";
 import { durationText } from "@/features/applications/utils/deploymentDuration";
 import { relativeTime } from "@/shared/utils/format";
@@ -24,6 +26,7 @@ import { relativeTime } from "@/shared/utils/format";
 interface Props {
   application: Application | null;
   latest: Deployment | null;
+  pipelineSteps: PipelineStep[];
   deployments: Deployment[];
   descColumns: number;
   acting: boolean;
@@ -68,6 +71,7 @@ const isCompose = computed<boolean>(() => props.application?.source_type === "co
 
 <template>
   <NSpace vertical :size="16" style="margin-top: 16px">
+    <ApplicationDeployPipeline :latest="props.latest" :steps="props.pipelineSteps" />
     <GitPrivateSourcePanel
       v-if="props.application?.source_type === 'git_private'"
       :application-id="props.application.id"

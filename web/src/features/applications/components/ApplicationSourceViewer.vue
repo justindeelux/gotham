@@ -4,11 +4,13 @@ import {
   NButton,
   NCard,
   NEmpty,
+  NIcon,
   NRadioButton,
   NRadioGroup,
   NSpace,
   NText,
 } from "naive-ui";
+import { ChevronDown, ChevronRight } from "@lucide/vue";
 import { useClipboard } from "@vueuse/core";
 import { computed, onMounted, ref, watch } from "vue";
 import { useI18n } from "vue-i18n";
@@ -31,6 +33,7 @@ const { copy, copied } = useClipboard({ legacy: true });
 
 type SourceView = "raw" | "deployable";
 
+const expanded = ref(false);
 const view = ref<SourceView>("raw");
 const source = ref<ApplicationSource | null>(null);
 const loading = ref(false);
@@ -78,10 +81,25 @@ function copySource(): void {
 <template>
   <NCard :title="t('applications.source.title')">
     <template #header-extra>
-      <NButton v-if="hasSource" size="small" secondary @click="copySource">
-        {{ copied ? t("applications.source.copied") : t("applications.source.copy") }}
-      </NButton>
+      <NSpace :size="8" align="center">
+        <NButton v-if="hasSource && expanded" size="small" secondary @click="copySource">
+          {{ copied ? t("applications.source.copied") : t("applications.source.copy") }}
+        </NButton>
+        <NButton
+          size="small"
+          quaternary
+          :aria-expanded="expanded"
+          :aria-label="expanded ? t('applications.source.collapse') : t('applications.source.expand')"
+          @click="expanded = !expanded"
+        >
+          <NIcon :size="16">
+            <ChevronDown v-if="expanded" />
+            <ChevronRight v-else />
+          </NIcon>
+        </NButton>
+      </NSpace>
     </template>
+    <template v-if="expanded">
     <NAlert v-if="failed" type="error" :show-icon="true">
       {{ t("applications.source.loadError") }}
     </NAlert>
@@ -111,6 +129,7 @@ function copySource(): void {
         :aria-label="t('applications.source.title')"
       />
     </NSpace>
+    </template>
   </NCard>
 </template>
 

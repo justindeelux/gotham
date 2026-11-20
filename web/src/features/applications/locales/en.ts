@@ -516,6 +516,8 @@ const en = {
       "The Dockerfile Gotham builds on the next deploy. Environment, labels and networks are added when the container runs, not in this file.",
     copy: "Copy",
     copied: "Copied",
+    expand: "Expand",
+    collapse: "Collapse",
     empty:
       "This application has no Dockerfile or compose source: it deploys a prebuilt image or is built by a build pack.",
     loadError: "The deployed source could not be read.",

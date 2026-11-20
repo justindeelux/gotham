@@ -73,7 +73,28 @@ function mountViewer(source: ApplicationSource, application = composeApp()) {
   return mount(Harness, { global: { plugins: [i18n] } });
 }
 
+async function expand(wrapper: ReturnType<typeof mountViewer>): Promise<void> {
+  await wrapper.find("button[aria-expanded]").trigger("click");
+  await flushPromises();
+}
+
 describe("ApplicationSourceViewer", () => {
+  it("is collapsed by default and toggles open and closed", async () => {
+    const wrapper = mountViewer({ kind: "dockerfile", raw: "FROM a\n", deployable: "FROM a\n" });
+    await flushPromises();
+
+    const toggle = wrapper.find("button[aria-expanded]");
+    expect(toggle.attributes("aria-expanded")).toBe("false");
+    expect(wrapper.findComponent(CodeEditor).exists()).toBe(false);
+
+    await expand(wrapper);
+    expect(wrapper.find("button[aria-expanded]").attributes("aria-expanded")).toBe("true");
+    expect(wrapper.findComponent(CodeEditor).exists()).toBe(true);
+
+    await expand(wrapper);
+    expect(wrapper.findComponent(CodeEditor).exists()).toBe(false);
+  });
+
   it("switches between the raw and deployable documents", async () => {
     const wrapper = mountViewer({
       kind: "compose",
@@ -81,6 +102,7 @@ describe("ApplicationSourceViewer", () => {
       deployable: "services:\n  web:\n    image: nginx\n    environment:\n      DB_PASSWORD: <redacted>\n",
     });
     await flushPromises();
+    await expand(wrapper);
 
     const viewer = wrapper.findComponent(CodeEditor);
     expect(viewer.props("preset")).toBe("yaml");
@@ -105,6 +127,7 @@ describe("ApplicationSourceViewer", () => {
       deployable: "FROM alpine:3.20\n",
     });
     await flushPromises();
+    await expand(wrapper);
 
     const viewer = wrapper.findComponent(CodeEditor);
     expect(viewer.props("preset")).toBe("dockerfile");
@@ -121,6 +144,7 @@ describe("ApplicationSourceViewer", () => {
       deployable: "FROM alpine:3.20\n",
     });
     await flushPromises();
+    await expand(wrapper);
 
     expect(wrapper.text()).toContain("Mã nguồn triển khai");
     expect(wrapper.text()).toContain("Nguyên bản");
@@ -135,6 +159,7 @@ describe("ApplicationSourceViewer", () => {
       application,
     );
     await flushPromises();
+    await expand(wrapper);
 
     expect(wrapper.findComponent(CodeEditor).exists()).toBe(false);
     expect(wrapper.text()).toContain("no Dockerfile or compose source");

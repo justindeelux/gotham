@@ -352,6 +352,33 @@ a {
   margin-bottom: var(--space-4);
 }
 
+/* Shared breadcrumb trail: one look for every page (ProjectBreadcrumb, detail fallbacks). */
+.crumb-trail {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  font-family: var(--font-mono);
+  font-size: 11px;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  color: var(--muted);
+  margin: 0 0 var(--space-2);
+  min-width: 0;
+}
+
+.crumb-trail a {
+  color: var(--muted);
+  text-decoration: none;
+}
+
+.crumb-trail a:hover {
+  color: var(--fg-2);
+}
+
+.crumb-trail__sep {
+  color: var(--meta);
+}
+
 .page-head {
   display: flex;
   align-items: flex-start;

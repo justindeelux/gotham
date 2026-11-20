@@ -66,6 +66,7 @@ type mockDockerClient struct {
 	removeVolumeSeen string
 	listResp         *agentv1.ListContainersResponse
 	listErr          error
+	listSeen         *agentv1.ListContainersRequest
 	volumesResp      *agentv1.ListVolumesResponse
 	volumesErr       error
 	listVolumes      int
@@ -88,10 +89,11 @@ type mockDockerClient struct {
 	restoreResp    *agentv1.RestoreVolumesResponse
 }
 
-func (m *mockDockerClient) ListContainers(context.Context, *agentv1.ListContainersRequest, ...grpc.CallOption) (*agentv1.ListContainersResponse, error) {
+func (m *mockDockerClient) ListContainers(_ context.Context, req *agentv1.ListContainersRequest, _ ...grpc.CallOption) (*agentv1.ListContainersResponse, error) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	m.lists++
+	m.listSeen = req
 	if m.listErr != nil {
 		return nil, m.listErr
 	}
@@ -938,6 +940,27 @@ func TestNewDefaultServiceNilRegistry(t *testing.T) {
 }
 
 var _ ContainerService = (*Service)(nil)
+
+func TestListFreshByLabelFiltersOnTheNode(t *testing.T) {
+	registry := newFakeRegistry()
+	server := registry.seed()
+	mock := &mockDockerClient{listResp: listResponse()}
+	svc := fixture(registry, mock, newFakeCache())
+
+	labels := map[string]string{"gotham.app_id": "app-1"}
+	if _, err := svc.ListFreshByLabel(context.Background(), server.ID, labels); err != nil {
+		t.Fatalf("ListFreshByLabel: %v", err)
+	}
+	if mock.listSeen == nil || mock.listSeen.GetLabels()["gotham.app_id"] != "app-1" {
+		t.Fatalf("request = %v, want the app label filter", mock.listSeen)
+	}
+	if !mock.listSeen.GetAll() {
+		t.Error("all = false, want stopped containers included")
+	}
+	if gets := registry.gets; gets != 1 {
+		t.Errorf("node lookups = %d, want one", gets)
+	}
+}
 
 func TestListFreshBypassesCache(t *testing.T) {
 	registry := newFakeRegistry()

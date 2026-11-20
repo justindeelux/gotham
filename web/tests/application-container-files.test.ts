@@ -382,7 +382,7 @@ describe("ApplicationFilesTab", () => {
     const fast = deferred<ContainerFileListing>();
     list.mockReturnValueOnce(slow.promise).mockReturnValueOnce(fast.promise);
 
-    await wrapper.findAll(".app-files-row")[0].trigger("dblclick");
+    await wrapper.findAll(".app-files-row")[0].trigger("click");
     await wrapper.find('[data-testid="files-breadcrumb-root"]').trigger("click");
 
     fast.resolve(listing("/", [fileEntry("/config.yml")]));
@@ -412,7 +412,7 @@ describe("ApplicationFilesTab", () => {
     list.mockReturnValueOnce(slow.promise);
     list.mockResolvedValueOnce(listing("/", [fileEntry("/c2-marker.txt")]));
 
-    await wrapper.findAll(".app-files-row")[0].trigger("dblclick");
+    await wrapper.findAll(".app-files-row")[0].trigger("click");
     wrapper.findComponent(NSelect).vm.$emit("update:value", "c2");
     await flushPromises();
 
@@ -525,7 +525,7 @@ describe("ApplicationFilesTab", () => {
     wrapper.unmount();
   });
 
-  it("leaves Enter and double click on the row menu button to the menu", async () => {
+  it("leaves Enter and click on the row menu button to the menu", async () => {
     const api = await import("@/features/applications/api/containerFiles");
     const list = vi.mocked(api.listContainerFiles);
     const wrapper = await mountTab();
@@ -534,9 +534,10 @@ describe("ApplicationFilesTab", () => {
 
     await wrapper.findAll(".app-files-more")[0].trigger("keydown", { key: "Enter" });
     await flushPromises();
-    await wrapper.findAll(".app-files-more")[0].trigger("dblclick");
+    await wrapper.findAll(".app-files-more")[0].trigger("click");
     await flushPromises();
-    await wrapper.findAll(".app-files-more")[1].trigger("dblclick");
+    expect(wrapper.findComponent(NDropdown).props("show")).toBe(true);
+    await wrapper.findAll(".app-files-more")[1].trigger("click");
     await flushPromises();
     expect(list).not.toHaveBeenCalled();
     expect(api.readContainerFile).not.toHaveBeenCalled();
@@ -597,12 +598,12 @@ describe("ApplicationFilesTab", () => {
     expect(rule).toContain("flex: none");
   });
 
-  it("opens a folder on double click and on Enter", async () => {
+  it("opens a folder on click and on Enter", async () => {
     const api = await import("@/features/applications/api/containerFiles");
     const list = vi.mocked(api.listContainerFiles);
     const wrapper = await mountTab();
     list.mockClear();
-    await wrapper.findAll(".app-files-row")[0].trigger("dblclick");
+    await wrapper.findAll(".app-files-row")[0].trigger("click");
     await flushPromises();
     expect(list).toHaveBeenCalledWith("app-1", "c1", "/app");
 
@@ -613,13 +614,24 @@ describe("ApplicationFilesTab", () => {
     wrapper.unmount();
   });
 
+  it("opens a text file in the editor on click", async () => {
+    const api = await import("@/features/applications/api/containerFiles");
+    const wrapper = await mountTab();
+    vi.mocked(api.readContainerFile).mockClear();
+    await wrapper.findAll(".app-files-row")[1].trigger("click");
+    await flushPromises();
+    expect(api.readContainerFile).toHaveBeenCalledWith("app-1", "c1", "/app/config.yml");
+    expect(wrapper.findComponent(CodeEditor).exists()).toBe(true);
+    wrapper.unmount();
+  });
+
   it("shows the breadcrumb without a double slash", async () => {
     const api = await import("@/features/applications/api/containerFiles");
     vi.mocked(api.listContainerFiles).mockResolvedValueOnce(
       listing("/app", [fileEntry("/app/main.go")]),
     );
     const wrapper = await mountTab();
-    await wrapper.findAll(".app-files-row")[0].trigger("dblclick");
+    await wrapper.findAll(".app-files-row")[0].trigger("click");
     await flushPromises();
     const crumbs = wrapper.find(".app-files-breadcrumb");
     expect(crumbs.text().replace(/\s+/g, "")).toBe("/app");
@@ -644,7 +656,7 @@ describe("ApplicationFilesTab", () => {
       ]),
     );
     const wrapper = await mountTab();
-    await wrapper.findAll(".app-files-row")[0].trigger("dblclick");
+    await wrapper.findAll(".app-files-row")[0].trigger("click");
     await flushPromises();
     expect(wrapper.text()).toContain("too large");
     expect(api.readContainerFile).not.toHaveBeenCalled();

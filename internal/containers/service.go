@@ -155,9 +155,17 @@ func (s *Service) List(ctx context.Context, serverID uuid.UUID) ([]Container, er
 }
 
 func (s *Service) ListFresh(ctx context.Context, serverID uuid.UUID) ([]Container, error) {
-	if _, err := s.resolve(ctx, serverID, false); err != nil {
-		return nil, err
-	}
+	return s.listFresh(ctx, serverID, nil)
+}
+
+// ListFreshByLabel asks the node for only the containers matching every label.
+// The filter runs in Docker, so a node carrying many stopped containers does
+// not serialize them all for a caller that needs one application's.
+func (s *Service) ListFreshByLabel(ctx context.Context, serverID uuid.UUID, labels map[string]string) ([]Container, error) {
+	return s.listFresh(ctx, serverID, labels)
+}
+
+func (s *Service) listFresh(ctx context.Context, serverID uuid.UUID, labels map[string]string) ([]Container, error) {
 	ctx, client, cancel, err := s.client(ctx, serverID, true)
 	if err != nil {
 		return nil, err
@@ -165,7 +173,7 @@ func (s *Service) ListFresh(ctx context.Context, serverID uuid.UUID) ([]Containe
 	defer cancel()
 	defer s.closeClient(client)
 
-	response, err := client.ListContainers(ctx, &agentv1.ListContainersRequest{All: true})
+	response, err := client.ListContainers(ctx, &agentv1.ListContainersRequest{All: true, Labels: labels})
 	if err != nil {
 		return nil, mapRPCError(err)
 	}

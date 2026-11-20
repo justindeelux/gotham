@@ -15,17 +15,19 @@ import (
 type fakeApplicationContainers struct {
 	containers.ContainerService
 
-	mu        sync.Mutex
-	listed    []containers.Container
-	states    map[string]string
-	calls     []string
-	listErr   error
-	actionErr error
+	mu         sync.Mutex
+	listed     []containers.Container
+	states     map[string]string
+	calls      []string
+	listLabels map[string]string
+	listErr    error
+	actionErr  error
 }
 
-func (f *fakeApplicationContainers) ListFresh(context.Context, uuid.UUID) ([]containers.Container, error) {
+func (f *fakeApplicationContainers) ListFreshByLabel(_ context.Context, _ uuid.UUID, labels map[string]string) ([]containers.Container, error) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
+	f.listLabels = labels
 	if f.listErr != nil {
 		return nil, f.listErr
 	}
@@ -37,6 +39,12 @@ func (f *fakeApplicationContainers) ListFresh(context.Context, uuid.UUID) ([]con
 		rows = append(rows, row)
 	}
 	return rows, nil
+}
+
+func (f *fakeApplicationContainers) labels() map[string]string {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	return f.listLabels
 }
 
 func (f *fakeApplicationContainers) Start(_ context.Context, _ uuid.UUID, containerID string) error {
@@ -76,16 +84,20 @@ func TestListApplicationContainersSingleApp(t *testing.T) {
 	app := testApplication(userID)
 	ids := []string{"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"}
 	svc := newTestService(t, &fakeRepository{app: app})
-	svc.containers = &fakeApplicationContainers{listed: []containers.Container{
+	fake := &fakeApplicationContainers{listed: []containers.Container{
 		{ID: ids[0], Name: "demo-web", Image: "gotham/demo:1", State: "running", Status: "Up 2 minutes",
 			Labels: map[string]string{labelAppID: app.ID.String()}},
 		{ID: "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb", Name: "other",
 			State: "running", Labels: map[string]string{labelAppID: uuid.New().String()}},
 	}}
+	svc.containers = fake
 
 	rows, err := svc.ListApplicationContainers(context.Background(), userID, app.ID)
 	if err != nil {
 		t.Fatalf("list application containers: %v", err)
+	}
+	if labels := fake.labels(); len(labels) != 1 || labels[labelAppID] != app.ID.String() {
+		t.Errorf("node filter = %v, want the application ownership label", labels)
 	}
 	if len(rows) != 1 {
 		t.Fatalf("rows = %d, want the application's single container", len(rows))
@@ -105,7 +117,7 @@ func TestListApplicationContainersComposeApp(t *testing.T) {
 	app.SourceType = SourceCompose
 	project := services.ProjectName(app.ID)
 	svc := newTestService(t, &fakeRepository{app: app})
-	svc.containers = &fakeApplicationContainers{listed: []containers.Container{
+	fake := &fakeApplicationContainers{listed: []containers.Container{
 		{ID: "web", Name: "shop-web-1", State: "running", Labels: map[string]string{
 			composeProjectLabel: project, composeServiceLabel: "web",
 		}},
@@ -116,10 +128,14 @@ func TestListApplicationContainersComposeApp(t *testing.T) {
 			composeProjectLabel: services.ProjectName(uuid.New()), composeServiceLabel: "web",
 		}},
 	}}
+	svc.containers = fake
 
 	rows, err := svc.ListApplicationContainers(context.Background(), userID, app.ID)
 	if err != nil {
 		t.Fatalf("list application containers: %v", err)
+	}
+	if labels := fake.labels(); len(labels) != 1 || labels[composeProjectLabel] != project {
+		t.Errorf("node filter = %v, want the compose project label", labels)
 	}
 	if len(rows) != 2 {
 		t.Fatalf("rows = %d, want one row per compose service", len(rows))

@@ -515,8 +515,6 @@ function formatTime(entry: ContainerFileEntry): string {
   return Number.isNaN(parsed.getTime()) ? "—" : parsed.toLocaleString();
 }
 
-const selectedPath = ref("");
-
 const menuEntry = ref<ContainerFileEntry | null>(null);
 const menuOpen = ref(false);
 const menuX = ref(0);
@@ -570,7 +568,7 @@ function iconKind(entry: ContainerFileEntry): FilesIconKind {
 }
 
 // The row's own handlers must not swallow events aimed at the row controls:
-// Enter on the "..." button and a double click on it belong to the menu.
+// Enter and a click on the "..." button belong to the menu.
 const ROW_CONTROL_SELECTOR = ".app-files-more";
 
 function isRowControl(event: Event): boolean {
@@ -582,15 +580,9 @@ function isRowControl(event: Event): boolean {
 
 function rowProps(entry: ContainerFileEntry): HTMLAttributes {
   return {
-    class: [
-      "app-files-row",
-      entry.path === selectedPath.value ? "is-selected" : "",
-    ],
+    class: "app-files-row",
     tabindex: 0,
-    onClick: () => {
-      selectedPath.value = entry.path;
-    },
-    onDblclick: (event: MouseEvent) => {
+    onClick: (event: MouseEvent) => {
       if (isRowControl(event)) {
         return;
       }
@@ -1110,10 +1102,6 @@ const promptPlaceholder = computed<string>(() => {
 
 .app-files-table :deep(.app-files-row) {
   cursor: default;
-}
-
-.app-files-table :deep(.app-files-row.is-selected) {
-  background: var(--hover-row);
 }
 
 .app-files-table :deep(.app-files-cell-name) {

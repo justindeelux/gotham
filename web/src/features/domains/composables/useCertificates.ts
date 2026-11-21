@@ -101,6 +101,7 @@ const certificatesKey: InjectionKey<CertificatesState> = Symbol("domains.certifi
 export function emptyCertificateDraft(): CertificateDraft {
   return {
     application_id: "",
+    service_id: "",
     challenge: "http-01",
     dns_provider_id: "",
     wildcard: false,

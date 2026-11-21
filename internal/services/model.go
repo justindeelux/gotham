@@ -52,6 +52,17 @@ type ServiceDomain struct {
 	UpdatedAt      time.Time
 }
 
+// CertificateIntent is the per-domain certificate configuration of a service
+// domain, the service counterpart of an application certificate intent.
+type CertificateIntent struct {
+	ServiceID     uuid.UUID
+	Domain        string
+	Enabled       bool
+	Challenge     string
+	DNSProviderID uuid.UUID
+	Wildcard      bool
+}
+
 type DeployState string
 
 const (

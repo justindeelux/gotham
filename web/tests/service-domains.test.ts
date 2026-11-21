@@ -16,6 +16,16 @@ vi.mock("naive-ui", async (importOriginal) => {
   return { ...actual, useMessage: () => messages };
 });
 
+vi.mock("@/features/domains/api/proxy", async (importOriginal) => {
+  const actual =
+    await importOriginal<typeof import("@/features/domains/api/proxy")>();
+  return {
+    ...actual,
+    listCertificates: vi.fn(),
+    listDNSProviders: vi.fn(),
+  };
+});
+
 vi.mock("@/features/services/api/services", async (importOriginal) => {
   const actual =
     await importOriginal<typeof import("@/features/services/api/services")>();
@@ -60,6 +70,11 @@ import {
   type ServiceDomain,
 } from "@/features/services/api/services";
 import { defaultDomainTarget, serviceDomainHostSchema } from "@/features/services/schemas/domains";
+import {
+  listCertificates,
+  listDNSProviders,
+  type Certificate,
+} from "@/features/domains/api/proxy";
 import ServiceDomainsTab from "@/features/services/components/ServiceDomainsTab.vue";
 import {
   i18n,
@@ -123,6 +138,8 @@ beforeEach(() => {
   vi.clearAllMocks();
   vi.mocked(listServiceDomains).mockResolvedValue([]);
   vi.mocked(getService).mockResolvedValue({} as Service);
+  vi.mocked(listCertificates).mockResolvedValue([]);
+  vi.mocked(listDNSProviders).mockResolvedValue([]);
   vi.mocked(addServiceDomain).mockResolvedValue(managedRow());
 });
 
@@ -169,6 +186,36 @@ describe("service domains tab", () => {
     expect(text).toContain("container port 3001 is not published");
     expect(wrapper.find(".domain-open-compose").exists()).toBe(true);
     expect(wrapper.findAll(".n-switch")).toHaveLength(1);
+    wrapper.unmount();
+  });
+
+  it("shows the certificate status and opens the certificate dialog", async () => {
+    const certificate: Certificate = {
+      id: "cert-1",
+      application_id: "",
+      service_id: "svc-1",
+      domain: "app.example.com",
+      enabled: true,
+      challenge: "http-01",
+      dns_provider_id: "",
+      wildcard: false,
+      status: "present",
+      created_at: "2026-01-01T00:00:00Z",
+      updated_at: "2026-01-01T00:00:00Z",
+    };
+    vi.mocked(listCertificates).mockResolvedValue([certificate]);
+    vi.mocked(listServiceDomains).mockResolvedValue([managedRow(), composeRow()]);
+    const wrapper = mountTab();
+    await flushPromises();
+
+    expect(wrapper.text()).toContain("present");
+    const certificateButtons = wrapper
+      .findAll("button")
+      .filter((node) => node.text().trim() === "Certificate");
+    expect(certificateButtons).toHaveLength(1);
+    await certificateButtons[0].trigger("click");
+    await flushPromises();
+    expect(wrapper.text()).toContain("Certificate for app.example.com");
     wrapper.unmount();
   });
 

@@ -165,6 +165,26 @@ func (s *Store) DeleteAutoDomainCertificate(ctx context.Context, params sqlc.Del
 	return s.queries.DeleteAutoDomainCertificate(ctx, params)
 }
 
+func (s *Store) ListDomainCertificatesByService(ctx context.Context, serviceID pgtype.UUID) ([]sqlc.DomainCertificate, error) {
+	return s.queries.ListDomainCertificatesByService(ctx, serviceID)
+}
+
+func (s *Store) CreateServiceDomainCertificate(ctx context.Context, params sqlc.CreateServiceDomainCertificateParams) (sqlc.DomainCertificate, error) {
+	return s.queries.CreateServiceDomainCertificate(ctx, params)
+}
+
+func (s *Store) CreateServiceDomainCertificateIfAbsent(ctx context.Context, params sqlc.CreateServiceDomainCertificateIfAbsentParams) (int64, error) {
+	return s.queries.CreateServiceDomainCertificateIfAbsent(ctx, params)
+}
+
+func (s *Store) DeleteAutoServiceDomainCertificate(ctx context.Context, params sqlc.DeleteAutoServiceDomainCertificateParams) (int64, error) {
+	return s.queries.DeleteAutoServiceDomainCertificate(ctx, params)
+}
+
+func (s *Store) DeleteServiceDomainCertificates(ctx context.Context, serviceID pgtype.UUID) error {
+	return s.queries.DeleteServiceDomainCertificates(ctx, serviceID)
+}
+
 func (s *Store) BackfillApplicationCertificates(ctx context.Context) (int64, error) {
 	return s.queries.BackfillApplicationCertificates(ctx)
 }
@@ -179,6 +199,10 @@ func (s *Store) ListDomainCertificatesByApplication(ctx context.Context, applica
 
 func (s *Store) ListProxiedCertificates(ctx context.Context) ([]sqlc.ListProxiedCertificatesRow, error) {
 	return s.queries.ListProxiedCertificates(ctx)
+}
+
+func (s *Store) ListProxiedServiceCertificates(ctx context.Context) ([]sqlc.ListProxiedServiceCertificatesRow, error) {
+	return s.queries.ListProxiedServiceCertificates(ctx)
 }
 
 func (s *Store) ListProxiedApplicationDomains(ctx context.Context) ([]sqlc.ListProxiedApplicationDomainsRow, error) {

@@ -43,7 +43,8 @@ only that host's routes.
 ## Certificates
 
 Certificates are configured per domain — one configuration per domain — from
-the same **Domains** tab. The control plane stores the intent; the node performs
+the same **Domains** tab. Service domains use the same configuration from the
+service's **Domains** tab. The control plane stores the intent; the node performs
 the ACME order and keeps the certificate in its own storage. Deleting a
 configuration falls back to plain HTTP for that host.
 

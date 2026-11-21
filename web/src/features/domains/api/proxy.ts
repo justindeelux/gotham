@@ -59,10 +59,11 @@ export interface PanelCertificateState {
 }
 
 export interface Certificate {
-  owner_kind?: "application" | "control_plane";
+  owner_kind?: "application" | "service" | "control_plane";
   panel_state?: PanelCertificateState;
   id: string;
   application_id: string;
+  service_id?: string;
   domain: string;
   enabled: boolean;
   challenge: ChallengeMode;
@@ -75,7 +76,8 @@ export interface Certificate {
 }
 
 export interface CreateCertificateInput {
-  application_id: string;
+  application_id?: string;
+  service_id?: string;
   domain?: string;
   enabled?: boolean;
   challenge?: ChallengeMode;
@@ -93,6 +95,7 @@ export interface UpdateCertificateInput {
 
 export interface CertificateDraft {
   application_id: string;
+  service_id: string;
   challenge: ChallengeMode;
   dns_provider_id: string;
   wildcard: boolean;
@@ -310,6 +313,7 @@ export function toCertificateInput(
 export function draftFromCertificate(certificate: Certificate): CertificateDraft {
   return {
     application_id: certificate.application_id,
+    service_id: certificate.service_id ?? "",
     challenge: certificate.challenge,
     dns_provider_id: certificate.dns_provider_id,
     wildcard: certificate.wildcard,

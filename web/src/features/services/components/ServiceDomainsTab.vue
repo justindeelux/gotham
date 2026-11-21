@@ -15,7 +15,7 @@ import {
   NText,
   type DataTableColumns,
 } from "naive-ui";
-import { computed, h, onMounted, watch } from "vue";
+import { computed, h, onMounted, ref, watch } from "vue";
 
 import type {
   ServiceDomain,
@@ -24,6 +24,13 @@ import type {
 } from "@/features/services/api/services";
 import { useServiceDomains } from "@/features/services/composables/useServiceDomains";
 import { useServiceDetailContext } from "@/features/services/composables/useServiceDetail";
+import CertificatePanel from "@/features/applications/components/CertificatePanel.vue";
+import {
+  certificateStatusLabel,
+  certificateStatusTagType,
+  useProxyStore,
+  type Certificate,
+} from "@/features/domains";
 import DomainFormModal from "@/features/domains/components/DomainFormModal.vue";
 import DomainHostCell from "@/features/domains/components/DomainHostCell.vue";
 import { activeLocale, i18n } from "@/shared/i18n";
@@ -47,6 +54,26 @@ function t(key: string, params?: Record<string, string | number>): string {
 
 const { service, serviceId, canWrite } = useServiceDetailContext();
 const domains = useServiceDomains(service, serviceId, canWrite);
+const proxyStore = useProxyStore();
+
+function certificateOf(row: ServiceDomain): Certificate | null {
+  if (row.id === undefined) {
+    return null;
+  }
+  return (
+    proxyStore.certificates.find(
+      (item) => item.service_id === serviceId.value && item.domain === row.domain,
+    ) ?? null
+  );
+}
+
+const certificateOpen = ref(false);
+const certificateDomain = ref("");
+
+function openCertificate(row: ServiceDomain): void {
+  certificateDomain.value = row.domain;
+  certificateOpen.value = true;
+}
 
 const protocolOptions = computed<
   Array<{ label: string; value: ServiceDomainProtocol }>
@@ -78,7 +105,7 @@ const columns = computed<DataTableColumns<ServiceDomain>>(() => {
   const actions = {
     title: t("services.domains.actions"),
     key: "actions",
-    width: 300,
+    width: 390,
     fixed: "right" as const,
     render: (row: ServiceDomain) => {
       if (row.source === "compose" || row.id === undefined) {
@@ -111,6 +138,18 @@ const columns = computed<DataTableColumns<ServiceDomain>>(() => {
                 onClick: () => domains.startEdit(row),
               },
               { default: () => t("services.domains.edit") },
+            ),
+            h(
+              NButton,
+              {
+                size: "small",
+                class: "domain-certificate",
+                "aria-label": t("services.domains.certificateAria", {
+                  domain: row.domain,
+                }),
+                onClick: () => openCertificate(row),
+              },
+              { default: () => t("services.domains.certificate") },
             ),
             row.is_primary
               ? null
@@ -241,6 +280,30 @@ const columns = computed<DataTableColumns<ServiceDomain>>(() => {
         });
       },
     },
+    {
+      title: t("services.domains.certificate"),
+      key: "certificate",
+      minWidth: 140,
+      render: (row) => {
+        if (row.source === "compose" || row.id === undefined) {
+          return h(NText, { depth: 3 }, { default: () => "—" });
+        }
+        const certificate = certificateOf(row);
+        if (!certificate) {
+          return h(NText, { depth: 3 }, {
+            default: () => t("services.domains.noCert"),
+          });
+        }
+        return h(
+          NTag,
+          {
+            size: "small",
+            type: certificateStatusTagType(certificate.status),
+          },
+          { default: () => certificateStatusLabel(certificate.status) },
+        );
+      },
+    },
     actions,
   ];
 });
@@ -291,7 +354,7 @@ watch(
         :row-key="rowKey"
         :bordered="false"
         :single-line="false"
-        :scroll-x="1000"
+        :scroll-x="1140"
         :pagination="false"
       />
       <NEmpty v-else :description="t('services.domains.empty')">
@@ -358,6 +421,12 @@ watch(
         </NFormItem>
       </template>
     </DomainFormModal>
+
+    <CertificatePanel
+      v-model:show="certificateOpen"
+      :service="{ id: service?.id ?? serviceId, name: service?.name ?? '' }"
+      :domain="certificateDomain"
+    />
   </NCard>
 </template>
 

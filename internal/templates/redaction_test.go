@@ -186,6 +186,22 @@ func (f *fakeRepository) DeleteServiceDomains(_ context.Context, _ uuid.UUID) er
 	return nil
 }
 
+func (f *fakeRepository) ListServiceCertificateIntents(_ context.Context, _ uuid.UUID) ([]services.CertificateIntent, error) {
+	return nil, nil
+}
+
+func (f *fakeRepository) CreateServiceCertificateIntentIfAbsent(_ context.Context, _ services.CertificateIntent) error {
+	return nil
+}
+
+func (f *fakeRepository) DeleteAutoServiceCertificateIntent(_ context.Context, _ uuid.UUID, _ string) error {
+	return nil
+}
+
+func (f *fakeRepository) DeleteServiceCertificateIntents(_ context.Context, _ uuid.UUID) error {
+	return nil
+}
+
 func (f *fakeRepository) ServiceDomainClaim(_ context.Context, _ string) (services.ServiceDomain, error) {
 	return services.ServiceDomain{}, services.ErrNotFound
 }

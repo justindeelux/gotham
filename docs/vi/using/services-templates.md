@@ -102,7 +102,10 @@ môi trường của dịch vụ. Thay đổi tên miền đánh dấu dịch v�
 ["domains"]` cho đến lần triển khai thành công tiếp theo nhận các biến mới.
 
 Các dòng HTTPS phục vụ qua ACME resolver mặc định và chuyển hướng HTTP sang HTTPS,
-giống hệt tên miền của ứng dụng. Một host được giữ chỗ trên toàn nền tảng: tên miền
+giống hệt tên miền của ứng dụng. Mỗi dòng quản lý hiển thị trạng thái chứng chỉ và
+mở cùng hộp thoại chứng chỉ theo từng tên miền như tên miền ứng dụng: thêm dòng
+`https` sẽ ghi một ý định `http-01` mặc định, và có thể chuyển sang `dns-01` hoặc
+yêu cầu wildcard ngay từ dòng đó. Một host được giữ chỗ trên toàn nền tảng: tên miền
 đã dùng bởi ứng dụng, nguồn chuyển hướng, dịch vụ khác hoặc nhãn compose sẽ bị từ
 chối khi ghi với `409`. Xem [Tên miền và bản xem trước](/vi/using/domains-previews)
 để biết về DNS và chứng chỉ, và [Proxy và DNS](/vi/operating/proxy-dns) cho phía

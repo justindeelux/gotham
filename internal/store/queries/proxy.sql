@@ -161,6 +161,14 @@ SELECT application_id, domain, enabled, challenge, wildcard, dns_provider_id
 FROM domain_certificates
 ORDER BY application_id, created_at, id;
 
+-- name: ListProxiedServiceCertificates :many
+-- ListProxiedServiceCertificates feeds the Traefik generator for service
+-- domains (GOTHAM-257), grouped onto its service route in Go.
+SELECT service_id, domain, enabled, challenge, wildcard, dns_provider_id
+FROM domain_certificates
+WHERE service_id IS NOT NULL
+ORDER BY service_id, created_at, id;
+
 -- name: CreateDomainCertificate :one
 INSERT INTO domain_certificates (application_id, domain, enabled, challenge, dns_provider_id, wildcard)
 VALUES ($1, $2, $3, $4, $5, $6)
@@ -182,6 +190,37 @@ ON CONFLICT (application_id, domain) DO NOTHING;
 -- or dns-01 intent is never touched.
 DELETE FROM domain_certificates
 WHERE application_id = $1 AND domain = $2 AND challenge = 'http-01' AND NOT wildcard;
+
+-- name: ListDomainCertificatesByService :many
+-- ListDomainCertificatesByService returns one service's certificate intents,
+-- oldest first (GOTHAM-257: one intent per domain).
+SELECT * FROM domain_certificates
+WHERE service_id = $1
+ORDER BY created_at, id;
+
+-- name: CreateServiceDomainCertificate :one
+INSERT INTO domain_certificates (service_id, domain, enabled, challenge, dns_provider_id, wildcard)
+VALUES ($1, $2, $3, $4, $5, $6)
+RETURNING *;
+
+-- name: CreateServiceDomainCertificateIfAbsent :execrows
+-- CreateServiceDomainCertificateIfAbsent mirrors the application attach path
+-- for service domains: a host that already holds an intent is a silent no-op.
+INSERT INTO domain_certificates (service_id, domain, enabled, challenge, dns_provider_id, wildcard)
+VALUES ($1, $2, $3, $4, $5, $6)
+ON CONFLICT (service_id, domain) DO NOTHING;
+
+-- name: DeleteAutoServiceDomainCertificate :execrows
+-- DeleteAutoServiceDomainCertificate removes the default enabled http-01
+-- non-wildcard intent a renamed or detached service domain got. An operator's
+-- wildcard or dns-01 intent is never touched.
+DELETE FROM domain_certificates
+WHERE service_id = $1 AND domain = $2 AND challenge = 'http-01' AND NOT wildcard;
+
+-- name: DeleteServiceDomainCertificates :exec
+-- DeleteServiceDomainCertificates drops the intents of a soft-deleted
+-- service, whose row (and FK) stays behind.
+DELETE FROM domain_certificates WHERE service_id = $1;
 
 -- name: BackfillApplicationCertificates :execrows
 -- BackfillApplicationCertificates gives every enabled application domain that
@@ -291,12 +330,14 @@ ORDER BY r.created_at, r.id;
 
 -- name: ListCertificateStatusTargets :many
 -- ListCertificateStatusTargets joins every certificate intent to the node
--- hosting its application, so the status service can read each node's ACME
--- storage once and map certificates to it. Disabled intents are included:
--- status is a fact about the node's storage, not about the intent.
+-- hosting its owner, so the status service can read each node's ACME storage
+-- once and map certificates to it. Disabled intents are included: status is a
+-- fact about the node's storage, not about the intent.
 SELECT c.id AS certificate_id, c.domain,
-       COALESCE(a.server_id, panel.id) AS server_id
+       COALESCE(a.server_id, s.server_id, panel.id) AS server_id
 FROM domain_certificates c
 LEFT JOIN applications a ON a.id = c.application_id
-LEFT JOIN servers panel ON c.application_id IS NULL AND panel.name = 'localhost'
+LEFT JOIN services s ON s.id = c.service_id AND s.deleted_at IS NULL
+LEFT JOIN servers panel
+       ON c.application_id IS NULL AND c.service_id IS NULL AND panel.name = 'localhost'
 ORDER BY c.id;

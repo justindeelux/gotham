@@ -527,6 +527,48 @@ func TestCreateServiceWithDomainsIsAtomic(t *testing.T) {
 	}
 }
 
+func TestCreateServiceWithHTTPSDomainRecordsCertificateIntent(t *testing.T) {
+	repo, st := integrationEnv(t)
+	ctx := context.Background()
+	ownerID, serverID := seedUserAndServer(t, st)
+	_, envID := seedProjectEnvironment(t, st)
+	suffix := fmt.Sprintf("%d", time.Now().UnixNano())
+
+	service := Service{
+		ID: uuid.New(), UserID: ownerID, ServerID: serverID, EnvironmentID: envID,
+		Name: "cert-" + suffix, Status: StatusCreating,
+		ComposeYAML: "services:\n  web:\n    image: nginx:1.27\n", Env: map[string]string{},
+	}
+	created, err := repo.CreateServiceWithDomains(ctx, service, []ServiceDomain{
+		{ID: uuid.New(), ServiceID: service.ID, ComposeService: "web", Port: 80,
+			Domain: "secure-" + suffix + ".example.com", Protocol: "https", IsPrimary: true},
+		{ID: uuid.New(), ServiceID: service.ID, ComposeService: "web", Port: 80,
+			Domain: "plain-" + suffix + ".example.com", Protocol: "http"},
+	})
+	if err != nil {
+		t.Fatalf("CreateServiceWithDomains: %v", err)
+	}
+	intents, err := repo.ListServiceCertificateIntents(ctx, created.ID)
+	if err != nil {
+		t.Fatalf("ListServiceCertificateIntents: %v", err)
+	}
+	if len(intents) != 1 {
+		t.Fatalf("intents = %+v, want only the https domain", intents)
+	}
+	intent := intents[0]
+	if intent.Domain != "secure-"+suffix+".example.com" || !intent.Enabled || intent.Challenge != "http-01" || intent.Wildcard {
+		t.Fatalf("intent = %+v", intent)
+	}
+
+	if err := repo.DeleteServiceCertificateIntents(ctx, created.ID); err != nil {
+		t.Fatalf("DeleteServiceCertificateIntents: %v", err)
+	}
+	intents, err = repo.ListServiceCertificateIntents(ctx, created.ID)
+	if err != nil || len(intents) != 0 {
+		t.Fatalf("intents after delete = %+v err=%v", intents, err)
+	}
+}
+
 func TestServiceDomainUniquenessAndCascade(t *testing.T) {
 	repo, st := integrationEnv(t)
 	ctx := context.Background()

@@ -119,6 +119,7 @@ type DNSProvider struct {
 type DomainCertificate struct {
 	ID            uuid.UUID
 	ApplicationID uuid.UUID
+	ServiceID     uuid.UUID
 	Domain        string
 	Enabled       bool
 	Challenge     ChallengeMode
@@ -134,6 +135,14 @@ type ApplicationInfo struct {
 	Domains        []string
 	BaseDomain     string
 	ServerID       uuid.UUID
+}
+
+// ServiceInfo is the certificate owner view of a service: the enabled managed
+// domains, primary first, and whether every domain is disabled.
+type ServiceInfo struct {
+	ID             uuid.UUID
+	DomainDisabled bool
+	Domains        []string
 }
 
 func (a ApplicationInfo) PrimaryDomain() string {
@@ -165,6 +174,7 @@ type DNSProviderWrite struct {
 
 type CertificateWrite struct {
 	ApplicationID uuid.UUID
+	ServiceID     uuid.UUID
 	Domain        string
 	Enabled       bool
 	Challenge     ChallengeMode
@@ -186,12 +196,14 @@ type SSLStore interface {
 	CreateCertificate(ctx context.Context, in CertificateWrite) (DomainCertificate, error)
 	GetCertificate(ctx context.Context, id uuid.UUID) (DomainCertificate, error)
 	ListCertificatesByApplication(ctx context.Context, applicationID uuid.UUID) ([]DomainCertificate, error)
+	ListCertificatesByService(ctx context.Context, serviceID uuid.UUID) ([]DomainCertificate, error)
 	ListCertificates(ctx context.Context) ([]DomainCertificate, error)
 	UpdateCertificate(ctx context.Context, id uuid.UUID, in CertificateWrite) (DomainCertificate, error)
 	DeleteCertificate(ctx context.Context, id uuid.UUID) error
 	BackfillApplicationCertificates(ctx context.Context) (int64, error)
 
 	GetApplication(ctx context.Context, id uuid.UUID) (ApplicationInfo, error)
+	GetService(ctx context.Context, id uuid.UUID) (ServiceInfo, error)
 }
 
 type storeSSL struct {
@@ -293,6 +305,20 @@ func (s storeSSL) ListEnabledCertificatesByProvider(ctx context.Context, provide
 }
 
 func (s storeSSL) CreateCertificate(ctx context.Context, in CertificateWrite) (DomainCertificate, error) {
+	if in.ServiceID != uuid.Nil {
+		row, err := s.store.CreateServiceDomainCertificate(ctx, sqlc.CreateServiceDomainCertificateParams{
+			ServiceID:     pgUUID(in.ServiceID),
+			Domain:        in.Domain,
+			Enabled:       in.Enabled,
+			Challenge:     string(in.Challenge),
+			DnsProviderID: pgUUID(in.DNSProviderID),
+			Wildcard:      in.Wildcard,
+		})
+		if err != nil {
+			return DomainCertificate{}, mapSSLWriteError(err)
+		}
+		return certificateFromRow(row), nil
+	}
 	row, err := s.store.CreateDomainCertificate(ctx, sqlc.CreateDomainCertificateParams{
 		ApplicationID: pgUUID(in.ApplicationID),
 		Domain:        in.Domain,
@@ -317,6 +343,18 @@ func (s storeSSL) GetCertificate(ctx context.Context, id uuid.UUID) (DomainCerti
 
 func (s storeSSL) ListCertificatesByApplication(ctx context.Context, applicationID uuid.UUID) ([]DomainCertificate, error) {
 	rows, err := s.store.ListDomainCertificatesByApplication(ctx, pgUUID(applicationID))
+	if err != nil {
+		return nil, err
+	}
+	out := make([]DomainCertificate, 0, len(rows))
+	for _, row := range rows {
+		out = append(out, certificateFromRow(row))
+	}
+	return out, nil
+}
+
+func (s storeSSL) ListCertificatesByService(ctx context.Context, serviceID uuid.UUID) ([]DomainCertificate, error) {
+	rows, err := s.store.ListDomainCertificatesByService(ctx, pgUUID(serviceID))
 	if err != nil {
 		return nil, err
 	}
@@ -384,6 +422,31 @@ func (s storeSSL) GetApplication(ctx context.Context, id uuid.UUID) (Application
 	return info, nil
 }
 
+func (s storeSSL) GetService(ctx context.Context, id uuid.UUID) (ServiceInfo, error) {
+	if _, err := s.store.GetService(ctx, pgUUID(id)); err != nil {
+		return ServiceInfo{}, mapSSLReadError(err)
+	}
+	rows, err := s.store.ListServiceDomainsByService(ctx, pgUUID(id))
+	if err != nil {
+		return ServiceInfo{}, err
+	}
+	info := ServiceInfo{ID: id}
+	enabled := 0
+	for _, row := range rows {
+		if row.Disabled {
+			continue
+		}
+		if row.IsPrimary {
+			info.Domains = append([]string{row.Domain}, info.Domains...)
+		} else {
+			info.Domains = append(info.Domains, row.Domain)
+		}
+		enabled++
+	}
+	info.DomainDisabled = len(rows) > 0 && enabled == 0
+	return info, nil
+}
+
 func applicationInfoFromRow(row sqlc.Application) ApplicationInfo {
 	return ApplicationInfo{
 		ID:       uuidFromPG(row.ID),
@@ -413,6 +476,7 @@ func certificateFromRow(row sqlc.DomainCertificate) DomainCertificate {
 	cert := DomainCertificate{
 		ID:            uuidFromPG(row.ID),
 		ApplicationID: uuidFromPG(row.ApplicationID),
+		ServiceID:     uuidFromPG(row.ServiceID),
 		Domain:        row.Domain,
 		Enabled:       row.Enabled,
 		Challenge:     ChallengeMode(row.Challenge),
@@ -445,6 +509,8 @@ func mapSSLWriteError(err error) error {
 				return fmt.Errorf("%w: an enabled DNS provider of that type already exists", ErrConflict)
 			case "domain_certificates_app_domain_unique", "domain_certificates_application_unique":
 				return fmt.Errorf("%w: the application already has a certificate configuration for that domain", ErrConflict)
+			case "domain_certificates_service_domain_unique":
+				return fmt.Errorf("%w: the service already has a certificate configuration for that domain", ErrConflict)
 			}
 			return fmt.Errorf("%w: the write conflicts with existing state", ErrConflict)
 		case "23503":

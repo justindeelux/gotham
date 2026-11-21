@@ -297,12 +297,44 @@ func (s *service) AddDomain(ctx context.Context, userID, serviceID uuid.UUID, in
 	}
 	domain.ID = uuid.New()
 	domain.IsPrimary = !hasEnabledDomain(managed) && !domain.Disabled
-	created, err := s.repo.CreateServiceDomain(ctx, domain)
+	var created ServiceDomain
+	err = s.repo.InTx(ctx, func(tx Repository) error {
+		row, err := tx.CreateServiceDomain(ctx, domain)
+		if err != nil {
+			return err
+		}
+		created = row
+		return ensureServiceHTTPSIntent(ctx, tx, service.ID, row)
+	})
 	if err != nil {
 		return ServiceDomain{}, err
 	}
 	s.syncProxy(ctx, service.ServerID)
 	return created, nil
+}
+
+// ensureServiceHTTPSIntent records the default http-01 intent an https service
+// domain gets, mirroring the application domain path. An enabled wildcard
+// intent already covers the host, so it suppresses the default one.
+func ensureServiceHTTPSIntent(ctx context.Context, repo Repository, serviceID uuid.UUID, domain ServiceDomain) error {
+	if domain.Protocol != proxy.ProtocolHTTPS || domain.Disabled {
+		return nil
+	}
+	intents, err := repo.ListServiceCertificateIntents(ctx, serviceID)
+	if err != nil {
+		return err
+	}
+	for _, intent := range intents {
+		if intent.Enabled && intent.Wildcard {
+			return nil
+		}
+	}
+	return repo.CreateServiceCertificateIntentIfAbsent(ctx, CertificateIntent{
+		ServiceID: serviceID,
+		Domain:    domain.Domain,
+		Enabled:   true,
+		Challenge: string(proxy.ChallengeHTTP01),
+	})
 }
 
 func (s *service) UpdateDomain(ctx context.Context, userID, serviceID, domainID uuid.UUID, in DomainInput) (ServiceDomain, error) {
@@ -376,6 +408,14 @@ func (s *service) UpdateDomain(ctx context.Context, userID, serviceID, domainID 
 			return err
 		}
 		updated = row
+		if next.Domain != target.Domain {
+			if err := tx.DeleteAutoServiceCertificateIntent(ctx, service.ID, target.Domain); err != nil {
+				return err
+			}
+		}
+		if err := ensureServiceHTTPSIntent(ctx, tx, service.ID, row); err != nil {
+			return err
+		}
 		if !promote {
 			return nil
 		}
@@ -418,6 +458,9 @@ func (s *service) RemoveDomain(ctx context.Context, userID, serviceID, domainID 
 	// domains never loses its primary.
 	err = s.repo.InTx(ctx, func(tx Repository) error {
 		if err := tx.DeleteServiceDomain(ctx, service.ID, target.ID); err != nil {
+			return err
+		}
+		if err := tx.DeleteAutoServiceCertificateIntent(ctx, service.ID, target.Domain); err != nil {
 			return err
 		}
 		if !target.IsPrimary {

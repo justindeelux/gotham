@@ -48,13 +48,24 @@ const cellSubStyle = {
   color: "var(--muted)",
 } as const;
 
+function ownerLabel(certificate: Certificate): string {
+  if (certificate.service_id) {
+    return proxyText(
+      "domains.certificates.serviceOwner",
+      "service {id}",
+      { id: certificate.service_id.slice(0, 8) },
+    );
+  }
+  return applicationName(certificate.application_id);
+}
+
 function domainCell(certificate: Certificate): VNode {
   return h("div", { style: cellStackStyle }, [
     h("span", { class: "mono", style: cellNameStyle }, certificate.domain),
     h(
       "span",
       { style: cellSubStyle },
-      applicationName(certificate.application_id),
+      ownerLabel(certificate),
     ),
   ]);
 }

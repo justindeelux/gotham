@@ -42,6 +42,20 @@ func (s *ProxySource) ListProxiedServices(ctx context.Context) ([]proxy.ProxiedS
 			Protocol: proxy.NormalizeProtocol(row.Protocol),
 		})
 	}
+	intents, err := s.store.ListProxiedServiceCertificates(ctx)
+	if err != nil {
+		return nil, fmt.Errorf("services: list proxied service certificates: %w", err)
+	}
+	certificatesByService := make(map[pgtype.UUID][]*proxy.CertificateIntent, len(rows))
+	for _, intent := range intents {
+		certificatesByService[intent.ServiceID] = append(certificatesByService[intent.ServiceID], &proxy.CertificateIntent{
+			Domain:        intent.Domain,
+			Enabled:       intent.Enabled,
+			Challenge:     proxy.ChallengeMode(intent.Challenge),
+			Wildcard:      intent.Wildcard,
+			DNSProviderID: uuidFromPG(intent.DnsProviderID),
+		})
+	}
 	proxied := make([]proxy.ProxiedService, 0, len(rows))
 	for _, row := range rows {
 		service, err := serviceFromRow(row)
@@ -50,11 +64,12 @@ func (s *ProxySource) ListProxiedServices(ctx context.Context) ([]proxy.ProxiedS
 		}
 		domains := managedByService[row.ID]
 		entry := proxy.ProxiedService{
-			ID:       service.ID,
-			ServerID: service.ServerID,
-			Name:     service.Name,
-			Project:  ProjectName(service.ID),
-			Domains:  domains,
+			ID:           service.ID,
+			ServerID:     service.ServerID,
+			Name:         service.Name,
+			Project:      ProjectName(service.ID),
+			Domains:      domains,
+			Certificates: certificatesByService[row.ID],
 		}
 		rendered, _, err := RenderService(service.ComposeYAML, service.Env, managedDomains(domains))
 		if err != nil {

@@ -517,6 +517,10 @@ func (s *service) Delete(ctx context.Context, userID, serviceID uuid.UUID) ([]st
 		s.logger.Warn("services: could not delete managed domains of a deleted service",
 			"service_id", service.ID.String(), "error", err)
 	}
+	if err := s.repo.DeleteServiceCertificateIntents(ctx, service.ID); err != nil {
+		s.logger.Warn("services: could not delete certificate intents of a deleted service",
+			"service_id", service.ID.String(), "error", err)
+	}
 	for _, warning := range volumeWarnings {
 		s.logger.Warn("services: a named volume was kept during delete",
 			"service_id", service.ID.String(), "warning", warning)

@@ -23,17 +23,17 @@ func panelCertificateAuth(next http.Handler) http.Handler {
 	})
 }
 
-func (s *sslService) certificateApplication(ctx context.Context, cert DomainCertificate) (ApplicationInfo, error) {
-	if cert.ApplicationID == uuid.Nil {
+func (s *sslService) certificateOwner(ctx context.Context, cert DomainCertificate) (certificateOwner, error) {
+	if cert.ApplicationID == uuid.Nil && cert.ServiceID == uuid.Nil {
 		if !panelCertificateContext(ctx) {
-			return ApplicationInfo{}, ErrNotFound
+			return certificateOwner{}, ErrNotFound
 		}
-		return ApplicationInfo{Domains: []string{cert.Domain}}, nil
+		return certificateOwner{domains: []string{cert.Domain}}, nil
 	}
 	if panelCertificateContext(ctx) {
-		return ApplicationInfo{}, ErrNotFound
+		return certificateOwner{}, ErrNotFound
 	}
-	return s.store.GetApplication(ctx, cert.ApplicationID)
+	return s.certificateOwnerFor(ctx, cert.ApplicationID, cert.ServiceID)
 }
 
 func (s *SyncService) ReconcilePanelCertificates(ctx context.Context, urls []string) error {
@@ -106,8 +106,11 @@ func (s *sslService) reconcilePanelCertificates(ctx context.Context, urls []stri
 		if err != nil {
 			return err
 		}
+		isPanel := func(cert DomainCertificate) bool {
+			return cert.ApplicationID == uuid.Nil && cert.ServiceID == uuid.Nil
+		}
 		for _, cert := range certificates {
-			if cert.ApplicationID == uuid.Nil {
+			if isPanel(cert) {
 				continue
 			}
 			if wanted[cert.Domain] {
@@ -116,7 +119,7 @@ func (s *sslService) reconcilePanelCertificates(ctx context.Context, urls []stri
 		}
 		existing := map[string]bool{}
 		for _, cert := range certificates {
-			if cert.ApplicationID == uuid.Nil {
+			if isPanel(cert) {
 				existing[cert.Domain] = true
 			}
 		}
@@ -129,7 +132,7 @@ func (s *sslService) reconcilePanelCertificates(ctx context.Context, urls []stri
 			}
 		}
 		for _, cert := range certificates {
-			if cert.ApplicationID == uuid.Nil && !wanted[cert.Domain] {
+			if isPanel(cert) && !wanted[cert.Domain] {
 				if err := s.store.DeleteCertificate(ctx, cert.ID); err != nil {
 					return err
 				}

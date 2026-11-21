@@ -55,6 +55,7 @@ type certificateResponse struct {
 	PanelState    *PanelCertificateState `json:"panel_state,omitempty"`
 	ID            string                 `json:"id"`
 	ApplicationID string                 `json:"application_id"`
+	ServiceID     string                 `json:"service_id,omitempty"`
 	Domain        string                 `json:"domain"`
 	Enabled       bool                   `json:"enabled"`
 	Challenge     string                 `json:"challenge"`
@@ -75,7 +76,8 @@ type certificateListEnvelope struct {
 }
 
 type createCertificateRequest struct {
-	ApplicationID string `json:"application_id"`
+	ApplicationID string `json:"application_id,omitempty"`
+	ServiceID     string `json:"service_id,omitempty"`
 	Domain        string `json:"domain,omitempty"`
 	Enabled       *bool  `json:"enabled,omitempty"`
 	Challenge     string `json:"challenge,omitempty"`
@@ -175,9 +177,20 @@ func (h *handler) createCertificate(w http.ResponseWriter, r *http.Request) {
 	if !decodeRequiredBody(w, r, &req) {
 		return
 	}
-	applicationID, err := uuid.Parse(strings.TrimSpace(req.ApplicationID))
-	if err != nil {
-		writeJSON(w, http.StatusBadRequest, apiError{Message: "invalid application_id"})
+	applicationID, ok := parseOptionalUUID(w, req.ApplicationID, "invalid application_id")
+	if !ok {
+		return
+	}
+	serviceID, ok := parseOptionalUUID(w, req.ServiceID, "invalid service_id")
+	if !ok {
+		return
+	}
+	if applicationID == uuid.Nil && serviceID == uuid.Nil {
+		writeJSON(w, http.StatusBadRequest, apiError{Message: "application_id or service_id is required"})
+		return
+	}
+	if applicationID != uuid.Nil && serviceID != uuid.Nil {
+		writeJSON(w, http.StatusBadRequest, apiError{Message: "application_id and service_id are mutually exclusive"})
 		return
 	}
 	providerID, ok := parseOptionalUUID(w, req.DNSProviderID, "invalid dns_provider_id")
@@ -186,6 +199,7 @@ func (h *handler) createCertificate(w http.ResponseWriter, r *http.Request) {
 	}
 	certificate, err := h.certs.CreateCertificate(r.Context(), CreateCertificateInput{
 		ApplicationID: applicationID,
+		ServiceID:     serviceID,
 		Domain:        strings.TrimSpace(req.Domain),
 		Enabled:       req.Enabled,
 		Challenge:     ChallengeMode(strings.TrimSpace(req.Challenge)),
@@ -379,8 +393,13 @@ func newCertificateResponse(certificate DomainCertificate, observation Certifica
 	response.OwnerKind = "application"
 	if certificate.ApplicationID == uuid.Nil {
 		response.OwnerKind = "control_plane"
-		state := panelCertificateState(observation, certificate.Enabled)
-		response.PanelState = &state
+		if certificate.ServiceID != uuid.Nil {
+			response.OwnerKind = "service"
+			response.ServiceID = certificate.ServiceID.String()
+		} else {
+			state := panelCertificateState(observation, certificate.Enabled)
+			response.PanelState = &state
+		}
 	}
 	if certificate.DNSProviderID != uuid.Nil {
 		response.DNSProviderID = certificate.DNSProviderID.String()

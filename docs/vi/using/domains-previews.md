@@ -42,7 +42,8 @@ chỉ cho host mới sau đó. Gỡ một tên miền chỉ gỡ các tuyến c�
 ## Chứng chỉ
 
 Chứng chỉ được cấu hình theo từng tên miền — một cấu hình cho mỗi tên miền — từ
-cùng tab **Tên miền**. Control plane lưu ý định; node thực hiện đơn ACME và giữ
+cùng tab **Tên miền**. Tên miền của dịch vụ dùng chung cấu hình đó từ tab **Tên
+miền** của dịch vụ. Control plane lưu ý định; node thực hiện đơn ACME và giữ
 chứng chỉ trong kho của chính nó. Xóa một cấu hình sẽ quay về HTTP thường cho host
 đó.
 

@@ -510,7 +510,7 @@ func (s *SyncService) gatherRoutes(ctx context.Context, apps []ProxiedApplicatio
 	routes, diagnostics := routesForServer(apps, serverID, s.backendHost, nodeList, access)
 	appCount := len(routes)
 	claimed := applicationHosts(apps, serverID)
-	serviceRoutes, serviceDiagnostics, serviceHosts := serviceRoutesForServer(services, serverID, s.backendHost, nodeList, claimed)
+	serviceRoutes, serviceDiagnostics, serviceHosts := serviceRoutesForServer(services, serverID, s.backendHost, nodeList, claimed, access)
 	routes = append(routes, serviceRoutes...)
 	diagnostics = append(diagnostics, serviceDiagnostics...)
 	redirects, redirectDiagnostics := redirectsForServer(apps, rules, serverID, serviceHosts...)
@@ -619,7 +619,7 @@ func (s *SyncService) controlPlaneRouteForURL(ctx context.Context, serverID uuid
 				s.logger.Warn("proxy: read panel certificates", "error", err)
 			} else {
 				for _, cert := range certs {
-					if cert.ApplicationID != uuid.Nil || cert.Domain != domain {
+					if cert.ApplicationID != uuid.Nil || cert.ServiceID != uuid.Nil || cert.Domain != domain {
 						continue
 					}
 					intent := &CertificateIntent{Domain: cert.Domain, Enabled: cert.Enabled, Challenge: cert.Challenge, DNSProviderID: cert.DNSProviderID, Wildcard: cert.Wildcard}
@@ -680,7 +680,7 @@ func serviceRouteName(id uuid.UUID, index int) string {
 	return "svc-" + id.String() + "-" + strconv.Itoa(index)
 }
 
-func serviceRoutesForServer(proxied []ProxiedService, serverID uuid.UUID, backendHost string, nodeContainers []containers.Container, claimed map[string]bool) ([]Route, []Diagnostic, []string) {
+func serviceRoutesForServer(proxied []ProxiedService, serverID uuid.UUID, backendHost string, nodeContainers []containers.Container, claimed map[string]bool, providers map[uuid.UUID]providerAccess) ([]Route, []Diagnostic, []string) {
 	routes := make([]Route, 0, len(proxied))
 	diagnostics := make([]Diagnostic, 0)
 	hosts := []string{}
@@ -736,13 +736,26 @@ func serviceRoutesForServer(proxied []ProxiedService, serverID uuid.UUID, backen
 				diagnostics = append(diagnostics, diagnostic)
 				continue
 			}
-			routes = append(routes, Route{
+			route := Route{
 				Name:     serviceRouteName(service.ID, index),
 				AppID:    service.ID,
 				Domain:   host,
 				Protocol: NormalizeProtocol(domain.Protocol),
 				Target:   fmt.Sprintf("http://%s:%d", backendHost, hostPort),
-			})
+			}
+			if route.Protocol == ProtocolHTTPS {
+				certificate, certReason := resolveRouteCertificate(
+					ProxiedApplication{Certificates: service.Certificates}, host, providers)
+				route.Certificate = certificate
+				if certReason != "" {
+					if certificate == nil {
+						route.Protocol = ProtocolHTTP
+					}
+					diagnostic.Reason = certReason
+					diagnostics = append(diagnostics, diagnostic)
+				}
+			}
+			routes = append(routes, route)
 		}
 	}
 	return routes, diagnostics, hosts

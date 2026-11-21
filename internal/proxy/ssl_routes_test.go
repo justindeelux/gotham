@@ -214,6 +214,8 @@ func TestSSLRouteMappingsAndValidation(t *testing.T) {
 		{name: "bad provider id", method: http.MethodGet, path: "/v1/proxy/dns-providers/not-a-uuid", body: "", status: http.StatusBadRequest},
 		{name: "certificate missing application id", method: http.MethodPost, path: "/v1/proxy/certificates", body: `{"challenge":"http-01"}`, status: http.StatusBadRequest},
 		{name: "certificate bad application id", method: http.MethodPost, path: "/v1/proxy/certificates", body: `{"application_id":"nope"}`, status: http.StatusBadRequest},
+		{name: "certificate bad service id", method: http.MethodPost, path: "/v1/proxy/certificates", body: `{"service_id":"nope"}`, status: http.StatusBadRequest},
+		{name: "certificate both owners", method: http.MethodPost, path: "/v1/proxy/certificates", body: `{"application_id":"dddddddd-0000-0000-0000-000000000004","service_id":"eeeeeeee-0000-0000-0000-000000000005"}`, status: http.StatusBadRequest},
 		{name: "certificate bad provider id", method: http.MethodPost, path: "/v1/proxy/certificates", body: `{"application_id":"dddddddd-0000-0000-0000-000000000004","challenge":"dns-01","dns_provider_id":"nope"}`, status: http.StatusBadRequest},
 		{name: "bad certificate id", method: http.MethodPatch, path: "/v1/proxy/certificates/not-a-uuid", body: `{"enabled":false}`, status: http.StatusBadRequest},
 		{name: "whitespace only body", method: http.MethodPatch, path: providerPath, body: "   \n\t ", status: http.StatusBadRequest},
@@ -241,6 +243,28 @@ func TestSSLRouteMappingsAndValidation(t *testing.T) {
 	}
 }
 
+func TestCertificateResponseOwnerKinds(t *testing.T) {
+	app := newCertificateResponse(sampleCertificate(), CertificateStatusObservation{})
+	if app.OwnerKind != "application" || app.ApplicationID == "" || app.ServiceID != "" {
+		t.Fatalf("application response = %#v", app)
+	}
+
+	serviceCertificate := sampleCertificate()
+	serviceCertificate.ApplicationID = uuid.Nil
+	serviceCertificate.ServiceID = uuid.New()
+	service := newCertificateResponse(serviceCertificate, CertificateStatusObservation{})
+	if service.OwnerKind != "service" || service.ServiceID != serviceCertificate.ServiceID.String() || service.PanelState != nil {
+		t.Fatalf("service response = %#v", service)
+	}
+
+	panelCertificate := sampleCertificate()
+	panelCertificate.ApplicationID = uuid.Nil
+	panel := newCertificateResponse(panelCertificate, CertificateStatusObservation{Status: CertificateStatusAbsent})
+	if panel.OwnerKind != "control_plane" || panel.PanelState == nil || panel.ServiceID != "" {
+		t.Fatalf("panel response = %#v", panel)
+	}
+}
+
 func TestCertificateCRUDRoutes(t *testing.T) {
 	service := &fakeCertificateService{certificate: sampleCertificate()}
 	handler := newSSLRoutes(nil, service)
@@ -259,6 +283,16 @@ func TestCertificateCRUDRoutes(t *testing.T) {
 	}
 	if envelope.Certificate.Domain != "app.example.com" || envelope.Certificate.DNSProviderID == "" {
 		t.Fatalf("certificate response = %#v", envelope.Certificate)
+	}
+
+	serviceID := uuid.MustParse("eeeeeeee-0000-0000-0000-000000000005")
+	serviceOwned := doJSON(t, handler, http.MethodPost, "/v1/proxy/certificates",
+		`{"service_id":"`+serviceID.String()+`","domain":"svc.example.com","challenge":"http-01"}`)
+	if serviceOwned.Code != http.StatusCreated {
+		t.Fatalf("service create status = %d, body = %s", serviceOwned.Code, serviceOwned.Body.String())
+	}
+	if service.lastInput.ServiceID != serviceID || service.lastInput.ApplicationID != uuid.Nil {
+		t.Fatalf("service create input = %#v", service.lastInput)
 	}
 
 	listed := doJSON(t, handler, http.MethodGet, "/v1/proxy/certificates", "")

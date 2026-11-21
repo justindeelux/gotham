@@ -141,7 +141,7 @@ func TestServiceRoutesForServerResolution(t *testing.T) {
 	}
 	for name, tc := range cases {
 		t.Run(name, func(t *testing.T) {
-			routes, diagnostics, hosts := serviceRoutesForServer(tc.proxied, serverID, DefaultBackendHost, tc.containers, tc.claimed)
+			routes, diagnostics, hosts := serviceRoutesForServer(tc.proxied, serverID, DefaultBackendHost, tc.containers, tc.claimed, nil)
 			if len(routes) != tc.wantRoutes {
 				t.Fatalf("routes = %+v, want %d", routes, tc.wantRoutes)
 			}
@@ -177,7 +177,7 @@ func TestServiceRouteProtocolBuildsHTTPSTLSRouter(t *testing.T) {
 		},
 	}}, serverID, DefaultBackendHost, []containers.Container{
 		composeContainer(project, "web", "80", "32768"),
-	}, nil)
+	}, nil, nil)
 	if len(diagnostics) != 0 || len(routes) != 2 {
 		t.Fatalf("routes = %+v diagnostics = %+v", routes, diagnostics)
 	}
@@ -193,6 +193,94 @@ func TestServiceRouteProtocolBuildsHTTPSTLSRouter(t *testing.T) {
 	}
 }
 
+func TestServiceRouteUsesItsCertificateIntent(t *testing.T) {
+	serverID := uuid.New()
+	serviceID := uuid.New()
+	project := "gotham-" + serviceID.String()
+	providerID := uuid.New()
+	providers := map[uuid.UUID]providerAccess{
+		providerID: {
+			provider: DNSProvider{
+				ID:       providerID,
+				Provider: ProviderCloudflare,
+				Zones:    []string{"example.com"},
+				Enabled:  true,
+			},
+			credential: "token",
+		},
+	}
+	routes, diagnostics, _ := serviceRoutesForServer([]ProxiedService{{
+		ID: serviceID, ServerID: serverID, Name: "shop", Project: project,
+		Domains: []ServiceDomain{
+			{Service: "web", Host: "secure.example.com", Port: 80, Protocol: ProtocolHTTPS},
+		},
+		Certificates: []*CertificateIntent{{
+			Domain:        "secure.example.com",
+			Enabled:       true,
+			Challenge:     ChallengeDNS01,
+			DNSProviderID: providerID,
+		}},
+	}}, serverID, DefaultBackendHost, []containers.Container{
+		composeContainer(project, "web", "80", "32768"),
+	}, nil, providers)
+	if len(diagnostics) != 0 || len(routes) != 1 {
+		t.Fatalf("routes = %+v diagnostics = %+v", routes, diagnostics)
+	}
+	certificate := routes[0].Certificate
+	if certificate == nil {
+		t.Fatal("service route has no certificate intent")
+	}
+	if certificate.Resolver != DNSResolverName(ProviderCloudflare) {
+		t.Fatalf("resolver = %q, want the dns-01 resolver", certificate.Resolver)
+	}
+	if certificate.DNSProviderID != providerID {
+		t.Fatalf("provider = %s, want %s", certificate.DNSProviderID, providerID)
+	}
+	cfg := BuildConfig(routes, nil, nil, "", "")
+	if router := cfg.Routers[routes[0].Name+"-websecure"]; router.TLS == nil || router.TLS.CertResolver != DNSResolverName(ProviderCloudflare) {
+		t.Fatalf("websecure router = %+v, want the dns-01 resolver", router)
+	}
+}
+
+func TestBackfilledServiceHTTPSDomainsKeepTLS(t *testing.T) {
+	serverID := uuid.New()
+	serviceID := uuid.New()
+	project := "gotham-" + serviceID.String()
+	routes, diagnostics, _ := serviceRoutesForServer([]ProxiedService{{
+		ID: serviceID, ServerID: serverID, Name: "shop", Project: project,
+		Domains: []ServiceDomain{
+			{Service: "web", Host: "old.example.com", Port: 80, Protocol: ProtocolHTTPS},
+			{Service: "web", Host: "new.example.com", Port: 80, Protocol: ProtocolHTTPS},
+		},
+		// What migration 00093 backfills for every pre-existing https row.
+		Certificates: []*CertificateIntent{
+			{Domain: "old.example.com", Enabled: true, Challenge: ChallengeHTTP01},
+			{Domain: "new.example.com", Enabled: true, Challenge: ChallengeHTTP01},
+		},
+	}}, serverID, DefaultBackendHost, []containers.Container{
+		composeContainer(project, "web", "80", "32768"),
+	}, nil, nil)
+	if len(diagnostics) != 0 || len(routes) != 2 {
+		t.Fatalf("routes = %+v diagnostics = %+v", routes, diagnostics)
+	}
+	cfg := BuildConfig(routes, nil, nil, "", "")
+	for _, route := range routes {
+		if NormalizeProtocol(route.Protocol) != ProtocolHTTPS {
+			t.Fatalf("%s protocol = %q, want https", route.Domain, route.Protocol)
+		}
+		if route.Certificate == nil || route.Certificate.Resolver != DefaultResolverName {
+			t.Fatalf("%s certificate = %+v, want the default resolver", route.Domain, route.Certificate)
+		}
+		if _, ok := cfg.Routers[route.Name+"-websecure"]; !ok {
+			t.Errorf("%s has no websecure router", route.Domain)
+		}
+		web := cfg.Routers[route.Name+"-web"]
+		if len(web.Middlewares) != 1 || web.Middlewares[0] != HTTPRedirectMiddleware {
+			t.Errorf("%s web router = %+v, want the https redirect", route.Domain, web)
+		}
+	}
+}
+
 func TestServiceRoutesDuplicateHosts(t *testing.T) {
 	serverID := uuid.New()
 	firstID, secondID := uuid.New(), uuid.New()
@@ -204,7 +292,7 @@ func TestServiceRoutesDuplicateHosts(t *testing.T) {
 	}, serverID, DefaultBackendHost, []containers.Container{
 		composeContainer("gotham-"+firstID.String(), "web", "80", "32768"),
 		composeContainer("gotham-"+secondID.String(), "api", "8080", "32769"),
-	}, nil)
+	}, nil, nil)
 	if len(routes) != 0 {
 		t.Fatalf("routes = %+v, want both duplicate bindings held back", routes)
 	}
@@ -225,7 +313,7 @@ func TestServiceRoutesReachTheGeneratedConfiguration(t *testing.T) {
 	routes, diagnostics, _ := serviceRoutesForServer([]ProxiedService{{
 		ID: serviceID, ServerID: serverID, Name: "shop", Project: project,
 		Domains: []ServiceDomain{{Service: "web", Host: "shop.example.com", Port: 80}},
-	}}, serverID, "172.17.0.1", []containers.Container{composeContainer(project, "web", "80", "32768")}, nil)
+	}}, serverID, "172.17.0.1", []containers.Container{composeContainer(project, "web", "80", "32768")}, nil, nil)
 	if len(routes) != 1 || len(diagnostics) != 0 {
 		t.Fatalf("routes = %+v, diagnostics = %+v", routes, diagnostics)
 	}

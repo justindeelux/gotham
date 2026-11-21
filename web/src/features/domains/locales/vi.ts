@@ -90,7 +90,8 @@ const vi = {
   },
   certificates: {
     title: "Cấu hình chứng chỉ",
-    onePerApp: "một cho mỗi ứng dụng",
+    onePerApp: "một cho mỗi miền tên",
+    serviceOwner: "dịch vụ {id}",
     add: "Thêm chứng chỉ",
     domain: "Tên miền",
     challenge: "Thử thách",
@@ -137,6 +138,7 @@ const vi = {
   },
   certificateForm: {
     application: "Ứng dụng",
+    service: "Dịch vụ",
     applicationAria: "Ứng dụng",
     selectApplication: "Chọn ứng dụng",
     domainFromApp: "Tên miền (từ ứng dụng)",

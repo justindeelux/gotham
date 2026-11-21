@@ -29,6 +29,7 @@ type fakeRepository struct {
 	deploys  map[uuid.UUID][]Deploy
 	servers  map[uuid.UUID]bool
 	domains  map[uuid.UUID][]ServiceDomain
+	certs    map[uuid.UUID][]CertificateIntent
 
 	applicationClaims map[string]bool
 	redirectSources   []string
@@ -53,6 +54,7 @@ func newFakeRepository() *fakeRepository {
 		deploys:  make(map[uuid.UUID][]Deploy),
 		servers:  make(map[uuid.UUID]bool),
 		domains:  make(map[uuid.UUID][]ServiceDomain),
+		certs:    make(map[uuid.UUID][]CertificateIntent),
 	}
 }
 
@@ -105,6 +107,16 @@ func (r *fakeRepository) CreateServiceWithDomains(ctx context.Context, service S
 			}
 			r.mu.Unlock()
 			return Service{}, err
+		}
+		if domain.Protocol == "https" && !domain.Disabled {
+			if err := r.CreateServiceCertificateIntentIfAbsent(ctx, CertificateIntent{
+				ServiceID: domain.ServiceID,
+				Domain:    domain.Domain,
+				Enabled:   true,
+				Challenge: "http-01",
+			}); err != nil {
+				return Service{}, err
+			}
 		}
 	}
 	return created, nil
@@ -348,6 +360,45 @@ func (r *fakeRepository) DeleteServiceDomains(_ context.Context, serviceID uuid.
 	r.mu.Lock()
 	defer r.mu.Unlock()
 	delete(r.domains, serviceID)
+	return nil
+}
+
+func (r *fakeRepository) ListServiceCertificateIntents(_ context.Context, serviceID uuid.UUID) ([]CertificateIntent, error) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	return append([]CertificateIntent{}, r.certs[serviceID]...), nil
+}
+
+func (r *fakeRepository) CreateServiceCertificateIntentIfAbsent(_ context.Context, in CertificateIntent) error {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	for _, intent := range r.certs[in.ServiceID] {
+		if intent.Domain == in.Domain {
+			return nil
+		}
+	}
+	r.certs[in.ServiceID] = append(r.certs[in.ServiceID], in)
+	return nil
+}
+
+func (r *fakeRepository) DeleteAutoServiceCertificateIntent(_ context.Context, serviceID uuid.UUID, domain string) error {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	kept := make([]CertificateIntent, 0, len(r.certs[serviceID]))
+	for _, intent := range r.certs[serviceID] {
+		if intent.Domain == domain && intent.Challenge == "http-01" && !intent.Wildcard {
+			continue
+		}
+		kept = append(kept, intent)
+	}
+	r.certs[serviceID] = kept
+	return nil
+}
+
+func (r *fakeRepository) DeleteServiceCertificateIntents(_ context.Context, serviceID uuid.UUID) error {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	delete(r.certs, serviceID)
 	return nil
 }
 

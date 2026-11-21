@@ -292,6 +292,7 @@ type DomainCertificate struct {
 	Wildcard      bool               `json:"wildcard"`
 	CreatedAt     pgtype.Timestamptz `json:"created_at"`
 	UpdatedAt     pgtype.Timestamptz `json:"updated_at"`
+	ServiceID     pgtype.UUID        `json:"service_id"`
 	OwnerKind     *string            `json:"owner_kind"`
 }
 

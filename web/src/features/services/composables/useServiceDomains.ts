@@ -21,6 +21,7 @@ import {
   serviceDomainTargetSchema,
   serviceDomainTargets,
 } from "@/features/services/schemas/domains";
+import { useProxyStore } from "@/features/domains";
 import { useServicesStore } from "@/features/services/stores/services";
 import { isApiError } from "@/features/servers";
 import { activeLocale, i18n } from "@/shared/i18n";
@@ -49,6 +50,7 @@ export function useServiceDomains(
 ) {
   const message = useMessage();
   const servicesStore = useServicesStore();
+  const proxyStore = useProxyStore();
 
   const domains = ref<ServiceDomain[]>([]);
   const loading = ref(false);
@@ -218,6 +220,7 @@ export function useServiceDomains(
       }
       closeForm();
       await refresh(true);
+      await proxyStore.fetchCertificates().catch(() => undefined);
       await reloadService();
     } catch (err) {
       surfaceFormError(err);
@@ -241,6 +244,7 @@ export function useServiceDomains(
         disabled: !enabled,
       });
       await refresh(true);
+      await proxyStore.fetchCertificates().catch(() => undefined);
       await reloadService();
     } catch (err) {
       loadFailure.value = err;
@@ -258,6 +262,7 @@ export function useServiceDomains(
     try {
       await removeServiceDomain(serviceId.value, row.id);
       await refresh(true);
+      await proxyStore.fetchCertificates().catch(() => undefined);
       await reloadService();
       message.success(tr("services.toast.domainRemoved"));
     } catch (err) {

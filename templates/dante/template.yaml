@@ -1,0 +1,27 @@
+name: Dante
+icon: dante
+description: SOCKS5 forward proxy from Dante, protected by a username and a generated password.
+homepage: https://www.inet.no/dante/
+category:
+  - proxy
+fields:
+  - key: socks_port
+    label: SOCKS5 port
+    type: number
+    default: 1080
+    min: 1024
+    max: 65535
+    help: Host port clients use for SOCKS5 proxying.
+  - key: username
+    label: Username
+    type: text
+    default: gotham
+    pattern: ^[a-z][a-z0-9_-]{2,31}$
+    max_length: 32
+    help: Created as a system user inside the container; lowercase letters, digits, dashes and underscores.
+  - key: password
+    label: Password
+    type: secret
+    required: true
+    generate: true
+    help: Use Generate. It becomes the system user's password inside the container.

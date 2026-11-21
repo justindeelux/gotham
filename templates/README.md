@@ -157,6 +157,10 @@ Rendering is strict, non-executing string substitution:
   untouched and reaches the container literally. `${VAR}` references left in
   `compose.yaml` outside a placeholder are interpolated by the services
   pipeline at create/deploy time, exactly as for a hand-written document.
+- A literal `$` written in `compose.yaml` itself, such as a shell variable in an
+  `entrypoint`, must be doubled in the template (`$$user`, `$${VAR}`). The
+  services pipeline keeps the pair and Compose reduces it to one `$`, so the
+  container's shell sees the variable and a lone `$` never reaches the node.
 - Rendering is deterministic: the same values produce the same bytes.
 
 The loader also applies the value-independent structural subset at load time:

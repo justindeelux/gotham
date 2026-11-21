@@ -1,0 +1,27 @@
+name: Squid
+icon: squid
+description: HTTP and HTTPS (CONNECT) forward proxy from Squid, protected by a username and a generated password.
+homepage: https://www.squid-cache.org
+category:
+  - proxy
+fields:
+  - key: http_port
+    label: Proxy port
+    type: number
+    default: 3128
+    min: 1024
+    max: 65535
+    help: Host port clients use for HTTP and HTTPS (CONNECT) proxying.
+  - key: username
+    label: Username
+    type: text
+    default: gotham
+    pattern: ^[A-Za-z0-9._-]{1,32}$
+    max_length: 32
+    help: Required by the proxy; letters, digits, dots, dashes and underscores only.
+  - key: password
+    label: Password
+    type: secret
+    required: true
+    generate: true
+    help: Use Generate. Squid reads it through a helper script, and a password with whitespace breaks that helper.

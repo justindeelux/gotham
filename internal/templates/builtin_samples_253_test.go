@@ -31,6 +31,16 @@ func init() {
 		"password":   "web-secret",
 		"domain":     "mitm.example.test",
 	}
+	builtinSamples["squid"] = map[string]any{
+		"http_port": 3128,
+		"username":  "gotham",
+		"password":  "proxy-secret",
+	}
+	builtinSamples["dante"] = map[string]any{
+		"socks_port": 1080,
+		"username":   "gotham",
+		"password":   "proxy-secret",
+	}
 }
 
 // TestProxyTemplateDefaults renders each proxy template with its defaults and
@@ -41,7 +51,7 @@ func TestProxyTemplateDefaults(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Load(builtin.FS): %v", err)
 	}
-	for _, slug := range []string{"three-proxy", "gost", "mitmproxy"} {
+	for _, slug := range []string{"three-proxy", "gost", "mitmproxy", "squid", "dante"} {
 		t.Run(slug, func(t *testing.T) {
 			result, err := catalog.Render(slug, nil)
 			if err != nil {
@@ -76,6 +86,8 @@ func TestProxyTemplateAuthByDefault(t *testing.T) {
 		"three-proxy": "PROXY_PASSWORD: ${password}",
 		"gost":        "http://gotham:${password}@:8080",
 		"mitmproxy":   "proxyauth=gotham:${password}",
+		"squid":       "PROXY_PASSWORD: ${password}",
+		"dante":       "PROXY_PASSWORD: ${password}",
 	} {
 		t.Run(slug, func(t *testing.T) {
 			result, err := catalog.Render(slug, nil)

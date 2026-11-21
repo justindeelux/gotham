@@ -21,9 +21,14 @@ interface Props {
   providers: DNSProvider[];
   lockApplication?: boolean;
   domain?: string;
+  serviceName?: string;
 }
 
-const props = withDefaults(defineProps<Props>(), { lockApplication: false, domain: "" });
+const props = withDefaults(defineProps<Props>(), {
+  lockApplication: false,
+  domain: "",
+  serviceName: "",
+});
 const emit = defineEmits<{
   "update:modelValue": [value: CertificateDraft];
 }>();
@@ -70,6 +75,12 @@ const domainPreview = computed<string>(
 
 const isDns01 = computed<boolean>(() => props.modelValue.challenge === "dns-01");
 
+const isService = computed<boolean>(() => Boolean(props.modelValue.service_id));
+
+const serviceLabel = computed<string>(
+  () => props.serviceName || (props.modelValue.service_id ?? "").slice(0, 8),
+);
+
 function patch(changes: Partial<CertificateDraft>): void {
   emit("update:modelValue", { ...props.modelValue, ...changes });
 }
@@ -86,8 +97,13 @@ function setChallenge(challenge: string): void {
 
 <template>
   <NForm label-placement="top" :show-feedback="false" class="certificate-form form-container">
-    <NFormItem :label="$t('domains.certificateForm.application')" class="field-application">
+    <NFormItem
+      :label="isService ? $t('domains.certificateForm.service') : $t('domains.certificateForm.application')"
+      class="field-application"
+    >
+      <NText v-if="isService" class="mono">{{ serviceLabel }}</NText>
       <NSelect
+        v-else
         :value="modelValue.application_id"
         :options="applicationOptions"
         :disabled="lockApplication"

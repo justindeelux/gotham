@@ -104,9 +104,12 @@ and rejected in the service environment. A domain change marks the service
 variables.
 
 HTTPS rows serve through the default ACME resolver and redirect HTTP to HTTPS,
-exactly like application domains. A host is claimed platform-wide: a domain
-already used by an application, a redirect source, another service or a compose
-label is rejected at write time with `409`. See
+exactly like application domains. Each managed row shows its certificate status
+and opens the same per-domain certificate dialog as an application domain:
+adding an `https` row records a default `http-01` intent, and the row can switch
+it to `dns-01` or request a wildcard from there. A host is claimed
+platform-wide: a domain already used by an application, a redirect source,
+another service or a compose label is rejected at write time with `409`. See
 [Domains and previews](/using/domains-previews) for DNS and certificates, and
 [Proxy and DNS](/operating/proxy-dns) for the operator side.
 

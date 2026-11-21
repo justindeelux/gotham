@@ -119,7 +119,7 @@ func (q *Queries) CreateDNSProvider(ctx context.Context, arg CreateDNSProviderPa
 const createDomainCertificate = `-- name: CreateDomainCertificate :one
 INSERT INTO domain_certificates (application_id, domain, enabled, challenge, dns_provider_id, wildcard)
 VALUES ($1, $2, $3, $4, $5, $6)
-RETURNING id, application_id, domain, enabled, challenge, dns_provider_id, wildcard, created_at, updated_at, owner_kind
+RETURNING id, application_id, domain, enabled, challenge, dns_provider_id, wildcard, created_at, updated_at, service_id, owner_kind
 `
 
 type CreateDomainCertificateParams struct {
@@ -151,6 +151,7 @@ func (q *Queries) CreateDomainCertificate(ctx context.Context, arg CreateDomainC
 		&i.Wildcard,
 		&i.CreatedAt,
 		&i.UpdatedAt,
+		&i.ServiceID,
 		&i.OwnerKind,
 	)
 	return i, err
@@ -230,6 +231,79 @@ func (q *Queries) CreateDomainRedirect(ctx context.Context, arg CreateDomainRedi
 	return i, err
 }
 
+const createServiceDomainCertificate = `-- name: CreateServiceDomainCertificate :one
+INSERT INTO domain_certificates (service_id, domain, enabled, challenge, dns_provider_id, wildcard)
+VALUES ($1, $2, $3, $4, $5, $6)
+RETURNING id, application_id, domain, enabled, challenge, dns_provider_id, wildcard, created_at, updated_at, service_id, owner_kind
+`
+
+type CreateServiceDomainCertificateParams struct {
+	ServiceID     pgtype.UUID `json:"service_id"`
+	Domain        string      `json:"domain"`
+	Enabled       bool        `json:"enabled"`
+	Challenge     string      `json:"challenge"`
+	DnsProviderID pgtype.UUID `json:"dns_provider_id"`
+	Wildcard      bool        `json:"wildcard"`
+}
+
+func (q *Queries) CreateServiceDomainCertificate(ctx context.Context, arg CreateServiceDomainCertificateParams) (DomainCertificate, error) {
+	row := q.db.QueryRow(ctx, createServiceDomainCertificate,
+		arg.ServiceID,
+		arg.Domain,
+		arg.Enabled,
+		arg.Challenge,
+		arg.DnsProviderID,
+		arg.Wildcard,
+	)
+	var i DomainCertificate
+	err := row.Scan(
+		&i.ID,
+		&i.ApplicationID,
+		&i.Domain,
+		&i.Enabled,
+		&i.Challenge,
+		&i.DnsProviderID,
+		&i.Wildcard,
+		&i.CreatedAt,
+		&i.UpdatedAt,
+		&i.ServiceID,
+		&i.OwnerKind,
+	)
+	return i, err
+}
+
+const createServiceDomainCertificateIfAbsent = `-- name: CreateServiceDomainCertificateIfAbsent :execrows
+INSERT INTO domain_certificates (service_id, domain, enabled, challenge, dns_provider_id, wildcard)
+VALUES ($1, $2, $3, $4, $5, $6)
+ON CONFLICT (service_id, domain) DO NOTHING
+`
+
+type CreateServiceDomainCertificateIfAbsentParams struct {
+	ServiceID     pgtype.UUID `json:"service_id"`
+	Domain        string      `json:"domain"`
+	Enabled       bool        `json:"enabled"`
+	Challenge     string      `json:"challenge"`
+	DnsProviderID pgtype.UUID `json:"dns_provider_id"`
+	Wildcard      bool        `json:"wildcard"`
+}
+
+// CreateServiceDomainCertificateIfAbsent mirrors the application attach path
+// for service domains: a host that already holds an intent is a silent no-op.
+func (q *Queries) CreateServiceDomainCertificateIfAbsent(ctx context.Context, arg CreateServiceDomainCertificateIfAbsentParams) (int64, error) {
+	result, err := q.db.Exec(ctx, createServiceDomainCertificateIfAbsent,
+		arg.ServiceID,
+		arg.Domain,
+		arg.Enabled,
+		arg.Challenge,
+		arg.DnsProviderID,
+		arg.Wildcard,
+	)
+	if err != nil {
+		return 0, err
+	}
+	return result.RowsAffected(), nil
+}
+
 const deleteAutoDomainCertificate = `-- name: DeleteAutoDomainCertificate :execrows
 DELETE FROM domain_certificates
 WHERE application_id = $1 AND domain = $2 AND challenge = 'http-01' AND NOT wildcard
@@ -245,6 +319,27 @@ type DeleteAutoDomainCertificateParams struct {
 // or dns-01 intent is never touched.
 func (q *Queries) DeleteAutoDomainCertificate(ctx context.Context, arg DeleteAutoDomainCertificateParams) (int64, error) {
 	result, err := q.db.Exec(ctx, deleteAutoDomainCertificate, arg.ApplicationID, arg.Domain)
+	if err != nil {
+		return 0, err
+	}
+	return result.RowsAffected(), nil
+}
+
+const deleteAutoServiceDomainCertificate = `-- name: DeleteAutoServiceDomainCertificate :execrows
+DELETE FROM domain_certificates
+WHERE service_id = $1 AND domain = $2 AND challenge = 'http-01' AND NOT wildcard
+`
+
+type DeleteAutoServiceDomainCertificateParams struct {
+	ServiceID pgtype.UUID `json:"service_id"`
+	Domain    string      `json:"domain"`
+}
+
+// DeleteAutoServiceDomainCertificate removes the default enabled http-01
+// non-wildcard intent a renamed or detached service domain got. An operator's
+// wildcard or dns-01 intent is never touched.
+func (q *Queries) DeleteAutoServiceDomainCertificate(ctx context.Context, arg DeleteAutoServiceDomainCertificateParams) (int64, error) {
+	result, err := q.db.Exec(ctx, deleteAutoServiceDomainCertificate, arg.ServiceID, arg.Domain)
 	if err != nil {
 		return 0, err
 	}
@@ -295,6 +390,17 @@ func (q *Queries) DeleteProxyConfigVersion(ctx context.Context, arg DeleteProxyC
 	return err
 }
 
+const deleteServiceDomainCertificates = `-- name: DeleteServiceDomainCertificates :exec
+DELETE FROM domain_certificates WHERE service_id = $1
+`
+
+// DeleteServiceDomainCertificates drops the intents of a soft-deleted
+// service, whose row (and FK) stays behind.
+func (q *Queries) DeleteServiceDomainCertificates(ctx context.Context, serviceID pgtype.UUID) error {
+	_, err := q.db.Exec(ctx, deleteServiceDomainCertificates, serviceID)
+	return err
+}
+
 const getDNSProvider = `-- name: GetDNSProvider :one
 SELECT id, provider, name, zones, ciphertext, enabled, created_at, updated_at FROM dns_providers WHERE id = $1
 `
@@ -316,7 +422,7 @@ func (q *Queries) GetDNSProvider(ctx context.Context, id pgtype.UUID) (DnsProvid
 }
 
 const getDomainCertificate = `-- name: GetDomainCertificate :one
-SELECT id, application_id, domain, enabled, challenge, dns_provider_id, wildcard, created_at, updated_at, owner_kind FROM domain_certificates WHERE id = $1
+SELECT id, application_id, domain, enabled, challenge, dns_provider_id, wildcard, created_at, updated_at, service_id, owner_kind FROM domain_certificates WHERE id = $1
 `
 
 func (q *Queries) GetDomainCertificate(ctx context.Context, id pgtype.UUID) (DomainCertificate, error) {
@@ -332,6 +438,7 @@ func (q *Queries) GetDomainCertificate(ctx context.Context, id pgtype.UUID) (Dom
 		&i.Wildcard,
 		&i.CreatedAt,
 		&i.UpdatedAt,
+		&i.ServiceID,
 		&i.OwnerKind,
 	)
 	return i, err
@@ -447,10 +554,12 @@ func (q *Queries) ListApplicationBaseDomains(ctx context.Context) ([]ListApplica
 
 const listCertificateStatusTargets = `-- name: ListCertificateStatusTargets :many
 SELECT c.id AS certificate_id, c.domain,
-       COALESCE(a.server_id, panel.id) AS server_id
+       COALESCE(a.server_id, s.server_id, panel.id) AS server_id
 FROM domain_certificates c
 LEFT JOIN applications a ON a.id = c.application_id
-LEFT JOIN servers panel ON c.application_id IS NULL AND panel.name = 'localhost'
+LEFT JOIN services s ON s.id = c.service_id AND s.deleted_at IS NULL
+LEFT JOIN servers panel
+       ON c.application_id IS NULL AND c.service_id IS NULL AND panel.name = 'localhost'
 ORDER BY c.id
 `
 
@@ -461,9 +570,9 @@ type ListCertificateStatusTargetsRow struct {
 }
 
 // ListCertificateStatusTargets joins every certificate intent to the node
-// hosting its application, so the status service can read each node's ACME
-// storage once and map certificates to it. Disabled intents are included:
-// status is a fact about the node's storage, not about the intent.
+// hosting its owner, so the status service can read each node's ACME storage
+// once and map certificates to it. Disabled intents are included: status is a
+// fact about the node's storage, not about the intent.
 func (q *Queries) ListCertificateStatusTargets(ctx context.Context) ([]ListCertificateStatusTargetsRow, error) {
 	rows, err := q.db.Query(ctx, listCertificateStatusTargets)
 	if err != nil {
@@ -522,7 +631,7 @@ func (q *Queries) ListDNSProviders(ctx context.Context) ([]DnsProvider, error) {
 }
 
 const listDomainCertificates = `-- name: ListDomainCertificates :many
-SELECT id, application_id, domain, enabled, challenge, dns_provider_id, wildcard, created_at, updated_at, owner_kind FROM domain_certificates
+SELECT id, application_id, domain, enabled, challenge, dns_provider_id, wildcard, created_at, updated_at, service_id, owner_kind FROM domain_certificates
 ORDER BY created_at DESC, id DESC
 `
 
@@ -545,6 +654,7 @@ func (q *Queries) ListDomainCertificates(ctx context.Context) ([]DomainCertifica
 			&i.Wildcard,
 			&i.CreatedAt,
 			&i.UpdatedAt,
+			&i.ServiceID,
 			&i.OwnerKind,
 		); err != nil {
 			return nil, err
@@ -558,7 +668,7 @@ func (q *Queries) ListDomainCertificates(ctx context.Context) ([]DomainCertifica
 }
 
 const listDomainCertificatesByApplication = `-- name: ListDomainCertificatesByApplication :many
-SELECT id, application_id, domain, enabled, challenge, dns_provider_id, wildcard, created_at, updated_at, owner_kind FROM domain_certificates
+SELECT id, application_id, domain, enabled, challenge, dns_provider_id, wildcard, created_at, updated_at, service_id, owner_kind FROM domain_certificates
 WHERE application_id = $1
 ORDER BY created_at, id
 `
@@ -584,6 +694,47 @@ func (q *Queries) ListDomainCertificatesByApplication(ctx context.Context, appli
 			&i.Wildcard,
 			&i.CreatedAt,
 			&i.UpdatedAt,
+			&i.ServiceID,
+			&i.OwnerKind,
+		); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
+const listDomainCertificatesByService = `-- name: ListDomainCertificatesByService :many
+SELECT id, application_id, domain, enabled, challenge, dns_provider_id, wildcard, created_at, updated_at, service_id, owner_kind FROM domain_certificates
+WHERE service_id = $1
+ORDER BY created_at, id
+`
+
+// ListDomainCertificatesByService returns one service's certificate intents,
+// oldest first (GOTHAM-257: one intent per domain).
+func (q *Queries) ListDomainCertificatesByService(ctx context.Context, serviceID pgtype.UUID) ([]DomainCertificate, error) {
+	rows, err := q.db.Query(ctx, listDomainCertificatesByService, serviceID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	items := []DomainCertificate{}
+	for rows.Next() {
+		var i DomainCertificate
+		if err := rows.Scan(
+			&i.ID,
+			&i.ApplicationID,
+			&i.Domain,
+			&i.Enabled,
+			&i.Challenge,
+			&i.DnsProviderID,
+			&i.Wildcard,
+			&i.CreatedAt,
+			&i.UpdatedAt,
+			&i.ServiceID,
 			&i.OwnerKind,
 		); err != nil {
 			return nil, err
@@ -671,7 +822,7 @@ func (q *Queries) ListDomainRedirectsByApplication(ctx context.Context, applicat
 }
 
 const listEnabledDomainCertificatesByProvider = `-- name: ListEnabledDomainCertificatesByProvider :many
-SELECT id, application_id, domain, enabled, challenge, dns_provider_id, wildcard, created_at, updated_at, owner_kind FROM domain_certificates
+SELECT id, application_id, domain, enabled, challenge, dns_provider_id, wildcard, created_at, updated_at, service_id, owner_kind FROM domain_certificates
 WHERE dns_provider_id = $1 AND enabled
 ORDER BY created_at, id
 `
@@ -696,6 +847,7 @@ func (q *Queries) ListEnabledDomainCertificatesByProvider(ctx context.Context, d
 			&i.Wildcard,
 			&i.CreatedAt,
 			&i.UpdatedAt,
+			&i.ServiceID,
 			&i.OwnerKind,
 		); err != nil {
 			return nil, err
@@ -829,6 +981,51 @@ func (q *Queries) ListProxiedCertificates(ctx context.Context) ([]ListProxiedCer
 		var i ListProxiedCertificatesRow
 		if err := rows.Scan(
 			&i.ApplicationID,
+			&i.Domain,
+			&i.Enabled,
+			&i.Challenge,
+			&i.Wildcard,
+			&i.DnsProviderID,
+		); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
+const listProxiedServiceCertificates = `-- name: ListProxiedServiceCertificates :many
+SELECT service_id, domain, enabled, challenge, wildcard, dns_provider_id
+FROM domain_certificates
+WHERE service_id IS NOT NULL
+ORDER BY service_id, created_at, id
+`
+
+type ListProxiedServiceCertificatesRow struct {
+	ServiceID     pgtype.UUID `json:"service_id"`
+	Domain        string      `json:"domain"`
+	Enabled       bool        `json:"enabled"`
+	Challenge     string      `json:"challenge"`
+	Wildcard      bool        `json:"wildcard"`
+	DnsProviderID pgtype.UUID `json:"dns_provider_id"`
+}
+
+// ListProxiedServiceCertificates feeds the Traefik generator for service
+// domains (GOTHAM-257), grouped onto its service route in Go.
+func (q *Queries) ListProxiedServiceCertificates(ctx context.Context) ([]ListProxiedServiceCertificatesRow, error) {
+	rows, err := q.db.Query(ctx, listProxiedServiceCertificates)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	items := []ListProxiedServiceCertificatesRow{}
+	for rows.Next() {
+		var i ListProxiedServiceCertificatesRow
+		if err := rows.Scan(
+			&i.ServiceID,
 			&i.Domain,
 			&i.Enabled,
 			&i.Challenge,
@@ -1119,7 +1316,7 @@ SET domain = $2,
     wildcard = $6,
     updated_at = now()
 WHERE id = $1
-RETURNING id, application_id, domain, enabled, challenge, dns_provider_id, wildcard, created_at, updated_at, owner_kind
+RETURNING id, application_id, domain, enabled, challenge, dns_provider_id, wildcard, created_at, updated_at, service_id, owner_kind
 `
 
 type UpdateDomainCertificateParams struct {
@@ -1151,6 +1348,7 @@ func (q *Queries) UpdateDomainCertificate(ctx context.Context, arg UpdateDomainC
 		&i.Wildcard,
 		&i.CreatedAt,
 		&i.UpdatedAt,
+		&i.ServiceID,
 		&i.OwnerKind,
 	)
 	return i, err

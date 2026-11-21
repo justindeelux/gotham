@@ -2,7 +2,6 @@ import { useMessage } from "naive-ui";
 import { activeLocale, i18n } from "@/shared/i18n";
 import { computed, onMounted, ref, watch, type Ref } from "vue";
 
-import type { Application } from "@/features/applications/api/applications";
 import {
   describeProxyError,
   draftFromCertificate,
@@ -12,8 +11,21 @@ import {
 } from "@/features/domains";
 import type { Certificate, CertificateDraft, DNSProvider } from "@/features/domains";
 
+export interface CertificateOwner {
+  kind: "application" | "service";
+  id: string;
+  name?: string;
+}
+
+function ownerCertificate(certificate: Certificate, owner: CertificateOwner): boolean {
+  if (owner.kind === "service") {
+    return certificate.service_id === owner.id;
+  }
+  return certificate.application_id === owner.id;
+}
+
 export function useCertificateConfig(
-  application: Ref<Application>,
+  owner: Ref<CertificateOwner>,
   domain: Ref<string>,
 ) {
   const message = useMessage();
@@ -31,8 +43,10 @@ export function useCertificateConfig(
   const certificateDraft = ref<CertificateDraft>(emptyDraft());
 
   function emptyDraft(): CertificateDraft {
+    const current = owner.value;
     return {
-      application_id: application.value.id,
+      application_id: current.kind === "application" ? current.id : "",
+      service_id: current.kind === "service" ? current.id : "",
       challenge: "http-01",
       dns_provider_id: "",
       wildcard: false,
@@ -47,7 +61,7 @@ export function useCertificateConfig(
     }
     return (
       proxyStore.certificates.find(
-        (item) => item.application_id === application.value.id && item.domain === host,
+        (item) => item.domain === host && ownerCertificate(item, owner.value),
       ) ?? null
     );
   });
@@ -81,9 +95,12 @@ export function useCertificateConfig(
         await proxyStore.updateCertificateConfig(existing.id, input);
         message.success(tr("applications.detail.certSaved"));
       } else {
+        const current = owner.value;
         await proxyStore.createCertificateConfig({
           ...input,
-          application_id: application.value.id,
+          ...(current.kind === "service"
+            ? { service_id: current.id }
+            : { application_id: current.id }),
           domain: domain.value,
         });
         message.success(tr("applications.detail.certCreated"));
@@ -121,9 +138,10 @@ export function useCertificateConfig(
   }
 
   watch(
-    () => application.value.id,
+    () => owner.value.id,
     () => {
       certificateErrorRaw.value = null;
+      certificateDraft.value = emptyDraft();
       void load();
     },
   );

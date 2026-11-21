@@ -9,6 +9,7 @@ import (
 
 type CreateCertificateInput struct {
 	ApplicationID uuid.UUID
+	ServiceID     uuid.UUID
 	Domain        string
 	Enabled       *bool
 	Challenge     ChallengeMode
@@ -34,6 +35,7 @@ type CertificateService interface {
 
 type certificateDraft struct {
 	applicationID uuid.UUID
+	serviceID     uuid.UUID
 	domain        string
 	enabled       bool
 	challenge     ChallengeMode
@@ -41,19 +43,103 @@ type certificateDraft struct {
 	wildcard      bool
 }
 
+// certificateOwner is the routing owner a certificate belongs to. The control
+// plane is the owner with neither id set.
+type certificateOwner struct {
+	applicationID  uuid.UUID
+	serviceID      uuid.UUID
+	domainDisabled bool
+	domains        []string
+}
+
+func (o certificateOwner) hasDomain(domain string) bool {
+	for _, owned := range o.domains {
+		if owned == domain {
+			return true
+		}
+	}
+	return false
+}
+
+func (o certificateOwner) defaultDomain() (string, error) {
+	if o.domainDisabled {
+		return "", fmt.Errorf("%w: the owner's domains are disabled; resolve the duplicate-domain conflict first", ErrValidation)
+	}
+	if len(o.domains) == 0 {
+		return "", fmt.Errorf("%w: the owner has no valid base domain to certify", ErrValidation)
+	}
+	domain := NormalizeDomain(o.domains[0])
+	if err := ValidateDomain(domain); err != nil {
+		return "", fmt.Errorf("%w: the owner has no valid base domain to certify", ErrValidation)
+	}
+	return domain, nil
+}
+
+func (o certificateOwner) label() string {
+	if o.serviceID != uuid.Nil {
+		return "service"
+	}
+	return "application"
+}
+
+func ownerFromApplication(info ApplicationInfo) certificateOwner {
+	domains := info.Domains
+	if len(domains) == 0 && info.BaseDomain != "" {
+		domains = []string{NormalizeDomain(info.BaseDomain)}
+	}
+	return certificateOwner{
+		applicationID:  info.ID,
+		domainDisabled: info.DomainDisabled,
+		domains:        domains,
+	}
+}
+
+func ownerFromService(info ServiceInfo) certificateOwner {
+	return certificateOwner{
+		serviceID:      info.ID,
+		domainDisabled: info.DomainDisabled,
+		domains:        info.Domains,
+	}
+}
+
+func (s *sslService) certificateOwnerFor(ctx context.Context, applicationID, serviceID uuid.UUID) (certificateOwner, error) {
+	if serviceID != uuid.Nil {
+		info, err := s.store.GetService(ctx, serviceID)
+		if err != nil {
+			return certificateOwner{}, err
+		}
+		return ownerFromService(info), nil
+	}
+	info, err := s.store.GetApplication(ctx, applicationID)
+	if err != nil {
+		return certificateOwner{}, err
+	}
+	return ownerFromApplication(info), nil
+}
+
+func (s *sslService) certificatesByOwner(ctx context.Context, owner certificateOwner) ([]DomainCertificate, error) {
+	if owner.serviceID != uuid.Nil {
+		return s.store.ListCertificatesByService(ctx, owner.serviceID)
+	}
+	return s.store.ListCertificatesByApplication(ctx, owner.applicationID)
+}
+
 func (s *sslService) CreateCertificate(ctx context.Context, in CreateCertificateInput) (DomainCertificate, error) {
-	if in.ApplicationID == uuid.Nil {
-		return DomainCertificate{}, fmt.Errorf("%w: application_id is required", ErrValidation)
+	if in.ApplicationID == uuid.Nil && in.ServiceID == uuid.Nil {
+		return DomainCertificate{}, fmt.Errorf("%w: application_id or service_id is required", ErrValidation)
+	}
+	if in.ApplicationID != uuid.Nil && in.ServiceID != uuid.Nil {
+		return DomainCertificate{}, fmt.Errorf("%w: application_id and service_id are mutually exclusive", ErrValidation)
 	}
 	var certificate DomainCertificate
 	err := s.mutate(ctx, func(ctx context.Context) error {
-		app, err := s.store.GetApplication(ctx, in.ApplicationID)
+		owner, err := s.certificateOwnerFor(ctx, in.ApplicationID, in.ServiceID)
 		if err != nil {
 			return err
 		}
 		domain := NormalizeDomain(in.Domain)
 		if domain == "" {
-			domain, err = certificateDomain(app)
+			domain, err = owner.defaultDomain()
 			if err != nil {
 				return err
 			}
@@ -61,13 +147,14 @@ func (s *sslService) CreateCertificate(ctx context.Context, in CreateCertificate
 			if err := ValidateDomain(domain); err != nil {
 				return fmt.Errorf("%w: invalid certificate domain: %v", ErrValidation, err)
 			}
-			if !app.HasDomain(domain) {
-				return fmt.Errorf("%w: %q is not attached to the application", ErrValidation, domain)
+			if !owner.hasDomain(domain) {
+				return fmt.Errorf("%w: %q is not attached to the %s", ErrValidation, domain, owner.label())
 			}
 		}
 
 		draft := certificateDraft{
-			applicationID: app.ID,
+			applicationID: owner.applicationID,
+			serviceID:     owner.serviceID,
 			domain:        domain,
 			enabled:       true,
 			challenge:     in.Challenge,
@@ -83,18 +170,19 @@ func (s *sslService) CreateCertificate(ctx context.Context, in CreateCertificate
 		if err := s.validateCertificate(ctx, draft); err != nil {
 			return err
 		}
-		existing, err := s.store.ListCertificatesByApplication(ctx, draft.applicationID)
+		existing, err := s.certificatesByOwner(ctx, owner)
 		if err != nil {
 			return err
 		}
 		for _, certificate := range existing {
 			if certificate.Domain == draft.domain {
-				return fmt.Errorf("%w: the application already has a certificate configuration for that domain", ErrConflict)
+				return fmt.Errorf("%w: the %s already has a certificate configuration for that domain", ErrConflict, owner.label())
 			}
 		}
 
 		created, err := s.store.CreateCertificate(ctx, CertificateWrite{
 			ApplicationID: draft.applicationID,
+			ServiceID:     draft.serviceID,
 			Domain:        draft.domain,
 			Enabled:       draft.enabled,
 			Challenge:     draft.challenge,
@@ -120,13 +208,12 @@ func (s *sslService) ListCertificates(ctx context.Context) ([]DomainCertificate,
 		return nil, err
 	}
 	visible := make([]DomainCertificate, 0, len(certificates))
+	panel := panelCertificateContext(ctx)
 	for _, cert := range certificates {
-		if (cert.ApplicationID == uuid.Nil) == panelCertificateContext(ctx) {
+		controlPlane := cert.ApplicationID == uuid.Nil && cert.ServiceID == uuid.Nil
+		if controlPlane == panel {
 			visible = append(visible, cert)
 		}
-	}
-	if panelCertificateContext(ctx) {
-		return visible, nil
 	}
 	return visible, nil
 }
@@ -152,7 +239,7 @@ func (s *sslService) UpdateCertificate(ctx context.Context, id uuid.UUID, in Upd
 		if err != nil {
 			return err
 		}
-		app, err := s.certificateApplication(ctx, existing)
+		owner, err := s.certificateOwner(ctx, existing)
 		if err != nil {
 			return err
 		}
@@ -164,12 +251,13 @@ func (s *sslService) UpdateCertificate(ctx context.Context, id uuid.UUID, in Upd
 				return fmt.Errorf("%w: invalid certificate domain: %v", ErrValidation, err)
 			}
 		}
-		if !app.HasDomain(domain) {
-			return fmt.Errorf("%w: %q is not attached to the application", ErrValidation, domain)
+		if !owner.hasDomain(domain) {
+			return fmt.Errorf("%w: %q is not attached to the %s", ErrValidation, domain, owner.label())
 		}
 
 		draft := certificateDraft{
-			applicationID: app.ID,
+			applicationID: owner.applicationID,
+			serviceID:     owner.serviceID,
 			domain:        domain,
 			enabled:       existing.Enabled,
 			challenge:     existing.Challenge,
@@ -196,19 +284,20 @@ func (s *sslService) UpdateCertificate(ctx context.Context, id uuid.UUID, in Upd
 			return err
 		}
 		if draft.domain != existing.Domain {
-			siblings, err := s.store.ListCertificatesByApplication(ctx, draft.applicationID)
+			siblings, err := s.certificatesByOwner(ctx, owner)
 			if err != nil {
 				return err
 			}
 			for _, sibling := range siblings {
 				if sibling.ID != id && sibling.Domain == draft.domain {
-					return fmt.Errorf("%w: the application already has a certificate configuration for that domain", ErrConflict)
+					return fmt.Errorf("%w: the %s already has a certificate configuration for that domain", ErrConflict, owner.label())
 				}
 			}
 		}
 
 		updated, err := s.store.UpdateCertificate(ctx, id, CertificateWrite{
 			ApplicationID: draft.applicationID,
+			ServiceID:     draft.serviceID,
 			Domain:        draft.domain,
 			Enabled:       draft.enabled,
 			Challenge:     draft.challenge,
@@ -237,7 +326,7 @@ func (s *sslService) DeleteCertificate(ctx context.Context, id uuid.UUID) error 
 		if err != nil {
 			return err
 		}
-		if _, err := s.certificateApplication(ctx, existing); err != nil {
+		if _, err := s.certificateOwner(ctx, existing); err != nil {
 			return err
 		}
 		return s.store.DeleteCertificate(ctx, id)
@@ -289,15 +378,4 @@ func (s *sslService) validateCertificate(ctx context.Context, draft certificateD
 		}
 	}
 	return nil
-}
-
-func certificateDomain(app ApplicationInfo) (string, error) {
-	if app.DomainDisabled {
-		return "", fmt.Errorf("%w: the application's domain is disabled; resolve the duplicate-domain conflict first", ErrValidation)
-	}
-	domain := NormalizeDomain(app.PrimaryDomain())
-	if err := ValidateDomain(domain); err != nil {
-		return "", fmt.Errorf("%w: the application has no valid base domain to certify", ErrValidation)
-	}
-	return domain, nil
 }

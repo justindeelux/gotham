@@ -64,12 +64,13 @@ type ServiceDomain struct {
 }
 
 type ProxiedService struct {
-	ID         uuid.UUID
-	ServerID   uuid.UUID
-	Name       string
-	Project    string
-	Domains    []ServiceDomain
-	Unroutable string
+	ID           uuid.UUID
+	ServerID     uuid.UUID
+	Name         string
+	Project      string
+	Domains      []ServiceDomain
+	Certificates []*CertificateIntent
+	Unroutable   string
 }
 
 type ServiceSource interface {

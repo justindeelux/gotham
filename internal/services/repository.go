@@ -12,6 +12,7 @@ import (
 	"github.com/jackc/pgx/v5/pgconn"
 	"github.com/jackc/pgx/v5/pgtype"
 
+	"github.com/justindeelux/gotham/internal/proxy"
 	"github.com/justindeelux/gotham/internal/store"
 	"github.com/justindeelux/gotham/internal/store/sqlc"
 )
@@ -44,6 +45,10 @@ type Repository interface {
 	InTx(ctx context.Context, fn func(tx Repository) error) error
 	DeleteServiceDomain(ctx context.Context, serviceID, domainID uuid.UUID) error
 	DeleteServiceDomains(ctx context.Context, serviceID uuid.UUID) error
+	ListServiceCertificateIntents(ctx context.Context, serviceID uuid.UUID) ([]CertificateIntent, error)
+	CreateServiceCertificateIntentIfAbsent(ctx context.Context, in CertificateIntent) error
+	DeleteAutoServiceCertificateIntent(ctx context.Context, serviceID uuid.UUID, domain string) error
+	DeleteServiceCertificateIntents(ctx context.Context, serviceID uuid.UUID) error
 	ServiceDomainClaim(ctx context.Context, domain string) (ServiceDomain, error)
 	ApplicationDomainClaim(ctx context.Context, domain string) (bool, error)
 	ListRedirectSources(ctx context.Context) ([]string, error)
@@ -163,6 +168,18 @@ func (r *storeRepository) CreateServiceWithDomains(ctx context.Context, service 
 					return ErrNotFound
 				}
 				return fmt.Errorf("services: create service domain: %w", err)
+			}
+			// A brand-new service has no intents yet, so a wildcard intent
+			// can never suppress this default one.
+			if domain.Protocol == proxy.ProtocolHTTPS && !domain.Disabled {
+				if _, err := tx.CreateServiceDomainCertificateIfAbsent(ctx, sqlc.CreateServiceDomainCertificateIfAbsentParams{
+					ServiceID: pgUUID(domain.ServiceID),
+					Domain:    domain.Domain,
+					Enabled:   true,
+					Challenge: string(proxy.ChallengeHTTP01),
+				}); err != nil {
+					return fmt.Errorf("services: create certificate intent: %w", err)
+				}
 			}
 		}
 		return nil
@@ -557,6 +574,56 @@ func (r *storeRepository) DeleteServiceDomain(ctx context.Context, serviceID, do
 func (r *storeRepository) DeleteServiceDomains(ctx context.Context, serviceID uuid.UUID) error {
 	if err := r.store.DeleteServiceDomainsByService(ctx, pgUUID(serviceID)); err != nil {
 		return fmt.Errorf("services: delete service domains: %w", err)
+	}
+	return nil
+}
+
+func (r *storeRepository) ListServiceCertificateIntents(ctx context.Context, serviceID uuid.UUID) ([]CertificateIntent, error) {
+	rows, err := r.store.ListDomainCertificatesByService(ctx, pgUUID(serviceID))
+	if err != nil {
+		return nil, fmt.Errorf("services: list certificate intents: %w", err)
+	}
+	intents := make([]CertificateIntent, 0, len(rows))
+	for _, row := range rows {
+		intents = append(intents, CertificateIntent{
+			ServiceID:     uuidFromPG(row.ServiceID),
+			Domain:        row.Domain,
+			Enabled:       row.Enabled,
+			Challenge:     row.Challenge,
+			DNSProviderID: uuidFromPG(row.DnsProviderID),
+			Wildcard:      row.Wildcard,
+		})
+	}
+	return intents, nil
+}
+
+func (r *storeRepository) CreateServiceCertificateIntentIfAbsent(ctx context.Context, in CertificateIntent) error {
+	if _, err := r.store.CreateServiceDomainCertificateIfAbsent(ctx, sqlc.CreateServiceDomainCertificateIfAbsentParams{
+		ServiceID:     pgUUID(in.ServiceID),
+		Domain:        in.Domain,
+		Enabled:       in.Enabled,
+		Challenge:     in.Challenge,
+		DnsProviderID: pgUUID(in.DNSProviderID),
+		Wildcard:      in.Wildcard,
+	}); err != nil {
+		return fmt.Errorf("services: create certificate intent: %w", err)
+	}
+	return nil
+}
+
+func (r *storeRepository) DeleteAutoServiceCertificateIntent(ctx context.Context, serviceID uuid.UUID, domain string) error {
+	if _, err := r.store.DeleteAutoServiceDomainCertificate(ctx, sqlc.DeleteAutoServiceDomainCertificateParams{
+		ServiceID: pgUUID(serviceID),
+		Domain:    domain,
+	}); err != nil {
+		return fmt.Errorf("services: delete auto certificate intent: %w", err)
+	}
+	return nil
+}
+
+func (r *storeRepository) DeleteServiceCertificateIntents(ctx context.Context, serviceID uuid.UUID) error {
+	if err := r.store.DeleteServiceDomainCertificates(ctx, pgUUID(serviceID)); err != nil {
+		return fmt.Errorf("services: delete certificate intents: %w", err)
 	}
 	return nil
 }

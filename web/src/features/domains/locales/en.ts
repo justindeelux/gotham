@@ -87,7 +87,8 @@ const en = {
   },
   certificates: {
     title: "Certificate configurations",
-    onePerApp: "one per application",
+    onePerApp: "one per domain",
+    serviceOwner: "service {id}",
     add: "Add certificate",
     domain: "Domain",
     challenge: "Challenge",
@@ -137,6 +138,7 @@ const en = {
   },
   certificateForm: {
     application: "Application",
+    service: "Service",
     applicationAria: "Application",
     selectApplication: "Select an application",
     domainFromApp: "Domain (from the application)",

@@ -742,3 +742,200 @@ func TestDeployMarksPendingWhenPrimaryChanges(t *testing.T) {
 		t.Fatalf("pending changes = %v, want empty after the redeploy", loaded.PendingChanges)
 	}
 }
+
+func serviceIntents(t *testing.T, repo *fakeRepository, serviceID uuid.UUID) []CertificateIntent {
+	t.Helper()
+	intents, err := repo.ListServiceCertificateIntents(context.Background(), serviceID)
+	if err != nil {
+		t.Fatalf("ListServiceCertificateIntents: %v", err)
+	}
+	return intents
+}
+
+func TestAddDomainHTTPSRecordsAutoCertificateIntent(t *testing.T) {
+	repo := newFakeRepository()
+	svc := newDomainTestService(t, repo, &fakeAgent{}, &fakeRouteSync{})
+	userID := uuid.New()
+	service := createDomainService(t, svc, repo, userID)
+	ctx := context.Background()
+
+	if _, err := svc.AddDomain(ctx, userID, service.ID, DomainInput{
+		Domain: "secure.example.com", ComposeService: "web", Port: 80, Protocol: "https",
+	}); err != nil {
+		t.Fatalf("AddDomain https: %v", err)
+	}
+	intents := serviceIntents(t, repo, service.ID)
+	if len(intents) != 1 {
+		t.Fatalf("intents = %+v, want one", intents)
+	}
+	if intent := intents[0]; intent.Domain != "secure.example.com" || !intent.Enabled || intent.Challenge != "http-01" || intent.Wildcard {
+		t.Fatalf("intent = %+v", intent)
+	}
+
+	if _, err := svc.AddDomain(ctx, userID, service.ID, DomainInput{
+		Domain: "plain.example.com", ComposeService: "web", Port: 80, Protocol: "http",
+	}); err != nil {
+		t.Fatalf("AddDomain http: %v", err)
+	}
+	if intents := serviceIntents(t, repo, service.ID); len(intents) != 1 {
+		t.Fatalf("intents after http = %+v, want only the https one", intents)
+	}
+}
+
+func TestAddDomainDisabledHTTPSRecordsNoIntent(t *testing.T) {
+	repo := newFakeRepository()
+	svc := newDomainTestService(t, repo, &fakeAgent{}, &fakeRouteSync{})
+	userID := uuid.New()
+	service := createDomainService(t, svc, repo, userID)
+	ctx := context.Background()
+
+	disabled := true
+	if _, err := svc.AddDomain(ctx, userID, service.ID, DomainInput{
+		Domain: "secure.example.com", ComposeService: "web", Port: 80, Protocol: "https", Disabled: &disabled,
+	}); err != nil {
+		t.Fatalf("AddDomain disabled: %v", err)
+	}
+	if intents := serviceIntents(t, repo, service.ID); len(intents) != 0 {
+		t.Fatalf("intents = %+v, want none for a disabled row", intents)
+	}
+}
+
+func TestAddDomainHTTPSWildcardSuppressesAutoIntent(t *testing.T) {
+	repo := newFakeRepository()
+	svc := newDomainTestService(t, repo, &fakeAgent{}, &fakeRouteSync{})
+	userID := uuid.New()
+	service := createDomainService(t, svc, repo, userID)
+	ctx := context.Background()
+	repo.certs[service.ID] = []CertificateIntent{{
+		ServiceID: service.ID,
+		Domain:    "example.com",
+		Enabled:   true,
+		Challenge: "dns-01",
+		Wildcard:  true,
+	}}
+
+	if _, err := svc.AddDomain(ctx, userID, service.ID, DomainInput{
+		Domain: "secure.example.com", ComposeService: "web", Port: 80, Protocol: "https",
+	}); err != nil {
+		t.Fatalf("AddDomain: %v", err)
+	}
+	intents := serviceIntents(t, repo, service.ID)
+	if len(intents) != 1 || !intents[0].Wildcard {
+		t.Fatalf("intents = %+v, want only the wildcard intent", intents)
+	}
+}
+
+func TestUpdateDomainRenameMovesAutoCertificateIntent(t *testing.T) {
+	repo := newFakeRepository()
+	svc := newDomainTestService(t, repo, &fakeAgent{}, &fakeRouteSync{})
+	userID := uuid.New()
+	service := createDomainService(t, svc, repo, userID)
+	ctx := context.Background()
+
+	created, err := svc.AddDomain(ctx, userID, service.ID, DomainInput{
+		Domain: "old.example.com", ComposeService: "web", Port: 80, Protocol: "https",
+	})
+	if err != nil {
+		t.Fatalf("AddDomain: %v", err)
+	}
+	if _, err := svc.UpdateDomain(ctx, userID, service.ID, created.ID, DomainInput{
+		Domain: "new.example.com", ComposeService: "web", Port: 80, Protocol: "https",
+	}); err != nil {
+		t.Fatalf("UpdateDomain: %v", err)
+	}
+	intents := serviceIntents(t, repo, service.ID)
+	if len(intents) != 1 || intents[0].Domain != "new.example.com" {
+		t.Fatalf("intents = %+v, want only the new host", intents)
+	}
+}
+
+func TestRemoveDomainDeletesAutoCertificateIntent(t *testing.T) {
+	repo := newFakeRepository()
+	svc := newDomainTestService(t, repo, &fakeAgent{}, &fakeRouteSync{})
+	userID := uuid.New()
+	service := createDomainService(t, svc, repo, userID)
+	ctx := context.Background()
+
+	created, err := svc.AddDomain(ctx, userID, service.ID, DomainInput{
+		Domain: "secure.example.com", ComposeService: "web", Port: 80, Protocol: "https",
+	})
+	if err != nil {
+		t.Fatalf("AddDomain: %v", err)
+	}
+	if err := svc.RemoveDomain(ctx, userID, service.ID, created.ID); err != nil {
+		t.Fatalf("RemoveDomain: %v", err)
+	}
+	if intents := serviceIntents(t, repo, service.ID); len(intents) != 0 {
+		t.Fatalf("intents = %+v, want none", intents)
+	}
+}
+
+func TestCreateWithHTTPSDomainRecordsAutoCertificateIntent(t *testing.T) {
+	repo := newFakeRepository()
+	svc := newDomainTestService(t, repo, &fakeAgent{}, &fakeRouteSync{})
+	userID := uuid.New()
+
+	created, err := svc.Create(context.Background(), userID, CreateRequest{
+		Name:          "secure-template",
+		EnvironmentID: mustEnvironment(t, repo),
+		ServerID:      repo.seedServer(),
+		ComposeYAML:   "services:\n  web:\n    image: nginx:1.27\n    ports:\n      - \"80\"\n",
+		Domains: []DomainInput{
+			{Domain: "secure.example.com", ComposeService: "web", Port: 80, Protocol: "https"},
+		},
+	})
+	if err != nil {
+		t.Fatalf("Create: %v", err)
+	}
+	intents := serviceIntents(t, repo, created.ID)
+	if len(intents) != 1 || intents[0].Domain != "secure.example.com" {
+		t.Fatalf("intents = %+v, want the default intent", intents)
+	}
+}
+
+func TestDeleteRemovesCertificateIntents(t *testing.T) {
+	repo := newFakeRepository()
+	svc := newDomainTestService(t, repo, &fakeAgent{}, &fakeRouteSync{})
+	userID := uuid.New()
+	service := createDomainService(t, svc, repo, userID)
+	ctx := context.Background()
+
+	if _, err := svc.AddDomain(ctx, userID, service.ID, DomainInput{
+		Domain: "secure.example.com", ComposeService: "web", Port: 80, Protocol: "https",
+	}); err != nil {
+		t.Fatalf("AddDomain: %v", err)
+	}
+	if _, err := svc.Delete(ctx, userID, service.ID); err != nil {
+		t.Fatalf("Delete: %v", err)
+	}
+	if intents := serviceIntents(t, repo, service.ID); len(intents) != 0 {
+		t.Fatalf("intents = %+v, want none after delete", intents)
+	}
+}
+
+func TestUpdateDomainProtocolHTTPSRecordsAutoCertificateIntent(t *testing.T) {
+	repo := newFakeRepository()
+	svc := newDomainTestService(t, repo, &fakeAgent{}, &fakeRouteSync{})
+	userID := uuid.New()
+	service := createDomainService(t, svc, repo, userID)
+	ctx := context.Background()
+
+	created, err := svc.AddDomain(ctx, userID, service.ID, DomainInput{
+		Domain: "secure.example.com", ComposeService: "web", Port: 80, Protocol: "http",
+	})
+	if err != nil {
+		t.Fatalf("AddDomain: %v", err)
+	}
+	if intents := serviceIntents(t, repo, service.ID); len(intents) != 0 {
+		t.Fatalf("intents after http = %+v, want none", intents)
+	}
+	if _, err := svc.UpdateDomain(ctx, userID, service.ID, created.ID, DomainInput{
+		Domain: "secure.example.com", ComposeService: "web", Port: 80, Protocol: "https",
+	}); err != nil {
+		t.Fatalf("UpdateDomain: %v", err)
+	}
+	intents := serviceIntents(t, repo, service.ID)
+	if len(intents) != 1 || intents[0].Domain != "secure.example.com" {
+		t.Fatalf("intents after https = %+v, want one", intents)
+	}
+}

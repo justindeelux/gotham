@@ -14,7 +14,10 @@ import { computed, toRef, watch } from "vue";
 import { useI18n } from "vue-i18n";
 
 import type { Application } from "@/features/applications/api/applications";
-import { useCertificateConfig } from "@/features/applications/composables/useCertificateConfig";
+import {
+  useCertificateConfig,
+  type CertificateOwner,
+} from "@/features/applications/composables/useCertificateConfig";
 import {
   certificateStatusLabel,
   certificateStatusTagType,
@@ -24,7 +27,8 @@ import { expiryLabel, formatDate, relativeTime } from "@/shared/utils/format";
 
 interface Props {
   show: boolean;
-  application: Application;
+  application?: Application;
+  service?: { id: string; name: string };
   domain: string;
 }
 
@@ -34,10 +38,21 @@ const emit = defineEmits<{
   "update:show": [value: boolean];
 }>();
 
-const certs = useCertificateConfig(
-  toRef(props, "application"),
-  toRef(props, "domain"),
+const owner = computed<CertificateOwner>(() =>
+  props.application
+    ? {
+        kind: "application",
+        id: props.application.id,
+        name: props.application.name,
+      }
+    : {
+        kind: "service",
+        id: props.service?.id ?? "",
+        name: props.service?.name ?? "",
+      },
 );
+
+const certs = useCertificateConfig(owner, toRef(props, "domain"));
 
 const { t } = useI18n();
 
@@ -132,9 +147,10 @@ async function remove(): Promise<void> {
 
       <CertificateForm
         v-model="certs.certificateDraft.value"
-        :applications="[props.application]"
+        :applications="props.application ? [props.application] : []"
         :providers="certs.proxyStore.providers"
         :domain="props.domain"
+        :service-name="props.service?.name ?? ''"
         lock-application
       />
       <NText depth="3" class="small">

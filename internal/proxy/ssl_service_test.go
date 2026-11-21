@@ -17,6 +17,7 @@ type fakeSSLStore struct {
 	providers     []DNSProvider
 	certificates  []DomainCertificate
 	applications  map[uuid.UUID]ApplicationInfo
+	services      map[uuid.UUID]ServiceInfo
 	createErr     error
 	updateErr     error
 	deleteErr     error
@@ -39,7 +40,10 @@ type fakeSSLStore struct {
 }
 
 func newFakeSSLStore() *fakeSSLStore {
-	return &fakeSSLStore{applications: map[uuid.UUID]ApplicationInfo{}}
+	return &fakeSSLStore{
+		applications: map[uuid.UUID]ApplicationInfo{},
+		services:     map[uuid.UUID]ServiceInfo{},
+	}
 }
 
 func (f *fakeSSLStore) CreateProvider(_ context.Context, in DNSProviderWrite) (DNSProvider, error) {
@@ -196,6 +200,12 @@ func (f *fakeSSLStore) CreateCertificate(_ context.Context, in CertificateWrite)
 	}
 	f.lastCertWrite = in
 	for _, cert := range f.certificates {
+		if in.ServiceID != uuid.Nil {
+			if cert.ServiceID == in.ServiceID && cert.Domain == in.Domain {
+				return DomainCertificate{}, fmt.Errorf("%w: domain_certificates_service_domain_unique", ErrConflict)
+			}
+			continue
+		}
 		if cert.ApplicationID == in.ApplicationID && cert.Domain == in.Domain {
 			return DomainCertificate{}, fmt.Errorf("%w: domain_certificates_app_domain_unique", ErrConflict)
 		}
@@ -203,6 +213,7 @@ func (f *fakeSSLStore) CreateCertificate(_ context.Context, in CertificateWrite)
 	certificate := DomainCertificate{
 		ID:            uuid.New(),
 		ApplicationID: in.ApplicationID,
+		ServiceID:     in.ServiceID,
 		Domain:        in.Domain,
 		Enabled:       in.Enabled,
 		Challenge:     in.Challenge,
@@ -236,6 +247,18 @@ func (f *fakeSSLStore) ListCertificatesByApplication(_ context.Context, applicat
 	return out, nil
 }
 
+func (f *fakeSSLStore) ListCertificatesByService(_ context.Context, serviceID uuid.UUID) ([]DomainCertificate, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	out := []DomainCertificate{}
+	for _, cert := range f.certificates {
+		if cert.ServiceID == serviceID {
+			out = append(out, cert)
+		}
+	}
+	return out, nil
+}
+
 func (f *fakeSSLStore) ListCertificates(context.Context) ([]DomainCertificate, error) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
@@ -256,6 +279,7 @@ func (f *fakeSSLStore) UpdateCertificate(_ context.Context, id uuid.UUID, in Cer
 		updated := DomainCertificate{
 			ID:            id,
 			ApplicationID: in.ApplicationID,
+			ServiceID:     in.ServiceID,
 			Domain:        in.Domain,
 			Enabled:       in.Enabled,
 			Challenge:     in.Challenge,
@@ -329,6 +353,19 @@ func (f *fakeSSLStore) GetApplication(_ context.Context, id uuid.UUID) (Applicat
 		return ApplicationInfo{}, ErrNotFound
 	}
 	return app, nil
+}
+
+func (f *fakeSSLStore) GetService(_ context.Context, id uuid.UUID) (ServiceInfo, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	if f.getAppErr != nil {
+		return ServiceInfo{}, f.getAppErr
+	}
+	info, ok := f.services[id]
+	if !ok {
+		return ServiceInfo{}, ErrNotFound
+	}
+	return info, nil
 }
 
 func newSSLServiceFixture(t *testing.T, resync func(context.Context) error) (*sslService, *fakeSSLStore) {
@@ -740,7 +777,8 @@ func TestCertificateCreateValidation(t *testing.T) {
 		in   CreateCertificateInput
 		want error
 	}{
-		{name: "missing application id", in: CreateCertificateInput{}, want: ErrValidation},
+		{name: "missing owner", in: CreateCertificateInput{}, want: ErrValidation},
+		{name: "both owners", in: CreateCertificateInput{ApplicationID: appWithDomain, ServiceID: uuid.New()}, want: ErrValidation},
 		{name: "unknown application", in: CreateCertificateInput{ApplicationID: uuid.New()}, want: ErrNotFound},
 		{name: "application without domain", in: CreateCertificateInput{ApplicationID: appWithoutDomain}, want: ErrValidation},
 		{name: "application domain disabled", in: CreateCertificateInput{ApplicationID: appDisabledDomain}, want: ErrValidation},
@@ -821,6 +859,66 @@ func TestCertificateCreateRejectsSecondConfigForApplication(t *testing.T) {
 	}
 	if _, err := service.CreateCertificate(context.Background(), CreateCertificateInput{ApplicationID: appID}); !errors.Is(err, ErrConflict) {
 		t.Fatalf("second CreateCertificate err = %v, want ErrConflict", err)
+	}
+}
+
+func TestCertificateCreateRecordsServiceDomain(t *testing.T) {
+	service, store := newSSLServiceFixture(t, nil)
+	serviceID := uuid.New()
+	store.services[serviceID] = ServiceInfo{
+		ID:      serviceID,
+		Domains: []string{"primary.example.com", "alias.example.com"},
+	}
+
+	certificate, err := service.CreateCertificate(context.Background(), CreateCertificateInput{ServiceID: serviceID})
+	if err != nil {
+		t.Fatalf("CreateCertificate: %v", err)
+	}
+	if certificate.ServiceID != serviceID || certificate.ApplicationID != uuid.Nil {
+		t.Fatalf("owner = %s/%s, want the service only", certificate.ServiceID, certificate.ApplicationID)
+	}
+	if certificate.Domain != "primary.example.com" {
+		t.Fatalf("recorded domain = %q, want the primary service domain", certificate.Domain)
+	}
+
+	alias, err := service.CreateCertificate(context.Background(), CreateCertificateInput{
+		ServiceID: serviceID,
+		Domain:    "alias.example.com",
+	})
+	if err != nil {
+		t.Fatalf("CreateCertificate(alias): %v", err)
+	}
+	if alias.Domain != "alias.example.com" {
+		t.Fatalf("alias domain = %q", alias.Domain)
+	}
+
+	intents, err := store.ListCertificatesByService(context.Background(), serviceID)
+	if err != nil {
+		t.Fatalf("ListCertificatesByService: %v", err)
+	}
+	if len(intents) != 2 {
+		t.Fatalf("service intents = %+v, want two", intents)
+	}
+	if _, err := service.CreateCertificate(context.Background(), CreateCertificateInput{
+		ServiceID: serviceID,
+		Domain:    "alias.example.com",
+	}); !errors.Is(err, ErrConflict) {
+		t.Fatalf("duplicate service domain err = %v, want ErrConflict", err)
+	}
+
+	if _, err := service.CreateCertificate(context.Background(), CreateCertificateInput{
+		ServiceID: serviceID,
+		Domain:    "detached.example.com",
+	}); !errors.Is(err, ErrValidation) {
+		t.Fatalf("detached service domain err = %v, want ErrValidation", err)
+	}
+
+	store.services[serviceID] = ServiceInfo{ID: serviceID, Domains: []string{"primary.example.com"}}
+	if _, err := service.UpdateCertificate(context.Background(), alias.ID, UpdateCertificateInput{Enabled: ptr(true)}); !errors.Is(err, ErrValidation) {
+		t.Fatalf("update on a detached service domain err = %v, want ErrValidation", err)
+	}
+	if err := service.DeleteCertificate(context.Background(), certificate.ID); err != nil {
+		t.Fatalf("DeleteCertificate: %v", err)
 	}
 }
 

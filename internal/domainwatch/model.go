@@ -1,5 +1,5 @@
-// Package domainwatch probes managed application domains from the control
-// plane. It reuses the persistent incident lifecycle and the existing
+// Package domainwatch probes managed application and service domains from the
+// control plane. It reuses the persistent incident lifecycle and the existing
 // certificate-expiry observation; it does not replace agent-pushed host or
 // container health.
 package domainwatch
@@ -107,16 +107,26 @@ func DefaultSettings() Settings {
 	}
 }
 
-// Target is one enabled managed domain bound to its application.
+// OwnerKind names the resource that manages a probed domain.
+type OwnerKind string
+
+const (
+	OwnerApplication OwnerKind = "application"
+	OwnerService     OwnerKind = "service"
+)
+
+// Target is one enabled managed domain bound to its owner.
 type Target struct {
-	DomainID        uuid.UUID
-	ApplicationID   uuid.UUID
-	ApplicationName string
-	Domain          string
-	Protocol        string
-	ProjectID       uuid.UUID
-	ServerID        uuid.UUID
-	CreatedAt       time.Time
+	DomainID  uuid.UUID
+	OwnerKind OwnerKind
+	OwnerID   uuid.UUID
+	OwnerName string
+	Domain    string
+	Protocol  string
+	ProjectID uuid.UUID
+	ServerID  uuid.UUID
+	CreatedAt time.Time
+	// DomainUpdatedAt is the managed domain row's updated_at.
 	DomainUpdatedAt time.Time
 	Settings        Settings
 	SettingsUpdated time.Time
@@ -127,8 +137,8 @@ type Target struct {
 	DeploymentFinished *time.Time
 	HasDeployment      bool
 	// DesiredState and RuntimeGraceUntil come from the same runtime monitor
-	// settings that own start/stop intent, so a stopped application is an
-	// unknown gap rather than a website failure.
+	// settings that own start/stop intent, so a stopped owner is an unknown
+	// gap rather than a website failure.
 	DesiredState      string
 	RuntimeGraceUntil time.Time
 }
@@ -177,7 +187,8 @@ type Window struct {
 // View is the API representation of one domain's website check.
 type View struct {
 	DomainID       string     `json:"domain_id"`
-	ApplicationID  string     `json:"application_id"`
+	ApplicationID  string     `json:"application_id,omitempty"`
+	ServiceID      string     `json:"service_id,omitempty"`
 	URL            string     `json:"url"`
 	ProbeLocation  string     `json:"probe_location"`
 	Enabled        bool       `json:"enabled"`
@@ -297,7 +308,7 @@ func (t Target) incidentIdentity() string {
 }
 
 func (t Target) resourceName() string {
-	name := strings.TrimSpace(t.ApplicationName)
+	name := strings.TrimSpace(t.OwnerName)
 	if name == "" {
 		return t.Domain
 	}

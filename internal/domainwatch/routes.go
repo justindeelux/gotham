@@ -19,7 +19,7 @@ type handler struct {
 }
 
 // Mount registers the resource-scoped website check routes. Authorization is
-// the shared resource/project gate; the application path is the only target
+// the shared resource/project gate; the owner path is the only target
 // selector.
 func Mount(r chi.Router, auth func(http.Handler) http.Handler, svc *Service) {
 	if svc == nil {
@@ -28,9 +28,12 @@ func Mount(r chi.Router, auth func(http.Handler) http.Handler, svc *Service) {
 	h := &handler{svc: svc}
 	r.Group(func(protected chi.Router) {
 		protected.Use(auth)
-		protected.Get("/v1/applications/{id}/domains/{domainId}/monitoring", h.get)
-		protected.Put("/v1/applications/{id}/domains/{domainId}/monitoring", h.put)
-		protected.Post("/v1/applications/{id}/domains/{domainId}/monitoring/test", h.test)
+		protected.Get("/v1/applications/{id}/domains/{domainId}/monitoring", h.get(OwnerApplication))
+		protected.Put("/v1/applications/{id}/domains/{domainId}/monitoring", h.put(OwnerApplication))
+		protected.Post("/v1/applications/{id}/domains/{domainId}/monitoring/test", h.test(OwnerApplication))
+		protected.Get("/v1/services/{id}/domains/{domainId}/monitoring", h.get(OwnerService))
+		protected.Put("/v1/services/{id}/domains/{domainId}/monitoring", h.put(OwnerService))
+		protected.Post("/v1/services/{id}/domains/{domainId}/monitoring/test", h.test(OwnerService))
 	})
 }
 
@@ -62,62 +65,68 @@ type settingsRequest struct {
 	TimeoutSeconds int    `json:"timeout_seconds"`
 }
 
-func (h *handler) get(w http.ResponseWriter, r *http.Request) {
-	appID, domainID, ok := params(w, r)
-	if !ok {
-		return
+func (h *handler) get(kind OwnerKind) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		ownerID, domainID, ok := params(w, r)
+		if !ok {
+			return
+		}
+		view, err := h.svc.Get(r.Context(), kind, ownerID, domainID)
+		if err != nil {
+			writeServiceError(w, err)
+			return
+		}
+		writeJSON(w, http.StatusOK, viewEnvelope{WebsiteCheck: view})
 	}
-	view, err := h.svc.Get(r.Context(), appID, domainID)
-	if err != nil {
-		writeServiceError(w, err)
-		return
-	}
-	writeJSON(w, http.StatusOK, viewEnvelope{WebsiteCheck: view})
 }
 
-func (h *handler) put(w http.ResponseWriter, r *http.Request) {
-	appID, domainID, ok := params(w, r)
-	if !ok {
-		return
+func (h *handler) put(kind OwnerKind) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		ownerID, domainID, ok := params(w, r)
+		if !ok {
+			return
+		}
+		var req settingsRequest
+		decoder := json.NewDecoder(io.LimitReader(r.Body, maxBodyBytes))
+		decoder.DisallowUnknownFields()
+		if err := decoder.Decode(&req); err != nil {
+			writeJSON(w, http.StatusBadRequest, errorBody{Message: "invalid request body"})
+			return
+		}
+		view, err := h.svc.SaveSettings(r.Context(), kind, ownerID, domainID, SettingsInput{
+			Enabled:     req.Enabled,
+			Path:        req.Path,
+			ExpectedMin: req.ExpectedMin,
+			ExpectedMax: req.ExpectedMax,
+			Timeout:     req.TimeoutSeconds,
+		})
+		if err != nil {
+			writeServiceError(w, err)
+			return
+		}
+		writeJSON(w, http.StatusOK, viewEnvelope{WebsiteCheck: view})
 	}
-	var req settingsRequest
-	decoder := json.NewDecoder(io.LimitReader(r.Body, maxBodyBytes))
-	decoder.DisallowUnknownFields()
-	if err := decoder.Decode(&req); err != nil {
-		writeJSON(w, http.StatusBadRequest, errorBody{Message: "invalid request body"})
-		return
-	}
-	view, err := h.svc.SaveSettings(r.Context(), appID, domainID, SettingsInput{
-		Enabled:     req.Enabled,
-		Path:        req.Path,
-		ExpectedMin: req.ExpectedMin,
-		ExpectedMax: req.ExpectedMax,
-		Timeout:     req.TimeoutSeconds,
-	})
-	if err != nil {
-		writeServiceError(w, err)
-		return
-	}
-	writeJSON(w, http.StatusOK, viewEnvelope{WebsiteCheck: view})
 }
 
-func (h *handler) test(w http.ResponseWriter, r *http.Request) {
-	appID, domainID, ok := params(w, r)
-	if !ok {
-		return
+func (h *handler) test(kind OwnerKind) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		ownerID, domainID, ok := params(w, r)
+		if !ok {
+			return
+		}
+		result, err := h.svc.Test(r.Context(), kind, ownerID, domainID)
+		if err != nil {
+			writeServiceError(w, err)
+			return
+		}
+		writeJSON(w, http.StatusOK, testEnvelope{Result: testResult{
+			Outcome:    result.Outcome,
+			Reason:     result.Reason,
+			StatusCode: result.StatusCode,
+			LatencyMS:  int(result.Latency / time.Millisecond),
+			Detail:     result.Detail,
+		}})
 	}
-	result, err := h.svc.Test(r.Context(), appID, domainID)
-	if err != nil {
-		writeServiceError(w, err)
-		return
-	}
-	writeJSON(w, http.StatusOK, testEnvelope{Result: testResult{
-		Outcome:    result.Outcome,
-		Reason:     result.Reason,
-		StatusCode: result.StatusCode,
-		LatencyMS:  int(result.Latency / time.Millisecond),
-		Detail:     result.Detail,
-	}})
 }
 
 func params(w http.ResponseWriter, r *http.Request) (uuid.UUID, uuid.UUID, bool) {

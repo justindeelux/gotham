@@ -332,6 +332,7 @@ type DomainProbeResult struct {
 	StatusCode    *int32             `json:"status_code"`
 	LatencyMs     *int32             `json:"latency_ms"`
 	ValidSeconds  int32              `json:"valid_seconds"`
+	ServiceID     pgtype.UUID        `json:"service_id"`
 }
 
 type DomainRedirect struct {

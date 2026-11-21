@@ -165,6 +165,98 @@ func (q *Queries) GetDomainProbeTarget(ctx context.Context, arg GetDomainProbeTa
 	return i, err
 }
 
+const getServiceDomainProbeTarget = `-- name: GetServiceDomainProbeTarget :one
+SELECT
+    d.id,
+    d.service_id,
+    d.domain,
+    d.protocol,
+    d.created_at,
+    d.updated_at AS domain_updated_at,
+    sv.name AS service_name,
+    sv.server_id,
+    e.project_id,
+    COALESCE(s.enabled, true) AS enabled,
+    COALESCE(s.path, '/') AS path,
+    COALESCE(s.expected_min, 200) AS expected_min,
+    COALESCE(s.expected_max, 399) AS expected_max,
+    COALESCE(s.timeout_seconds, 5) AS timeout_seconds,
+    s.updated_at AS settings_updated_at,
+    COALESCE(dep.state, '') AS deployment_state,
+    dep.created_at AS deployment_started_at,
+    dep.finished_at AS deployment_finished_at,
+    (dep.state IS NOT NULL)::boolean AS has_deployment,
+    CASE WHEN sv.status = 'stopped' THEN 'stopped' ELSE 'running' END AS desired_state
+FROM service_domains d
+JOIN services sv ON sv.id = d.service_id
+JOIN environments e ON e.id = sv.environment_id
+LEFT JOIN domain_monitor_settings s ON s.domain_id = d.id
+LEFT JOIN LATERAL (
+    SELECT state, created_at, finished_at
+    FROM service_deploys
+    WHERE service_id = sv.id
+    ORDER BY created_at DESC
+    LIMIT 1
+) dep ON true
+WHERE d.service_id = $1 AND d.id = $2
+`
+
+type GetServiceDomainProbeTargetParams struct {
+	ServiceID pgtype.UUID `json:"service_id"`
+	ID        pgtype.UUID `json:"id"`
+}
+
+type GetServiceDomainProbeTargetRow struct {
+	ID                   pgtype.UUID        `json:"id"`
+	ServiceID            pgtype.UUID        `json:"service_id"`
+	Domain               string             `json:"domain"`
+	Protocol             string             `json:"protocol"`
+	CreatedAt            pgtype.Timestamptz `json:"created_at"`
+	DomainUpdatedAt      pgtype.Timestamptz `json:"domain_updated_at"`
+	ServiceName          string             `json:"service_name"`
+	ServerID             pgtype.UUID        `json:"server_id"`
+	ProjectID            pgtype.UUID        `json:"project_id"`
+	Enabled              bool               `json:"enabled"`
+	Path                 string             `json:"path"`
+	ExpectedMin          int32              `json:"expected_min"`
+	ExpectedMax          int32              `json:"expected_max"`
+	TimeoutSeconds       int32              `json:"timeout_seconds"`
+	SettingsUpdatedAt    pgtype.Timestamptz `json:"settings_updated_at"`
+	DeploymentState      string             `json:"deployment_state"`
+	DeploymentStartedAt  pgtype.Timestamptz `json:"deployment_started_at"`
+	DeploymentFinishedAt pgtype.Timestamptz `json:"deployment_finished_at"`
+	HasDeployment        bool               `json:"has_deployment"`
+	DesiredState         string             `json:"desired_state"`
+}
+
+func (q *Queries) GetServiceDomainProbeTarget(ctx context.Context, arg GetServiceDomainProbeTargetParams) (GetServiceDomainProbeTargetRow, error) {
+	row := q.db.QueryRow(ctx, getServiceDomainProbeTarget, arg.ServiceID, arg.ID)
+	var i GetServiceDomainProbeTargetRow
+	err := row.Scan(
+		&i.ID,
+		&i.ServiceID,
+		&i.Domain,
+		&i.Protocol,
+		&i.CreatedAt,
+		&i.DomainUpdatedAt,
+		&i.ServiceName,
+		&i.ServerID,
+		&i.ProjectID,
+		&i.Enabled,
+		&i.Path,
+		&i.ExpectedMin,
+		&i.ExpectedMax,
+		&i.TimeoutSeconds,
+		&i.SettingsUpdatedAt,
+		&i.DeploymentState,
+		&i.DeploymentStartedAt,
+		&i.DeploymentFinishedAt,
+		&i.HasDeployment,
+		&i.DesiredState,
+	)
+	return i, err
+}
+
 const insertDomainProbeResult = `-- name: InsertDomainProbeResult :exec
 INSERT INTO domain_probe_results (
     domain_id, application_id, observed_at, interval_start, outcome,
@@ -188,6 +280,40 @@ func (q *Queries) InsertDomainProbeResult(ctx context.Context, arg InsertDomainP
 	_, err := q.db.Exec(ctx, insertDomainProbeResult,
 		arg.DomainID,
 		arg.ApplicationID,
+		arg.ObservedAt,
+		arg.IntervalStart,
+		arg.Outcome,
+		arg.Reason,
+		arg.StatusCode,
+		arg.LatencyMs,
+		arg.ValidSeconds,
+	)
+	return err
+}
+
+const insertServiceDomainProbeResult = `-- name: InsertServiceDomainProbeResult :exec
+INSERT INTO domain_probe_results (
+    domain_id, service_id, observed_at, interval_start, outcome,
+    reason, status_code, latency_ms, valid_seconds
+) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)
+`
+
+type InsertServiceDomainProbeResultParams struct {
+	DomainID      pgtype.UUID        `json:"domain_id"`
+	ServiceID     pgtype.UUID        `json:"service_id"`
+	ObservedAt    pgtype.Timestamptz `json:"observed_at"`
+	IntervalStart pgtype.Timestamptz `json:"interval_start"`
+	Outcome       string             `json:"outcome"`
+	Reason        string             `json:"reason"`
+	StatusCode    *int32             `json:"status_code"`
+	LatencyMs     *int32             `json:"latency_ms"`
+	ValidSeconds  int32              `json:"valid_seconds"`
+}
+
+func (q *Queries) InsertServiceDomainProbeResult(ctx context.Context, arg InsertServiceDomainProbeResultParams) error {
+	_, err := q.db.Exec(ctx, insertServiceDomainProbeResult,
+		arg.DomainID,
+		arg.ServiceID,
 		arg.ObservedAt,
 		arg.IntervalStart,
 		arg.Outcome,
@@ -231,7 +357,7 @@ func (q *Queries) ListActiveDomainIncidents(ctx context.Context) ([]ListActiveDo
 }
 
 const listDomainProbeResults = `-- name: ListDomainProbeResults :many
-SELECT id, domain_id, application_id, observed_at, interval_start, outcome, reason, status_code, latency_ms, valid_seconds FROM domain_probe_results
+SELECT id, domain_id, application_id, observed_at, interval_start, outcome, reason, status_code, latency_ms, valid_seconds, service_id FROM domain_probe_results
 WHERE domain_id = $1 AND observed_at >= $2
 ORDER BY observed_at DESC
 LIMIT $3
@@ -263,6 +389,7 @@ func (q *Queries) ListDomainProbeResults(ctx context.Context, arg ListDomainProb
 			&i.StatusCode,
 			&i.LatencyMs,
 			&i.ValidSeconds,
+			&i.ServiceID,
 		); err != nil {
 			return nil, err
 		}
@@ -369,6 +496,111 @@ func (q *Queries) ListDomainProbeTargets(ctx context.Context) ([]ListDomainProbe
 			&i.HasDeployment,
 			&i.DesiredState,
 			&i.RuntimeGraceUntil,
+		); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
+const listServiceDomainProbeTargets = `-- name: ListServiceDomainProbeTargets :many
+SELECT
+    d.id,
+    d.service_id,
+    d.domain,
+    d.protocol,
+    d.created_at,
+    d.updated_at AS domain_updated_at,
+    sv.name AS service_name,
+    sv.server_id,
+    e.project_id,
+    COALESCE(s.enabled, true) AS enabled,
+    COALESCE(s.path, '/') AS path,
+    COALESCE(s.expected_min, 200) AS expected_min,
+    COALESCE(s.expected_max, 399) AS expected_max,
+    COALESCE(s.timeout_seconds, 5) AS timeout_seconds,
+    s.updated_at AS settings_updated_at,
+    COALESCE(dep.state, '') AS deployment_state,
+    dep.created_at AS deployment_started_at,
+    dep.finished_at AS deployment_finished_at,
+    (dep.state IS NOT NULL)::boolean AS has_deployment,
+    CASE WHEN sv.status = 'stopped' THEN 'stopped' ELSE 'running' END AS desired_state
+FROM service_domains d
+JOIN services sv ON sv.id = d.service_id
+JOIN environments e ON e.id = sv.environment_id
+LEFT JOIN domain_monitor_settings s ON s.domain_id = d.id
+LEFT JOIN LATERAL (
+    SELECT state, created_at, finished_at
+    FROM service_deploys
+    WHERE service_id = sv.id
+    ORDER BY created_at DESC
+    LIMIT 1
+) dep ON true
+WHERE NOT d.disabled AND sv.deleted_at IS NULL
+ORDER BY d.id
+`
+
+type ListServiceDomainProbeTargetsRow struct {
+	ID                   pgtype.UUID        `json:"id"`
+	ServiceID            pgtype.UUID        `json:"service_id"`
+	Domain               string             `json:"domain"`
+	Protocol             string             `json:"protocol"`
+	CreatedAt            pgtype.Timestamptz `json:"created_at"`
+	DomainUpdatedAt      pgtype.Timestamptz `json:"domain_updated_at"`
+	ServiceName          string             `json:"service_name"`
+	ServerID             pgtype.UUID        `json:"server_id"`
+	ProjectID            pgtype.UUID        `json:"project_id"`
+	Enabled              bool               `json:"enabled"`
+	Path                 string             `json:"path"`
+	ExpectedMin          int32              `json:"expected_min"`
+	ExpectedMax          int32              `json:"expected_max"`
+	TimeoutSeconds       int32              `json:"timeout_seconds"`
+	SettingsUpdatedAt    pgtype.Timestamptz `json:"settings_updated_at"`
+	DeploymentState      string             `json:"deployment_state"`
+	DeploymentStartedAt  pgtype.Timestamptz `json:"deployment_started_at"`
+	DeploymentFinishedAt pgtype.Timestamptz `json:"deployment_finished_at"`
+	HasDeployment        bool               `json:"has_deployment"`
+	DesiredState         string             `json:"desired_state"`
+}
+
+// Same shape as ListDomainProbeTargets for the services side. Only managed
+// rows are targets: compose label routes have no row, no settings and no
+// stable id. A service that was never deployed or is stopped is returned so
+// the caller can close its incidents and treat the gap as unknown.
+func (q *Queries) ListServiceDomainProbeTargets(ctx context.Context) ([]ListServiceDomainProbeTargetsRow, error) {
+	rows, err := q.db.Query(ctx, listServiceDomainProbeTargets)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	items := []ListServiceDomainProbeTargetsRow{}
+	for rows.Next() {
+		var i ListServiceDomainProbeTargetsRow
+		if err := rows.Scan(
+			&i.ID,
+			&i.ServiceID,
+			&i.Domain,
+			&i.Protocol,
+			&i.CreatedAt,
+			&i.DomainUpdatedAt,
+			&i.ServiceName,
+			&i.ServerID,
+			&i.ProjectID,
+			&i.Enabled,
+			&i.Path,
+			&i.ExpectedMin,
+			&i.ExpectedMax,
+			&i.TimeoutSeconds,
+			&i.SettingsUpdatedAt,
+			&i.DeploymentState,
+			&i.DeploymentStartedAt,
+			&i.DeploymentFinishedAt,
+			&i.HasDeployment,
+			&i.DesiredState,
 		); err != nil {
 			return nil, err
 		}

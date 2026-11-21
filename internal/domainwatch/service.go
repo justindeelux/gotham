@@ -126,14 +126,14 @@ func (s *Service) Run(ctx context.Context) {
 }
 
 func (s *Service) tick(ctx context.Context) {
-	targets, err := s.st.ListDomainProbeTargets(ctx)
+	targets, err := s.targets(ctx)
 	if err != nil {
 		s.logger.Warn("domainwatch: list targets", "error", err)
 		return
 	}
 	known := make(map[uuid.UUID]bool, len(targets))
-	for _, row := range targets {
-		known[row.ID.Bytes] = true
+	for _, target := range targets {
+		known[target.DomainID] = true
 	}
 	s.closeRemovedIncidents(ctx, known)
 	s.prune(ctx)
@@ -141,8 +141,7 @@ func (s *Service) tick(ctx context.Context) {
 	now := s.now().UTC()
 	sem := make(chan struct{}, maxConcurrency)
 	var wg sync.WaitGroup
-	for _, row := range targets {
-		target := targetFromRow(row)
+	for _, target := range targets {
 		if reason := suppressionReason(target); reason != "" {
 			s.suppress(ctx, target, reason)
 			continue
@@ -190,6 +189,25 @@ func (s *Service) tick(ctx context.Context) {
 		}
 	}
 	wg.Wait()
+}
+
+func (s *Service) targets(ctx context.Context) ([]Target, error) {
+	appRows, err := s.st.ListDomainProbeTargets(ctx)
+	if err != nil {
+		return nil, err
+	}
+	serviceRows, err := s.st.ListServiceDomainProbeTargets(ctx)
+	if err != nil {
+		return nil, err
+	}
+	targets := make([]Target, 0, len(appRows)+len(serviceRows))
+	for _, row := range appRows {
+		targets = append(targets, targetFromRow(row))
+	}
+	for _, row := range serviceRows {
+		targets = append(targets, targetFromServiceRow(row))
+	}
+	return targets, nil
 }
 
 func (s *Service) closeRemovedIncidents(ctx context.Context, known map[uuid.UUID]bool) {
@@ -340,17 +358,32 @@ func (s *Service) record(ctx context.Context, target Target, result Result) erro
 	if validSeconds < 0 {
 		validSeconds = 0
 	}
-	if err := s.st.InsertDomainProbeResult(ctx, sqlc.InsertDomainProbeResultParams{
-		DomainID:      pgUUID(target.DomainID),
-		ApplicationID: pgUUID(target.ApplicationID),
-		ObservedAt:    pgTimestamptz(at),
-		IntervalStart: pgTimestamptz(intervalStart),
-		Outcome:       result.Outcome,
-		Reason:        result.Reason,
-		StatusCode:    status,
-		LatencyMs:     latency,
-		ValidSeconds:  int32(validSeconds),
-	}); err != nil {
+	if target.OwnerKind == OwnerService {
+		err = s.st.InsertServiceDomainProbeResult(ctx, sqlc.InsertServiceDomainProbeResultParams{
+			DomainID:      pgUUID(target.DomainID),
+			ServiceID:     pgUUID(target.OwnerID),
+			ObservedAt:    pgTimestamptz(at),
+			IntervalStart: pgTimestamptz(intervalStart),
+			Outcome:       result.Outcome,
+			Reason:        result.Reason,
+			StatusCode:    status,
+			LatencyMs:     latency,
+			ValidSeconds:  int32(validSeconds),
+		})
+	} else {
+		err = s.st.InsertDomainProbeResult(ctx, sqlc.InsertDomainProbeResultParams{
+			DomainID:      pgUUID(target.DomainID),
+			ApplicationID: pgUUID(target.OwnerID),
+			ObservedAt:    pgTimestamptz(at),
+			IntervalStart: pgTimestamptz(intervalStart),
+			Outcome:       result.Outcome,
+			Reason:        result.Reason,
+			StatusCode:    status,
+			LatencyMs:     latency,
+			ValidSeconds:  int32(validSeconds),
+		})
+	}
+	if err != nil {
 		return err
 	}
 
@@ -439,11 +472,11 @@ func (s *Service) closeIncident(ctx context.Context, target Target, reason strin
 }
 
 // Get returns one domain's settings, current status and bounded history.
-func (s *Service) Get(ctx context.Context, appID, domainID uuid.UUID) (View, error) {
+func (s *Service) Get(ctx context.Context, kind OwnerKind, ownerID, domainID uuid.UUID) (View, error) {
 	if s == nil || s.st == nil {
 		return View{}, errors.New("domainwatch: store is not configured")
 	}
-	target, err := s.target(ctx, appID, domainID)
+	target, err := s.target(ctx, kind, ownerID, domainID)
 	if err != nil {
 		return View{}, err
 	}
@@ -454,7 +487,6 @@ func (s *Service) view(ctx context.Context, target Target) (View, error) {
 	now := s.now().UTC()
 	view := View{
 		DomainID:       target.DomainID.String(),
-		ApplicationID:  target.ApplicationID.String(),
 		ProbeLocation:  "control_plane",
 		Enabled:        target.Settings.Enabled,
 		Path:           target.Settings.Path,
@@ -464,6 +496,11 @@ func (s *Service) view(ctx context.Context, target Target) (View, error) {
 		Status:         StatusUnknown,
 		Coverage:       "unknown",
 		Windows:        []Window{},
+	}
+	if target.OwnerKind == OwnerService {
+		view.ServiceID = target.OwnerID.String()
+	} else {
+		view.ApplicationID = target.OwnerID.String()
 	}
 	if rawURL, err := buildURL(target); err == nil {
 		view.URL = rawURL
@@ -548,11 +585,11 @@ func (s *Service) view(ctx context.Context, target Target) (View, error) {
 
 // SaveSettings validates and persists one domain's controls. The saved
 // updated_at arms the configuration grace; history is not re-evaluated.
-func (s *Service) SaveSettings(ctx context.Context, appID, domainID uuid.UUID, in SettingsInput) (View, error) {
+func (s *Service) SaveSettings(ctx context.Context, kind OwnerKind, ownerID, domainID uuid.UUID, in SettingsInput) (View, error) {
 	if s == nil || s.st == nil {
 		return View{}, errors.New("domainwatch: store is not configured")
 	}
-	target, err := s.target(ctx, appID, domainID)
+	target, err := s.target(ctx, kind, ownerID, domainID)
 	if err != nil {
 		return View{}, err
 	}
@@ -591,20 +628,30 @@ func (s *Service) SaveSettings(ctx context.Context, appID, domainID uuid.UUID, i
 
 // Test runs one probe without writing scheduled history or touching an
 // incident.
-func (s *Service) Test(ctx context.Context, appID, domainID uuid.UUID) (Result, error) {
-	target, err := s.target(ctx, appID, domainID)
+func (s *Service) Test(ctx context.Context, kind OwnerKind, ownerID, domainID uuid.UUID) (Result, error) {
+	target, err := s.target(ctx, kind, ownerID, domainID)
 	if err != nil {
 		return Result{}, err
 	}
 	return s.prober.Probe(ctx, target), nil
 }
 
-func (s *Service) target(ctx context.Context, appID, domainID uuid.UUID) (Target, error) {
-	if appID == uuid.Nil || domainID == uuid.Nil {
+func (s *Service) target(ctx context.Context, kind OwnerKind, ownerID, domainID uuid.UUID) (Target, error) {
+	if ownerID == uuid.Nil || domainID == uuid.Nil {
 		return Target{}, pgx.ErrNoRows
 	}
+	if kind == OwnerService {
+		row, err := s.st.GetServiceDomainProbeTarget(ctx, sqlc.GetServiceDomainProbeTargetParams{
+			ServiceID: pgUUID(ownerID),
+			ID:        pgUUID(domainID),
+		})
+		if err != nil {
+			return Target{}, err
+		}
+		return targetFromServiceRow(sqlc.ListServiceDomainProbeTargetsRow(row)), nil
+	}
 	row, err := s.st.GetDomainProbeTarget(ctx, sqlc.GetDomainProbeTargetParams{
-		ApplicationID: pgUUID(appID),
+		ApplicationID: pgUUID(ownerID),
 		ID:            pgUUID(domainID),
 	})
 	if err != nil {
@@ -615,13 +662,14 @@ func (s *Service) target(ctx context.Context, appID, domainID uuid.UUID) (Target
 
 func targetFromRow(row sqlc.ListDomainProbeTargetsRow) Target {
 	target := Target{
-		DomainID:        row.ID.Bytes,
-		ApplicationID:   row.ApplicationID.Bytes,
-		ApplicationName: row.ApplicationName,
-		Domain:          row.Domain,
-		Protocol:        row.Protocol,
-		ProjectID:       row.ProjectID.Bytes,
-		ServerID:        uuid.UUID(row.ServerID.Bytes),
+		DomainID:  row.ID.Bytes,
+		OwnerKind: OwnerApplication,
+		OwnerID:   row.ApplicationID.Bytes,
+		OwnerName: row.ApplicationName,
+		Domain:    row.Domain,
+		Protocol:  row.Protocol,
+		ProjectID: row.ProjectID.Bytes,
+		ServerID:  uuid.UUID(row.ServerID.Bytes),
 		Settings: Settings{
 			Enabled:     row.Enabled,
 			Path:        row.Path,
@@ -645,6 +693,47 @@ func targetFromRow(row sqlc.ListDomainProbeTargetsRow) Target {
 	if row.RuntimeGraceUntil.Valid {
 		target.RuntimeGraceUntil = row.RuntimeGraceUntil.Time.UTC()
 	}
+	if row.DeploymentStartedAt.Valid {
+		at := row.DeploymentStartedAt.Time.UTC()
+		target.DeploymentStarted = &at
+	}
+	if row.DeploymentFinishedAt.Valid {
+		at := row.DeploymentFinishedAt.Time.UTC()
+		target.DeploymentFinished = &at
+	}
+	return target
+}
+
+func targetFromServiceRow(row sqlc.ListServiceDomainProbeTargetsRow) Target {
+	target := Target{
+		DomainID:  row.ID.Bytes,
+		OwnerKind: OwnerService,
+		OwnerID:   row.ServiceID.Bytes,
+		OwnerName: row.ServiceName,
+		Domain:    row.Domain,
+		Protocol:  row.Protocol,
+		ProjectID: row.ProjectID.Bytes,
+		ServerID:  uuid.UUID(row.ServerID.Bytes),
+		Settings: Settings{
+			Enabled:     row.Enabled,
+			Path:        row.Path,
+			ExpectedMin: int(row.ExpectedMin),
+			ExpectedMax: int(row.ExpectedMax),
+			Timeout:     time.Duration(row.TimeoutSeconds) * time.Second,
+		},
+	}
+	if row.CreatedAt.Valid {
+		target.CreatedAt = row.CreatedAt.Time.UTC()
+	}
+	if row.DomainUpdatedAt.Valid {
+		target.DomainUpdatedAt = row.DomainUpdatedAt.Time.UTC()
+	}
+	if row.SettingsUpdatedAt.Valid {
+		target.SettingsUpdated = row.SettingsUpdatedAt.Time.UTC()
+	}
+	target.DeploymentState = row.DeploymentState
+	target.HasDeployment = row.HasDeployment
+	target.DesiredState = row.DesiredState
 	if row.DeploymentStartedAt.Valid {
 		at := row.DeploymentStartedAt.Time.UTC()
 		target.DeploymentStarted = &at

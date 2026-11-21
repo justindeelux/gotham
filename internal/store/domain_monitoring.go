@@ -28,6 +28,10 @@ func (s *Store) InsertDomainProbeResult(ctx context.Context, params sqlc.InsertD
 	return s.queries.InsertDomainProbeResult(ctx, params)
 }
 
+func (s *Store) InsertServiceDomainProbeResult(ctx context.Context, params sqlc.InsertServiceDomainProbeResultParams) error {
+	return s.queries.InsertServiceDomainProbeResult(ctx, params)
+}
+
 func (s *Store) ListDomainProbeResults(ctx context.Context, params sqlc.ListDomainProbeResultsParams) ([]sqlc.DomainProbeResult, error) {
 	return s.queries.ListDomainProbeResults(ctx, params)
 }
@@ -42,6 +46,14 @@ func (s *Store) ListDomainProbeTargets(ctx context.Context) ([]sqlc.ListDomainPr
 
 func (s *Store) GetDomainProbeTarget(ctx context.Context, params sqlc.GetDomainProbeTargetParams) (sqlc.GetDomainProbeTargetRow, error) {
 	return s.queries.GetDomainProbeTarget(ctx, params)
+}
+
+func (s *Store) ListServiceDomainProbeTargets(ctx context.Context) ([]sqlc.ListServiceDomainProbeTargetsRow, error) {
+	return s.queries.ListServiceDomainProbeTargets(ctx)
+}
+
+func (s *Store) GetServiceDomainProbeTarget(ctx context.Context, params sqlc.GetServiceDomainProbeTargetParams) (sqlc.GetServiceDomainProbeTargetRow, error) {
+	return s.queries.GetServiceDomainProbeTarget(ctx, params)
 }
 
 func (s *Store) ListActiveDomainIncidents(ctx context.Context) ([]sqlc.ListActiveDomainIncidentsRow, error) {

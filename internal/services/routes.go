@@ -80,6 +80,7 @@ type serviceDomainResponse struct {
 	Port           int32      `json:"port"`
 	Protocol       string     `json:"protocol"`
 	Disabled       bool       `json:"disabled"`
+	IsPrimary      bool       `json:"is_primary"`
 	Source         string     `json:"source"`
 	Status         string     `json:"status"`
 	Reason         string     `json:"reason,omitempty"`
@@ -154,6 +155,7 @@ func Mount(r chi.Router, auth func(http.Handler) http.Handler, userID UserIDFunc
 		protected.Post("/v1/services/{id}/domains", h.addDomain)
 		protected.Put("/v1/services/{id}/domains/{domainId}", h.updateDomain)
 		protected.Delete("/v1/services/{id}/domains/{domainId}", h.removeDomain)
+		protected.Post("/v1/services/{id}/domains/{domainId}/primary", h.setPrimaryDomain)
 	})
 }
 
@@ -491,6 +493,23 @@ func (h *handler) removeDomain(w http.ResponseWriter, r *http.Request) {
 	w.WriteHeader(http.StatusNoContent)
 }
 
+func (h *handler) setPrimaryDomain(w http.ResponseWriter, r *http.Request) {
+	userID, serviceID, ok := h.serviceParams(w, r)
+	if !ok {
+		return
+	}
+	domainID, err := uuid.Parse(chi.URLParam(r, "domainId"))
+	if err != nil {
+		writeJSON(w, http.StatusBadRequest, errorBody{Message: "invalid domain id"})
+		return
+	}
+	if err := h.svc.SetPrimaryDomain(r.Context(), userID, serviceID, domainID); err != nil {
+		h.writeServiceError(w, err)
+		return
+	}
+	w.WriteHeader(http.StatusNoContent)
+}
+
 func domainInput(req domainRequest) DomainInput {
 	return DomainInput(req)
 }
@@ -503,6 +522,7 @@ func newServiceDomainResponse(view DomainView) serviceDomainResponse {
 		Port:           view.Port,
 		Protocol:       view.Protocol,
 		Disabled:       view.Disabled,
+		IsPrimary:      view.IsPrimary,
 		Source:         view.Source,
 		Status:         view.Status,
 		Reason:         view.Reason,

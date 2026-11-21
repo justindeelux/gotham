@@ -78,7 +78,7 @@ const columns = computed<DataTableColumns<ServiceDomain>>(() => {
   const actions = {
     title: t("services.domains.actions"),
     key: "actions",
-    width: 200,
+    width: 300,
     fixed: "right" as const,
     render: (row: ServiceDomain) => {
       if (row.source === "compose" || row.id === undefined) {
@@ -112,6 +112,21 @@ const columns = computed<DataTableColumns<ServiceDomain>>(() => {
               },
               { default: () => t("services.domains.edit") },
             ),
+            row.is_primary
+              ? null
+              : h(
+                  NButton,
+                  {
+                    size: "small",
+                    disabled: row.disabled,
+                    "aria-label": t("services.domains.setPrimaryAria", {
+                      domain: row.domain,
+                    }),
+                    loading: domains.busyDomainId.value === row.id,
+                    onClick: () => void domains.handleSetPrimary(row),
+                  },
+                  { default: () => t("services.domains.setPrimary") },
+                ),
             h(
               NPopconfirm,
               { onPositiveClick: () => void domains.handleRemove(row) },
@@ -183,6 +198,17 @@ const columns = computed<DataTableColumns<ServiceDomain>>(() => {
           },
           { default: () => row.protocol },
         ),
+    },
+    {
+      title: t("services.domains.primaryColumn"),
+      key: "is_primary",
+      width: 110,
+      render: (row) =>
+        row.is_primary
+          ? h(NTag, { size: "small", type: "success" }, {
+              default: () => t("services.domains.primary"),
+            })
+          : h(NText, { depth: 3 }, { default: () => "—" }),
     },
     {
       title: t("services.domains.enabled"),
@@ -265,7 +291,7 @@ watch(
         :row-key="rowKey"
         :bordered="false"
         :single-line="false"
-        :scroll-x="900"
+        :scroll-x="1000"
         :pagination="false"
       />
       <NEmpty v-else :description="t('services.domains.empty')">

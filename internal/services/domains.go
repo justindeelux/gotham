@@ -5,7 +5,6 @@ import (
 	"errors"
 	"fmt"
 	"slices"
-	"sort"
 	"strings"
 
 	"github.com/google/uuid"
@@ -62,11 +61,13 @@ func RenderService(document string, env map[string]string, managed []ServiceDoma
 	}
 
 	hosts := make([]string, 0, len(managed)+len(probe.Spec.Domains))
-	for _, domain := range managed {
-		if domain.Disabled {
-			continue
+	for _, primary := range []bool{true, false} {
+		for _, domain := range managed {
+			if domain.Disabled || domain.IsPrimary != primary {
+				continue
+			}
+			hosts = append(hosts, proxy.NormalizeDomain(domain.Domain))
 		}
-		hosts = append(hosts, proxy.NormalizeDomain(domain.Domain))
 	}
 	for _, route := range probe.Spec.Domains {
 		if route.Domain == domainSeed {
@@ -128,12 +129,37 @@ func normalizeHosts(hosts []string) []string {
 	return normalized
 }
 
+// sameHosts compares the effective host order, not only the set: promoting a
+// different primary changes GOTHAM_DOMAIN and has to deploy again.
 func sameHosts(a, b []string) bool {
-	left := normalizeHosts(a)
-	right := normalizeHosts(b)
-	sort.Strings(left)
-	sort.Strings(right)
-	return slices.Equal(left, right)
+	return slices.Equal(normalizeHosts(a), normalizeHosts(b))
+}
+
+func hasEnabledDomain(domains []ServiceDomain) bool {
+	for _, domain := range domains {
+		if !domain.Disabled {
+			return true
+		}
+	}
+	return false
+}
+
+// promoteFirstEnabledDomain marks the oldest enabled row primary. The caller
+// has already removed or demoted the previous primary in the same transaction.
+func promoteFirstEnabledDomain(ctx context.Context, repo Repository, serviceID, exceptID uuid.UUID) error {
+	domains, err := repo.ListServiceDomains(ctx, serviceID)
+	if err != nil {
+		return err
+	}
+	for _, domain := range domains {
+		if domain.Disabled || domain.ID == exceptID {
+			continue
+		}
+		domain.IsPrimary = true
+		_, err := repo.UpdateServiceDomain(ctx, domain)
+		return err
+	}
+	return nil
 }
 
 func (s *service) normalizeDomain(service Service, managed []ServiceDomain, in DomainInput) (ServiceDomain, error) {
@@ -270,6 +296,7 @@ func (s *service) AddDomain(ctx context.Context, userID, serviceID uuid.UUID, in
 		return ServiceDomain{}, err
 	}
 	domain.ID = uuid.New()
+	domain.IsPrimary = !hasEnabledDomain(managed) && !domain.Disabled
 	created, err := s.repo.CreateServiceDomain(ctx, domain)
 	if err != nil {
 		return ServiceDomain{}, err
@@ -316,6 +343,22 @@ func (s *service) UpdateDomain(ctx context.Context, userID, serviceID, domainID 
 			next.Disabled = false
 		}
 	}
+	next.IsPrimary = target.IsPrimary
+	promote := false
+	if next.Disabled {
+		// A disabled row cannot stay primary; the next enabled row takes over.
+		next.IsPrimary = false
+		promote = target.IsPrimary
+	} else if !target.IsPrimary {
+		otherEnabled := false
+		for _, domain := range managed {
+			if domain.ID != target.ID && !domain.Disabled {
+				otherEnabled = true
+				break
+			}
+		}
+		next.IsPrimary = !otherEnabled
+	}
 	releaseDomain, err := s.guardDomains.Acquire(ctx, next.Domain)
 	if err != nil {
 		return ServiceDomain{}, fmt.Errorf("%w: %v", ErrValidation, err)
@@ -326,7 +369,18 @@ func (s *service) UpdateDomain(ctx context.Context, userID, serviceID, domainID 
 			return ServiceDomain{}, err
 		}
 	}
-	updated, err := s.repo.UpdateServiceDomain(ctx, next)
+	var updated ServiceDomain
+	err = s.repo.InTx(ctx, func(tx Repository) error {
+		row, err := tx.UpdateServiceDomain(ctx, next)
+		if err != nil {
+			return err
+		}
+		updated = row
+		if !promote {
+			return nil
+		}
+		return promoteFirstEnabledDomain(ctx, tx, service.ID, target.ID)
+	})
 	if err != nil {
 		return ServiceDomain{}, err
 	}
@@ -346,7 +400,80 @@ func (s *service) RemoveDomain(ctx context.Context, userID, serviceID, domainID 
 	if domainID == uuid.Nil {
 		return fmt.Errorf("%w: invalid domain id", ErrValidation)
 	}
-	if err := s.repo.DeleteServiceDomain(ctx, service.ID, domainID); err != nil {
+	managed, err := s.repo.ListServiceDomains(ctx, service.ID)
+	if err != nil {
+		return err
+	}
+	var target *ServiceDomain
+	for i := range managed {
+		if managed[i].ID == domainID {
+			target = &managed[i]
+			break
+		}
+	}
+	if target == nil {
+		return ErrNotFound
+	}
+	// Promote the next enabled row in the same transaction, so a service with
+	// domains never loses its primary.
+	err = s.repo.InTx(ctx, func(tx Repository) error {
+		if err := tx.DeleteServiceDomain(ctx, service.ID, target.ID); err != nil {
+			return err
+		}
+		if !target.IsPrimary {
+			return nil
+		}
+		return promoteFirstEnabledDomain(ctx, tx, service.ID, target.ID)
+	})
+	if err != nil {
+		return err
+	}
+	s.syncProxy(ctx, service.ServerID)
+	return nil
+}
+
+// SetPrimaryDomain makes an enabled managed row the host GOTHAM_DOMAIN renders.
+func (s *service) SetPrimaryDomain(ctx context.Context, userID, serviceID, domainID uuid.UUID) error {
+	if !Enabled() {
+		return ErrDisabled
+	}
+	service, release, err := s.lifecycle(ctx, userID, serviceID)
+	if err != nil {
+		return err
+	}
+	defer release()
+	if domainID == uuid.Nil {
+		return fmt.Errorf("%w: invalid domain id", ErrValidation)
+	}
+	managed, err := s.repo.ListServiceDomains(ctx, service.ID)
+	if err != nil {
+		return err
+	}
+	var target *ServiceDomain
+	for i := range managed {
+		if managed[i].ID == domainID {
+			target = &managed[i]
+			break
+		}
+	}
+	if target == nil {
+		return ErrNotFound
+	}
+	if target.Disabled {
+		return fmt.Errorf("%w: a disabled domain cannot be primary", ErrValidation)
+	}
+	if target.IsPrimary {
+		return nil
+	}
+	err = s.repo.InTx(ctx, func(tx Repository) error {
+		if err := tx.ClearPrimaryServiceDomains(ctx, service.ID); err != nil {
+			return err
+		}
+		target.IsPrimary = true
+		_, err := tx.UpdateServiceDomain(ctx, *target)
+		return err
+	})
+	if err != nil {
 		return err
 	}
 	s.syncProxy(ctx, service.ServerID)

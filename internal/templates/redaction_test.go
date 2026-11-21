@@ -170,6 +170,14 @@ func (f *fakeRepository) UpdateServiceDomain(_ context.Context, domain services.
 	return domain, nil
 }
 
+func (f *fakeRepository) ClearPrimaryServiceDomains(_ context.Context, _ uuid.UUID) error {
+	return nil
+}
+
+func (f *fakeRepository) InTx(ctx context.Context, fn func(tx services.Repository) error) error {
+	return fn(f)
+}
+
 func (f *fakeRepository) DeleteServiceDomain(_ context.Context, _, _ uuid.UUID) error {
 	return nil
 }

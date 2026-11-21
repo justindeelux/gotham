@@ -317,6 +317,20 @@ func (r *fakeRepository) UpdateServiceDomain(_ context.Context, domain ServiceDo
 	return ServiceDomain{}, ErrNotFound
 }
 
+func (r *fakeRepository) ClearPrimaryServiceDomains(_ context.Context, serviceID uuid.UUID) error {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	list := r.domains[serviceID]
+	for i := range list {
+		list[i].IsPrimary = false
+	}
+	return nil
+}
+
+func (r *fakeRepository) InTx(ctx context.Context, fn func(tx Repository) error) error {
+	return fn(r)
+}
+
 func (r *fakeRepository) DeleteServiceDomain(_ context.Context, serviceID, domainID uuid.UUID) error {
 	r.mu.Lock()
 	defer r.mu.Unlock()

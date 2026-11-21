@@ -94,11 +94,12 @@ và một dòng quản lý cùng một host, cả hai đều bị giữ lại k�
 ngầm một bên.
 
 Khi control plane render tài liệu để triển khai, kiểm tra và proxy, nó chèn
-`GOTHAM_DOMAIN` (host bật đầu tiên) và `GOTHAM_DOMAINS` (danh sách host phân tách
-bằng dấu phẩy). Chúng là chuỗi rỗng khi dịch vụ chưa có tên miền. Template có thể
-tham chiếu chúng; hai tên này được dành riêng và bị từ chối trong môi trường của
-dịch vụ. Thay đổi tên miền đánh dấu dịch vụ `pending_changes: ["domains"]` cho đến
-lần triển khai thành công tiếp theo nhận các biến mới.
+`GOTHAM_DOMAIN` (host chính) và `GOTHAM_DOMAINS` (danh sách host phân tách
+bằng dấu phẩy). Tên miền bật đầu tiên trở thành tên miền chính; chọn tên miền
+khác từ tab Tên miền để đổi. Chúng là chuỗi rỗng khi dịch vụ chưa có tên miền.
+Template có thể tham chiếu chúng; hai tên này được dành riêng và bị từ chối trong
+môi trường của dịch vụ. Thay đổi tên miền đánh dấu dịch vụ `pending_changes:
+["domains"]` cho đến lần triển khai thành công tiếp theo nhận các biến mới.
 
 Các dòng HTTPS phục vụ qua ACME resolver mặc định và chuyển hướng HTTP sang HTTPS,
 giống hệt tên miền của ứng dụng. Một host được giữ chỗ trên toàn nền tảng: tên miền

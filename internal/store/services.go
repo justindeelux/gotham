@@ -84,6 +84,10 @@ func (s *Store) UpdateServiceDomain(ctx context.Context, params sqlc.UpdateServi
 	return s.queries.UpdateServiceDomain(ctx, params)
 }
 
+func (s *Store) ClearPrimaryServiceDomains(ctx context.Context, serviceID pgtype.UUID) error {
+	return s.queries.ClearPrimaryServiceDomains(ctx, serviceID)
+}
+
 func (s *Store) DeleteServiceDomain(ctx context.Context, params sqlc.DeleteServiceDomainParams) error {
 	return s.queries.DeleteServiceDomain(ctx, params)
 }

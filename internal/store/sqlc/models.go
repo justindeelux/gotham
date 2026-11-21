@@ -920,6 +920,7 @@ type ServiceDomain struct {
 	Disabled       bool               `json:"disabled"`
 	CreatedAt      pgtype.Timestamptz `json:"created_at"`
 	UpdatedAt      pgtype.Timestamptz `json:"updated_at"`
+	IsPrimary      bool               `json:"is_primary"`
 }
 
 type Session struct {

@@ -11,10 +11,23 @@ import (
 	"github.com/jackc/pgx/v5/pgtype"
 )
 
+const clearPrimaryServiceDomains = `-- name: ClearPrimaryServiceDomains :exec
+UPDATE service_domains
+SET is_primary = false, updated_at = now()
+WHERE service_id = $1 AND is_primary
+`
+
+// ClearPrimaryServiceDomains drops the primary flag of a service before a
+// promotion, so the partial unique index never sees two primaries.
+func (q *Queries) ClearPrimaryServiceDomains(ctx context.Context, serviceID pgtype.UUID) error {
+	_, err := q.db.Exec(ctx, clearPrimaryServiceDomains, serviceID)
+	return err
+}
+
 const createServiceDomain = `-- name: CreateServiceDomain :one
-INSERT INTO service_domains (id, service_id, compose_service, port, domain, protocol, disabled)
-VALUES ($1, $2, $3, $4, $5, $6, $7)
-RETURNING id, service_id, compose_service, port, domain, protocol, disabled, created_at, updated_at
+INSERT INTO service_domains (id, service_id, compose_service, port, domain, protocol, disabled, is_primary)
+VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
+RETURNING id, service_id, compose_service, port, domain, protocol, disabled, created_at, updated_at, is_primary
 `
 
 type CreateServiceDomainParams struct {
@@ -25,6 +38,7 @@ type CreateServiceDomainParams struct {
 	Domain         string      `json:"domain"`
 	Protocol       string      `json:"protocol"`
 	Disabled       bool        `json:"disabled"`
+	IsPrimary      bool        `json:"is_primary"`
 }
 
 func (q *Queries) CreateServiceDomain(ctx context.Context, arg CreateServiceDomainParams) (ServiceDomain, error) {
@@ -36,6 +50,7 @@ func (q *Queries) CreateServiceDomain(ctx context.Context, arg CreateServiceDoma
 		arg.Domain,
 		arg.Protocol,
 		arg.Disabled,
+		arg.IsPrimary,
 	)
 	var i ServiceDomain
 	err := row.Scan(
@@ -48,6 +63,7 @@ func (q *Queries) CreateServiceDomain(ctx context.Context, arg CreateServiceDoma
 		&i.Disabled,
 		&i.CreatedAt,
 		&i.UpdatedAt,
+		&i.IsPrimary,
 	)
 	return i, err
 }
@@ -78,7 +94,7 @@ func (q *Queries) DeleteServiceDomainsByService(ctx context.Context, serviceID p
 }
 
 const getServiceDomainByNameAnyService = `-- name: GetServiceDomainByNameAnyService :one
-SELECT d.id, d.service_id, d.compose_service, d.port, d.domain, d.protocol, d.disabled, d.created_at, d.updated_at FROM service_domains d
+SELECT d.id, d.service_id, d.compose_service, d.port, d.domain, d.protocol, d.disabled, d.created_at, d.updated_at, d.is_primary FROM service_domains d
 JOIN services s ON s.id = d.service_id
 WHERE lower(d.domain) = lower($1) AND s.deleted_at IS NULL
 ORDER BY d.created_at, d.id
@@ -101,6 +117,7 @@ func (q *Queries) GetServiceDomainByNameAnyService(ctx context.Context, lower st
 		&i.Disabled,
 		&i.CreatedAt,
 		&i.UpdatedAt,
+		&i.IsPrimary,
 	)
 	return i, err
 }
@@ -156,13 +173,14 @@ func (q *Queries) ListProxiedServiceDomains(ctx context.Context) ([]ListProxiedS
 }
 
 const listServiceDomainsByService = `-- name: ListServiceDomainsByService :many
-SELECT id, service_id, compose_service, port, domain, protocol, disabled, created_at, updated_at FROM service_domains
+SELECT id, service_id, compose_service, port, domain, protocol, disabled, created_at, updated_at, is_primary FROM service_domains
 WHERE service_id = $1
 ORDER BY created_at, id
 `
 
-// Every managed domain of one service, oldest first. The order is the routing
-// and GOTHAM_DOMAIN order: the first enabled row is the primary host.
+// Every managed domain of one service, oldest first. The primary flag decides
+// the GOTHAM_DOMAIN host; removing the primary promotes the oldest remaining
+// enabled row, so this order is also the promotion order.
 func (q *Queries) ListServiceDomainsByService(ctx context.Context, serviceID pgtype.UUID) ([]ServiceDomain, error) {
 	rows, err := q.db.Query(ctx, listServiceDomainsByService, serviceID)
 	if err != nil {
@@ -182,6 +200,7 @@ func (q *Queries) ListServiceDomainsByService(ctx context.Context, serviceID pgt
 			&i.Disabled,
 			&i.CreatedAt,
 			&i.UpdatedAt,
+			&i.IsPrimary,
 		); err != nil {
 			return nil, err
 		}
@@ -200,9 +219,10 @@ SET compose_service = $3,
     domain = $5,
     protocol = $6,
     disabled = $7,
+    is_primary = $8,
     updated_at = now()
 WHERE id = $1 AND service_id = $2
-RETURNING id, service_id, compose_service, port, domain, protocol, disabled, created_at, updated_at
+RETURNING id, service_id, compose_service, port, domain, protocol, disabled, created_at, updated_at, is_primary
 `
 
 type UpdateServiceDomainParams struct {
@@ -213,6 +233,7 @@ type UpdateServiceDomainParams struct {
 	Domain         string      `json:"domain"`
 	Protocol       string      `json:"protocol"`
 	Disabled       bool        `json:"disabled"`
+	IsPrimary      bool        `json:"is_primary"`
 }
 
 func (q *Queries) UpdateServiceDomain(ctx context.Context, arg UpdateServiceDomainParams) (ServiceDomain, error) {
@@ -224,6 +245,7 @@ func (q *Queries) UpdateServiceDomain(ctx context.Context, arg UpdateServiceDoma
 		arg.Domain,
 		arg.Protocol,
 		arg.Disabled,
+		arg.IsPrimary,
 	)
 	var i ServiceDomain
 	err := row.Scan(
@@ -236,6 +258,7 @@ func (q *Queries) UpdateServiceDomain(ctx context.Context, arg UpdateServiceDoma
 		&i.Disabled,
 		&i.CreatedAt,
 		&i.UpdatedAt,
+		&i.IsPrimary,
 	)
 	return i, err
 }

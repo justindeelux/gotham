@@ -33,6 +33,7 @@ export interface ServiceDomain {
   port: number;
   protocol: ServiceDomainProtocol;
   disabled: boolean;
+  is_primary: boolean;
   source: ServiceDomainSource;
   status: ServiceDomainStatus;
   reason?: string;
@@ -259,6 +260,13 @@ export async function removeServiceDomain(
   domainId: string,
 ): Promise<void> {
   await http.delete(`/services/${id}/domains/${domainId}`);
+}
+
+export async function setPrimaryServiceDomain(
+  id: string,
+  domainId: string,
+): Promise<void> {
+  await http.post(`/services/${id}/domains/${domainId}/primary`, {});
 }
 
 export interface ServiceLogsOptions {

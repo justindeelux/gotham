@@ -6,6 +6,7 @@ import {
   describeServiceError,
   listServiceDomains,
   removeServiceDomain,
+  setPrimaryServiceDomain,
   updateServiceDomain,
   type Service,
   type ServiceDomain,
@@ -266,6 +267,24 @@ export function useServiceDomains(
     }
   }
 
+  async function handleSetPrimary(row: ServiceDomain): Promise<void> {
+    if (!canWrite.value || row.id === undefined) {
+      return;
+    }
+    busyDomainId.value = row.id;
+    loadFailure.value = null;
+    try {
+      await setPrimaryServiceDomain(serviceId.value, row.id);
+      await refresh(true);
+      await reloadService();
+      message.success(tr("services.toast.domainPrimaryChanged"));
+    } catch (err) {
+      loadFailure.value = err;
+    } finally {
+      busyDomainId.value = null;
+    }
+  }
+
   function statusLabel(row: ServiceDomain): string {
     return tr(`services.domains.status.${row.status}`);
   }
@@ -299,6 +318,7 @@ export function useServiceDomains(
     handleSave,
     handleToggle,
     handleRemove,
+    handleSetPrimary,
     statusLabel,
   };
 }

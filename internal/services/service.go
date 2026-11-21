@@ -74,6 +74,7 @@ type ServiceService interface {
 	AddDomain(ctx context.Context, userID, serviceID uuid.UUID, in DomainInput) (ServiceDomain, error)
 	UpdateDomain(ctx context.Context, userID, serviceID, domainID uuid.UUID, in DomainInput) (ServiceDomain, error)
 	RemoveDomain(ctx context.Context, userID, serviceID, domainID uuid.UUID) error
+	SetPrimaryDomain(ctx context.Context, userID, serviceID, domainID uuid.UUID) error
 }
 
 type RouteSync interface {
@@ -309,6 +310,7 @@ func (s *service) Create(ctx context.Context, userID uuid.UUID, req CreateReques
 			return Service{}, err
 		}
 		domain.ID = uuid.New()
+		domain.IsPrimary = !hasEnabledDomain(managed) && !domain.Disabled
 		managed = append(managed, domain)
 		hosts = append(hosts, domain.Domain)
 	}

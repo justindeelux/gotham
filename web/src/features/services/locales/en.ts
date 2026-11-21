@@ -170,6 +170,10 @@ const en = {
     enabledOn: "enabled",
     disabled: "disabled",
     notEnabled: "—",
+    primaryColumn: "Primary",
+    primary: "primary",
+    setPrimary: "Make primary",
+    setPrimaryAria: "Make {domain} the primary domain",
     toggleAria: "Enable domain {domain}",
     edit: "Edit",
     editAria: "Edit domain {domain}",
@@ -251,6 +255,7 @@ const en = {
     domainAdded: "Domain added.",
     domainSaved: "Domain saved.",
     domainRemoved: "Domain removed.",
+    domainPrimaryChanged: "Primary domain changed.",
   },
 };
 

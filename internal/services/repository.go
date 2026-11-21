@@ -40,6 +40,8 @@ type Repository interface {
 	ListServiceDomains(ctx context.Context, serviceID uuid.UUID) ([]ServiceDomain, error)
 	CreateServiceDomain(ctx context.Context, domain ServiceDomain) (ServiceDomain, error)
 	UpdateServiceDomain(ctx context.Context, domain ServiceDomain) (ServiceDomain, error)
+	ClearPrimaryServiceDomains(ctx context.Context, serviceID uuid.UUID) error
+	InTx(ctx context.Context, fn func(tx Repository) error) error
 	DeleteServiceDomain(ctx context.Context, serviceID, domainID uuid.UUID) error
 	DeleteServiceDomains(ctx context.Context, serviceID uuid.UUID) error
 	ServiceDomainClaim(ctx context.Context, domain string) (ServiceDomain, error)
@@ -55,6 +57,19 @@ var _ Repository = (*storeRepository)(nil)
 
 func newStoreRepository(st *store.Store) *storeRepository {
 	return &storeRepository{store: st}
+}
+
+func (r *storeRepository) InTx(ctx context.Context, fn func(tx Repository) error) error {
+	return r.store.InTx(ctx, func(tx *store.Store) error {
+		return fn(&storeRepository{store: tx})
+	})
+}
+
+func (r *storeRepository) ClearPrimaryServiceDomains(ctx context.Context, serviceID uuid.UUID) error {
+	if err := r.store.ClearPrimaryServiceDomains(ctx, pgUUID(serviceID)); err != nil {
+		return fmt.Errorf("services: clear primary service domains: %w", err)
+	}
+	return nil
 }
 
 func (r *storeRepository) CreateService(ctx context.Context, service Service) (Service, error) {
@@ -138,6 +153,7 @@ func (r *storeRepository) CreateServiceWithDomains(ctx context.Context, service 
 				Domain:         domain.Domain,
 				Protocol:       domain.Protocol,
 				Disabled:       domain.Disabled,
+				IsPrimary:      domain.IsPrimary,
 			})
 			if err != nil {
 				if isUniqueViolation(err) {
@@ -491,6 +507,7 @@ func (r *storeRepository) CreateServiceDomain(ctx context.Context, domain Servic
 		Domain:         domain.Domain,
 		Protocol:       domain.Protocol,
 		Disabled:       domain.Disabled,
+		IsPrimary:      domain.IsPrimary,
 	})
 	if err != nil {
 		if isUniqueViolation(err) {
@@ -513,6 +530,7 @@ func (r *storeRepository) UpdateServiceDomain(ctx context.Context, domain Servic
 		Domain:         domain.Domain,
 		Protocol:       domain.Protocol,
 		Disabled:       domain.Disabled,
+		IsPrimary:      domain.IsPrimary,
 	})
 	if err != nil {
 		if errors.Is(err, pgx.ErrNoRows) {
@@ -586,6 +604,7 @@ func serviceDomainFromRow(row sqlc.ServiceDomain) ServiceDomain {
 		Domain:         row.Domain,
 		Protocol:       row.Protocol,
 		Disabled:       row.Disabled,
+		IsPrimary:      row.IsPrimary,
 		CreatedAt:      timeFromPG(row.CreatedAt),
 		UpdatedAt:      timeFromPG(row.UpdatedAt),
 	}

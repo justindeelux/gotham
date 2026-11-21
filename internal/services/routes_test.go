@@ -29,8 +29,9 @@ type fakeRouteService struct {
 	domainIn  DomainInput
 	deleted   []string
 
-	deployCalls int
-	err         error
+	primaryDomainID uuid.UUID
+	deployCalls     int
+	err             error
 }
 
 func (f *fakeRouteService) Create(_ context.Context, _ uuid.UUID, req CreateRequest) (Service, error) {
@@ -155,6 +156,11 @@ func (f *fakeRouteService) RemoveDomain(context.Context, uuid.UUID, uuid.UUID, u
 	return f.err
 }
 
+func (f *fakeRouteService) SetPrimaryDomain(_ context.Context, _, _, domainID uuid.UUID) error {
+	f.primaryDomainID = domainID
+	return f.err
+}
+
 var _ ServiceService = (*fakeRouteService)(nil)
 
 func TestRoutesServiceDomains(t *testing.T) {
@@ -205,6 +211,16 @@ func TestRoutesServiceDomains(t *testing.T) {
 	router.ServeHTTP(recorder, httptest.NewRequest(http.MethodDelete, base+"/"+domainID.String(), nil))
 	if recorder.Code != http.StatusNoContent {
 		t.Fatalf("DELETE domain = %d: %s", recorder.Code, recorder.Body)
+	}
+
+	primaryID := uuid.New()
+	recorder = httptest.NewRecorder()
+	router.ServeHTTP(recorder, httptest.NewRequest(http.MethodPost, base+"/"+primaryID.String()+"/primary", nil))
+	if recorder.Code != http.StatusNoContent {
+		t.Fatalf("POST primary = %d: %s", recorder.Code, recorder.Body)
+	}
+	if fake.primaryDomainID != primaryID {
+		t.Fatalf("primary domain id = %s, want %s", fake.primaryDomainID, primaryID)
 	}
 }
 

@@ -1,0 +1,12 @@
+services:
+  gost:
+    image: gogost/gost:3.3.3
+    restart: unless-stopped
+    command:
+      - -L
+      - "http://{{ .username }}:{{ .password }}@:{{ .http_port }}"
+      - -L
+      - "socks5://{{ .username }}:{{ .password }}@:{{ .socks_port }}"
+    ports:
+      - "{{ .http_port }}:{{ .http_port }}"
+      - "{{ .socks_port }}:{{ .socks_port }}"

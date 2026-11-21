@@ -1,0 +1,46 @@
+services:
+  dante:
+    image: losenmann/dante:1.4.4
+    restart: unless-stopped
+    user: "0:0"
+    ports:
+      - "{{ .socks_port }}:{{ .socks_port }}"
+    environment:
+      PROXY_USER: "{{ .username }}"
+      PROXY_PASSWORD: "{{ .password }}"
+    entrypoint:
+      - /bin/sh
+      - -c
+      - |
+        set -e
+        id -u "$$PROXY_USER" >/dev/null 2>&1 || adduser -D -H -s /sbin/nologin "$$PROXY_USER"
+        printf '%s:%s\n' "$$PROXY_USER" "$$PROXY_PASSWORD" | chpasswd
+        cat > /etc/pam.d/sockd <<'EOF'
+        auth required pam_unix.so
+        account required pam_unix.so
+        EOF
+        cat > /etc/sockd.conf <<'EOF'
+        logoutput: stderr
+        internal: 0.0.0.0 port = {{ .socks_port }}
+        external: eth0
+        socksmethod: username
+        clientmethod: none
+        user.privileged: root
+        user.unprivileged: nobody
+        client pass {
+            from: 0.0.0.0/0 to: 0.0.0.0/0
+            log: error
+        }
+        socks pass {
+            from: 0.0.0.0/0 to: 0.0.0.0/0
+            protocol: tcp udp
+            log: error
+        }
+        EOF
+        exec sockd -f /etc/sockd.conf
+    healthcheck:
+      test: ["CMD", "nc", "-z", "127.0.0.1", "{{ .socks_port }}"]
+      interval: 30s
+      timeout: 3s
+      start_period: 5s
+      retries: 3

@@ -242,6 +242,45 @@ func TestServiceRouteUsesItsCertificateIntent(t *testing.T) {
 	}
 }
 
+func TestBackfilledServiceHTTPSDomainsKeepTLS(t *testing.T) {
+	serverID := uuid.New()
+	serviceID := uuid.New()
+	project := "gotham-" + serviceID.String()
+	routes, diagnostics, _ := serviceRoutesForServer([]ProxiedService{{
+		ID: serviceID, ServerID: serverID, Name: "shop", Project: project,
+		Domains: []ServiceDomain{
+			{Service: "web", Host: "old.example.com", Port: 80, Protocol: ProtocolHTTPS},
+			{Service: "web", Host: "new.example.com", Port: 80, Protocol: ProtocolHTTPS},
+		},
+		// What migration 00093 backfills for every pre-existing https row.
+		Certificates: []*CertificateIntent{
+			{Domain: "old.example.com", Enabled: true, Challenge: ChallengeHTTP01},
+			{Domain: "new.example.com", Enabled: true, Challenge: ChallengeHTTP01},
+		},
+	}}, serverID, DefaultBackendHost, []containers.Container{
+		composeContainer(project, "web", "80", "32768"),
+	}, nil, nil)
+	if len(diagnostics) != 0 || len(routes) != 2 {
+		t.Fatalf("routes = %+v diagnostics = %+v", routes, diagnostics)
+	}
+	cfg := BuildConfig(routes, nil, nil, "", "")
+	for _, route := range routes {
+		if NormalizeProtocol(route.Protocol) != ProtocolHTTPS {
+			t.Fatalf("%s protocol = %q, want https", route.Domain, route.Protocol)
+		}
+		if route.Certificate == nil || route.Certificate.Resolver != DefaultResolverName {
+			t.Fatalf("%s certificate = %+v, want the default resolver", route.Domain, route.Certificate)
+		}
+		if _, ok := cfg.Routers[route.Name+"-websecure"]; !ok {
+			t.Errorf("%s has no websecure router", route.Domain)
+		}
+		web := cfg.Routers[route.Name+"-web"]
+		if len(web.Middlewares) != 1 || web.Middlewares[0] != HTTPRedirectMiddleware {
+			t.Errorf("%s web router = %+v, want the https redirect", route.Domain, web)
+		}
+	}
+}
+
 func TestServiceRoutesDuplicateHosts(t *testing.T) {
 	serverID := uuid.New()
 	firstID, secondID := uuid.New(), uuid.New()

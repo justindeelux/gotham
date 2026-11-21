@@ -78,7 +78,7 @@ func TestServiceDomainCertificateMigration(t *testing.T) {
 	if err != nil {
 		t.Fatalf("connect scratch database: %v", err)
 	}
-	var serviceOne, serviceTwo, applicationID string
+	var serviceOne, serviceTwo, legacyService, deletedService, applicationID string
 	err = conn.QueryRow(ctx, `
 		WITH u AS (INSERT INTO users (email) VALUES ('svc-cert@example.com') RETURNING id),
 		     p AS (INSERT INTO projects (name) VALUES ('svc-cert') RETURNING id),
@@ -94,15 +94,45 @@ func TestServiceDomainCertificateMigration(t *testing.T) {
 		         SELECT u.id, s.id, e.id, 'svc-two', 'services: {}' FROM u, s, e
 		         RETURNING id
 		     ),
+		     legacy AS (
+		         INSERT INTO services (user_id, server_id, environment_id, name, compose_yaml)
+		         SELECT u.id, s.id, e.id, 'svc-legacy', 'services: {}' FROM u, s, e
+		         RETURNING id
+		     ),
+		     gone AS (
+		         INSERT INTO services (user_id, server_id, environment_id, name, compose_yaml, deleted_at)
+		         SELECT u.id, s.id, e.id, 'svc-gone', 'services: {}', now() FROM u, s, e
+		         RETURNING id
+		     ),
 		     app AS (
 		         INSERT INTO applications (user_id, server_id, environment_id, name)
 		         SELECT u.id, s.id, e.id, 'svc-cert-app' FROM u, s, e
 		         RETURNING id
 		     )
-		SELECT (SELECT id::text FROM sv1), (SELECT id::text FROM sv2), (SELECT id::text FROM app)`).
-		Scan(&serviceOne, &serviceTwo, &applicationID)
+		SELECT (SELECT id::text FROM sv1), (SELECT id::text FROM sv2),
+		       (SELECT id::text FROM legacy), (SELECT id::text FROM gone),
+		       (SELECT id::text FROM app)`).
+		Scan(&serviceOne, &serviceTwo, &legacyService, &deletedService, &applicationID)
 	if err != nil {
 		t.Fatalf("seed scratch rows: %v", err)
+	}
+	for _, row := range []struct {
+		serviceID string
+		domain    string
+		protocol  string
+		disabled  bool
+	}{
+		{legacyService, "legacy-https.example.com", "https", false},
+		{legacyService, "legacy-http.example.com", "http", false},
+		{legacyService, "legacy-disabled.example.com", "https", true},
+		{deletedService, "legacy-deleted.example.com", "https", false},
+	} {
+		if _, err := conn.Exec(ctx, `
+			INSERT INTO service_domains (service_id, compose_service, port, domain, protocol, disabled)
+			VALUES ($1::uuid, 'web', 80, $2, $3, $4)`,
+			row.serviceID, row.domain, row.protocol, row.disabled); err != nil {
+			t.Fatalf("seed service domain %s: %v", row.domain, err)
+		}
 	}
 	_ = conn.Close(ctx)
 
@@ -119,7 +149,28 @@ func TestServiceDomainCertificateMigration(t *testing.T) {
 
 	serviceOneID := pgUUID(uuid.MustParse(serviceOne))
 	serviceTwoID := pgUUID(uuid.MustParse(serviceTwo))
+	legacyServiceID := pgUUID(uuid.MustParse(legacyService))
+	deletedServiceID := pgUUID(uuid.MustParse(deletedService))
 	applicationUUID := pgUUID(uuid.MustParse(applicationID))
+
+	backfilled, err := st.ListDomainCertificatesByService(ctx, legacyServiceID)
+	if err != nil {
+		t.Fatalf("ListDomainCertificatesByService(backfill): %v", err)
+	}
+	if len(backfilled) != 1 {
+		t.Fatalf("backfilled intents = %#v, want only the enabled https row", backfilled)
+	}
+	legacyIntent := backfilled[0]
+	if legacyIntent.Domain != "legacy-https.example.com" || !legacyIntent.Enabled ||
+		legacyIntent.Challenge != "http-01" || legacyIntent.Wildcard {
+		t.Fatalf("backfilled intent = %#v", legacyIntent)
+	}
+	if legacyIntent.OwnerKind == nil || *legacyIntent.OwnerKind != "service" {
+		t.Fatalf("backfilled owner_kind = %v, want service", legacyIntent.OwnerKind)
+	}
+	if rows, err := st.ListDomainCertificatesByService(ctx, deletedServiceID); err != nil || len(rows) != 0 {
+		t.Fatalf("soft-deleted service intents = %#v err=%v, want none", rows, err)
+	}
 
 	created, err := st.CreateServiceDomainCertificate(ctx, sqlc.CreateServiceDomainCertificateParams{
 		ServiceID: serviceOneID,
@@ -172,8 +223,8 @@ func TestServiceDomainCertificateMigration(t *testing.T) {
 	if err != nil {
 		t.Fatalf("ListProxiedServiceCertificates: %v", err)
 	}
-	if len(proxied) != 2 {
-		t.Fatalf("proxied service intents = %#v, want two", proxied)
+	if len(proxied) != 3 {
+		t.Fatalf("proxied service intents = %#v, want the backfilled row and two created rows", proxied)
 	}
 
 	if _, err := st.CreateServiceDomainCertificate(ctx, sqlc.CreateServiceDomainCertificateParams{
@@ -223,9 +274,17 @@ func TestServiceDomainCertificateMigration(t *testing.T) {
 	if err != nil {
 		t.Fatalf("ListDomainCertificates: %v", err)
 	}
+	serviceRows := 0
 	for _, row := range remaining {
-		if row.ServiceID.Valid {
-			t.Fatalf("service intent survived delete: %#v", row)
+		if !row.ServiceID.Valid {
+			continue
 		}
+		serviceRows++
+		if row.ServiceID != legacyServiceID || row.Domain != "legacy-https.example.com" {
+			t.Fatalf("unexpected service intent survived delete: %#v", row)
+		}
+	}
+	if serviceRows != 1 {
+		t.Fatalf("service intents remaining = %d, want only the untouched backfilled row", serviceRows)
 	}
 }

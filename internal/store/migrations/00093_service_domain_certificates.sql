@@ -35,6 +35,19 @@ ALTER TABLE domain_certificates ADD COLUMN owner_kind text GENERATED ALWAYS AS (
 CREATE INDEX domain_certificates_service_idx
     ON domain_certificates (service_id);
 
+-- Backfill (GOTHAM-257): every existing https service domain gets the same
+-- default http-01 intent the write path now records. Without it, adding a
+-- second https domain or configuring a certificate on one row would make the
+-- other legacy hosts resolve as "recorded for a different domain" and fall
+-- back to plain HTTP. Soft-deleted services are skipped: their intents have no
+-- routable owner.
+INSERT INTO domain_certificates (service_id, domain, enabled, challenge, wildcard)
+SELECT d.service_id, d.domain, true, 'http-01', false
+FROM service_domains d
+JOIN services s ON s.id = d.service_id AND s.deleted_at IS NULL
+WHERE NOT d.disabled AND d.protocol = 'https'
+ON CONFLICT (service_id, domain) DO NOTHING;
+
 -- +goose Down
 -- Service intents have no representation in the previous schema.
 DELETE FROM domain_certificates WHERE service_id IS NOT NULL;

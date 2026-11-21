@@ -286,6 +286,7 @@ owner POST /api/v1/servers/{id}/toolchain/jobs/{jobID}/cancel
 owner POST /api/v1/servers/{id}/validate
 project POST /api/v1/services
 project POST /api/v1/services/{id}/domains
+project POST /api/v1/services/{id}/domains/{domainId}/primary
 project POST /api/v1/services/{id}/deploy
 project POST /api/v1/services/{id}/restart
 project POST /api/v1/services/{id}/stop

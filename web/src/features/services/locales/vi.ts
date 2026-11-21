@@ -172,6 +172,10 @@ const vi: typeof en = {
     enabledOn: "đang bật",
     disabled: "đã tắt",
     notEnabled: "—",
+    primaryColumn: "Chính",
+    primary: "chính",
+    setPrimary: "Đặt làm chính",
+    setPrimaryAria: "Đặt {domain} làm tên miền chính",
     toggleAria: "Bật tên miền {domain}",
     edit: "Sửa",
     editAria: "Sửa tên miền {domain}",
@@ -253,6 +257,7 @@ const vi: typeof en = {
     domainAdded: "Đã thêm tên miền.",
     domainSaved: "Đã lưu tên miền.",
     domainRemoved: "Đã gỡ tên miền.",
+    domainPrimaryChanged: "Đã đổi tên miền chính.",
   },
 };
 

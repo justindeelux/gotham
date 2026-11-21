@@ -47,6 +47,7 @@ type ServiceDomain struct {
 	Domain         string
 	Protocol       string
 	Disabled       bool
+	IsPrimary      bool
 	CreatedAt      time.Time
 	UpdatedAt      time.Time
 }

@@ -1,6 +1,7 @@
 -- name: ListServiceDomainsByService :many
--- Every managed domain of one service, oldest first. The order is the routing
--- and GOTHAM_DOMAIN order: the first enabled row is the primary host.
+-- Every managed domain of one service, oldest first. The primary flag decides
+-- the GOTHAM_DOMAIN host; removing the primary promotes the oldest remaining
+-- enabled row, so this order is also the promotion order.
 SELECT * FROM service_domains
 WHERE service_id = $1
 ORDER BY created_at, id;
@@ -16,8 +17,8 @@ ORDER BY d.created_at, d.id
 LIMIT 1;
 
 -- name: CreateServiceDomain :one
-INSERT INTO service_domains (id, service_id, compose_service, port, domain, protocol, disabled)
-VALUES ($1, $2, $3, $4, $5, $6, $7)
+INSERT INTO service_domains (id, service_id, compose_service, port, domain, protocol, disabled, is_primary)
+VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
 RETURNING *;
 
 -- name: UpdateServiceDomain :one
@@ -27,9 +28,17 @@ SET compose_service = $3,
     domain = $5,
     protocol = $6,
     disabled = $7,
+    is_primary = $8,
     updated_at = now()
 WHERE id = $1 AND service_id = $2
 RETURNING *;
+
+-- name: ClearPrimaryServiceDomains :exec
+-- ClearPrimaryServiceDomains drops the primary flag of a service before a
+-- promotion, so the partial unique index never sees two primaries.
+UPDATE service_domains
+SET is_primary = false, updated_at = now()
+WHERE service_id = $1 AND is_primary;
 
 -- name: DeleteServiceDomain :exec
 DELETE FROM service_domains WHERE id = $1 AND service_id = $2;
@@ -41,11 +50,13 @@ DELETE FROM service_domains WHERE service_id = $1;
 
 -- name: ListProxiedServiceDomains :many
 -- Feeds the Traefik generator: every service domain joined to its node,
--- ordered deterministically. Disabled rows are omitted because they generate
--- no route; the API lists them separately with their diagnostic.
+-- ordered deterministically with the primary host first, because the proxy
+-- source rebuilds GOTHAM_DOMAIN from this order. Disabled rows are omitted
+-- because they generate no route; the API lists them separately with their
+-- diagnostic.
 SELECT d.service_id, s.server_id, d.compose_service, d.port, d.domain,
        d.protocol, d.disabled
 FROM service_domains d
 JOIN services s ON s.id = d.service_id
 WHERE s.deleted_at IS NULL AND NOT d.disabled
-ORDER BY s.created_at, s.id, d.created_at, d.id;
+ORDER BY s.created_at, s.id, d.is_primary DESC, d.created_at, d.id;

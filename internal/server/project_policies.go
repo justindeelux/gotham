@@ -112,6 +112,7 @@ var projectPolicies = map[string]projectPolicy{
 	"POST /api/v1/services/{id}/domains":                                {kind: "service"},
 	"PUT /api/v1/services/{id}/domains/{domainId}":                      {kind: "service"},
 	"DELETE /api/v1/services/{id}/domains/{domainId}":                   {kind: "service"},
+	"POST /api/v1/services/{id}/domains/{domainId}/primary":             {kind: "service"},
 	"GET /api/v1/notification-channels":                                 {kind: "channel", listKey: "channels"},
 	"POST /api/v1/notification-channels":                                {kind: "channel", create: true},
 	"GET /api/v1/notification-channels/{id}":                            {kind: "channel"},

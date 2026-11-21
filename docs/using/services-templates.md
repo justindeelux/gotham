@@ -95,11 +95,13 @@ a managed row for the same host are both held back with a diagnostic instead of
 silently picking one.
 
 When the control plane renders the document for deploy, validation and proxy, it
-injects `GOTHAM_DOMAIN` (the first enabled host) and `GOTHAM_DOMAINS` (the
-comma-separated host list). They are empty strings when the service has no
-domain. Templates can reference them; the two names are reserved and rejected in
-the service environment. A domain change marks the service `pending_changes:
-["domains"]` until the next successful deploy picks up the variables.
+injects `GOTHAM_DOMAIN` (the primary host) and `GOTHAM_DOMAINS` (the
+comma-separated host list). The first enabled domain becomes the primary; pick
+another one from the Domains tab to change it. They are empty strings when the
+service has no domain. Templates can reference them; the two names are reserved
+and rejected in the service environment. A domain change marks the service
+`pending_changes: ["domains"]` until the next successful deploy picks up the
+variables.
 
 HTTPS rows serve through the default ACME resolver and redirect HTTP to HTTPS,
 exactly like application domains. A host is claimed platform-wide: a domain

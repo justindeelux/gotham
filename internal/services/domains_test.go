@@ -537,3 +537,208 @@ func TestUpdateDomainHostChangeRechecksClaimAndEnables(t *testing.T) {
 		}
 	}
 }
+
+func addTestDomain(t *testing.T, svc ServiceService, userID, serviceID uuid.UUID, host string, disabled bool) ServiceDomain {
+	t.Helper()
+	in := DomainInput{Domain: host, ComposeService: "web", Port: 80}
+	if disabled {
+		in.Disabled = &disabled
+	}
+	created, err := svc.AddDomain(context.Background(), userID, serviceID, in)
+	if err != nil {
+		t.Fatalf("AddDomain(%s): %v", host, err)
+	}
+	return created
+}
+
+func primaryHosts(t *testing.T, repo *fakeRepository, serviceID uuid.UUID) []string {
+	t.Helper()
+	domains, err := repo.ListServiceDomains(context.Background(), serviceID)
+	if err != nil {
+		t.Fatalf("ListServiceDomains: %v", err)
+	}
+	hosts := make([]string, 0, len(domains))
+	for _, domain := range domains {
+		if domain.IsPrimary {
+			hosts = append(hosts, domain.Domain)
+		}
+	}
+	return hosts
+}
+
+func TestAddDomainOnlyTheFirstEnabledIsPrimary(t *testing.T) {
+	repo := newFakeRepository()
+	svc := newDomainTestService(t, repo, &fakeAgent{}, &fakeRouteSync{})
+	userID := uuid.New()
+	service := createDomainService(t, svc, repo, userID)
+
+	addTestDomain(t, svc, userID, service.ID, "disabled.example.com", true)
+	if primaries := primaryHosts(t, repo, service.ID); len(primaries) != 0 {
+		t.Fatalf("primaries = %v, want none for a disabled first row", primaries)
+	}
+	first := addTestDomain(t, svc, userID, service.ID, "first.example.com", false)
+	addTestDomain(t, svc, userID, service.ID, "second.example.com", false)
+	if !first.IsPrimary {
+		t.Fatalf("first = %+v, want primary", first)
+	}
+	if primaries := primaryHosts(t, repo, service.ID); len(primaries) != 1 || primaries[0] != "first.example.com" {
+		t.Fatalf("primaries = %v, want [first.example.com]", primaries)
+	}
+}
+
+func TestSetPrimaryDomainRejectsDisabledAndFollowsRows(t *testing.T) {
+	repo := newFakeRepository()
+	svc := newDomainTestService(t, repo, &fakeAgent{}, &fakeRouteSync{})
+	userID := uuid.New()
+	service := createDomainService(t, svc, repo, userID)
+	ctx := context.Background()
+
+	first := addTestDomain(t, svc, userID, service.ID, "first.example.com", false)
+	disabled := addTestDomain(t, svc, userID, service.ID, "disabled.example.com", true)
+	third := addTestDomain(t, svc, userID, service.ID, "third.example.com", false)
+
+	if err := svc.SetPrimaryDomain(ctx, userID, service.ID, first.ID); err != nil {
+		t.Fatalf("setting the current primary: %v", err)
+	}
+	if err := svc.SetPrimaryDomain(ctx, userID, service.ID, disabled.ID); !errors.Is(err, ErrValidation) {
+		t.Fatalf("disabled primary err = %v, want ErrValidation", err)
+	}
+	if err := svc.SetPrimaryDomain(ctx, userID, service.ID, uuid.New()); !errors.Is(err, ErrNotFound) {
+		t.Fatalf("unknown primary err = %v, want ErrNotFound", err)
+	}
+	if err := svc.SetPrimaryDomain(ctx, userID, service.ID, third.ID); err != nil {
+		t.Fatalf("SetPrimaryDomain: %v", err)
+	}
+	if primaries := primaryHosts(t, repo, service.ID); len(primaries) != 1 || primaries[0] != third.Domain {
+		t.Fatalf("primaries = %v, want [%s]", primaries, third.Domain)
+	}
+}
+
+func TestRemovePrimaryPromotesOldestEnabled(t *testing.T) {
+	repo := newFakeRepository()
+	svc := newDomainTestService(t, repo, &fakeAgent{}, &fakeRouteSync{})
+	userID := uuid.New()
+	service := createDomainService(t, svc, repo, userID)
+	ctx := context.Background()
+
+	primary := addTestDomain(t, svc, userID, service.ID, "primary.example.com", false)
+	addTestDomain(t, svc, userID, service.ID, "middle.example.com", true)
+	next := addTestDomain(t, svc, userID, service.ID, "next.example.com", false)
+
+	if err := svc.RemoveDomain(ctx, userID, service.ID, primary.ID); err != nil {
+		t.Fatalf("RemoveDomain: %v", err)
+	}
+	if primaries := primaryHosts(t, repo, service.ID); len(primaries) != 1 || primaries[0] != next.Domain {
+		t.Fatalf("primaries = %v, want [%s]", primaries, next.Domain)
+	}
+
+	if err := svc.RemoveDomain(ctx, userID, service.ID, next.ID); err != nil {
+		t.Fatalf("RemoveDomain: %v", err)
+	}
+	if primaries := primaryHosts(t, repo, service.ID); len(primaries) != 0 {
+		t.Fatalf("primaries = %v, want none when only a disabled row remains", primaries)
+	}
+}
+
+func TestDisablePrimaryPromotesNextEnabled(t *testing.T) {
+	repo := newFakeRepository()
+	svc := newDomainTestService(t, repo, &fakeAgent{}, &fakeRouteSync{})
+	userID := uuid.New()
+	service := createDomainService(t, svc, repo, userID)
+	ctx := context.Background()
+
+	first := addTestDomain(t, svc, userID, service.ID, "first.example.com", false)
+	second := addTestDomain(t, svc, userID, service.ID, "second.example.com", false)
+	off := true
+	if _, err := svc.UpdateDomain(ctx, userID, service.ID, first.ID, DomainInput{
+		Domain: first.Domain, ComposeService: "web", Port: 80, Disabled: &off,
+	}); err != nil {
+		t.Fatalf("disable primary: %v", err)
+	}
+	if primaries := primaryHosts(t, repo, service.ID); len(primaries) != 1 || primaries[0] != second.Domain {
+		t.Fatalf("primaries = %v, want [%s]", primaries, second.Domain)
+	}
+	on := false
+	if _, err := svc.UpdateDomain(ctx, userID, service.ID, first.ID, DomainInput{
+		Domain: "first-new.example.com", ComposeService: "web", Port: 80, Disabled: &on,
+	}); err != nil {
+		t.Fatalf("re-enable domain: %v", err)
+	}
+	if primaries := primaryHosts(t, repo, service.ID); len(primaries) != 1 || primaries[0] != second.Domain {
+		t.Fatalf("primaries = %v, want the existing primary kept", primaries)
+	}
+}
+
+func TestRenderServicePutsPrimaryHostFirst(t *testing.T) {
+	managed := []ServiceDomain{
+		{Domain: "first.example.com"},
+		{Domain: "primary.example.com", IsPrimary: true},
+		{Domain: "third.example.com"},
+	}
+	rendered, hosts, err := RenderService(domainDocument, map[string]string{}, managed)
+	if err != nil {
+		t.Fatalf("RenderService: %v", err)
+	}
+	want := []string{"primary.example.com", "first.example.com", "third.example.com"}
+	if strings.Join(hosts, ",") != strings.Join(want, ",") {
+		t.Fatalf("hosts = %v, want %v", hosts, want)
+	}
+	if !strings.Contains(rendered.ComposeYAML, "PUBLIC_HOST: primary.example.com") {
+		t.Errorf("GOTHAM_DOMAIN is not the primary host:\n%s", rendered.ComposeYAML)
+	}
+	if !strings.Contains(rendered.ComposeYAML, "PUBLIC_HOSTS: primary.example.com,first.example.com,third.example.com") {
+		t.Errorf("GOTHAM_DOMAINS set or order changed:\n%s", rendered.ComposeYAML)
+	}
+}
+
+func TestDeployMarksPendingWhenPrimaryChanges(t *testing.T) {
+	repo := newFakeRepository()
+	svc := newDomainTestService(t, repo, &fakeAgent{}, &fakeRouteSync{})
+	userID := uuid.New()
+	service := createDomainService(t, svc, repo, userID)
+	ctx := context.Background()
+
+	addTestDomain(t, svc, userID, service.ID, "first.example.com", false)
+	second := addTestDomain(t, svc, userID, service.ID, "second.example.com", false)
+	if _, _, err := svc.Deploy(ctx, userID, service.ID); err != nil {
+		t.Fatalf("Deploy: %v", err)
+	}
+	deploy := waitForDeploy(t, svc, userID, service.ID)
+	if deploy.State != DeployRunning {
+		t.Fatalf("deploy state = %s (%s)", deploy.State, deploy.Error)
+	}
+	if len(deploy.Domains) != 2 || deploy.Domains[0] != "first.example.com" {
+		t.Fatalf("deploy domains = %v, want the created-first host first", deploy.Domains)
+	}
+	loaded, err := svc.Get(ctx, userID, service.ID)
+	if err != nil {
+		t.Fatalf("Get: %v", err)
+	}
+	if len(loaded.PendingChanges) != 0 {
+		t.Fatalf("pending changes = %v, want empty after the deploy", loaded.PendingChanges)
+	}
+
+	if err := svc.SetPrimaryDomain(ctx, userID, service.ID, second.ID); err != nil {
+		t.Fatalf("SetPrimaryDomain: %v", err)
+	}
+	loaded, err = svc.Get(ctx, userID, service.ID)
+	if err != nil {
+		t.Fatalf("Get: %v", err)
+	}
+	if len(loaded.PendingChanges) != 1 || loaded.PendingChanges[0] != "domains" {
+		t.Fatalf("pending changes = %v, want [domains] after a primary change", loaded.PendingChanges)
+	}
+	if _, _, err := svc.Deploy(ctx, userID, service.ID); err != nil {
+		t.Fatalf("second Deploy: %v", err)
+	}
+	if deploy := waitForDeploy(t, svc, userID, service.ID); deploy.Domains[0] != second.Domain {
+		t.Fatalf("deploy domains = %v, want %s first", deploy.Domains, second.Domain)
+	}
+	loaded, err = svc.Get(ctx, userID, service.ID)
+	if err != nil {
+		t.Fatalf("Get: %v", err)
+	}
+	if len(loaded.PendingChanges) != 0 {
+		t.Fatalf("pending changes = %v, want empty after the redeploy", loaded.PendingChanges)
+	}
+}

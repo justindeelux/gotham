@@ -1,0 +1,40 @@
+name: mitmproxy
+icon: mitmproxy
+description: Intercepting HTTP/HTTPS proxy with the mitmweb interface, protected by a username and a generated password.
+homepage: https://mitmproxy.org
+category:
+  - proxy
+fields:
+  - key: proxy_port
+    label: Proxy port
+    type: number
+    default: 8080
+    min: 1024
+    max: 65535
+    help: Host port clients send HTTP and HTTPS traffic through.
+  - key: username
+    label: Username
+    type: text
+    default: gotham
+    pattern: ^[A-Za-z0-9._-]{1,32}$
+    max_length: 32
+    help: Login for both the proxy port and the mitmweb interface.
+  - key: password
+    label: Password
+    type: secret
+    required: true
+    generate: true
+    help: Use Generate. It guards both the proxy port and the mitmweb interface.
+  - key: domain
+    label: Domain
+    type: text
+    required: false
+    default: ""
+    placeholder: mitm.example.com
+    help: Optional. Serves the mitmweb interface; leave empty to add a domain later from the service page.
+    pattern: ^([A-Za-z0-9][A-Za-z0-9.-]*)?$
+    max_length: 253
+routes:
+  - service: mitmweb
+    port: 8081
+    domain_field: domain

@@ -1,0 +1,12 @@
+services:
+  proxy:
+    image: tarampampam/3proxy:2.6.0
+    restart: unless-stopped
+    ports:
+      - "{{ .http_port }}:{{ .http_port }}"
+      - "{{ .socks_port }}:{{ .socks_port }}"
+    environment:
+      PROXY_LOGIN: "{{ .username }}"
+      PROXY_PASSWORD: "{{ .password }}"
+      PROXY_PORT: "{{ .http_port }}"
+      SOCKS_PORT: "{{ .socks_port }}"

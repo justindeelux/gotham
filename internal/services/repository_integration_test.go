@@ -686,6 +686,61 @@ func TestProxySourceSkipsLabelShadowedByManagedDomain(t *testing.T) {
 	}
 }
 
+func TestProxySourcePutsPrimaryDomainFirst(t *testing.T) {
+	repo, st := integrationEnv(t)
+	ctx := context.Background()
+	ownerID, serverID := seedUserAndServer(t, st)
+	_, envID := seedProjectEnvironment(t, st)
+
+	service, err := repo.CreateService(ctx, Service{
+		ID: uuid.New(), UserID: ownerID, ServerID: serverID, EnvironmentID: envID,
+		Name: "primary", Status: StatusRunning,
+		ComposeYAML: "services:\n  web:\n    image: nginx:1.27\n    labels:\n      gotham.domain: www.${GOTHAM_DOMAIN:-}\n",
+		Env:         map[string]string{},
+	})
+	if err != nil {
+		t.Fatalf("CreateService: %v", err)
+	}
+	first, err := repo.CreateServiceDomain(ctx, ServiceDomain{
+		ID: uuid.New(), ServiceID: service.ID, ComposeService: "web", Port: 80,
+		Domain: "first.example.com", Protocol: "https",
+	})
+	if err != nil {
+		t.Fatalf("CreateServiceDomain(first): %v", err)
+	}
+	primary, err := repo.CreateServiceDomain(ctx, ServiceDomain{
+		ID: uuid.New(), ServiceID: service.ID, ComposeService: "web", Port: 80,
+		Domain: "primary.example.com", Protocol: "https", IsPrimary: true,
+	})
+	if err != nil {
+		t.Fatalf("CreateServiceDomain(primary): %v", err)
+	}
+	if _, err := st.DB.Exec(ctx, `UPDATE service_domains SET created_at = created_at + interval '1 day' WHERE id = $1`,
+		pgUUID(primary.ID)); err != nil {
+		t.Fatalf("make the primary the newest row: %v", err)
+	}
+
+	proxied, err := NewProxySource(st).ListProxiedServices(ctx)
+	if err != nil {
+		t.Fatalf("ListProxiedServices: %v", err)
+	}
+	var entry proxy.ProxiedService
+	for _, candidate := range proxied {
+		if candidate.ID == service.ID {
+			entry = candidate
+		}
+	}
+	if len(entry.Domains) != 3 {
+		t.Fatalf("domains = %+v, want two managed rows and the label route", entry.Domains)
+	}
+	if entry.Domains[0].Host != primary.Domain || entry.Domains[1].Host != first.Domain {
+		t.Fatalf("domains = %+v, want %s first", entry.Domains, primary.Domain)
+	}
+	if entry.Domains[2].Host != "www."+primary.Domain {
+		t.Fatalf("label host = %s, want www.%s", entry.Domains[2].Host, primary.Domain)
+	}
+}
+
 func TestServiceDomainClaimIgnoresSoftDeletedService(t *testing.T) {
 	repo, st := integrationEnv(t)
 	ctx := context.Background()

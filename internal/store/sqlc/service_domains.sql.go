@@ -128,7 +128,7 @@ SELECT d.service_id, s.server_id, d.compose_service, d.port, d.domain,
 FROM service_domains d
 JOIN services s ON s.id = d.service_id
 WHERE s.deleted_at IS NULL AND NOT d.disabled
-ORDER BY s.created_at, s.id, d.created_at, d.id
+ORDER BY s.created_at, s.id, d.is_primary DESC, d.created_at, d.id
 `
 
 type ListProxiedServiceDomainsRow struct {
@@ -142,8 +142,10 @@ type ListProxiedServiceDomainsRow struct {
 }
 
 // Feeds the Traefik generator: every service domain joined to its node,
-// ordered deterministically. Disabled rows are omitted because they generate
-// no route; the API lists them separately with their diagnostic.
+// ordered deterministically with the primary host first, because the proxy
+// source rebuilds GOTHAM_DOMAIN from this order. Disabled rows are omitted
+// because they generate no route; the API lists them separately with their
+// diagnostic.
 func (q *Queries) ListProxiedServiceDomains(ctx context.Context) ([]ListProxiedServiceDomainsRow, error) {
 	rows, err := q.db.Query(ctx, listProxiedServiceDomains)
 	if err != nil {

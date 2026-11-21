@@ -9,6 +9,8 @@ import (
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5/pgtype"
 
+	"github.com/justindeelux/gotham/internal/domainwatch"
+	"github.com/justindeelux/gotham/internal/incidents"
 	"github.com/justindeelux/gotham/internal/store"
 	"github.com/justindeelux/gotham/internal/store/sqlc"
 )
@@ -141,11 +143,74 @@ func TestServiceWebsiteCheckOwnerAndCleanup(t *testing.T) {
 		return settings, state, results
 	}
 
-	if _, err := pool.Exec(ctx, `DELETE FROM application_domains WHERE id = $1`, appDomain.ID); err != nil {
-		t.Fatalf("delete application domain: %v", err)
+	// The shared lifecycle opens and recovers an incident for a service-owned
+	// domain through the same Report call the application path uses.
+	var projectID pgtype.UUID
+	if err := pool.QueryRow(ctx, `SELECT project_id FROM environments WHERE id = $1`, envID).Scan(&projectID); err != nil {
+		t.Fatalf("read project id: %v", err)
+	}
+	incidentService := incidents.NewService(incidents.Config{Store: st})
+	identity := incidents.Identity(domainwatch.DetectorReachability, domainwatch.ResourceDomain, uuid.UUID(serviceDomain.ID.Bytes))
+	t.Cleanup(func() {
+		cleanupCtx, cleanupCancel := context.WithTimeout(context.Background(), 10*time.Second)
+		defer cleanupCancel()
+		_, _ = pool.Exec(cleanupCtx, "DELETE FROM incidents WHERE identity_key = $1", identity)
+	})
+	observation := incidents.Observation{
+		Identity:     identity,
+		Detector:     domainwatch.DetectorReachability,
+		ScopeKind:    incidents.ScopeProject,
+		ScopeID:      uuid.UUID(projectID.Bytes),
+		NodeID:       uuid.UUID(serverID.Bytes),
+		ProjectID:    uuid.UUID(projectID.Bytes),
+		ResourceType: domainwatch.ResourceDomain,
+		ResourceID:   uuid.UUID(serviceDomain.ID.Bytes),
+		ResourceName: service.Name + " / " + serviceDomain.Domain,
+		At:           time.Now().UTC(),
+		Severity:     incidents.SeverityCritical,
+		Valid:        true,
+		Unhealthy:    true,
+		Evidence:     "reason=timeout",
+	}
+	incident, transition, err := incidentService.Report(ctx, observation)
+	if err != nil {
+		t.Fatalf("report service domain incident: %v", err)
+	}
+	if incident == nil || incident.Lifecycle != incidents.LifecycleFiring ||
+		incident.ResourceID != uuid.UUID(serviceDomain.ID.Bytes) ||
+		transition.Event != incidents.TransitionOpened {
+		t.Fatalf("service domain incident = %+v transition=%+v", incident, transition)
+	}
+	observation.At = observation.At.Add(time.Minute)
+	observation.Unhealthy = false
+	observation.Evidence = "status=200"
+	incident, transition, err = incidentService.Report(ctx, observation)
+	if err != nil {
+		t.Fatalf("recover service domain incident: %v", err)
+	}
+	if incident == nil || incident.Lifecycle != incidents.LifecycleResolved ||
+		transition.Event != incidents.TransitionRecovered {
+		t.Fatalf("service domain recovery = %+v transition=%+v", incident, transition)
+	}
+	var lifecycle, closeReason string
+	if err := pool.QueryRow(ctx, `SELECT lifecycle, close_reason FROM incidents WHERE identity_key = $1`, identity).
+		Scan(&lifecycle, &closeReason); err != nil {
+		t.Fatalf("read recovered incident: %v", err)
+	}
+	if lifecycle != "resolved" || closeReason != "recovered" {
+		t.Fatalf("recovered incident = %q / %q", lifecycle, closeReason)
+	}
+
+	// Deleting the application removes its domain and monitor rows through the
+	// domain trigger, and leaves the service domain untouched.
+	if _, err := pool.Exec(ctx, `DELETE FROM applications WHERE id = $1`, app.ID); err != nil {
+		t.Fatalf("delete application: %v", err)
 	}
 	if settings, state, results := monitorRows(appDomain.ID); settings+state+results != 0 {
-		t.Fatalf("application domain delete kept monitor rows: %d/%d/%d", settings, state, results)
+		t.Fatalf("application delete kept monitor rows: %d/%d/%d", settings, state, results)
+	}
+	if settings, state, results := monitorRows(serviceDomain.ID); settings != 1 || state != 1 || results != 1 {
+		t.Fatalf("application delete touched service monitor rows: %d/%d/%d", settings, state, results)
 	}
 
 	if _, err := pool.Exec(ctx, `DELETE FROM services WHERE id = $1`, service.ID); err != nil {

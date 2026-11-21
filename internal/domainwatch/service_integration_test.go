@@ -214,6 +214,77 @@ func TestServiceDomainTargetProbeAndSettings(t *testing.T) {
 	if _, err := svc.Get(ctx, OwnerService, uuid.New(), fixture.domainID); err == nil {
 		t.Fatal("foreign owner read the service domain")
 	}
+
+	// Disabled rows and rows of a soft-deleted service are not targets.
+	var userID, serverID, environmentID pgtype.UUID
+	if err := fixture.store.DB.QueryRow(ctx, `SELECT user_id, server_id, environment_id
+		FROM services WHERE id = $1`, fixture.serviceID).Scan(&userID, &serverID, &environmentID); err != nil {
+		t.Fatalf("read service owner columns: %v", err)
+	}
+	disabledID := uuid.New()
+	if _, err := fixture.store.DB.Exec(ctx, `INSERT INTO service_domains
+		(id, service_id, compose_service, port, domain, protocol, disabled, is_primary, created_at, updated_at)
+		VALUES ($1, $2, 'web', 80, $3, 'https', true, false, $4, $4)`,
+		disabledID, fixture.serviceID, "svc-disabled-"+disabledID.String()[:8]+".example.com", now.Add(-time.Hour)); err != nil {
+		t.Fatalf("insert disabled service domain: %v", err)
+	}
+	deletedServiceID := uuid.New()
+	if _, err := fixture.store.DB.Exec(ctx, `INSERT INTO services
+		(id, user_id, server_id, environment_id, name, status, compose_yaml, env, deleted_at)
+		VALUES ($1, $2, $3, $4, $5, 'running', 'services: {}', '{}'::jsonb, now())`,
+		deletedServiceID, userID, serverID, environmentID, "domain-watch-deleted"); err != nil {
+		t.Fatalf("insert soft-deleted service: %v", err)
+	}
+	deletedDomainID := uuid.New()
+	if _, err := fixture.store.DB.Exec(ctx, `INSERT INTO service_domains
+		(id, service_id, compose_service, port, domain, protocol, disabled, is_primary, created_at, updated_at)
+		VALUES ($1, $2, 'web', 80, $3, 'https', false, true, $4, $4)`,
+		deletedDomainID, deletedServiceID, "svc-deleted-"+deletedDomainID.String()[:8]+".example.com", now.Add(-time.Hour)); err != nil {
+		t.Fatalf("insert soft-deleted service domain: %v", err)
+	}
+	targets, err := svc.targets(ctx)
+	if err != nil {
+		t.Fatalf("targets: %v", err)
+	}
+	byDomain := make(map[uuid.UUID]Target, len(targets))
+	for _, item := range targets {
+		byDomain[item.DomainID] = item
+	}
+	if _, ok := byDomain[disabledID]; ok {
+		t.Fatal("disabled service domain was a probe target")
+	}
+	if _, ok := byDomain[deletedDomainID]; ok {
+		t.Fatal("soft-deleted service domain was a probe target")
+	}
+	if _, ok := byDomain[fixture.domainID]; !ok {
+		t.Fatal("enabled service domain disappeared from probe targets")
+	}
+
+	// A stopped service stays a target: its incidents close as intentionally
+	// stopped through the shared suppression path.
+	if _, err := fixture.store.DB.Exec(ctx, `UPDATE services SET status = 'stopped' WHERE id = $1`,
+		fixture.serviceID); err != nil {
+		t.Fatalf("stop service: %v", err)
+	}
+	targets, err = svc.targets(ctx)
+	if err != nil {
+		t.Fatalf("stopped targets: %v", err)
+	}
+	stopped := Target{}
+	foundStopped := false
+	for _, item := range targets {
+		if item.DomainID == fixture.domainID {
+			stopped = item
+			foundStopped = true
+			break
+		}
+	}
+	if !foundStopped {
+		t.Fatal("stopped service domain disappeared from probe targets")
+	}
+	if stopped.DesiredState != "stopped" || suppressionReason(stopped) != "intentionally_stopped" {
+		t.Fatalf("stopped service target = %q / %q", stopped.DesiredState, suppressionReason(stopped))
+	}
 }
 
 func TestServiceDomainDeleteClosesIncidentAndCleansHistory(t *testing.T) {

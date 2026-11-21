@@ -12,6 +12,11 @@ runtime.
 - `databases/<engine>.<ext>`: one icon per database engine value
 - `default.webp`: shown when a template key has no icon here
 
+Later additions taken from the project's own site or GitHub organization,
+scaled to 128px WebP: `services/mitmproxy.webp` (mitmproxy.org favicon) and
+`services/gost.webp` (go-gost GitHub organization avatar). Templates whose
+project has no usable logo (3proxy, Squid, Dante) keep the default icon.
+
 The brand marks belong to their respective owners and are used only to
 identify the service in the product UI.
 

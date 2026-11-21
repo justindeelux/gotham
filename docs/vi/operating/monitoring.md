@@ -160,19 +160,23 @@ giới hạn.
 
 ## Kiểm tra khả năng truy cập website
 
-Tên miền của ứng dụng cũng được kiểm tra từ control plane. Mỗi tên miền được
-quản lý và đang bật nhận một yêu cầu HTTP(S) mỗi 60 giây (có jitter) với thời
-gian chờ 5 giây, độc lập với trình duyệt đang mở. Mặc định dùng `GET /` và chấp
-nhận mã trạng thái 200 đến 399. Chỉ được coi là khỏe khi phản hồi cuối cùng nằm
-trong khoảng mong đợi — chỉ kết nối TCP là chưa đủ.
+Tên miền của ứng dụng và tên miền dịch vụ được quản lý cũng được kiểm tra từ
+control plane. Mỗi tên miền được quản lý và đang bật nhận một yêu cầu HTTP(S)
+mỗi 60 giây (có jitter) với thời gian chờ 5 giây, độc lập với trình duyệt đang
+mở. Mặc định dùng `GET /` và chấp nhận mã trạng thái 200 đến 399. Chỉ được coi
+là khỏe khi phản hồi cuối cùng nằm trong khoảng mong đợi — chỉ kết nối TCP là
+chưa đủ.
 
-Kiểm tra chỉ gắn với tên miền ứng dụng được quản lý. Yêu cầu luôn dùng giao thức,
-tên miền và đường dẫn đã cấu hình; Gotham không nhận host bên ngoài, cổng tùy
-chọn, thông tin đăng nhập, header tùy chỉnh hay quy tắc regex trên body. Chuyển
-hướng được theo tối đa ba lần và chỉ trong cùng host; chuyển hướng sang host
-khác làm lần thử thất bại, còn đích phân giải về loopback, mạng riêng, link-local
-hoặc metadata bị chặn. Với triển khai cục bộ, đích bị chặn được báo là độ phủ
-**không hỗ trợ**, không gợi ý bỏ qua lớp bảo vệ.
+Kiểm tra chỉ gắn với tên miền được quản lý: dòng tên miền ứng dụng và dòng tên
+miền dịch vụ tạo trong tab **Domains** của dịch vụ. Tuyến chỉ khai báo bằng label
+compose không được thử vì chỉ dòng được quản lý mới có cấu hình, lịch sử và id ổn
+định. Yêu cầu luôn dùng giao thức, tên miền và đường dẫn đã cấu hình; Gotham
+không nhận host bên ngoài, cổng tùy chọn, thông tin đăng nhập, header tùy chỉnh
+hay quy tắc regex trên body. Chuyển hướng được theo tối đa ba lần và chỉ trong
+cùng host; chuyển hướng sang host khác làm lần thử thất bại, còn đích phân giải
+về loopback, mạng riêng, link-local hoặc metadata bị chặn. Với triển khai cục
+bộ, đích bị chặn được báo là độ phủ **không hỗ trợ**, không gợi ý bỏ qua lớp bảo
+vệ.
 
 ### Xác nhận và phục hồi
 
@@ -180,8 +184,9 @@ Ba lần thử thất bại liên tiếp đã hoàn tất sẽ mở một sự c
 công liên tiếp sẽ phục hồi. Lỗi bộ thực thi hoặc cơ sở dữ liệu, thời gian tắt,
 thay đổi cấu hình và thời gian control plane ngừng hoạt động là khoảng **chưa
 rõ**: không bao giờ tính là lỗi của đích và cũng không tính là thời gian khỏe.
-Ứng dụng đã dừng và ứng dụng chưa triển khai lần nào không bị thử, nên việc dừng
-có chủ đích hoặc ứng dụng trống không thể mở sự cố website.
+Ứng dụng và dịch vụ đã dừng, cùng ứng dụng hoặc dịch vụ chưa triển khai lần nào
+không bị thử, nên việc dừng có chủ đích hoặc tài nguyên trống không thể mở sự cố
+website.
 Tên miền mới, thay đổi cấu hình và bản phát hành vừa hoàn tất chờ 120 giây
 trước lần thử theo lịch tiếp theo, nên việc triển khai hoặc chỉnh sửa không gây
 cảnh báo lúc khởi động.
@@ -194,15 +199,15 @@ hiện có và không bị nhân đôi.
 ### Lịch sử và độ phủ
 
 Kết quả phân loại và khoảng quan sát hợp lệ được giữ **30 ngày**. Trang chi tiết
-tên miền trả lịch sử 24 giờ và 7 ngày, độ trễ đạt được và khả dụng quan sát được
-bên cạnh độ phủ. Thời gian chưa rõ không nằm trong mẫu số uptime, lần thử lỗi
-không bị vẽ thành độ trễ 0, và dưới 90% độ phủ giao diện hiển thị thiếu độ phủ
-thay vì một phần trăm uptime riêng lẻ. Khoảng đọc và số điểm biểu đồ đều bị giới
-hạn.
+tên miền ứng dụng và dịch vụ trả lịch sử 24 giờ và 7 ngày, độ trễ đạt được và
+khả dụng quan sát được bên cạnh độ phủ. Thời gian chưa rõ không nằm trong mẫu số
+uptime, lần thử lỗi không bị vẽ thành độ trễ 0, và dưới 90% độ phủ giao diện hiển
+thị thiếu độ phủ thay vì một phần trăm uptime riêng lẻ. Khoảng đọc và số điểm
+biểu đồ đều bị giới hạn.
 
 ### Cấu hình kiểm tra
 
-Mở tab **Domains** của ứng dụng và dùng thẻ **Kiểm tra website**:
+Mở tab **Domains** của ứng dụng hoặc dịch vụ và dùng thẻ **Kiểm tra website**:
 
 - **Bật/tắt** tắt việc thử theo lịch cho tên miền đó. Tắt cũng đóng sự cố website
   đang mở.

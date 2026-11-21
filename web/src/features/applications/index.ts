@@ -7,6 +7,7 @@ export {
   listRecentDeployments,
 } from "./api/applications";
 export type { Application, RecentDeployment } from "./api/applications";
+export type { WebsiteCheckOwner } from "./api/applications";
 export { commitSubject, shortCommitSha } from "./utils/deploymentCommit";
 export { durationText } from "./utils/deploymentDuration";
 export { useApplicationsStore } from "./stores/applications";

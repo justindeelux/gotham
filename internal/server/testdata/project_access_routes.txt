@@ -144,6 +144,7 @@ project GET /api/v1/services/{id}/containers
 project GET /api/v1/services/{id}/deploys
 project GET /api/v1/services/{id}/logs
 project GET /api/v1/services/{id}/domains
+project GET /api/v1/services/{id}/domains/{domainId}/monitoring
 personal GET /api/v1/templates
 personal GET /api/v1/templates/{slug}
 owner GET /api/v1/terminal/targets
@@ -287,6 +288,7 @@ owner POST /api/v1/servers/{id}/validate
 project POST /api/v1/services
 project POST /api/v1/services/{id}/domains
 project POST /api/v1/services/{id}/domains/{domainId}/primary
+project POST /api/v1/services/{id}/domains/{domainId}/monitoring/test
 project POST /api/v1/services/{id}/deploy
 project POST /api/v1/services/{id}/restart
 project POST /api/v1/services/{id}/stop
@@ -311,6 +313,7 @@ project PUT /api/v1/projects/{id}/icon
 owner PUT /api/v1/projects/{id}/members
 project PUT /api/v1/projects/{id}/variables
 project PUT /api/v1/services/{id}/domains/{domainId}
+project PUT /api/v1/services/{id}/domains/{domainId}/monitoring
 owner PUT /api/v1/servers/{id}/files/content
 owner PUT /api/v1/servers/{id}/host/agent-root
 owner PUT /api/v1/servers/{id}/host/network

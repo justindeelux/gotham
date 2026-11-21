@@ -6,10 +6,10 @@ import {
   getDomainMonitoring,
   testDomainMonitoring,
   updateDomainMonitoring,
-  type Application,
-  type ApplicationDomain,
   type WebsiteCheck,
+  type WebsiteCheckDomain,
   type WebsiteCheckInput,
+  type WebsiteCheckOwner,
   type WebsiteCheckTestResult,
 } from "@/features/applications/api/applications";
 import { websiteCheckSchema } from "@/features/applications/schemas/websiteCheck";
@@ -17,8 +17,8 @@ import { activeLocale, i18n } from "@/shared/i18n";
 import { fieldErrors } from "@/shared/validation/naiveAdapter";
 
 export function useWebsiteChecks(
-  application: Ref<Application>,
-  domains: Ref<ApplicationDomain[]>,
+  owner: Ref<WebsiteCheckOwner>,
+  domains: Ref<WebsiteCheckDomain[]>,
 ) {
   const message = useMessage();
   const checks = ref<Record<string, WebsiteCheck>>({});
@@ -39,9 +39,8 @@ export function useWebsiteChecks(
   );
 
   async function refresh(): Promise<void> {
-    const appID = application.value.id;
     const ids = domainIDs.value;
-    if (ids.length === 0) {
+    if (owner.value.id === "" || ids.length === 0) {
       checks.value = {};
       error.value = null;
       return;
@@ -49,7 +48,7 @@ export function useWebsiteChecks(
     loading.value = Object.keys(checks.value).length === 0;
     try {
       const results = await Promise.all(
-        ids.map((id) => getDomainMonitoring(appID, id)),
+        ids.map((id) => getDomainMonitoring(owner.value, id)),
       );
       const next: Record<string, WebsiteCheck> = {};
       for (const check of results) {
@@ -82,7 +81,7 @@ export function useWebsiteChecks(
     error.value = null;
     try {
       const check = await updateDomainMonitoring(
-        application.value.id,
+        owner.value,
         domainID,
         input,
       );
@@ -101,7 +100,7 @@ export function useWebsiteChecks(
     testingDomainId.value = domainID;
     error.value = null;
     try {
-      const result = await testDomainMonitoring(application.value.id, domainID);
+      const result = await testDomainMonitoring(owner.value, domainID);
       testResults.value = { ...testResults.value, [domainID]: result };
     } catch (errorValue) {
       error.value = describeApplicationError(errorValue);
@@ -124,7 +123,7 @@ export function useWebsiteChecks(
   }
 
   watch(
-    () => application.value.id,
+    () => `${owner.value.kind}:${owner.value.id}`,
     () => {
       checks.value = {};
       testResults.value = {};

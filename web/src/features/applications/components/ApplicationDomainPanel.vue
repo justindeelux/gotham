@@ -17,6 +17,7 @@ import type {
   Application,
   ApplicationDomain,
   DomainProtocol,
+  WebsiteCheckOwner,
 } from "@/features/applications/api/applications";
 import CertificatePanel from "@/features/applications/components/CertificatePanel.vue";
 import DomainTable from "@/features/applications/components/DomainTable.vue";
@@ -35,6 +36,11 @@ const domains = useApplicationDomains(toRef(props, "application"));
 const proxyStore = useProxyStore();
 
 const { t } = useI18n();
+
+const websiteCheckOwner = computed<WebsiteCheckOwner>(() => ({
+  kind: "application",
+  id: props.application.id,
+}));
 
 const protocolOptions = computed<Array<{ label: string; value: DomainProtocol }>>(() => [
   { label: t("applications.domain.protocolHttp"), value: "http" },
@@ -121,7 +127,7 @@ function openCertificate(row: ApplicationDomain): void {
     </NCard>
 
     <WebsiteChecksCard
-      :application="props.application"
+      :owner="websiteCheckOwner"
       :domains="domains.domains.value"
     />
 

@@ -45,6 +45,12 @@ INSERT INTO domain_probe_results (
     reason, status_code, latency_ms, valid_seconds
 ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9);
 
+-- name: InsertServiceDomainProbeResult :exec
+INSERT INTO domain_probe_results (
+    domain_id, service_id, observed_at, interval_start, outcome,
+    reason, status_code, latency_ms, valid_seconds
+) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9);
+
 -- name: ListDomainProbeResults :many
 SELECT * FROM domain_probe_results
 WHERE domain_id = $1 AND observed_at >= $2
@@ -130,6 +136,81 @@ LEFT JOIN LATERAL (
     LIMIT 1
 ) dep ON true
 WHERE d.application_id = $1 AND d.id = $2;
+
+-- name: ListServiceDomainProbeTargets :many
+-- Same shape as ListDomainProbeTargets for the services side. Only managed
+-- rows are targets: compose label routes have no row, no settings and no
+-- stable id. A service that was never deployed or is stopped is returned so
+-- the caller can close its incidents and treat the gap as unknown.
+SELECT
+    d.id,
+    d.service_id,
+    d.domain,
+    d.protocol,
+    d.created_at,
+    d.updated_at AS domain_updated_at,
+    sv.name AS service_name,
+    sv.server_id,
+    e.project_id,
+    COALESCE(s.enabled, true) AS enabled,
+    COALESCE(s.path, '/') AS path,
+    COALESCE(s.expected_min, 200) AS expected_min,
+    COALESCE(s.expected_max, 399) AS expected_max,
+    COALESCE(s.timeout_seconds, 5) AS timeout_seconds,
+    s.updated_at AS settings_updated_at,
+    COALESCE(dep.state, '') AS deployment_state,
+    dep.created_at AS deployment_started_at,
+    dep.finished_at AS deployment_finished_at,
+    (dep.state IS NOT NULL)::boolean AS has_deployment,
+    CASE WHEN sv.status = 'stopped' THEN 'stopped' ELSE 'running' END AS desired_state
+FROM service_domains d
+JOIN services sv ON sv.id = d.service_id
+JOIN environments e ON e.id = sv.environment_id
+LEFT JOIN domain_monitor_settings s ON s.domain_id = d.id
+LEFT JOIN LATERAL (
+    SELECT state, created_at, finished_at
+    FROM service_deploys
+    WHERE service_id = sv.id
+    ORDER BY created_at DESC
+    LIMIT 1
+) dep ON true
+WHERE NOT d.disabled AND sv.deleted_at IS NULL
+ORDER BY d.id;
+
+-- name: GetServiceDomainProbeTarget :one
+SELECT
+    d.id,
+    d.service_id,
+    d.domain,
+    d.protocol,
+    d.created_at,
+    d.updated_at AS domain_updated_at,
+    sv.name AS service_name,
+    sv.server_id,
+    e.project_id,
+    COALESCE(s.enabled, true) AS enabled,
+    COALESCE(s.path, '/') AS path,
+    COALESCE(s.expected_min, 200) AS expected_min,
+    COALESCE(s.expected_max, 399) AS expected_max,
+    COALESCE(s.timeout_seconds, 5) AS timeout_seconds,
+    s.updated_at AS settings_updated_at,
+    COALESCE(dep.state, '') AS deployment_state,
+    dep.created_at AS deployment_started_at,
+    dep.finished_at AS deployment_finished_at,
+    (dep.state IS NOT NULL)::boolean AS has_deployment,
+    CASE WHEN sv.status = 'stopped' THEN 'stopped' ELSE 'running' END AS desired_state
+FROM service_domains d
+JOIN services sv ON sv.id = d.service_id
+JOIN environments e ON e.id = sv.environment_id
+LEFT JOIN domain_monitor_settings s ON s.domain_id = d.id
+LEFT JOIN LATERAL (
+    SELECT state, created_at, finished_at
+    FROM service_deploys
+    WHERE service_id = sv.id
+    ORDER BY created_at DESC
+    LIMIT 1
+) dep ON true
+WHERE d.service_id = $1 AND d.id = $2;
 
 -- name: ListActiveDomainIncidents :many
 SELECT id, identity_key, resource_id FROM incidents

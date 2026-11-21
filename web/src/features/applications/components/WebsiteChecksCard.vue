@@ -16,10 +16,10 @@ import { computed, ref, toRef } from "vue";
 import { useI18n } from "vue-i18n";
 
 import type {
-  Application,
-  ApplicationDomain,
   WebsiteCheck,
+  WebsiteCheckDomain,
   WebsiteCheckInput,
+  WebsiteCheckOwner,
   WebsiteCheckPoint,
   WebsiteCheckTestResult,
   WebsiteCheckWindow,
@@ -29,23 +29,23 @@ import { useWebsiteChecks } from "@/features/applications/composables/useWebsite
 import { formatPercent, relativeTime } from "@/shared/utils/format";
 
 interface Props {
-  application: Application;
-  domains: ApplicationDomain[];
+  owner: WebsiteCheckOwner;
+  domains: WebsiteCheckDomain[];
 }
 
 const props = defineProps<Props>();
 const { t } = useI18n();
 
 const checks = useWebsiteChecks(
-  toRef(props, "application"),
+  toRef(props, "owner"),
   toRef(props, "domains"),
 );
 
 const windowKey = ref<"24h" | "7d">("24h");
-const editing = ref<ApplicationDomain | null>(null);
+const editing = ref<WebsiteCheckDomain | null>(null);
 const modalOpen = ref(false);
 
-const visibleDomains = computed<ApplicationDomain[]>(() =>
+const visibleDomains = computed<WebsiteCheckDomain[]>(() =>
   props.domains.filter((row) => !row.disabled),
 );
 
@@ -173,7 +173,7 @@ function testResultText(result: WebsiteCheckTestResult): string {
   return parts.filter(Boolean).join(" · ");
 }
 
-function openConfigure(domain: ApplicationDomain): void {
+function openConfigure(domain: WebsiteCheckDomain): void {
   editing.value = domain;
   modalOpen.value = true;
 }
@@ -189,7 +189,7 @@ async function save(input: WebsiteCheckInput): Promise<void> {
 }
 
 async function toggleEnabled(
-  domain: ApplicationDomain,
+  domain: WebsiteCheckDomain,
   check: WebsiteCheck,
   value: boolean,
 ): Promise<void> {

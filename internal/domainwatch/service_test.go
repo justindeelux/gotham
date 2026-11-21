@@ -40,13 +40,14 @@ func testService(reporter *recordingReporter) *Service {
 
 func serviceTarget() Target {
 	return Target{
-		DomainID:        uuid.MustParse("11111111-1111-1111-1111-111111111111"),
-		ApplicationID:   uuid.MustParse("22222222-2222-2222-2222-222222222222"),
-		ProjectID:       uuid.MustParse("33333333-3333-3333-3333-333333333333"),
-		ApplicationName: "shop",
-		Domain:          "shop.example.com",
-		Protocol:        "https",
-		Settings:        DefaultSettings(),
+		DomainID:  uuid.MustParse("11111111-1111-1111-1111-111111111111"),
+		OwnerKind: OwnerApplication,
+		OwnerID:   uuid.MustParse("22222222-2222-2222-2222-222222222222"),
+		ProjectID: uuid.MustParse("33333333-3333-3333-3333-333333333333"),
+		OwnerName: "shop",
+		Domain:    "shop.example.com",
+		Protocol:  "https",
+		Settings:  DefaultSettings(),
 	}
 }
 

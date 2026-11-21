@@ -142,7 +142,7 @@ func newIntegrationFixture(t *testing.T) integrationFixture {
 
 func (f integrationFixture) target(t *testing.T) Target {
 	t.Helper()
-	target, err := (&Service{st: f.store}).target(context.Background(), f.appID, f.domainID)
+	target, err := (&Service{st: f.store}).target(context.Background(), OwnerApplication, f.appID, f.domainID)
 	if err != nil {
 		t.Fatalf("target: %v", err)
 	}
@@ -268,7 +268,7 @@ func TestDisabledDomainClosesIncidentAndSettingsArmGrace(t *testing.T) {
 	svc.startedAt = now.Add(-time.Hour)
 	ctx := context.Background()
 
-	view, err := svc.SaveSettings(ctx, fixture.appID, fixture.domainID, SettingsInput{
+	view, err := svc.SaveSettings(ctx, OwnerApplication, fixture.appID, fixture.domainID, SettingsInput{
 		Enabled:     false,
 		Path:        "/health",
 		ExpectedMin: 200,
@@ -286,17 +286,17 @@ func TestDisabledDomainClosesIncidentAndSettingsArmGrace(t *testing.T) {
 		t.Fatalf("grace = %v", got)
 	}
 
-	if _, err := svc.SaveSettings(ctx, fixture.appID, fixture.domainID, SettingsInput{
+	if _, err := svc.SaveSettings(ctx, OwnerApplication, fixture.appID, fixture.domainID, SettingsInput{
 		Enabled: true, Path: "health", ExpectedMin: 200, ExpectedMax: 399, Timeout: 5,
 	}); err == nil {
 		t.Fatal("invalid path was accepted")
 	}
-	if _, err := svc.SaveSettings(ctx, fixture.appID, fixture.domainID, SettingsInput{
+	if _, err := svc.SaveSettings(ctx, OwnerApplication, fixture.appID, fixture.domainID, SettingsInput{
 		Enabled: true, Path: "/", ExpectedMin: 500, ExpectedMax: 400, Timeout: 5,
 	}); err == nil {
 		t.Fatal("inverted status range was accepted")
 	}
-	if _, err := svc.SaveSettings(ctx, fixture.appID, fixture.domainID, SettingsInput{
+	if _, err := svc.SaveSettings(ctx, OwnerApplication, fixture.appID, fixture.domainID, SettingsInput{
 		Enabled: true, Path: "/", ExpectedMin: 200, ExpectedMax: 399, Timeout: 31,
 	}); err == nil {
 		t.Fatal("out-of-range timeout was accepted")

@@ -248,7 +248,8 @@ export interface WebsiteCheckWindow {
 
 export interface WebsiteCheck {
   domain_id: string;
-  application_id: string;
+  application_id?: string;
+  service_id?: string;
   url: string;
   probe_location: string;
   enabled: boolean;
@@ -276,6 +277,19 @@ export interface WebsiteCheckInput {
   timeout_seconds: number;
 }
 
+/** The resource a website check belongs to. A domain id is owned by one resource. */
+export interface WebsiteCheckOwner {
+  kind: "application" | "service";
+  id: string;
+}
+
+/** The narrow domain row shape the website checks card needs. */
+export interface WebsiteCheckDomain {
+  id: string;
+  domain: string;
+  disabled: boolean;
+}
+
 export interface WebsiteCheckTestResult {
   outcome: WebsiteCheckOutcome;
   reason?: string;
@@ -292,34 +306,39 @@ interface WebsiteCheckTestEnvelope {
   result: WebsiteCheckTestResult;
 }
 
+function websiteCheckPath(owner: WebsiteCheckOwner, domainId: string): string {
+  const resource = owner.kind === "service" ? "services" : "applications";
+  return `/${resource}/${owner.id}/domains/${domainId}/monitoring`;
+}
+
 export async function getDomainMonitoring(
-  appId: string,
+  owner: WebsiteCheckOwner,
   domainId: string,
 ): Promise<WebsiteCheck> {
   const response = await http.get<WebsiteCheckEnvelope>(
-    `/applications/${appId}/domains/${domainId}/monitoring`,
+    websiteCheckPath(owner, domainId),
   );
   return response.data.website_check;
 }
 
 export async function updateDomainMonitoring(
-  appId: string,
+  owner: WebsiteCheckOwner,
   domainId: string,
   input: WebsiteCheckInput,
 ): Promise<WebsiteCheck> {
   const response = await http.put<WebsiteCheckEnvelope>(
-    `/applications/${appId}/domains/${domainId}/monitoring`,
+    websiteCheckPath(owner, domainId),
     input,
   );
   return response.data.website_check;
 }
 
 export async function testDomainMonitoring(
-  appId: string,
+  owner: WebsiteCheckOwner,
   domainId: string,
 ): Promise<WebsiteCheckTestResult> {
   const response = await http.post<WebsiteCheckTestEnvelope>(
-    `/applications/${appId}/domains/${domainId}/monitoring/test`,
+    `${websiteCheckPath(owner, domainId)}/test`,
   );
   return response.data.result;
 }

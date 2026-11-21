@@ -22,6 +22,8 @@ import type {
   ServiceDomainProtocol,
   ServiceDomainStatus,
 } from "@/features/services/api/services";
+import type { WebsiteCheckOwner } from "@/features/applications";
+import WebsiteChecksCard from "@/features/applications/components/WebsiteChecksCard.vue";
 import { useServiceDomains } from "@/features/services/composables/useServiceDomains";
 import { useServiceDetailContext } from "@/features/services/composables/useServiceDetail";
 import CertificatePanel from "@/features/applications/components/CertificatePanel.vue";
@@ -74,6 +76,26 @@ function openCertificate(row: ServiceDomain): void {
   certificateDomain.value = row.domain;
   certificateOpen.value = true;
 }
+
+// Only managed rows have an id, settings and a stable probe history; compose
+// label routes stay read-only and are not probed.
+const websiteCheckDomains = computed(() =>
+  domains.domains.value
+    .filter(
+      (row): row is ServiceDomain & { id: string } =>
+        row.source === "managed" && row.id !== undefined,
+    )
+    .map((row) => ({
+      id: row.id,
+      domain: row.domain,
+      disabled: row.disabled,
+    })),
+);
+
+const websiteCheckOwner = computed<WebsiteCheckOwner>(() => ({
+  kind: "service",
+  id: serviceId.value,
+}));
 
 const protocolOptions = computed<
   Array<{ label: string; value: ServiceDomainProtocol }>
@@ -428,9 +450,19 @@ watch(
       :domain="certificateDomain"
     />
   </NCard>
+
+  <WebsiteChecksCard
+    class="website-checks"
+    :owner="websiteCheckOwner"
+    :domains="websiteCheckDomains"
+  />
 </template>
 
 <style scoped>
+.website-checks {
+  margin-top: var(--space-4);
+}
+
 .domain-target {
   flex: 2 1 0;
   min-width: 0;

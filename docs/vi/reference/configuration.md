@@ -116,9 +116,10 @@ giữ hiệu lực.
 ## Đăng nhập OAuth
 
 Các nhà cung cấp đăng nhập OAuth được cấu hình trong phần cài đặt instance của giao
-diện Gotham, không phải trong tệp này hay biến môi trường. Client ID, client secret
-và trạng thái bật/tắt của nhà cung cấp được lưu trong cơ sở dữ liệu; secret được mã
-hóa bằng khóa secret của instance.
+diện Gotham, không phải trong tệp này hay biến môi trường. Gotham hỗ trợ GitHub và
+Google. Client ID, client secret và trạng thái bật/tắt của nhà cung cấp được lưu
+trong cơ sở dữ liệu; secret được mã hóa bằng khóa secret của instance. Mở
+**Cài đặt → Chung** và dùng mục **Đăng nhập**.
 
 - Lưu thông tin đăng nhập là bật nhà cung cấp ngay, không cần khởi động lại. Tắt nó
   thì tuyến đăng nhập của nó trả lời 404 trở lại.
@@ -126,9 +127,10 @@ hóa bằng khóa secret của instance.
   `GOTHAM_OAUTH_GITHUB_REDIRECT_URL` và khối `oauth:` bị bỏ qua. Instance từng dùng
   chúng vẫn đăng nhập bằng email và mật khẩu cho đến khi nhà cung cấp được nhập
   trong giao diện.
-- URL callback ủy quyền của ứng dụng là
+- URL callback ủy quyền của mỗi ứng dụng là
   `/api/v1/auth/oauth/<provider>/callback` trên origin control plane của instance,
-  ví dụ `https://gotham.example/api/v1/auth/oauth/github/callback`.
+  ví dụ `https://gotham.example/api/v1/auth/oauth/github/callback` hoặc
+  `https://gotham.example/api/v1/auth/oauth/google/callback`.
 
 ## Chính sách nguồn Git
 

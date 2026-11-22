@@ -86,8 +86,8 @@ Open **Profile** from the account menu (`/settings/profile`).
 - **Account** shows your email, role and member-since date. Your email address
   cannot be changed here.
 - **Display name** replaces your email in the sidebar. It is 1–64 characters;
-  clear it to fall back to the email. An avatar comes from GitHub when you sign
-  in with GitHub, otherwise your initials are shown.
+  clear it to fall back to the email. An avatar comes from your OAuth provider
+  when you sign in with one, otherwise your initials are shown.
 - **Change password** asks for the current password (when the account has one)
   and a new password: at least 10 characters with two character classes.
   Changing it signs out every other device and keeps this session signed in.

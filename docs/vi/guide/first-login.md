@@ -57,6 +57,25 @@ trong biến môi trường, và không bao giờ được ghi ra đĩa, tệp m
 lịch sử shell: nó chỉ đi tới tệp nhị phân qua stdin (việc trace `sh -x` bị tắt
 quanh phần xử lý bí mật).
 
+## Đăng nhập bằng GitHub hoặc Google
+
+Chủ sở hữu có thể thêm đăng nhập OAuth trong **Cài đặt → Chung**, mục
+**Đăng nhập**. Mỗi nhà cung cấp có một thẻ riêng:
+
+1. Tạo ứng dụng OAuth:
+   - **GitHub:** Settings → Developer settings → OAuth Apps → New OAuth App.
+   - **Google:** Google Cloud console → APIs & Services → Credentials →
+     Create credentials → OAuth client ID → Web application.
+2. Đăng ký URL callback hiển thị trên thẻ. URL là
+   `<origin control plane>/api/v1/auth/oauth/github/callback` hoặc
+   `<origin control plane>/api/v1/auth/oauth/google/callback`.
+3. Dán client ID và secret, bật nhà cung cấp rồi lưu. Nút đăng nhập xuất hiện
+   trên trang đăng nhập ngay, không cần khởi động lại.
+
+Secret được mã hóa khi lưu và không bao giờ hiển thị lại: thẻ chỉ báo đã có
+secret. Để thay thế, nhập secret mới rồi lưu. Tắt nhà cung cấp sẽ ẩn nút của nó và
+tắt tuyến đăng nhập tương ứng.
+
 ## Nếu chưa có tài khoản
 
 Nếu bạn đã bỏ qua câu hỏi email, hoặc lần cài không tương tác mà không có

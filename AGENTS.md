@@ -36,7 +36,7 @@ Ask yourself: "Would a senior engineer say this is overcomplicated?" If yes, sim
 ## Development Workflow
 
 - Every change follows this workflow, however small; skip a step only on explicit instruction.
-- If you are an orchestrator, worker or reviewer, read the file for your role first: `.workflow/orchestration.md`, `.workflow/worker.md`, `.workflow/reviewer.md`.
+- If you are an orchestrator, worker or reviewer, use the skill for your role first: `/orchestration`, `/worker`, `/reviewer`. The orchestrator also reads `.workflow/WORKFLOW.md` if it exists (owner-only, untracked).
 - `docs/` is the user guide, not a place for internal documentation.
 - Small changes (typos, wording, CSS, minor fixes, config, docs) are batched: related changes share one branch/PR, one commit per change. Real logic changes, migrations, security fixes and changes touching many modules get their own branch/PR.
 - Branch name: `<type>/<slug>`, e.g. `feat/files-icon-tooltips`. `<type>` is one of `feat` (new capability), `fix` (bug fix), `refactor` (no behaviour change), `perf`, `docs`, `test`, `ci`, `build` (build system, deps, packaging), `chore` (housekeeping).

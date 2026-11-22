@@ -3,7 +3,6 @@ package instance
 import (
 	"context"
 	"os"
-	"reflect"
 	"testing"
 	"time"
 
@@ -12,7 +11,9 @@ import (
 	"github.com/justindeelux/gotham/internal/store"
 )
 
-func TestPendingControlPlaneURLPersistence(t *testing.T) {
+// A row written by a release that still ran the confirmation trial must load
+// as applied and lose the retired column on the next save.
+func TestLeftoverPendingControlPlaneURLIsIgnoredAndCleared(t *testing.T) {
 	dsn := os.Getenv("GOTHAM_TEST_DSN")
 	if dsn == "" {
 		t.Skip("GOTHAM_TEST_DSN is required for singleton settings persistence")
@@ -37,24 +38,22 @@ func TestPendingControlPlaneURLPersistence(t *testing.T) {
 			t.Error(err)
 		}
 	}()
-	old, next := "https://old.example.com", "https://new.example.com"
-	rec := original
-	rec.ControlPlaneURL = &next
-	rec.PendingControlPlaneURL = &PendingControlPlaneURL{Previous: &old, Proposed: next, Deadline: time.Now().UTC().Add(time.Minute).Truncate(time.Microsecond), Synced: true}
-	if err := repo.Save(ctx, uuid.Nil, SectionGeneral, rec, map[string]any{"event": "trial"}); err != nil {
+	trial := `{"previous":"https://old.example.com","proposed":"https://new.example.com","deadline":"2026-01-01T00:00:00Z","synced":true}`
+	if _, err := pool.Exec(ctx, `UPDATE instance_settings SET control_plane_url = $1, pending_control_plane_url = $2 WHERE id = 1`, "https://new.example.com", trial); err != nil {
 		t.Fatal(err)
 	}
-	restarted := NewStoreRepository(store.New(pool))
-	loaded, err := restarted.Load(ctx)
-	if err != nil || !reflect.DeepEqual(loaded.PendingControlPlaneURL, rec.PendingControlPlaneURL) {
-		t.Fatalf("loaded=%+v err=%v", loaded, err)
+	loaded, err := repo.Load(ctx)
+	if err != nil || loaded.ControlPlaneURL == nil || *loaded.ControlPlaneURL != "https://new.example.com" {
+		t.Fatalf("leftover trial blocked the upgrade: %+v err=%v", loaded, err)
 	}
-	loaded.ControlPlaneURL, loaded.PendingControlPlaneURL = loaded.PendingControlPlaneURL.Previous, nil
-	if err := restarted.Save(ctx, uuid.Nil, SectionGeneral, loaded, map[string]any{"event": "revert"}); err != nil {
+	if err := repo.Save(ctx, uuid.Nil, SectionGeneral, loaded, map[string]any{"event": "upgrade"}); err != nil {
 		t.Fatal(err)
 	}
-	loaded, err = repo.Load(ctx)
-	if err != nil || loaded.PendingControlPlaneURL != nil || loaded.ControlPlaneURL == nil || *loaded.ControlPlaneURL != old {
-		t.Fatalf("reverted=%+v err=%v", loaded, err)
+	var pending *string
+	if err := pool.QueryRow(ctx, `SELECT pending_control_plane_url::text FROM instance_settings WHERE id = 1`).Scan(&pending); err != nil {
+		t.Fatal(err)
+	}
+	if pending != nil {
+		t.Fatalf("retired trial column kept: %s", *pending)
 	}
 }

@@ -22,13 +22,6 @@ export interface GeneralInput {
   instance_name: string;
 }
 
-export interface PendingControlPlaneURL {
-  previous: string | null;
-  proposed: string;
-  deadline: string;
-  synced: boolean;
-}
-
 export interface CleanupRetention {
   history_days: number;
   backup_file_min_age_days: number;
@@ -39,7 +32,6 @@ export type CleanupRetentionInput = CleanupRetention;
 export interface InstanceState {
   general: GeneralSettings;
   cleanup: CleanupRetention;
-  pending_control_plane_url?: PendingControlPlaneURL | null;
 }
 
 async function unwrap(request: Promise<{ data: unknown }>): Promise<InstanceState> {
@@ -58,9 +50,3 @@ export const saveCleanupRetention = (
   input: CleanupRetentionInput,
 ): Promise<InstanceState> =>
   unwrap(http.put("/instance/settings/cleanup", input));
-
-export const confirmControlPlaneURL = (): Promise<InstanceState> =>
-  unwrap(http.post("/instance/settings/control-plane-url/confirm"));
-
-export const revertControlPlaneURL = (): Promise<InstanceState> =>
-  unwrap(http.post("/instance/settings/control-plane-url/revert"));

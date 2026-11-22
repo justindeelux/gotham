@@ -10,7 +10,6 @@ test("URL status follows edits and warns when localhost is missing", async ({ pa
       control_plane_url: field("https://panel.example.com"),
       instance_name: field("Gotham"),
     },
-    pending_control_plane_url: null,
     cleanup: { history_days: 90, backup_file_min_age_days: 7 },
   };
   await page.route("**/api/v1/instance/settings", (route) =>

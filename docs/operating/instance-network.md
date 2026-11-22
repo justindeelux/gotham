@@ -23,17 +23,10 @@ database or the built-in default. A field set by an environment variable is
 locked and cannot be changed here; the page names the variable.
 
 The control-plane URL is the address agents enroll against and external
-services call back to, so changing it is guarded:
-
-1. Saving the new URL records a pending change and pushes the new panel route.
-2. The new configuration counts as applied only when you confirm it **through
-   the new address**, within two minutes. Open Gotham at the new URL and keep
-   the change there.
-3. If the new route has not synced, confirmation is refused. If you cannot
-   reach Gotham at the new address, do nothing: the previous route is restored
-   when the countdown ends.
-
-Only one control-plane URL change can be pending at a time.
+services call back to. Saving a new URL applies it at once: the panel route is
+pushed and, for an HTTPS URL, a certificate for the new host is requested. If
+the new domain is not ready yet, Gotham stays reachable at the server's IP
+address.
 
 ### Domain and certificate status
 

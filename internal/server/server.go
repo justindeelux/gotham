@@ -463,7 +463,7 @@ func (s *Server) routes() (http.Handler, error) {
 				}); ok {
 					return syncer.SyncControlPlane(ctx)
 				}
-				return instance.ErrDomainNotSynced
+				return errors.New("proxy does not support control-plane sync")
 			}
 			if checker, ok := s.proxy.(interface {
 				CheckControlPlaneHost(context.Context, string) error
@@ -474,9 +474,6 @@ func (s *Server) routes() (http.Handler, error) {
 				instanceSvc.CheckControlPlaneHost = checker.CheckControlPlaneHost
 			}
 			s.instanceSvc = instanceSvc
-			if err := instanceSvc.Reconcile(context.Background()); err != nil {
-				s.logger.Warn("instance settings reconcile failed", "error", err)
-			}
 			instance.Mount(api, platformOnly, UserIDFromContext, instanceSvc)
 			if dialer, ok := s.servers.(hostDialer); ok {
 				nodeHosts := instance.NewNodeService(
@@ -1292,9 +1289,6 @@ func (s *Server) Run(ctx context.Context) error {
 	}
 	if s.closer != nil {
 		defer s.closer()
-	}
-	if s.instanceSvc != nil {
-		defer s.instanceSvc.Close()
 	}
 
 	if s.updates != nil {

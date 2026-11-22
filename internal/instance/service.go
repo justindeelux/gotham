@@ -6,7 +6,6 @@ import (
 	"os"
 	"strings"
 	"sync"
-	"time"
 
 	"github.com/google/uuid"
 )
@@ -16,11 +15,8 @@ type Service struct {
 	ResyncProxy           func(context.Context) error
 	CheckControlPlaneHost func(context.Context, string) error
 	domainLock            sync.Mutex
-	domainTimer           *time.Timer
-	domainClosed          bool
 	repo                  Repository
 	logger                *slog.Logger
-	now                   func() time.Time
 	lookup                func(string) string
 }
 
@@ -28,7 +24,7 @@ func NewService(repo Repository, logger *slog.Logger) *Service {
 	if logger == nil {
 		logger = slog.Default()
 	}
-	return &Service{repo: repo, logger: logger, now: time.Now, lookup: os.Getenv}
+	return &Service{repo: repo, logger: logger, lookup: os.Getenv}
 }
 
 func (s *Service) resolve(env string, stored *string, def string) Field {
@@ -94,9 +90,6 @@ func (s *Service) ControlPlaneURL(ctx context.Context) (string, error) {
 }
 
 func (s *Service) Get(ctx context.Context) (State, error) {
-	if err := s.reconcileControlPlaneURL(ctx); err != nil {
-		return State{}, err
-	}
 	rec, err := s.repo.Load(ctx)
 	if err != nil {
 		return State{}, err
@@ -104,14 +97,7 @@ func (s *Service) Get(ctx context.Context) (State, error) {
 	return s.stateLocked(rec), nil
 }
 
-func (s *Service) Reconcile(ctx context.Context) error {
-	return s.reconcileControlPlaneURL(ctx)
-}
-
 func (s *Service) UpdateGeneral(ctx context.Context, actor uuid.UUID, in GeneralInput) (State, error) {
-	if err := s.reconcileControlPlaneURL(ctx); err != nil {
-		return State{}, err
-	}
 	s.domainLock.Lock()
 	defer s.domainLock.Unlock()
 	in, errs := normalizeGeneral(in)
@@ -138,18 +124,12 @@ func (s *Service) UpdateGeneral(ctx context.Context, actor uuid.UUID, in General
 		return State{}, errs
 	}
 	changedURL := cur.ControlPlaneURL.Value != in.ControlPlaneURL
-	if changedURL && rec.PendingControlPlaneURL != nil {
-		return State{}, ErrDomainPending
-	}
 	if changedURL && s.CheckControlPlaneHost != nil {
 		if err := s.CheckControlPlaneHost(ctx, in.ControlPlaneURL); err != nil {
 			return State{}, FieldErrors{"control_plane_url": err.Error()}
 		}
 	}
 	next := rec
-	if changedURL {
-		next.PendingControlPlaneURL = &PendingControlPlaneURL{Previous: rec.ControlPlaneURL, Proposed: in.ControlPlaneURL, Deadline: s.now().Add(ControlPlaneConfirmWindow)}
-	}
 	next.ControlPlaneURL = ptrOrNil(in.ControlPlaneURL, cur.ControlPlaneURL.Locked, rec.ControlPlaneURL)
 	next.InstanceName = ptrOrNil(in.InstanceName, cur.InstanceName.Locked, rec.InstanceName)
 	changes := diff(map[string]any{
@@ -163,19 +143,12 @@ func (s *Service) UpdateGeneral(ctx context.Context, actor uuid.UUID, in General
 	s.logger.Info("instance general settings updated", "actor", actor, "changes", changes)
 	if !changedURL {
 		s.syncPanelCertificates(ctx, next)
+		return s.stateLocked(next), nil
 	}
-	if changedURL {
-		s.scheduleDomainRevert(next.PendingControlPlaneURL.Deadline)
-		if err := s.syncControlPlaneURL(ctx); err != nil {
-			s.logger.Warn("instance control-plane URL pending; proxy resync failed", "error", err)
-		} else {
-			pending := *next.PendingControlPlaneURL
-			pending.Synced = true
-			next.PendingControlPlaneURL = &pending
-			if err := s.repo.Save(ctx, actor, SectionGeneral, next, map[string]any{"event": "control-plane routers synced"}); err != nil {
-				return State{}, err
-			}
-		}
+	// A URL change applies at once: the panel route and its certificate follow
+	// the stored value. Gotham stays reachable at the host IP meanwhile.
+	if err := s.syncControlPlaneURL(ctx); err != nil {
+		s.logger.Warn("instance control-plane URL changed; proxy resync failed", "error", err)
 	}
 	return s.stateLocked(next), nil
 }
@@ -192,9 +165,8 @@ func ptrOrNil(v string, locked bool, stored *string) *string {
 
 func (s *Service) stateLocked(rec Stored) State {
 	return State{
-		General:                s.general(rec),
-		PendingControlPlaneURL: rec.PendingControlPlaneURL,
-		Cleanup:                retentionOrDefault(rec.Retention),
+		General: s.general(rec),
+		Cleanup: retentionOrDefault(rec.Retention),
 	}
 }
 

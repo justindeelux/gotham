@@ -11,6 +11,8 @@ const en = {
     title: "Instance",
     url: "Control-plane URL",
     urlHint: "Public base URL used for agent enrollment, OAuth redirects and webhooks.",
+    urlChangedHint:
+      "Saved. If the new domain is not ready yet, the panel stays reachable at the server's IP address.",
     name: "Instance name",
     submit: "Save settings",
     saved: "Settings saved.",
@@ -51,15 +53,6 @@ const en = {
     readFailed: "Could not read the localhost router status. Check the node and retry.",
     unsaved: "Save the URL before its router can be generated and synced.",
     refresh: "Refresh status",
-  },
-  pendingConfirm: {
-    title: "Pending control-plane URL change",
-    body: "The control-plane URL is now {url}. Open Gotham at that address to keep the change.",
-    hint:
-      "Keep works only from the new address. If you cannot reach Gotham there, do nothing: the previous address is restored when the countdown ends.",
-    countdownStart: "The control-plane URL change will revert in {time}.",
-    keep: "Keep change",
-    revert: "Revert now",
   },
   oauth: {
     eyebrow: "System · Owner",

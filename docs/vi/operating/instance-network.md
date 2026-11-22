@@ -21,17 +21,10 @@ hay fragment. Mỗi trường hiển thị nguồn của giá trị — biến m
 liệu hay mặc định có sẵn. Một trường được đặt bởi biến môi trường sẽ bị khóa và
 không sửa được ở đây; trang nêu tên biến đó.
 
-URL control plane là địa chỉ mà agent đăng ký tới và các dịch vụ bên ngoài gọi về,
-nên việc đổi nó được bảo vệ:
-
-1. Lưu URL mới sẽ ghi nhận một thay đổi đang chờ và đẩy tuyến bảng điều khiển mới.
-2. Cấu hình mới chỉ được coi là đã áp dụng khi bạn xác nhận **qua địa chỉ mới**,
-   trong vòng hai phút. Hãy mở Gotham ở URL mới và giữ thay đổi tại đó.
-3. Nếu tuyến mới chưa đồng bộ, việc xác nhận bị từ chối. Nếu bạn không truy cập
-   được Gotham ở địa chỉ mới, hãy không làm gì: tuyến trước được khôi phục khi hết
-   thời gian đếm ngược.
-
-Mỗi lần chỉ có một thay đổi URL control plane đang chờ.
+URL control plane là địa chỉ mà agent đăng ký tới và các dịch vụ bên ngoài gọi về.
+Lưu URL mới là áp dụng ngay: tuyến bảng điều khiển được đẩy và, với URL HTTPS,
+một chứng chỉ cho host mới được yêu cầu. Nếu tên miền mới chưa sẵn sàng, Gotham
+vẫn truy cập được qua địa chỉ IP của máy chủ.
 
 ### Trạng thái tên miền và chứng chỉ
 

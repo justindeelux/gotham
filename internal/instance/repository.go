@@ -49,13 +49,6 @@ func (r *storeRepository) Load(ctx context.Context) (Stored, error) {
 		Timezone:        row.Timezone,
 		Retention:       retentionFrom(row.CleanupHistoryRetentionDays, row.CleanupBackupFileMinAgeDays),
 	}
-	if len(row.PendingControlPlaneUrl) > 0 {
-		var pending PendingControlPlaneURL
-		if err := json.Unmarshal(row.PendingControlPlaneUrl, &pending); err != nil {
-			return Stored{}, fmt.Errorf("instance: decode pending control-plane URL: %w", err)
-		}
-		rec.PendingControlPlaneURL = &pending
-	}
 	return rec, nil
 }
 
@@ -67,15 +60,11 @@ func (r *storeRepository) Save(ctx context.Context, actor uuid.UUID, section str
 	if err != nil {
 		return err
 	}
-	var pending []byte
-	if rec.PendingControlPlaneURL != nil {
-		pending, err = json.Marshal(rec.PendingControlPlaneURL)
-		if err != nil {
-			return fmt.Errorf("instance: encode pending control-plane URL: %w", err)
-		}
-	}
 	err = r.store.UpdateInstanceGeneral(ctx, sqlc.UpdateInstanceGeneralParams{
-		ControlPlaneUrl: rec.ControlPlaneURL, InstanceName: rec.InstanceName, Timezone: rec.Timezone, PendingControlPlaneUrl: pending,
+		ControlPlaneUrl: rec.ControlPlaneURL, InstanceName: rec.InstanceName, Timezone: rec.Timezone,
+		// The URL change applies at once; writing NULL clears a trial left by an
+		// older release.
+		PendingControlPlaneUrl: nil,
 	}, audit)
 	if err != nil {
 		return fmt.Errorf("instance: save %s: %w", section, err)

@@ -118,22 +118,6 @@ type Pending struct {
 	Deadline time.Time `json:"deadline"`
 }
 
-type PendingControlPlaneURL struct {
-	Previous *string   `json:"previous"`
-	Proposed string    `json:"proposed"`
-	Deadline time.Time `json:"deadline"`
-	Synced   bool      `json:"synced"`
-}
-
-var (
-	ErrDomainPending     = errors.New("instance: a control-plane URL change is awaiting confirmation")
-	ErrNoDomainPending   = errors.New("instance: no control-plane URL change is awaiting confirmation")
-	ErrDomainNotSynced   = errors.New("instance: the new control-plane router has not synced")
-	ErrConfirmDomainHost = errors.New("instance: confirm through the new control-plane host")
-)
-
-const ControlPlaneConfirmWindow = 120 * time.Second
-
 // NodeCapability is what one node can do with its own host settings. Anything
 // but ready means the settings forms are read-only, with Reason saying why.
 type NodeCapability string
@@ -176,9 +160,8 @@ type NodeState struct {
 }
 
 type State struct {
-	PendingControlPlaneURL *PendingControlPlaneURL `json:"pending_control_plane_url"`
-	General                General                 `json:"general"`
-	Cleanup                Retention               `json:"cleanup"`
+	General General   `json:"general"`
+	Cleanup Retention `json:"cleanup"`
 }
 
 // Retention is how long Gotham keeps its own leftovers before the cleanup
@@ -215,11 +198,10 @@ func retentionFrom(historyDays int32, backupAge int32) Retention {
 }
 
 type Stored struct {
-	PendingControlPlaneURL *PendingControlPlaneURL
-	ControlPlaneURL        *string
-	InstanceName           *string
-	Timezone               *string
-	Retention              Retention
+	ControlPlaneURL *string
+	InstanceName    *string
+	Timezone        *string
+	Retention       Retention
 }
 
 const (

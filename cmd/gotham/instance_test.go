@@ -33,13 +33,12 @@ func TestInstanceSetURL(t *testing.T) {
 	}{
 		{name: "committed", url: "https://panel.example.com"},
 		{name: "invalid", url: "javascript:alert(1)", wantErr: true},
-		{name: "sync failure", url: "https://panel.example.com", syncErr: errors.New("agent unavailable"), wantErr: true},
+		{name: "sync failure keeps URL", url: "https://panel.example.com", syncErr: errors.New("agent unavailable")},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			name, zone := "My instance", "Asia/Ho_Chi_Minh"
 			repo := &instanceCLIRepo{rec: instance.Stored{InstanceName: &name, Timezone: &zone}}
 			svc := instance.NewService(repo, nil)
-			defer svc.Close()
 			syncs := 0
 			svc.ResyncProxy = func(context.Context) error { syncs++; return tc.syncErr }
 			_, err := setInstanceURL(context.Background(), svc, tc.url)
@@ -50,19 +49,19 @@ func TestInstanceSetURL(t *testing.T) {
 				t.Fatal("unrelated settings changed")
 			}
 			if tc.wantErr {
-				if repo.rec.ControlPlaneURL != nil || repo.rec.PendingControlPlaneURL != nil {
+				if repo.rec.ControlPlaneURL != nil {
 					t.Fatal("failed change kept URL")
 				}
 				return
 			}
-			if syncs != 2 || repo.rec.PendingControlPlaneURL != nil {
-				t.Fatal("the CLI did not commit the domain instead of leaving a trial")
-			}
-			if *repo.rec.ControlPlaneURL != tc.url {
-				t.Fatal("URL not saved")
+			if syncs != 1 || repo.rec.ControlPlaneURL == nil || *repo.rec.ControlPlaneURL != tc.url {
+				t.Fatalf("URL not applied directly: syncs=%d url=%+v", syncs, repo.rec.ControlPlaneURL)
 			}
 			if _, err := setInstanceURL(context.Background(), svc, tc.url); err != nil {
 				t.Fatalf("repeat: %v", err)
+			}
+			if syncs != 1 {
+				t.Fatalf("unchanged URL resynced: syncs=%d", syncs)
 			}
 		})
 	}

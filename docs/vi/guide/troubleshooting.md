@@ -120,11 +120,10 @@ phụ thuộc vào DNS và vào việc cổng 80/443 có tới được node đ�
   cho đến khi có chứng chỉ.
 - **Node phải chạy Traefik.** HTTPS cho bảng điều khiển dùng node `localhost` đã
   đăng ký, nên node đó cần Traefik và mở cổng vào 80 và 443.
-- **Phiên thử phải được xác nhận.** Lưu `control_plane_url` của instance dưới dạng
-  `https://...` sẽ bắt đầu một phiên xác nhận và tạo một bản ghi ý định chứng chỉ
-  cho bảng điều khiển. Hãy xác nhận qua host được đề xuất trước khi phiên thử hết
-  hạn. Trong phiên thử, cả host được đề xuất lẫn host trước đó đều được định tuyến;
-  hoàn tác sẽ khôi phục host trước đó nếu việc cấp chứng chỉ thất bại.
+- **URL mới được áp dụng ngay.** Lưu `control_plane_url` của instance dưới dạng
+  `https://...` sẽ tạo một bản ghi ý định chứng chỉ cho host đó; không có bước xác
+  nhận. Cho tới khi cấp thành công, hãy truy cập bảng điều khiển tại
+  `http://<server-ip>:9074`.
 - **HTTP vẫn hoạt động cho đến khi cấp thành công.** Bảng điều khiển chỉ chuyển
   hướng sang HTTPS sau khi agent cục bộ báo một chứng chỉ chưa hết hạn (trạng thái
   sẵn sàng được làm mới mỗi 30 giây). Việc cấp đang chờ hoặc thất bại vẫn giữ HTTP

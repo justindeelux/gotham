@@ -4,9 +4,8 @@ import type { FormInst, FormRules } from "naive-ui";
 import { computed, reactive, ref, watch } from "vue";
 import { useI18n } from "vue-i18n";
 
-import { getInstanceSettings, saveGeneral } from "@/features/instance-settings/api/instance";
+import { saveGeneral } from "@/features/instance-settings/api/instance";
 import type { InstanceState } from "@/features/instance-settings/api/instance";
-import ControlPlaneConfirmCard from "@/features/instance-settings/components/ControlPlaneConfirmCard.vue";
 import ControlPlaneDomainStatus from "@/features/instance-settings/components/ControlPlaneDomainStatus.vue";
 import {
   controlPlaneUrlSchema,
@@ -22,28 +21,8 @@ const { t } = useI18n();
 const formRef = ref<FormInst | null>(null);
 const form = reactive({ url: "", name: "" });
 const general = computed(() => props.state.general);
-const expired = ref(false);
-const pending = computed(() =>
-  expired.value ? null : (props.state.pending_control_plane_url ?? null),
-);
-
-watch(
-  () => props.state.pending_control_plane_url,
-  () => {
-    expired.value = false;
-  },
-);
-
-// The control plane restores the previous URL at the deadline; reload so the
-// form shows it instead of the proposed address.
-async function handlePendingExpired(): Promise<void> {
-  expired.value = true;
-  try {
-    emit("saved", await getInstanceSettings());
-  } catch {
-    // Leave the stale state in place; the next page load reconciles it.
-  }
-}
+const urlChanged = ref(false);
+let savedURL = "";
 
 watch(
   general,
@@ -65,7 +44,10 @@ const { submitting, serverErrors, errorMessage, submit } = useSectionForm(
       control_plane_url: form.url,
       instance_name: form.name,
     }),
-  (next) => emit("saved", next),
+  (next) => {
+    urlChanged.value = next.general.control_plane_url.value !== savedURL;
+    emit("saved", next);
+  },
   () => t("instance-settings.general.saved"),
 );
 
@@ -75,6 +57,7 @@ async function handleSubmit(): Promise<void> {
   } catch {
     return;
   }
+  savedURL = general.value.control_plane_url.value;
   await submit();
 }
 
@@ -106,12 +89,9 @@ function status(path: string): "error" | undefined {
         :url="form.url"
         :saved-url="general.control_plane_url.value"
       />
-      <ControlPlaneConfirmCard
-        v-if="pending"
-        :pending="pending"
-        @settled="emit('saved', $event)"
-        @expired="handlePendingExpired"
-      />
+      <NAlert v-if="urlChanged" type="info" :show-icon="true" class="form-alert">
+        {{ t("instance-settings.general.urlChangedHint") }}
+      </NAlert>
       <p v-if="general.control_plane_url.locked" class="lock-note">
         {{ t("instance-settings.locked", { name: general.control_plane_url.env_var }) }}
       </p>

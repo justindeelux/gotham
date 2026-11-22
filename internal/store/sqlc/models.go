@@ -630,6 +630,14 @@ type NotificationDelivery struct {
 	UpdatedAt     pgtype.Timestamptz `json:"updated_at"`
 }
 
+type OauthProvider struct {
+	Name         string             `json:"name"`
+	Enabled      bool               `json:"enabled"`
+	ClientID     string             `json:"client_id"`
+	ClientSecret string             `json:"client_secret"`
+	UpdatedAt    pgtype.Timestamptz `json:"updated_at"`
+}
+
 type PreviewDelivery struct {
 	ID            pgtype.UUID        `json:"id"`
 	ApplicationID pgtype.UUID        `json:"application_id"`

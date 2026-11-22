@@ -167,22 +167,26 @@ func TestNewWarnsOnBroadTrustedProxy(t *testing.T) {
 	}
 }
 
-func TestNewWarnsOnMissingTrustedProxyForOAuth(t *testing.T) {
+func TestOAuthProviderUpdateWarnsOnMissingTrustedProxy(t *testing.T) {
 	var buf bytes.Buffer
 	logger := slog.New(slog.NewTextHandler(&buf, nil))
 	cfg := &config.Config{Values: config.Values{
 		Server: config.Server{Addr: "127.0.0.1", Port: 0},
-		OAuth: config.OAuth{GitHub: config.OAuthGitHub{
-			RedirectURL: "https://gotham.example/api/v1/auth/oauth/github/callback",
-		}},
 	}}
 
-	s, err := New(cfg, logger, nil, &fakeOAuthService{}, nil, nil, nil)
+	s, err := New(cfg, logger, newFakeAuthService(), &fakeOAuthService{}, nil, nil, nil)
 	if err != nil {
 		t.Fatalf("New: %v", err)
 	}
 	t.Cleanup(s.closer)
+	s.db = stubPinger{}
+	s.redis = stubPinger{}
 
+	rec := doRequest(t, s, http.MethodPut, "/api/v1/instance/oauth-providers/github",
+		`{"client_id":"gh-client","client_secret":"gh-secret","enabled":true}`, "Bearer owner-token")
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status = %d, want 200 (body %s)", rec.Code, rec.Body.String())
+	}
 	if !strings.Contains(buf.String(), "no trusted proxies configured") {
 		t.Errorf("log = %q, want a missing trusted-proxy warning", buf.String())
 	}

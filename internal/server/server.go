@@ -10,7 +10,6 @@ import (
 	"net/http"
 	"net/netip"
 	"strconv"
-	"strings"
 	"sync"
 	"time"
 
@@ -148,7 +147,7 @@ func New(cfg *config.Config, logger *slog.Logger, authService AuthService, oauth
 	if err != nil {
 		return nil, fmt.Errorf("server: trusted proxies: %w", err)
 	}
-	warnTrustedProxyConfig(logger, trustedProxies, snap, oauthService != nil)
+	warnTrustedProxyConfig(logger, trustedProxies)
 	logDisabledFeatures(logger)
 
 	var db Pinger
@@ -247,15 +246,15 @@ func New(cfg *config.Config, logger *slog.Logger, authService AuthService, oauth
 	return s, nil
 }
 
-func warnTrustedProxyConfig(logger *slog.Logger, trusted []netip.Prefix, snap config.Values, oauth bool) {
+// warnTrustedProxyConfig flags a trusted-proxy list that trusts more than the
+// proxy itself. OAuth needs the forwarded scheme to be trusted; that warning
+// fires when a provider is enabled.
+func warnTrustedProxyConfig(logger *slog.Logger, trusted []netip.Prefix) {
 	for _, prefix := range trusted {
 		if prefix.Bits() <= 8 {
 			logger.Warn("GOTHAM_TRUSTED_PROXIES contains an overly broad prefix; every host it covers can spoof the forwarded client address and scheme. List the proxy's exact IPs.",
 				"prefix", prefix.String())
 		}
-	}
-	if len(trusted) == 0 && (oauth || strings.HasPrefix(snap.OAuth.GitHub.RedirectURL, "https://")) {
-		logger.Warn("no trusted proxies configured: X-Forwarded-For and X-Forwarded-Proto are ignored. Behind a TLS-terminating proxy this downgrades secure cookies and makes OAuth fail closed; set GOTHAM_TRUSTED_PROXIES to the proxy's address.")
 	}
 }
 
@@ -375,6 +374,10 @@ func (s *Server) routes() (http.Handler, error) {
 		domainwatch.Mount(api, s.resourceAuth(), s.domainwatch)
 
 		platformOnly := s.platformOnlyAuth
+		s.mountOAuthProviderRoutes(api, platformOnly)
+		if setter, ok := s.oauth.(interface{ SetControlPlaneURLSource(func() string) }); ok {
+			setter.SetControlPlaneURLSource(s.oauthRedirectBase)
+		}
 		containerService := s.containerService()
 		containers.Mount(api, s.resourceAuth(), containerService)
 		volumeService, _ := containerService.(containers.VolumeService)
@@ -477,9 +480,6 @@ func (s *Server) routes() (http.Handler, error) {
 					nodeHostResolver{nodes: s.servers, dialer: dialer},
 					instanceSvc, s.logger)
 				instance.MountNode(api, platformOnly, UserIDFromContext, nodeHosts)
-			}
-			if setter, ok := s.oauth.(interface{ SetGitHubControlPlaneURLSource(func() string) }); ok {
-				setter.SetGitHubControlPlaneURLSource(s.controlPlaneURL)
 			}
 		}
 		certificateStatus := proxy.NewDefaultCertificateStatusService(statusConfig)

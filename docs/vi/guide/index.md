@@ -36,10 +36,9 @@ mời dùng một lần tạo trong **Người dùng** (xem
 Mở URL mà trình cài đặt in ra (bảng điều khiển mặc định lắng nghe trên cổng 9074)
 và đăng nhập bằng email và mật khẩu. Có thêm hai cách đăng nhập:
 
-- **GitHub OAuth.** Dùng được khi instance đã cấu hình GitHub OAuth với
-  `GOTHAM_OAUTH_GITHUB_CLIENT_ID`, `GOTHAM_OAUTH_GITHUB_CLIENT_SECRET` và một
-  redirect URL đã đăng ký với ứng dụng GitHub OAuth. Đây là nhà cung cấp OAuth
-  duy nhất.
+- **GitHub OAuth.** Dùng được khi client ID và secret của ứng dụng GitHub OAuth
+  đã được lưu trong cài đặt instance. Đăng ký URL callback ủy quyền của ứng dụng là
+  `/api/v1/auth/oauth/github/callback` trên origin control plane của instance.
 - **Xác thực hai lớp.** Tùy chọn theo từng tài khoản: bật TOTP trong
   **Hồ sơ → Xác thực hai lớp**, quét mã QR bằng ứng dụng xác thực, và lưu các mã
   khôi phục — chúng chỉ hiện một lần và mỗi mã dùng được một lần. Sau đó, đăng

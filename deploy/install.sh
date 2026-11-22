@@ -491,7 +491,7 @@ env_prev() {
     printf '%s\n' "${ENV_PREV}" | sed -n "s/^$1=//p" | head -n1
 }
 # yaml_port prints the server.port a gotham.yaml defines, or nothing when it
-# sets none: a yaml with only other keys (oauth:, log:) still leaves the panel
+# sets none: a yaml with only other keys (auth:, log:) still leaves the panel
 # on the default port, so it must not be mistaken for an explicit port.
 yaml_port() {
     [ -r "$1" ] || return 0

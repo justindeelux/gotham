@@ -164,7 +164,7 @@ func TestServiceConcurrentFirstRegistrations(t *testing.T) {
 func TestOAuthBootstrapIsOwnerAndStaysClosed(t *testing.T) {
 	svc, _ := scratchService(t)
 	provider := &fakeOAuthProvider{name: "github"}
-	oauth := NewOAuthService(svc, testLogger(), provider)
+	oauth := NewOAuthService(svc, testLogger(), nil, provider)
 	t.Cleanup(oauth.Close)
 	ctx := context.Background()
 

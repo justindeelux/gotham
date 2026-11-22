@@ -44,11 +44,14 @@ type oauthExchangeRequest struct {
 type OAuthService interface {
 	Begin(ctx context.Context, providerName, redirectBase string) (url string, state string, err error)
 	Callback(ctx context.Context, providerName, code, state string, meta auth.SessionMeta) (*auth.AuthResult, error)
+	Providers(ctx context.Context) ([]auth.OAuthProviderInfo, error)
+	UpdateProvider(ctx context.Context, provider string, in auth.OAuthProviderUpdate) (auth.OAuthProviderInfo, error)
 	Close()
 }
 
 func (s *Server) mountOAuthRoutes(api chi.Router) {
 	api.Route("/v1/auth/oauth", func(r chi.Router) {
+		r.Get("/providers", s.handleOAuthProviderNames)
 		r.With(s.rateLimit).Get("/{provider}/login", s.handleOAuthLogin)
 		r.Get("/{provider}/callback", s.handleOAuthCallback)
 		r.With(s.rateLimit).Post("/exchange", s.handleOAuthExchange)
@@ -170,10 +173,7 @@ func (s *Server) oauthSuccessLocation(code string) string {
 }
 
 func (s *Server) oauthRedirectBase() string {
-	raw := strings.TrimSpace(s.cfg.Snapshot().OAuth.GitHub.RedirectURL)
-	if raw == "" {
-		raw = s.controlPlaneURL()
-	}
+	raw := s.controlPlaneURL()
 	if raw == "" {
 		return ""
 	}

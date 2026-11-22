@@ -27,6 +27,8 @@ import (
 type fakeOAuthService struct {
 	callback    *auth.AuthResult
 	callbackErr error
+	providers   []auth.OAuthProviderInfo
+	updated     []auth.OAuthProviderUpdate
 	closed      bool
 }
 
@@ -44,6 +46,18 @@ func (f *fakeOAuthService) Callback(_ context.Context, _ string, _, _ string, _ 
 	return f.callback, nil
 }
 
+func (f *fakeOAuthService) Providers(_ context.Context) ([]auth.OAuthProviderInfo, error) {
+	return f.providers, nil
+}
+
+func (f *fakeOAuthService) UpdateProvider(_ context.Context, name string, in auth.OAuthProviderUpdate) (auth.OAuthProviderInfo, error) {
+	if name != "github" {
+		return auth.OAuthProviderInfo{}, auth.ErrProviderUnknown
+	}
+	f.updated = append(f.updated, in)
+	return auth.OAuthProviderInfo{Name: name, Enabled: in.Enabled, ClientID: in.ClientID, HasSecret: true}, nil
+}
+
 func (f *fakeOAuthService) Close() { f.closed = true }
 
 func newOAuthTestServer(t *testing.T, cfg *config.Config, oauth OAuthService) *Server {
@@ -58,6 +72,8 @@ func newOAuthTestServer(t *testing.T, cfg *config.Config, oauth OAuthService) *S
 
 	s.db = stubPinger{}
 	s.redis = stubPinger{}
+	s.instanceSvc = instance.NewService(stubInstanceRepo{}, logger)
+	t.Setenv(instance.EnvPublicURL, "http://localhost:8000")
 	return s
 }
 
@@ -73,19 +89,14 @@ func newOAuthTestServerWithAuth(t *testing.T, cfg *config.Config, oauth OAuthSer
 
 	s.db = stubPinger{}
 	s.redis = stubPinger{}
+	s.instanceSvc = instance.NewService(stubInstanceRepo{}, logger)
+	t.Setenv(instance.EnvPublicURL, "http://localhost:8000")
 	return s
 }
 
 func defaultOAuthConfig() *config.Config {
 	return &config.Config{
-		Values: config.Values{
-			Server: config.Server{Addr: "127.0.0.1", Port: 0},
-			OAuth: config.OAuth{
-				GitHub: config.OAuthGitHub{
-					RedirectURL: "http://localhost:8000/api/v1/auth/oauth/github/callback",
-				},
-			},
-		},
+		Values: config.Values{Server: config.Server{Addr: "127.0.0.1", Port: 0}},
 	}
 }
 
@@ -326,11 +337,8 @@ func TestOAuthCallbackRedirectsWithCode(t *testing.T) {
 	}
 }
 
-func TestOAuthCallbackSuccessUsesConfiguredOrigin(t *testing.T) {
-	cfg := defaultOAuthConfig()
-	cfg.OAuth.GitHub.RedirectURL = "http://localhost:8000/api/v1/auth/oauth/github/callback"
-
-	s := newOAuthTestServer(t, cfg, &fakeOAuthService{callback: defaultOAuthResult()})
+func TestOAuthCallbackUsesControlPlaneOrigin(t *testing.T) {
+	s := newOAuthTestServer(t, defaultOAuthConfig(), &fakeOAuthService{callback: defaultOAuthResult()})
 
 	rec := oauthCallbackRequest(t, s,
 		"/api/v1/auth/oauth/github/callback?state=test-state&code=code",
@@ -341,7 +349,7 @@ func TestOAuthCallbackSuccessUsesConfiguredOrigin(t *testing.T) {
 	}
 	loc := rec.Header().Get("Location")
 	if !strings.HasPrefix(loc, "http://localhost:8000/oauth/callback?code=") {
-		t.Errorf("Location = %q, want configured-origin code redirect", loc)
+		t.Errorf("Location = %q, want the control-plane-origin code redirect", loc)
 	}
 }
 
@@ -699,9 +707,8 @@ func oauthRawRequest(t *testing.T, s *Server, method, path, body string, secure 
 }
 
 func TestOAuthLoginRejectsInsecureFlowForHTTPSOrigin(t *testing.T) {
-	cfg := defaultOAuthConfig()
-	cfg.OAuth.GitHub.RedirectURL = "https://gotham.example/api/v1/auth/oauth/github/callback"
-	s := newOAuthTestServer(t, cfg, &fakeOAuthService{})
+	s := newOAuthTestServer(t, defaultOAuthConfig(), &fakeOAuthService{})
+	t.Setenv(instance.EnvPublicURL, "https://gotham.example")
 
 	rec := oauthRequest(t, s, "/api/v1/auth/oauth/github/login")
 
@@ -758,9 +765,7 @@ func TestOAuthExchangeSecureFlow(t *testing.T) {
 }
 
 func TestOAuthHTTPDevFlowEndToEnd(t *testing.T) {
-	cfg := defaultOAuthConfig()
-	cfg.OAuth.GitHub.RedirectURL = "http://localhost:8000/api/v1/auth/oauth/github/callback"
-	s := newOAuthTestServer(t, cfg, &fakeOAuthService{callback: defaultOAuthResult()})
+	s := newOAuthTestServer(t, defaultOAuthConfig(), &fakeOAuthService{callback: defaultOAuthResult()})
 
 	login := oauthRawRequest(t, s, http.MethodGet, "/api/v1/auth/oauth/github/login", "", false)
 	if login.Code != http.StatusFound {
@@ -815,9 +820,8 @@ func TestOAuthLogoutClearsBothCookieNameSets(t *testing.T) {
 }
 
 func TestOAuthCallbackRejectsInsecureRequestForHTTPSOrigin(t *testing.T) {
-	cfg := defaultOAuthConfig()
-	cfg.OAuth.GitHub.RedirectURL = "https://gotham.example/api/v1/auth/oauth/github/callback"
-	s := newOAuthTestServer(t, cfg, &fakeOAuthService{callback: defaultOAuthResult()})
+	s := newOAuthTestServer(t, defaultOAuthConfig(), &fakeOAuthService{callback: defaultOAuthResult()})
+	t.Setenv(instance.EnvPublicURL, "https://gotham.example")
 
 	rec := oauthRawRequest(t, s, http.MethodGet,
 		"/api/v1/auth/oauth/github/callback?state=test-state&code=auth-code", "", false,
@@ -837,9 +841,8 @@ func TestOAuthCallbackRejectsInsecureRequestForHTTPSOrigin(t *testing.T) {
 }
 
 func TestOAuthExchangeRejectsInsecureRequestForHTTPSOrigin(t *testing.T) {
-	cfg := defaultOAuthConfig()
-	cfg.OAuth.GitHub.RedirectURL = "https://gotham.example/api/v1/auth/oauth/github/callback"
-	s := newOAuthTestServer(t, cfg, &fakeOAuthService{callback: defaultOAuthResult()})
+	s := newOAuthTestServer(t, defaultOAuthConfig(), &fakeOAuthService{callback: defaultOAuthResult()})
+	t.Setenv(instance.EnvPublicURL, "https://gotham.example")
 
 	callback := oauthRawRequest(t, s, http.MethodGet,
 		"/api/v1/auth/oauth/github/callback?state=test-state&code=auth-code", "", true,
@@ -861,10 +864,8 @@ func TestOAuthExchangeRejectsInsecureRequestForHTTPSOrigin(t *testing.T) {
 }
 
 func TestOAuthEmptyRedirectBaseRequiresHTTPS(t *testing.T) {
-	cfg := &config.Config{
-		Values: config.Values{Server: config.Server{Addr: "127.0.0.1", Port: 0}},
-	}
-	s := newOAuthTestServer(t, cfg, &fakeOAuthService{})
+	s := newOAuthTestServer(t, defaultOAuthConfig(), &fakeOAuthService{})
+	t.Setenv(instance.EnvPublicURL, "")
 
 	insecure := oauthRequest(t, s, "/api/v1/auth/oauth/github/login")
 	if insecure.Code != http.StatusFound {
@@ -898,37 +899,83 @@ func (stubInstanceRepo) SaveCleanup(context.Context, uuid.UUID, instance.Stored,
 }
 
 func TestOAuthRedirectBaseControlPlaneURL(t *testing.T) {
-	newServerWithInstance := func(t *testing.T, redirectURL string) *Server {
-		t.Helper()
-		cfg := &config.Config{
-			Values: config.Values{
-				Server: config.Server{Addr: "127.0.0.1", Port: 0},
-				OAuth:  config.OAuth{GitHub: config.OAuthGitHub{RedirectURL: redirectURL}},
-			},
-		}
-		s := newOAuthTestServer(t, cfg, &fakeOAuthService{})
-		s.instanceSvc = instance.NewService(stubInstanceRepo{}, slog.New(slog.NewTextHandler(io.Discard, nil)))
-		return s
-	}
+	s := newOAuthTestServer(t, defaultOAuthConfig(), &fakeOAuthService{})
 
 	t.Setenv(instance.EnvPublicURL, "https://cp.example")
-
-	if got := newServerWithInstance(t, "https://login.example/api/v1/auth/oauth/github/callback").oauthRedirectBase(); got != "https://login.example" {
-		t.Errorf("explicit oauthRedirectBase = %q, want https://login.example", got)
-	}
-	if got := newServerWithInstance(t, "").oauthRedirectBase(); got != "https://cp.example" {
-		t.Errorf("derived oauthRedirectBase = %q, want https://cp.example", got)
+	if got := s.oauthRedirectBase(); got != "https://cp.example" {
+		t.Errorf("oauthRedirectBase = %q, want https://cp.example", got)
 	}
 
 	t.Setenv(instance.EnvPublicURL, "")
-	if got := newServerWithInstance(t, "").oauthRedirectBase(); got != "" {
+	if got := s.oauthRedirectBase(); got != "" {
 		t.Errorf("empty oauthRedirectBase = %q, want empty", got)
 	}
+}
 
-	cfg := &config.Config{
-		Values: config.Values{Server: config.Server{Addr: "127.0.0.1", Port: 0}},
+func TestOAuthProviderList(t *testing.T) {
+	oauth := &fakeOAuthService{providers: []auth.OAuthProviderInfo{
+		{Name: "github", Enabled: true, ClientID: "gh-client", HasSecret: true},
+	}}
+	s := newOAuthTestServerWithAuth(t, defaultOAuthConfig(), oauth)
+
+	rec := doRequest(t, s, http.MethodGet, "/api/v1/instance/oauth-providers", "", "Bearer owner-token")
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status = %d, want 200 (body %s)", rec.Code, rec.Body.String())
 	}
-	if got := newOAuthTestServer(t, cfg, &fakeOAuthService{}).oauthRedirectBase(); got != "" {
-		t.Errorf("nil-service oauthRedirectBase = %q, want empty", got)
+	body := rec.Body.String()
+	if strings.Contains(body, "client_secret") || strings.Contains(body, "gh-secret") {
+		t.Errorf("provider list leaks the secret: %s", body)
+	}
+	if !strings.Contains(body, `"has_secret":true`) {
+		t.Errorf("provider list = %s, want has_secret", body)
+	}
+
+	if rec := doRequest(t, s, http.MethodGet, "/api/v1/instance/oauth-providers", "", ""); rec.Code != http.StatusUnauthorized {
+		t.Errorf("anonymous list status = %d, want 401", rec.Code)
+	}
+	if rec := doRequest(t, s, http.MethodGet, "/api/v1/instance/oauth-providers", "", "Bearer valid-token"); rec.Code != http.StatusNotFound {
+		t.Errorf("member list status = %d, want 404", rec.Code)
+	}
+}
+
+func TestOAuthProviderUpdate(t *testing.T) {
+	oauth := &fakeOAuthService{}
+	s := newOAuthTestServerWithAuth(t, defaultOAuthConfig(), oauth)
+
+	rec := doRequest(t, s, http.MethodPut, "/api/v1/instance/oauth-providers/github",
+		`{"client_id":"gh-client","client_secret":"gh-secret","enabled":true}`, "Bearer owner-token")
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status = %d, want 200 (body %s)", rec.Code, rec.Body.String())
+	}
+	if strings.Contains(rec.Body.String(), "gh-secret") {
+		t.Errorf("update response leaks the secret: %s", rec.Body.String())
+	}
+	if !strings.Contains(rec.Body.String(), `"has_secret":true`) {
+		t.Errorf("update response = %s, want has_secret", rec.Body.String())
+	}
+	if len(oauth.updated) != 1 || !oauth.updated[0].Enabled || oauth.updated[0].ClientSecret != "gh-secret" {
+		t.Errorf("service update = %+v, want the submitted values", oauth.updated)
+	}
+
+	unknown := doRequest(t, s, http.MethodPut, "/api/v1/instance/oauth-providers/gitlab",
+		`{"client_id":"id","client_secret":"secret","enabled":true}`, "Bearer owner-token")
+	if unknown.Code != http.StatusNotFound {
+		t.Errorf("unknown provider status = %d, want 404", unknown.Code)
+	}
+}
+
+func TestOAuthProviderNames(t *testing.T) {
+	oauth := &fakeOAuthService{providers: []auth.OAuthProviderInfo{
+		{Name: "github", Enabled: true, ClientID: "gh-client", HasSecret: true},
+		{Name: "google", Enabled: false, HasSecret: false},
+	}}
+	s := newOAuthTestServer(t, defaultOAuthConfig(), oauth)
+
+	rec := oauthRequest(t, s, "/api/v1/auth/oauth/providers")
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status = %d, want 200 (body %s)", rec.Code, rec.Body.String())
+	}
+	if body := rec.Body.String(); !strings.Contains(body, `"providers":["github"]`) {
+		t.Errorf("providers = %s, want only the enabled provider", body)
 	}
 }

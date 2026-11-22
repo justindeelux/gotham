@@ -12,10 +12,10 @@ import (
 )
 
 func TestNewGitHubProviderDisabled(t *testing.T) {
-	if p := NewGitHubProvider("", "secret", ""); p != nil {
+	if p := NewGitHubProvider("", "secret"); p != nil {
 		t.Errorf("NewGitHubProvider(no client id) = %v, want nil", p)
 	}
-	if p := NewGitHubProvider("id", "", ""); p != nil {
+	if p := NewGitHubProvider("id", ""); p != nil {
 		t.Errorf("NewGitHubProvider(no secret) = %v, want nil", p)
 	}
 }
@@ -126,7 +126,7 @@ func TestGitHubProviderNameAndAuthCodeURL(t *testing.T) {
 func newTestGitHubProvider(t *testing.T, base string) *GitHubProvider {
 	t.Helper()
 
-	provider, ok := NewGitHubProvider("client-id", "client-secret", "http://localhost/callback").(*GitHubProvider)
+	provider, ok := NewGitHubProvider("client-id", "client-secret").(*GitHubProvider)
 	if !ok {
 		t.Fatal("NewGitHubProvider did not return a *GitHubProvider")
 	}

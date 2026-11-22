@@ -27,10 +27,6 @@ const (
 	EnvAuthJWTPrivateKeyPath = "GOTHAM_AUTH_JWT_PRIVATE_KEY_PATH"
 	EnvAuthJWTPublicKeyPath  = "GOTHAM_AUTH_JWT_PUBLIC_KEY_PATH"
 
-	EnvOAuthGitHubClientID     = "GOTHAM_OAUTH_GITHUB_CLIENT_ID"
-	EnvOAuthGitHubClientSecret = "GOTHAM_OAUTH_GITHUB_CLIENT_SECRET"
-	EnvOAuthGitHubRedirectURL  = "GOTHAM_OAUTH_GITHUB_REDIRECT_URL"
-
 	EnvGRPCAddr                = "GOTHAM_GRPC_ADDR"
 	EnvGRPCHosts               = "GOTHAM_GRPC_HOSTS"
 	EnvGRPCInsecure            = "GOTHAM_GRPC_INSECURE"
@@ -110,16 +106,6 @@ type Auth struct {
 	JWTPublicKeyPath  string `mapstructure:"jwt_public_key_path"`
 }
 
-type OAuth struct {
-	GitHub OAuthGitHub `mapstructure:"github"`
-}
-
-type OAuthGitHub struct {
-	ClientID     string `mapstructure:"client_id"`
-	ClientSecret string `mapstructure:"client_secret"`
-	RedirectURL  string `mapstructure:"redirect_url"`
-}
-
 type Values struct {
 	Server    Server
 	Database  Database
@@ -129,7 +115,6 @@ type Values struct {
 	Deploy    Deploy
 	Log       Log
 	Auth      Auth
-	OAuth     OAuth
 	SecretKey string `mapstructure:"secret_key"`
 }
 
@@ -261,10 +246,6 @@ func newViper() *viper.Viper {
 		"log.format":                     EnvLogFormat,
 		"auth.jwt_private_key_path":      EnvAuthJWTPrivateKeyPath,
 		"auth.jwt_public_key_path":       EnvAuthJWTPublicKeyPath,
-
-		"oauth.github.client_id":     EnvOAuthGitHubClientID,
-		"oauth.github.client_secret": EnvOAuthGitHubClientSecret,
-		"oauth.github.redirect_url":  EnvOAuthGitHubRedirectURL,
 	} {
 		_ = v.BindEnv(key, env)
 	}

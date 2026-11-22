@@ -49,7 +49,7 @@ func testLogger() *slog.Logger {
 func newTestOAuth(t *testing.T, providers ...OAuthProvider) *OAuthService {
 	t.Helper()
 
-	oauth := NewOAuthService(nil, testLogger(), providers...)
+	oauth := NewOAuthService(nil, testLogger(), nil, providers...)
 	t.Cleanup(oauth.Close)
 	return oauth
 }
@@ -58,7 +58,7 @@ func newTestOAuthWithStore(t *testing.T, providers ...OAuthProvider) (*OAuthServ
 	t.Helper()
 
 	svc, st := newTestService(t)
-	oauth := NewOAuthService(svc, testLogger(), providers...)
+	oauth := NewOAuthService(svc, testLogger(), nil, providers...)
 	t.Cleanup(oauth.Close)
 	return oauth, st
 }
@@ -69,7 +69,7 @@ func newScratchOAuthWithStore(t *testing.T, providers ...OAuthProvider) (*OAuthS
 	t.Helper()
 
 	svc, st := scratchService(t)
-	oauth := NewOAuthService(svc, testLogger(), providers...)
+	oauth := NewOAuthService(svc, testLogger(), nil, providers...)
 	t.Cleanup(oauth.Close)
 	return oauth, st
 }
@@ -235,7 +235,7 @@ func TestOAuthCallbackUnknownProvider(t *testing.T) {
 func TestOAuthCallbackRefusesNewUserWhenClosed(t *testing.T) {
 	svc, st := scratchService(t)
 	provider := &fakeOAuthProvider{name: "github"}
-	oauth := NewOAuthService(svc, testLogger(), provider)
+	oauth := NewOAuthService(svc, testLogger(), nil, provider)
 	t.Cleanup(oauth.Close)
 	requireClosedInstance(t, svc)
 	ctx := context.Background()

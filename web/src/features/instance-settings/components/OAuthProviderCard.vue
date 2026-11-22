@@ -86,7 +86,20 @@ function status(path: string): "error" | undefined {
 </script>
 
 <template>
-  <NCard :title="t(`instance-settings.oauth.providers.${provider.name}`)">
+  <NCard>
+    <template #header>
+      <div class="oauth-card-header">
+        <span>{{ t(`instance-settings.oauth.providers.${provider.name}`) }}</span>
+        <span class="oauth-toggle">
+          <NSwitch
+            v-model:value="form.enabled"
+            :aria-label="t('instance-settings.oauth.enabled')"
+          />
+          <span>{{ t("instance-settings.oauth.enabled") }}</span>
+        </span>
+      </div>
+    </template>
+
     <NAlert v-if="errorMessage" type="error" :show-icon="true" class="oauth-alert">
       {{ errorMessage }}
     </NAlert>
@@ -97,14 +110,6 @@ function status(path: string): "error" | undefined {
       class="oauth-form"
       @submit.prevent="handleSubmit"
     >
-      <div class="oauth-toggle">
-        <NSwitch
-          v-model:value="form.enabled"
-          :aria-label="t('instance-settings.oauth.enabled')"
-        />
-        <span>{{ t("instance-settings.oauth.enabled") }}</span>
-      </div>
-
       <NFormItem
         path="clientId"
         :label="t('instance-settings.oauth.clientId')"
@@ -167,12 +172,19 @@ function status(path: string): "error" | undefined {
   max-width: 640px;
 }
 
+.oauth-card-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--space-3);
+}
+
 .oauth-toggle {
   display: flex;
   align-items: center;
   gap: var(--space-2);
-  margin-bottom: var(--space-4);
   font-size: var(--text-sm);
+  font-weight: 400;
   color: var(--fg-2);
 }
 
@@ -181,7 +193,7 @@ function status(path: string): "error" | undefined {
 }
 
 .oauth-hint {
-  margin: calc(var(--space-2) * -1) 0 var(--space-4);
+  margin: var(--space-2) 0 var(--space-4);
   font-size: var(--text-xs);
   color: var(--muted);
   line-height: 1.6;

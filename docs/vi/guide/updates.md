@@ -222,8 +222,8 @@ Xem [Thành viên và quyền truy cập](/vi/using/members-access) để biết
 ## Ghi chú phát hành: đăng nhập OAuth chuyển vào Cài đặt
 
 Đăng nhập GitHub và Google được cấu hình trong phần cài đặt instance của giao diện
-Gotham, không phải trong `gotham.yaml` hay biến môi trường, tại **Cài đặt → Chung**,
-mục **Đăng nhập**. Các biến `GOTHAM_OAUTH_GITHUB_*` và khối `oauth:` bị bỏ qua;
+Gotham, không phải trong `gotham.yaml` hay biến môi trường, tại **Cài đặt → Đăng nhập**.
+Các biến `GOTHAM_OAUTH_GITHUB_*` và khối `oauth:` bị bỏ qua;
 không có giá trị nào được nhập từ chúng.
 
 Instance từng dùng chúng vẫn đăng nhập bằng email và mật khẩu cho đến khi client ID

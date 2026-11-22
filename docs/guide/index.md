@@ -35,9 +35,9 @@ through single-use invite links created on **Users**
 Open the URL the installer printed (the panel listens on port 9074 by default)
 and sign in with email and password. Two more sign-in paths exist:
 
-- **GitHub or Google OAuth.** Turn on a provider in **Settings → General**, in
-  the **Authentication** section of the owner account: create the OAuth app,
-  paste its client ID and secret, and register the callback URL shown there
+- **GitHub or Google OAuth.** Turn on a provider on **Settings →
+  Authentication** in the owner account: create the OAuth app, paste its client
+  ID and secret, and register the callback URL shown there
   (`/api/v1/auth/oauth/github/callback` or
   `/api/v1/auth/oauth/google/callback` on the instance's control-plane origin).
   The provider appears on the login page as soon as it is saved.

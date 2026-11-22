@@ -45,7 +45,16 @@ afterEach(() => {
 describe("owner route guard", () => {
   it("flags the admin-only routes and the permission page wiring", () => {
     const byName = new Map(router.getRoutes().map((route) => [route.name, route]));
-    for (const name of ["files", "server-files", "servers", "domains", "users", "instance", "updates"]) {
+    for (const name of [
+      "files",
+      "server-files",
+      "servers",
+      "domains",
+      "users",
+      "instance",
+      "authentication",
+      "updates",
+    ]) {
       expect(byName.get(name)?.meta.requiresOwner).toBe(true);
     }
     expect(byName.get("dashboard")?.meta.requiresOwner).toBeFalsy();
@@ -64,6 +73,8 @@ describe("owner route guard", () => {
     expect(router.currentRoute.value.name).toBe("forbidden");
     await router.push("/settings/general");
     expect(router.currentRoute.value.name).toBe("forbidden");
+    await router.push("/settings/authentication");
+    expect(router.currentRoute.value.name).toBe("forbidden");
   });
 
   it("lets the owner through to the owner routes", async () => {
@@ -74,6 +85,8 @@ describe("owner route guard", () => {
     expect(router.currentRoute.value.name).toBe("updates");
     await router.push("/settings/general");
     expect(router.currentRoute.value.name).toBe("instance");
+    await router.push("/settings/authentication");
+    expect(router.currentRoute.value.name).toBe("authentication");
   });
 });
 

@@ -37,7 +37,10 @@ effect.
   gateway, so the panel sees a `172.17.x.x` peer and the forwarded scheme and
   client address work without configuration. Set it only to replace that list,
   for example when a proxy outside Docker fronts the panel or Docker uses
-  another bridge subnet. Keep the list to the proxy's exact addresses: every
+  another bridge subnet. The default also covers other containers on Docker's
+  default bridge; a stricter setup lists the proxy's exact address instead. An
+  empty value means the default, so to trust no proxy list an address that
+  never connects, such as `192.0.2.1`. Keep the list to the proxy's exact addresses: every
   host inside a trusted range can spoof the client address and scheme.
   Changing it requires a restart.
 

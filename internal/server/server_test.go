@@ -180,8 +180,8 @@ func TestNewDoesNotWarnOnDefaultTrustedProxies(t *testing.T) {
 	}
 	t.Cleanup(s.closer)
 
-	if strings.Contains(buf.String(), "trusted prox") {
-		t.Errorf("log = %q, want no trusted-proxy warning for the default peer set", buf.String())
+	if out := buf.String(); strings.Contains(out, "overly broad") {
+		t.Errorf("log = %q, want no trusted-proxy warning for the default peer set", out)
 	}
 }
 

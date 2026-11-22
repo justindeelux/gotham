@@ -35,7 +35,10 @@ giữ hiệu lực.
   trên cầu mặc định của Docker và tới bảng điều khiển qua gateway của cầu, nên bảng
   điều khiển thấy peer `172.17.x.x` và giao thức cùng địa chỉ máy khách được chuyển
   tiếp hoạt động mà không cần cấu hình. Chỉ đặt giá trị này để thay thế danh sách
-  đó, ví dụ khi proxy nằm ngoài Docker hoặc Docker dùng dải cầu khác. Giữ danh sách
+  đó, ví dụ khi proxy nằm ngoài Docker hoặc Docker dùng dải cầu khác. Mặc định cũng phủ
+  các container khác trên cầu mặc định của Docker; thiết lập chặt hơn thì liệt kê
+  đúng địa chỉ của proxy. Giá trị rỗng nghĩa là dùng mặc định, nên muốn không tin
+  proxy nào hãy liệt kê một địa chỉ không bao giờ kết nối, chẳng hạn `192.0.2.1`. Giữ danh sách
   đúng bằng địa chỉ của proxy: mọi máy chủ trong một dải được tin cậy đều có thể giả
   mạo địa chỉ và giao thức của máy khách. Đổi giá trị này cần khởi động lại.
 

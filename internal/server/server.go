@@ -147,10 +147,10 @@ func New(cfg *config.Config, logger *slog.Logger, authService AuthService, oauth
 	if err != nil {
 		return nil, fmt.Errorf("server: trusted proxies: %w", err)
 	}
+	warnTrustedProxyConfig(logger, trustedProxies)
 	if len(trustedProxies) == 0 {
 		trustedProxies = clientip.DefaultTrusted()
 	}
-	warnTrustedProxyConfig(logger, trustedProxies)
 	logDisabledFeatures(logger)
 
 	var db Pinger
@@ -249,9 +249,10 @@ func New(cfg *config.Config, logger *slog.Logger, authService AuthService, oauth
 	return s, nil
 }
 
-// warnTrustedProxyConfig flags a trusted-proxy list that trusts more than the
-// proxy itself. The built-in default (loopback and Docker's default bridge)
-// stays below the threshold, so only an operator-supplied range triggers this.
+// warnTrustedProxyConfig flags an operator-supplied trusted-proxy list that
+// trusts more than the proxy itself. It must run before the built-in default
+// (loopback and Docker's default bridge) is substituted, so the default never
+// triggers it.
 func warnTrustedProxyConfig(logger *slog.Logger, trusted []netip.Prefix) {
 	for _, prefix := range trusted {
 		if prefix.Bits() <= 8 {

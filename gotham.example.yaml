@@ -78,7 +78,8 @@ server:
   # (127.0.0.0/8, ::1/128, 172.17.0.0/16): that is where the bundled Traefik
   # container reaches the panel, so HTTPS and the client address work without
   # configuration. Set this only to replace that list, for example when a proxy
-  # outside Docker fronts the panel.
+  # outside Docker fronts the panel. The default also covers other containers on
+  # Docker's default bridge; a stricter setup lists the proxy's exact address.
   #
   # List the proxy's exact addresses and keep ranges as narrow as possible:
   # EVERY host inside a trusted range can spoof the client address and scheme,

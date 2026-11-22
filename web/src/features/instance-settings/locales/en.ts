@@ -61,6 +61,35 @@ const en = {
     keep: "Keep change",
     revert: "Revert now",
   },
+  oauth: {
+    title: "Authentication",
+    description:
+      "Let people sign in with GitHub or Google. Saving a client ID and secret turns the provider on immediately; the secret is stored encrypted and never shown again.",
+    enabled: "Enabled",
+    clientId: "Client ID",
+    clientSecret: "Client secret",
+    clientSecretSaved: "A secret is saved. Type a new one to replace it.",
+    clientSecretPlaceholder: "Paste the client secret",
+    callback: "Callback URL",
+    copy: "Copy",
+    copyCallback: "Copy callback URL",
+    setup: {
+      github:
+        "Create an OAuth App in GitHub under Settings → Developer settings → OAuth Apps, then register this callback URL.",
+      google:
+        "Create a Web application OAuth client ID in the Google Cloud console under APIs & Services → Credentials, then register this callback URL.",
+    },
+    providers: {
+      github: "GitHub",
+      google: "Google",
+    },
+    save: "Save",
+    saved: "Sign-in settings saved.",
+    validation: {
+      clientId: "Enter the OAuth app's client ID.",
+      clientSecret: "Enter the client secret to enable this provider.",
+    },
+  },
   validation: {
     url: "Enter an http(s) URL with a host, without credentials, query or fragment.",
     name: "The name must be 1-64 characters.",

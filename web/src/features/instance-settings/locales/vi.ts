@@ -63,6 +63,35 @@ const vi: typeof en = {
     keep: "Giữ thay đổi",
     revert: "Hoàn tác ngay",
   },
+  oauth: {
+    title: "Đăng nhập",
+    description:
+      "Cho phép mọi người đăng nhập bằng GitHub hoặc Google. Lưu client ID và secret là bật nhà cung cấp ngay; secret được mã hóa khi lưu và không bao giờ hiển thị lại.",
+    enabled: "Bật",
+    clientId: "Client ID",
+    clientSecret: "Client secret",
+    clientSecretSaved: "Đã lưu secret. Nhập secret mới để thay thế.",
+    clientSecretPlaceholder: "Dán client secret",
+    callback: "URL callback",
+    copy: "Sao chép",
+    copyCallback: "Sao chép URL callback",
+    setup: {
+      github:
+        "Tạo OAuth App trong GitHub tại Settings → Developer settings → OAuth Apps, rồi đăng ký URL callback này.",
+      google:
+        "Tạo OAuth client ID loại Web application trong Google Cloud console tại APIs & Services → Credentials, rồi đăng ký URL callback này.",
+    },
+    providers: {
+      github: "GitHub",
+      google: "Google",
+    },
+    save: "Lưu",
+    saved: "Đã lưu cài đặt đăng nhập.",
+    validation: {
+      clientId: "Nhập client ID của ứng dụng OAuth.",
+      clientSecret: "Nhập client secret để bật nhà cung cấp này.",
+    },
+  },
   validation: {
     url: "Nhập URL http(s) có tên máy chủ, không kèm thông tin đăng nhập, query hay fragment.",
     name: "Tên phải dài 1-64 ký tự.",

@@ -129,6 +129,11 @@ phụ thuộc vào DNS và vào việc cổng 80/443 có tới được node đ�
   hướng sang HTTPS sau khi agent cục bộ báo một chứng chỉ chưa hết hạn (trạng thái
   sẵn sàng được làm mới mỗi 30 giây). Việc cấp đang chờ hoặc thất bại vẫn giữ HTTP
   khả dụng.
+- **Đăng nhập OAuth chuyển về `/login?error=oauth_failed`.** Control plane chỉ
+  chấp nhận giao thức của bảng điều khiển trong `X-Forwarded-Proto` từ các proxy
+  tin cậy. Traefik đi kèm được tin cậy mặc định; nếu một proxy khác đứng trước bảng
+  điều khiển, hãy đặt `server.trusted_proxies` (hoặc `GOTHAM_TRUSTED_PROXIES`)
+  bằng địa chỉ của proxy đó rồi khởi động lại.
 - **Nơi cần xem.** Các dòng bảng điều khiển trong API routers mang
   `certificate.status` (`issued`, `pending`, `failed`) và `certificate.not_after`.
   `pending` nghĩa là chưa quan sát được chứng chỉ dùng được nào; `failed` bao gồm

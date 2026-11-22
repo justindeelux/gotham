@@ -61,8 +61,8 @@ secret handling).
 
 ## Sign in with GitHub or Google
 
-The owner can add OAuth sign-in under **Settings → General**, in the
-**Authentication** section. Each provider has its own card:
+The owner can add OAuth sign-in under **Settings → Authentication**. Each
+provider has its own card:
 
 1. Create the OAuth app:
    - **GitHub:** Settings → Developer settings → OAuth Apps → New OAuth App.

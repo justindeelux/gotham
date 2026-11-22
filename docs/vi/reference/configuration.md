@@ -119,7 +119,7 @@ Các nhà cung cấp đăng nhập OAuth được cấu hình trong phần cài 
 diện Gotham, không phải trong tệp này hay biến môi trường. Gotham hỗ trợ GitHub và
 Google. Client ID, client secret và trạng thái bật/tắt của nhà cung cấp được lưu
 trong cơ sở dữ liệu; secret được mã hóa bằng khóa secret của instance. Mở
-**Cài đặt → Chung** và dùng mục **Đăng nhập**.
+**Cài đặt → Đăng nhập**.
 
 - Lưu thông tin đăng nhập là bật nhà cung cấp ngay, không cần khởi động lại. Tắt nó
   thì tuyến đăng nhập của nó trả lời 404 trở lại.

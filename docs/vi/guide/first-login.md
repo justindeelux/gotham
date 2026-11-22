@@ -59,8 +59,8 @@ quanh phần xử lý bí mật).
 
 ## Đăng nhập bằng GitHub hoặc Google
 
-Chủ sở hữu có thể thêm đăng nhập OAuth trong **Cài đặt → Chung**, mục
-**Đăng nhập**. Mỗi nhà cung cấp có một thẻ riêng:
+Chủ sở hữu có thể thêm đăng nhập OAuth trong **Cài đặt → Đăng nhập**. Mỗi nhà
+cung cấp có một thẻ riêng:
 
 1. Tạo ứng dụng OAuth:
    - **GitHub:** Settings → Developer settings → OAuth Apps → New OAuth App.

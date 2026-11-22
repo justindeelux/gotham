@@ -120,8 +120,8 @@ effect.
 OAuth sign-in providers are configured in the Gotham UI's instance settings, not
 in this file or the environment. GitHub and Google are supported. The client ID,
 the client secret and whether the provider is on are stored in the database; the
-secret is encrypted with the instance secret key. Open **Settings → General** and
-use the **Authentication** section.
+secret is encrypted with the instance secret key. Open **Settings →
+Authentication**.
 
 - Saving the credentials enables the provider without a restart. Disabling it
   makes its login route answer 404 again.

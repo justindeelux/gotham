@@ -12,6 +12,7 @@ import (
 	"net/url"
 	"strconv"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -977,5 +978,63 @@ func TestOAuthProviderNames(t *testing.T) {
 	}
 	if body := rec.Body.String(); !strings.Contains(body, `"providers":["github"]`) {
 		t.Errorf("providers = %s, want only the enabled provider", body)
+	}
+}
+
+type fakeOAuthProviderSettings struct {
+	mu   sync.Mutex
+	rows []auth.OAuthProviderSettings
+}
+
+func (f *fakeOAuthProviderSettings) List(context.Context) ([]auth.OAuthProviderSettings, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	return append([]auth.OAuthProviderSettings(nil), f.rows...), nil
+}
+
+func (f *fakeOAuthProviderSettings) Save(_ context.Context, in auth.OAuthProviderSettings) error {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	for i, row := range f.rows {
+		if row.Name == in.Name {
+			f.rows[i] = in
+			return nil
+		}
+	}
+	f.rows = append(f.rows, in)
+	return nil
+}
+
+// TestOAuthGoogleLoginFollowsProviderSettings drives the real registry through
+// the settings API path and checks the login route reacts without a restart.
+func TestOAuthGoogleLoginFollowsProviderSettings(t *testing.T) {
+	logger := slog.New(slog.NewTextHandler(io.Discard, nil))
+	oauth := auth.NewOAuthService(nil, logger, &fakeOAuthProviderSettings{})
+	t.Cleanup(oauth.Close)
+	s := newOAuthTestServer(t, defaultOAuthConfig(), oauth)
+
+	if rec := oauthRequest(t, s, "/api/v1/auth/oauth/google/login"); rec.Code != http.StatusNotFound {
+		t.Fatalf("disabled status = %d, want 404 (body %s)", rec.Code, rec.Body.String())
+	}
+
+	if _, err := oauth.UpdateProvider(context.Background(), "google", auth.OAuthProviderUpdate{
+		ClientID: "google-client", ClientSecret: "google-secret", Enabled: true,
+	}); err != nil {
+		t.Fatalf("UpdateProvider: %v", err)
+	}
+
+	rec := oauthRequest(t, s, "/api/v1/auth/oauth/google/login")
+	if rec.Code != http.StatusFound {
+		t.Fatalf("enabled status = %d, want 302 (body %s)", rec.Code, rec.Body.String())
+	}
+	location, err := url.Parse(rec.Header().Get("Location"))
+	if err != nil {
+		t.Fatalf("parse Location: %v", err)
+	}
+	if location.Host != "accounts.google.com" {
+		t.Errorf("Location host = %q, want accounts.google.com", location.Host)
+	}
+	if got := location.Query().Get("redirect_uri"); got != "http://localhost:8000/api/v1/auth/oauth/google/callback" {
+		t.Errorf("redirect_uri = %q, want the instance callback", got)
 	}
 }

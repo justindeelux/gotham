@@ -67,3 +67,6 @@ web/src/features/__i18n_probe__/
 
 # Generated standalone installer release bundle
 /release-assets/
+
+# Owner-only workflow notes
+.workflow/

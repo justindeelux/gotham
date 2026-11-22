@@ -110,7 +110,12 @@ func runServe() int {
 
 	authStore := store.New(pool)
 	authService := auth.New(authStore, signer, logger)
-	oauthService := buildOAuthService(snap.OAuth, authService, logger)
+	serverSecret, _, _ := server.ResolveSecretKey(snap.SecretKey, snap.CA.Dir)
+	oauthService := auth.NewOAuthService(authService, logger,
+		auth.NewOAuthSettingsRepository(authStore, serverSecret))
+	if err := oauthService.Reload(ctx); err != nil {
+		logger.Warn("oauth: could not load the configured providers", "error", err)
+	}
 	tokenService := auth.NewAPITokenService(authStore, logger)
 
 	authority, err := servers.LoadAuthority(snap.CA.Dir)
@@ -130,7 +135,6 @@ func runServe() int {
 		logger.Info("certificate authority loaded", "ca_dir", snap.CA.Dir)
 	}
 
-	serverSecret, _, _ := server.ResolveSecretKey(snap.SecretKey, snap.CA.Dir)
 	authService.SetSecretKey(serverSecret)
 	serverService := servers.NewService(servers.Config{
 		Store:     authStore,
@@ -242,24 +246,6 @@ func agentUpdater(logger *slog.Logger) servers.AgentUpdateOfferer {
 		return nil
 	}
 	return updater
-}
-
-func buildOAuthService(oauthCfg config.OAuth, authService *auth.Service, logger *slog.Logger) server.OAuthService {
-	providers := make([]auth.OAuthProvider, 0, 1)
-	if provider := auth.NewGitHubProvider(
-		oauthCfg.GitHub.ClientID,
-		oauthCfg.GitHub.ClientSecret,
-		oauthCfg.GitHub.RedirectURL,
-	); provider != nil {
-		providers = append(providers, provider)
-	}
-
-	if len(providers) == 0 {
-		logger.Info("oauth: no providers configured")
-		return nil
-	}
-	logger.Info("oauth: providers enabled", "providers", len(providers))
-	return auth.NewOAuthService(authService, logger, providers...)
 }
 
 func loadJWTKeys(cfg config.Auth) (privatePEM, publicPEM []byte, err error) {

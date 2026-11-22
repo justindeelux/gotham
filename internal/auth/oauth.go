@@ -46,14 +46,20 @@ type OAuthIdentity struct {
 	AvatarURL string
 }
 
+// OAuthService is the live set of sign-in providers. The set is rebuilt from
+// the instance settings at startup and whenever a provider is saved, so a
+// change takes effect without a restart.
 type OAuthService struct {
+	mu        sync.RWMutex
 	providers map[string]OAuthProvider
+	settings  OAuthSettingsRepository
+	baseURL   func() string
 	auth      *Service
 	logger    *slog.Logger
 	states    *stateStore
 }
 
-func NewOAuthService(auth *Service, logger *slog.Logger, providers ...OAuthProvider) *OAuthService {
+func NewOAuthService(auth *Service, logger *slog.Logger, settings OAuthSettingsRepository, providers ...OAuthProvider) *OAuthService {
 	if logger == nil {
 		logger = slog.Default()
 	}
@@ -68,18 +74,82 @@ func NewOAuthService(auth *Service, logger *slog.Logger, providers ...OAuthProvi
 
 	return &OAuthService{
 		providers: registered,
+		settings:  settings,
 		auth:      auth,
 		logger:    logger,
 		states:    newStateStore(),
 	}
 }
 
-func (s *OAuthService) SetGitHubControlPlaneURLSource(src func() string) {
-	for _, provider := range s.providers {
-		if g, ok := provider.(interface{ SetControlPlaneURLSource(func() string) }); ok {
-			g.SetControlPlaneURLSource(src)
-		}
+// oauthProviderFactories maps a provider name to its constructor. Only these
+// names can be stored or enabled.
+var oauthProviderFactories = map[string]func(clientID, clientSecret string) OAuthProvider{
+	"github": NewGitHubProvider,
+}
+
+// SetControlPlaneURLSource supplies the instance origin the providers derive
+// their callback URL from. It is kept for providers built by a later Reload.
+func (s *OAuthService) SetControlPlaneURLSource(src func() string) {
+	s.mu.Lock()
+	s.baseURL = src
+	providers := s.providers
+	s.mu.Unlock()
+
+	for _, provider := range providers {
+		sourceProvider(provider, src)
 	}
+}
+
+func sourceProvider(provider OAuthProvider, src func() string) {
+	if setter, ok := provider.(interface{ SetControlPlaneURLSource(func() string) }); ok {
+		setter.SetControlPlaneURLSource(src)
+	}
+}
+
+func (s *OAuthService) provider(name string) (OAuthProvider, bool) {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	provider, ok := s.providers[name]
+	return provider, ok
+}
+
+// Reload rebuilds the provider set from the stored settings.
+func (s *OAuthService) Reload(ctx context.Context) error {
+	if s.settings == nil {
+		return nil
+	}
+	rows, err := s.settings.List(ctx)
+	if err != nil {
+		return fmt.Errorf("auth: load oauth providers: %w", err)
+	}
+
+	providers := make(map[string]OAuthProvider, len(rows))
+	for _, row := range rows {
+		build, ok := oauthProviderFactories[row.Name]
+		if !ok || !row.Enabled || row.ClientID == "" || row.ClientSecret == "" {
+			continue
+		}
+		provider := build(row.ClientID, row.ClientSecret)
+		if provider == nil {
+			continue
+		}
+		s.mu.RLock()
+		baseURL := s.baseURL
+		s.mu.RUnlock()
+		sourceProvider(provider, baseURL)
+		providers[row.Name] = provider
+	}
+
+	s.mu.Lock()
+	s.providers = providers
+	s.mu.Unlock()
+
+	if len(providers) == 0 {
+		s.logger.Info("oauth: no providers configured")
+	} else {
+		s.logger.Info("oauth: providers enabled", "providers", len(providers))
+	}
+	return nil
 }
 
 func (s *OAuthService) Begin(ctx context.Context, providerName, redirectBase string) (url string, state string, err error) {
@@ -87,7 +157,7 @@ func (s *OAuthService) Begin(ctx context.Context, providerName, redirectBase str
 		return "", "", err
 	}
 
-	provider, ok := s.providers[providerName]
+	provider, ok := s.provider(providerName)
 	if !ok {
 		return "", "", fmt.Errorf("%w: %s", ErrProviderDisabled, providerName)
 	}
@@ -105,7 +175,7 @@ func (s *OAuthService) Begin(ctx context.Context, providerName, redirectBase str
 }
 
 func (s *OAuthService) Callback(ctx context.Context, providerName, code, stateFromQuery string, meta SessionMeta) (*AuthResult, error) {
-	provider, ok := s.providers[providerName]
+	provider, ok := s.provider(providerName)
 	if !ok {
 		return nil, fmt.Errorf("%w: %s", ErrProviderDisabled, providerName)
 	}

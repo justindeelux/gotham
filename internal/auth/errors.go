@@ -10,6 +10,8 @@ var (
 	ErrValidation               = errors.New("auth: validation failed")
 	ErrNotFound                 = errors.New("auth: not found")
 	ErrProviderDisabled         = errors.New("auth: oauth provider disabled")
+	ErrProviderUnknown          = errors.New("oauth provider not found")
+	ErrProviderIncomplete       = errors.New("a client ID and secret are required to enable this provider")
 	ErrStateMismatch            = errors.New("auth: oauth state mismatch")
 	ErrMissingEmail             = errors.New("auth: oauth identity missing email")
 	ErrRegistrationClosed       = errors.New("auth: registration is closed")

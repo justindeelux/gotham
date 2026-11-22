@@ -31,26 +31,28 @@ type gitHubEmail struct {
 	Verified bool   `json:"verified"`
 }
 
-const GitHubCallbackPath = "/api/v1/auth/oauth/github/callback"
+// oauthCallbackPath is the callback URL path a provider's app registers.
+func oauthCallbackPath(provider string) string {
+	return "/api/v1/auth/oauth/" + provider + "/callback"
+}
 
-func ResolveGitHubRedirectURL(explicit, controlPlaneBase string) string {
-	if v := strings.TrimSpace(explicit); v != "" {
-		return v
+// resolveOAuthRedirectURL derives the callback URL from the control-plane
+// origin. A provider is unusable until the instance has one.
+func resolveOAuthRedirectURL(controlPlaneBase, provider string) string {
+	base := strings.TrimSpace(controlPlaneBase)
+	if base == "" {
+		return ""
 	}
-	if base := strings.TrimSpace(controlPlaneBase); base != "" {
-		return strings.TrimRight(base, "/") + GitHubCallbackPath
-	}
-	return ""
+	return strings.TrimRight(base, "/") + oauthCallbackPath(provider)
 }
 
 type GitHubProvider struct {
 	config           *oauth2.Config
 	apiBase          string
-	explicitRedirect string
 	controlPlaneBase func() string
 }
 
-func NewGitHubProvider(clientID, clientSecret, redirectURL string) OAuthProvider {
+func NewGitHubProvider(clientID, clientSecret string) OAuthProvider {
 	if clientID == "" || clientSecret == "" {
 		return nil
 	}
@@ -58,15 +60,13 @@ func NewGitHubProvider(clientID, clientSecret, redirectURL string) OAuthProvider
 		config: &oauth2.Config{
 			ClientID:     clientID,
 			ClientSecret: clientSecret,
-			RedirectURL:  redirectURL,
 			Scopes:       []string{gitHubEmailScope},
 			Endpoint: oauth2.Endpoint{
 				AuthURL:  gitHubAuthURL,
 				TokenURL: gitHubTokenURL,
 			},
 		},
-		apiBase:          gitHubAPIBase,
-		explicitRedirect: redirectURL,
+		apiBase: gitHubAPIBase,
 	}
 }
 
@@ -75,11 +75,10 @@ func (p *GitHubProvider) SetControlPlaneURLSource(src func() string) {
 }
 
 func (p *GitHubProvider) resolved() *oauth2.Config {
-	if p.controlPlaneBase == nil {
-		return p.config
-	}
 	cfg := *p.config
-	cfg.RedirectURL = ResolveGitHubRedirectURL(p.explicitRedirect, p.controlPlaneBase())
+	if p.controlPlaneBase != nil {
+		cfg.RedirectURL = resolveOAuthRedirectURL(p.controlPlaneBase(), p.Name())
+	}
 	return &cfg
 }
 

@@ -8,7 +8,7 @@ const en = {
   identity: {
     title: "Account",
     avatarNote:
-      "Your avatar comes from GitHub when you sign in with GitHub, otherwise your initials are shown.",
+      "Your avatar comes from your OAuth provider when you sign in with one, otherwise your initials are shown.",
     email: "Email",
     role: "Role",
     owner: "Owner",

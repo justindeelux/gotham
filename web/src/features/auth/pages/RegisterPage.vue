@@ -15,7 +15,7 @@ import { useI18n } from "vue-i18n";
 import { RouterLink, useRoute, useRouter } from "vue-router";
 
 import AuthFootnote from "@/features/auth/components/AuthFootnote.vue";
-import GitHubOAuthButton from "@/features/auth/components/GitHubOAuthButton.vue";
+import OAuthProviderButtons from "@/features/auth/components/OAuthProviderButtons.vue";
 import PasswordStrengthMeter from "@/features/auth/components/PasswordStrengthMeter.vue";
 import { useRegisterInvite } from "@/features/auth/composables/useRegisterInvite";
 import { registerRules } from "@/features/auth/schemas/auth";
@@ -217,12 +217,8 @@ async function handleSubmit(): Promise<void> {
             {{ t("auth.register.submit") }}
           </NButton>
 
-          <div class="auth-divider" aria-hidden="true">
-            <span>{{ t("auth.register.divider") }}</span>
-          </div>
-
           <template v-if="!invite.inviteToken.value">
-            <GitHubOAuthButton mode="signup" />
+            <OAuthProviderButtons mode="signup" />
           </template>
         </NForm>
 
@@ -280,23 +276,5 @@ async function handleSubmit(): Promise<void> {
   font-size: var(--text-xs);
   color: var(--muted);
   line-height: 1.6;
-}
-
-.auth-divider {
-  display: flex;
-  align-items: center;
-  gap: 12px;
-  margin: 4px 0;
-  font-size: var(--text-sm);
-  color: var(--muted);
-  white-space: nowrap;
-}
-
-.auth-divider::before,
-.auth-divider::after {
-  content: "";
-  height: 1px;
-  flex: 1 1 0;
-  background: var(--border);
 }
 </style>

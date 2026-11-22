@@ -59,6 +59,25 @@ environment, and never written to disk, the env file, logs or shell history: it
 travels to the binary on stdin only (`sh -x` tracing is disabled around the
 secret handling).
 
+## Sign in with GitHub or Google
+
+The owner can add OAuth sign-in under **Settings → General**, in the
+**Authentication** section. Each provider has its own card:
+
+1. Create the OAuth app:
+   - **GitHub:** Settings → Developer settings → OAuth Apps → New OAuth App.
+   - **Google:** Google Cloud console → APIs & Services → Credentials →
+     Create credentials → OAuth client ID → Web application.
+2. Register the callback URL shown on the card. It is
+   `<control-plane origin>/api/v1/auth/oauth/github/callback` or
+   `<control-plane origin>/api/v1/auth/oauth/google/callback`.
+3. Paste the client ID and secret, switch the provider on and save. The button
+   appears on the login page immediately; no restart is needed.
+
+The secret is stored encrypted and never shown again: the card only says one is
+saved. To replace it, type a new secret and save. Switching the provider off
+hides its button and turns its login route off.
+
 ## If no account was created
 
 If you skipped the email prompt, or the install was non-interactive without

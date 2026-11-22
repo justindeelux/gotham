@@ -30,7 +30,7 @@ const en = {
     createAccount: "Create account",
     contactAdmin: "Forgot your password? Contact your admin to reset it.",
     divider: "or",
-    oauthFailed: "GitHub sign-in failed. Please try again.",
+    oauthFailed: "OAuth sign-in failed. Please try again.",
   },
   register: {
     title: "Create account",
@@ -52,12 +52,16 @@ const en = {
     divider: "or",
   },
   oauth: {
-    githubSignin: "Sign in with GitHub",
-    githubSignup: "Sign up with GitHub",
+    providers: {
+      github: "GitHub",
+      google: "Google",
+    },
+    signin: "Sign in with {provider}",
+    signup: "Sign up with {provider}",
     signingIn: "Signing you in",
     failed: "Sign-in failed",
-    inProgress: "Completing GitHub sign-in…",
-    noSession: "GitHub did not return a usable session.",
+    inProgress: "Completing sign-in…",
+    noSession: "Your OAuth provider did not return a usable session.",
     back: "Back to sign in",
   },
   mfa: {
@@ -76,7 +80,7 @@ const en = {
     sessionExpired: "Your verification window expired. Sign in again.",
   },
   footnote: {
-    text: "Your password is stored securely. Sign in with GitHub or your email.",
+    text: "Your password is stored securely. Sign in with your email or an OAuth provider.",
   },
   strength: {
     level0: "Not entered",

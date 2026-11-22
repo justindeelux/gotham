@@ -221,16 +221,16 @@ See [Members and access](/using/members-access) for the new model.
 
 ## Release note: OAuth sign-in moves into Settings
 
-GitHub sign-in is configured in the Gotham UI's instance settings instead of
-`gotham.yaml` or the environment. `GOTHAM_OAUTH_GITHUB_CLIENT_ID`,
-`GOTHAM_OAUTH_GITHUB_CLIENT_SECRET`, `GOTHAM_OAUTH_GITHUB_REDIRECT_URL` and an
+GitHub and Google sign-in are configured in the Gotham UI's instance settings
+instead of `gotham.yaml` or the environment, under **Settings → General** in the
+**Authentication** section. The `GOTHAM_OAUTH_GITHUB_*` variables and an
 `oauth:` block are ignored; nothing is imported from them.
 
 An instance that used them keeps signing in with email and password until the
-GitHub OAuth app's client ID and secret are entered in the instance settings.
-The app's authorization callback URL is
-`/api/v1/auth/oauth/github/callback` on the instance's control-plane origin.
-Saving the credentials enables the provider without a restart.
+provider's client ID and secret are entered in the instance settings. Each app's
+authorization callback URL is `/api/v1/auth/oauth/<provider>/callback` on the
+instance's control-plane origin. Saving the credentials enables the provider
+without a restart.
 
 ## What verification covers
 

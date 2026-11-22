@@ -3,6 +3,7 @@ import { NAlert, NSpin } from "naive-ui";
 import { onMounted } from "vue";
 import { useI18n } from "vue-i18n";
 
+import AuthenticationSection from "@/features/instance-settings/components/AuthenticationSection.vue";
 import CleanupRetentionForm from "@/features/instance-settings/components/CleanupRetentionForm.vue";
 import GeneralForm from "@/features/instance-settings/components/GeneralForm.vue";
 import { useInstanceSettings } from "@/features/instance-settings/composables/useInstanceSettings";
@@ -33,6 +34,7 @@ onMounted(() => {
 
     <div v-else-if="state" class="instance-stack">
       <GeneralForm :state="state" @saved="apply" />
+      <AuthenticationSection :control-plane-url="state.general.control_plane_url.value" />
       <CleanupRetentionForm :state="state" @saved="apply" />
     </div>
   </div>

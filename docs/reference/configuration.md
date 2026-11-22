@@ -118,9 +118,10 @@ effect.
 ## OAuth sign-in
 
 OAuth sign-in providers are configured in the Gotham UI's instance settings, not
-in this file or the environment. The client ID, the client secret and whether
-the provider is on are stored in the database; the secret is encrypted with the
-instance secret key.
+in this file or the environment. GitHub and Google are supported. The client ID,
+the client secret and whether the provider is on are stored in the database; the
+secret is encrypted with the instance secret key. Open **Settings → General** and
+use the **Authentication** section.
 
 - Saving the credentials enables the provider without a restart. Disabling it
   makes its login route answer 404 again.
@@ -128,9 +129,10 @@ instance secret key.
   `GOTHAM_OAUTH_GITHUB_REDIRECT_URL` and an `oauth:` block are ignored. An
   instance that used them keeps signing in with email and password until the
   provider is entered in the UI.
-- The app's authorization callback URL is
+- Each app's authorization callback URL is
   `/api/v1/auth/oauth/<provider>/callback` on the instance's control-plane
-  origin, for example `https://gotham.example/api/v1/auth/oauth/github/callback`.
+  origin, for example `https://gotham.example/api/v1/auth/oauth/github/callback`
+  or `https://gotham.example/api/v1/auth/oauth/google/callback`.
 
 ## Git source policy
 

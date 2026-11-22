@@ -32,7 +32,7 @@ const vi: AuthMessages = {
     createAccount: "Tạo tài khoản",
     contactAdmin: "Quên mật khẩu? Hãy liên hệ chủ sở hữu để đặt lại.",
     divider: "hoặc",
-    oauthFailed: "Đăng nhập GitHub thất bại. Vui lòng thử lại.",
+    oauthFailed: "Đăng nhập OAuth thất bại. Vui lòng thử lại.",
   },
   register: {
     title: "Tạo tài khoản",
@@ -54,12 +54,16 @@ const vi: AuthMessages = {
     divider: "hoặc",
   },
   oauth: {
-    githubSignin: "Đăng nhập bằng GitHub",
-    githubSignup: "Đăng ký bằng GitHub",
+    providers: {
+      github: "GitHub",
+      google: "Google",
+    },
+    signin: "Đăng nhập bằng {provider}",
+    signup: "Đăng ký bằng {provider}",
     signingIn: "Đang đăng nhập",
     failed: "Đăng nhập thất bại",
-    inProgress: "Đang hoàn tất đăng nhập GitHub…",
-    noSession: "GitHub không trả về phiên dùng được.",
+    inProgress: "Đang hoàn tất đăng nhập…",
+    noSession: "Nhà cung cấp OAuth không trả về phiên dùng được.",
     back: "Quay lại đăng nhập",
   },
   mfa: {
@@ -78,7 +82,7 @@ const vi: AuthMessages = {
     sessionExpired: "Thời gian xác minh đã hết. Vui lòng đăng nhập lại.",
   },
   footnote: {
-    text: "Mật khẩu của bạn được lưu an toàn. Đăng nhập bằng GitHub hoặc email của bạn.",
+    text: "Mật khẩu của bạn được lưu an toàn. Đăng nhập bằng email hoặc nhà cung cấp OAuth.",
   },
   strength: {
     level0: "Chưa nhập",

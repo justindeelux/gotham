@@ -36,9 +36,12 @@ mời dùng một lần tạo trong **Người dùng** (xem
 Mở URL mà trình cài đặt in ra (bảng điều khiển mặc định lắng nghe trên cổng 9074)
 và đăng nhập bằng email và mật khẩu. Có thêm hai cách đăng nhập:
 
-- **GitHub OAuth.** Dùng được khi client ID và secret của ứng dụng GitHub OAuth
-  đã được lưu trong cài đặt instance. Đăng ký URL callback ủy quyền của ứng dụng là
-  `/api/v1/auth/oauth/github/callback` trên origin control plane của instance.
+- **OAuth GitHub hoặc Google.** Bật nhà cung cấp trong **Cài đặt → Chung**, mục
+  **Đăng nhập**, bằng tài khoản chủ sở hữu: tạo ứng dụng OAuth, dán client ID và
+  secret, rồi đăng ký URL callback hiển thị ở đó
+  (`/api/v1/auth/oauth/github/callback` hoặc
+  `/api/v1/auth/oauth/google/callback` trên origin control plane của instance).
+  Nhà cung cấp xuất hiện trên trang đăng nhập ngay sau khi lưu.
 - **Xác thực hai lớp.** Tùy chọn theo từng tài khoản: bật TOTP trong
   **Hồ sơ → Xác thực hai lớp**, quét mã QR bằng ứng dụng xác thực, và lưu các mã
   khôi phục — chúng chỉ hiện một lần và mỗi mã dùng được một lần. Sau đó, đăng

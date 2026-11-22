@@ -83,8 +83,8 @@ Mở **Hồ sơ** từ menu tài khoản (`/settings/profile`).
 - **Tài khoản** hiển thị email, vai trò và ngày tham gia của bạn. Địa chỉ email
   không thể đổi ở đây.
 - **Tên hiển thị** thay cho email trong sidebar. Nó dài 1–64 ký tự; xóa trống để
-  quay lại dùng email. Ảnh đại diện lấy từ GitHub khi bạn đăng nhập bằng GitHub,
-  nếu không sẽ hiện chữ cái đầu của bạn.
+  quay lại dùng email. Ảnh đại diện lấy từ nhà cung cấp OAuth khi bạn đăng nhập
+  bằng nó, nếu không sẽ hiện chữ cái đầu của bạn.
 - **Đổi mật khẩu** hỏi mật khẩu hiện tại (khi tài khoản đã có mật khẩu) và một mật
   khẩu mới: ít nhất 10 ký tự thuộc hai nhóm ký tự. Đổi mật khẩu sẽ đăng xuất mọi
   thiết bị khác và giữ phiên này đăng nhập.

@@ -10,7 +10,7 @@ const vi: ProfileMessages = {
   identity: {
     title: "Tài khoản",
     avatarNote:
-      "Ảnh đại diện lấy từ GitHub khi bạn đăng nhập bằng GitHub, nếu không sẽ hiện chữ cái đầu.",
+      "Ảnh đại diện lấy từ nhà cung cấp OAuth khi bạn đăng nhập bằng nó, nếu không sẽ hiện chữ cái đầu.",
     email: "Email",
     role: "Vai trò",
     owner: "Chủ sở hữu",

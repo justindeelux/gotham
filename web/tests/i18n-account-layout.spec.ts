@@ -110,6 +110,10 @@ async function mockApi(page: Page, state: MockState): Promise<void> {
       await json({ registrationOpen: false });
       return;
     }
+    if (path === "/auth/oauth/providers") {
+      await json({ providers: [] });
+      return;
+    }
     if (path === "/auth/me" && route.request().method() === "GET") {
       await json({ user });
       return;
@@ -321,8 +325,8 @@ test("auth footnote renders exact sentence per locale", async ({ page }) => {
   const state: MockState = { apiCalls: 0 };
   await mockApi(page, state);
   const exact = {
-    en: "Your password is stored securely. Sign in with GitHub or your email.",
-    vi: "Mật khẩu của bạn được lưu an toàn. Đăng nhập bằng GitHub hoặc email của bạn.",
+    en: "Your password is stored securely. Sign in with your email or an OAuth provider.",
+    vi: "Mật khẩu của bạn được lưu an toàn. Đăng nhập bằng email hoặc nhà cung cấp OAuth.",
   };
   for (const locale of ["en", "vi"] as const) {
     await seedStorage(page, locale, false);

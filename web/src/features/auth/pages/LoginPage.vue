@@ -20,8 +20,8 @@ import { authSwitchTarget, safeRedirect } from "@/features/auth/utils/authRedire
 import { createVisibleValidation } from "@/features/auth/utils/visibleValidation";
 import { onLocaleChange } from "@/shared/i18n";
 import AuthFootnote from "@/features/auth/components/AuthFootnote.vue";
-import GitHubOAuthButton from "@/features/auth/components/GitHubOAuthButton.vue";
 import MfaChallengeForm from "@/features/auth/components/MfaChallengeForm.vue";
+import OAuthProviderButtons from "@/features/auth/components/OAuthProviderButtons.vue";
 
 interface LoginForm {
   email: string;
@@ -198,11 +198,7 @@ onMounted(() => {
 
             <p class="auth-contact">{{ t("auth.login.contactAdmin") }}</p>
 
-            <div class="auth-divider" aria-hidden="true">
-              <span>{{ t("auth.login.divider") }}</span>
-            </div>
-
-            <GitHubOAuthButton mode="signin" />
+            <OAuthProviderButtons mode="signin" />
           </NForm>
         </template>
 
@@ -256,23 +252,5 @@ onMounted(() => {
   font-size: var(--text-xs);
   color: var(--muted);
   margin: 12px 0 0;
-}
-
-.auth-divider {
-  display: flex;
-  align-items: center;
-  gap: 12px;
-  margin: 4px 0;
-  font-size: var(--text-sm);
-  color: var(--muted);
-  white-space: nowrap;
-}
-
-.auth-divider::before,
-.auth-divider::after {
-  content: "";
-  height: 1px;
-  flex: 1 1 0;
-  background: var(--border);
 }
 </style>

@@ -14,6 +14,11 @@ func TestSanitizeAvatarURL(t *testing.T) {
 		t.Errorf("SanitizeAvatarURL(valid) = (%q, %v), want (%q, true)", got, ok, valid)
 	}
 
+	google := "https://lh3.googleusercontent.com/a/ACg8ocK=s96-c"
+	if got, ok := SanitizeAvatarURL(google); !ok || got != google {
+		t.Errorf("SanitizeAvatarURL(google) = (%q, %v), want (%q, true)", got, ok, google)
+	}
+
 	cases := map[string]string{
 		"http scheme":        "http://avatars.githubusercontent.com/u/1",
 		"foreign host":       "https://avatars.example/octo.png",

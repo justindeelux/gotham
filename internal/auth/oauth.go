@@ -85,6 +85,7 @@ func NewOAuthService(auth *Service, logger *slog.Logger, settings OAuthSettingsR
 // names can be stored or enabled.
 var oauthProviderFactories = map[string]func(clientID, clientSecret string) OAuthProvider{
 	"github": NewGitHubProvider,
+	"google": NewGoogleProvider,
 }
 
 // SetControlPlaneURLSource supplies the instance origin the providers derive

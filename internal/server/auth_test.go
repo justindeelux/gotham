@@ -606,7 +606,7 @@ func TestContentSecurityPolicyAvatarAllowlist(t *testing.T) {
 
 	rec := doRequest(t, s, http.MethodGet, "/healthz", "", "")
 	got := rec.Header().Get("Content-Security-Policy")
-	want := "default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data: blob: https://avatars.githubusercontent.com; base-uri 'self'; object-src 'none'; form-action 'self' https://github.com; frame-ancestors 'none'"
+	want := "default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data: blob: https://avatars.githubusercontent.com https://lh3.googleusercontent.com; base-uri 'self'; object-src 'none'; form-action 'self' https://github.com; frame-ancestors 'none'"
 	if got != want {
 		t.Fatalf("Content-Security-Policy = %q, want %q", got, want)
 	}
@@ -620,8 +620,9 @@ func TestContentSecurityPolicyAvatarAllowlist(t *testing.T) {
 		}
 		hosts = append(hosts, token)
 	}
-	if len(hosts) != 1 || hosts[0] != "https://avatars.githubusercontent.com" {
-		t.Errorf("img-src remote hosts = %q, want [https://avatars.githubusercontent.com]", hosts)
+	if len(hosts) != 2 || hosts[0] != "https://avatars.githubusercontent.com" ||
+		hosts[1] != "https://lh3.googleusercontent.com" {
+		t.Errorf("img-src remote hosts = %q, want the GitHub and Google avatar hosts", hosts)
 	}
 	if !strings.Contains(got, "img-src 'self' data: blob: ") {
 		t.Errorf("Content-Security-Policy %q missing the viewer blob: source", got)

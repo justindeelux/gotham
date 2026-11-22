@@ -126,7 +126,8 @@ func TestOAuthUpdateProviderValidation(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Providers: %v", err)
 	}
-	if len(infos) != 1 || infos[0].Name != "github" || infos[0].Enabled || infos[0].HasSecret {
-		t.Errorf("Providers = %+v, want the unconfigured GitHub provider", infos)
+	if len(infos) != 2 || infos[0].Name != "github" || infos[0].Enabled || infos[0].HasSecret ||
+		infos[1].Name != "google" || infos[1].Enabled || infos[1].HasSecret {
+		t.Errorf("Providers = %+v, want the unconfigured GitHub and Google providers", infos)
 	}
 }

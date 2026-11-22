@@ -6,7 +6,7 @@ import (
 	"unicode"
 )
 
-var avatarImageHosts = []string{"avatars.githubusercontent.com"}
+var avatarImageHosts = []string{"avatars.githubusercontent.com", "lh3.googleusercontent.com"}
 
 const maxAvatarURLLength = 512
 

@@ -26,16 +26,23 @@ effect.
 |---|---|---|---|
 | `server.addr` | `GOTHAM_SERVER_ADDR` | `0.0.0.0` | no |
 | `server.port` | `GOTHAM_SERVER_PORT` | `9074` | no |
-| `server.trusted_proxies` | `GOTHAM_TRUSTED_PROXIES` | empty — no peer trusted | no |
+| `server.trusted_proxies` | `GOTHAM_TRUSTED_PROXIES` | loopback and Docker's default bridge (`127.0.0.0/8`, `::1/128`, `172.17.0.0/16`) | no |
 
 - `server.port` must be between 1 and 65535.
 - `server.trusted_proxies` is a YAML list or a comma-separated environment
   value of IPs and CIDRs. Only these peers' `X-Forwarded-For` and
   `X-Forwarded-Proto` headers are honoured; from every other peer they are
-  ignored. Set it when a TLS-terminating proxy fronts the control plane, or
-  clients share one rate-limit bucket and HTTPS is not detected. Keep the list
-  to the proxy's exact addresses: every host inside a trusted range can spoof
-  the client address and scheme. Changing it requires a restart.
+  ignored. The default covers a standard install: the bundled Traefik container
+  runs on Docker's default bridge and reaches the panel through the bridge
+  gateway, so the panel sees a `172.17.x.x` peer and the forwarded scheme and
+  client address work without configuration. Set it only to replace that list,
+  for example when a proxy outside Docker fronts the panel or Docker uses
+  another bridge subnet. The default also covers other containers on Docker's
+  default bridge; a stricter setup lists the proxy's exact address instead. An
+  empty value means the default, so to trust no proxy list an address that
+  never connects, such as `192.0.2.1`. Keep the list to the proxy's exact addresses: every
+  host inside a trusted range can spoof the client address and scheme.
+  Changing it requires a restart.
 
 ## Database and Redis
 

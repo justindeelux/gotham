@@ -74,6 +74,11 @@ provider has its own card:
 3. Paste the client ID and secret, switch the provider on and save. The button
    appears on the login page immediately; no restart is needed.
 
+On a standard install the bundled Traefik is a trusted proxy by default, so the
+HTTPS scheme and the client address are recognised without any environment
+variable. Only a proxy outside Docker needs `server.trusted_proxies` or
+`GOTHAM_TRUSTED_PROXIES`.
+
 The secret is stored encrypted and never shown again: the card only says one is
 saved. To replace it, type a new secret and save. Switching the provider off
 hides its button and turns its login route off.

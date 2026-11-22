@@ -8,6 +8,18 @@ import (
 	"strings"
 )
 
+// DefaultTrusted is the peer set a standard install trusts: loopback and
+// Docker's default bridge, where the bundled Traefik container runs and reaches
+// the panel through the bridge gateway. It is used when no trusted proxies are
+// configured.
+func DefaultTrusted() []netip.Prefix {
+	return []netip.Prefix{
+		netip.MustParsePrefix("127.0.0.0/8"),
+		netip.MustParsePrefix("::1/128"),
+		netip.MustParsePrefix("172.17.0.0/16"),
+	}
+}
+
 func Parse(entries []string) ([]netip.Prefix, error) {
 	var prefixes []netip.Prefix
 	for _, entry := range entries {

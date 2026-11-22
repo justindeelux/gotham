@@ -126,6 +126,11 @@ depends on DNS and on ports 80/443 reaching that node.
 - **HTTP stays up until issuance succeeds.** The panel redirects to HTTPS only
   after the local agent reports an unexpired certificate (readiness is refreshed
   every 30 seconds). Pending or failed issuance keeps HTTP available.
+- **OAuth sign-in redirects to `/login?error=oauth_failed`.** The control plane
+  only accepts the panel scheme in `X-Forwarded-Proto` from its trusted proxies.
+  The bundled Traefik is trusted by default; if another proxy fronts the panel,
+  set `server.trusted_proxies` (or `GOTHAM_TRUSTED_PROXIES`) to that proxy's
+  addresses and restart.
 - **Where to look.** Panel rows in the routers API carry `certificate.status`
   (`issued`, `pending`, `failed`) and `certificate.not_after`. `pending` means no
   usable certificate has been observed yet; `failed` covers unusable

@@ -25,17 +25,22 @@ giữ hiệu lực.
 |---|---|---|---|
 | `server.addr` | `GOTHAM_SERVER_ADDR` | `0.0.0.0` | không |
 | `server.port` | `GOTHAM_SERVER_PORT` | `9074` | không |
-| `server.trusted_proxies` | `GOTHAM_TRUSTED_PROXIES` | rỗng — không tin cậy peer nào | không |
+| `server.trusted_proxies` | `GOTHAM_TRUSTED_PROXIES` | loopback và cầu mặc định của Docker (`127.0.0.0/8`, `::1/128`, `172.17.0.0/16`) | không |
 
 - `server.port` phải nằm trong khoảng 1 đến 65535.
 - `server.trusted_proxies` là một danh sách YAML hoặc một giá trị môi trường gồm các
   IP và CIDR cách nhau bằng dấu phẩy. Chỉ các header `X-Forwarded-For` và
   `X-Forwarded-Proto` của những peer này được tôn trọng; từ mọi peer khác chúng bị
-  bỏ qua. Hãy đặt nó khi có một proxy kết thúc TLS đứng trước control plane, nếu
-  không các máy khách sẽ dùng chung một giỏ giới hạn tần suất và HTTPS không được
-  nhận ra. Giữ danh sách đúng bằng địa chỉ của proxy: mọi máy chủ trong một dải được
-  tin cậy đều có thể giả mạo địa chỉ và giao thức của máy khách. Đổi giá trị này cần
-  khởi động lại.
+  bỏ qua. Giá trị mặc định phủ một lần cài tiêu chuẩn: container Traefik đi kèm chạy
+  trên cầu mặc định của Docker và tới bảng điều khiển qua gateway của cầu, nên bảng
+  điều khiển thấy peer `172.17.x.x` và giao thức cùng địa chỉ máy khách được chuyển
+  tiếp hoạt động mà không cần cấu hình. Chỉ đặt giá trị này để thay thế danh sách
+  đó, ví dụ khi proxy nằm ngoài Docker hoặc Docker dùng dải cầu khác. Mặc định cũng phủ
+  các container khác trên cầu mặc định của Docker; thiết lập chặt hơn thì liệt kê
+  đúng địa chỉ của proxy. Giá trị rỗng nghĩa là dùng mặc định, nên muốn không tin
+  proxy nào hãy liệt kê một địa chỉ không bao giờ kết nối, chẳng hạn `192.0.2.1`. Giữ danh sách
+  đúng bằng địa chỉ của proxy: mọi máy chủ trong một dải được tin cậy đều có thể giả
+  mạo địa chỉ và giao thức của máy khách. Đổi giá trị này cần khởi động lại.
 
 ## Cơ sở dữ liệu và Redis
 

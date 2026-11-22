@@ -72,6 +72,11 @@ cung cấp có một thẻ riêng:
 3. Dán client ID và secret, bật nhà cung cấp rồi lưu. Nút đăng nhập xuất hiện
    trên trang đăng nhập ngay, không cần khởi động lại.
 
+Ở một lần cài tiêu chuẩn, Traefik đi kèm mặc định là proxy tin cậy, nên giao thức
+HTTPS và địa chỉ máy khách được nhận ra mà không cần biến môi trường nào. Chỉ
+proxy nằm ngoài Docker mới cần `server.trusted_proxies` hoặc
+`GOTHAM_TRUSTED_PROXIES`.
+
 Secret được mã hóa khi lưu và không bao giờ hiển thị lại: thẻ chỉ báo đã có
 secret. Để thay thế, nhập secret mới rồi lưu. Tắt nhà cung cấp sẽ ẩn nút của nó và
 tắt tuyến đăng nhập tương ứng.

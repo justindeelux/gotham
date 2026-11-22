@@ -469,7 +469,7 @@ describe("ProfileIdentityCard", () => {
     expect(text).toContain("ada@gotham.dev");
     expect(text).toContain("Member");
     expect(text).toContain("2026");
-    expect(text).toContain("GitHub");
+    expect(text).toContain("OAuth provider");
     expect(text).toContain("A");
     wrapper.unmount();
   });

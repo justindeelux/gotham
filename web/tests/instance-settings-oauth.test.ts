@@ -88,6 +88,21 @@ describe("OAuth provider cards", () => {
     wrapper.unmount();
   });
 
+  it("puts the provider name and the Enabled switch in one header row", async () => {
+    mockGet.mockResolvedValue([github]);
+    const wrapper = mountSection();
+    await flushPromises();
+
+    const header = card(wrapper, 0).find(".oauth-card-header");
+    expect(header.text()).toContain("GitHub");
+    expect(header.text()).toContain(en.oauth.enabled);
+    expect(header.find(".n-switch").exists()).toBe(true);
+    expect(header.find(".n-switch").attributes("aria-label")).toBe(
+      en.oauth.enabled,
+    );
+    wrapper.unmount();
+  });
+
   it("saves without a new secret and never renders the stored one", async () => {
     mockGet.mockResolvedValue([
       { ...github, client_secret: "gh-client-secret" } as typeof github,
@@ -144,8 +159,8 @@ describe("OAuth provider cards", () => {
     const wrapper = mountSection();
     await flushPromises();
 
-    expect(wrapper.text()).toContain(vietnamese.oauth.title);
     expect(wrapper.text()).toContain(vietnamese.oauth.providers.google);
+    expect(wrapper.text()).toContain(vietnamese.oauth.callback);
     expect(wrapper.text()).not.toContain("instance-settings.oauth");
     wrapper.unmount();
   });

@@ -26,6 +26,7 @@ describe("activeNavKey", () => {
     expect(activeNavKey("/updates")).toBe("updates");
     expect(activeNavKey("/settings/general")).toBe("instance");
     expect(activeNavKey("/settings/monitoring")).toBe("monitoring");
+    expect(activeNavKey("/settings/authentication")).toBe("authentication");
     expect(activeNavKey("/security/private-keys")).toBe("private-keys");
     expect(activeNavKey("/security/api-tokens")).toBe("api-tokens");
     expect(activeNavKey("/integrations/git-sources")).toBe("git-sources");
@@ -80,7 +81,7 @@ describe("navSections", () => {
     const system = navSections[2]!;
     expect(
       system.items.find((item) => item.key === "settings")?.children?.map((item) => item.key),
-    ).toEqual(["instance", "monitoring"]);
+    ).toEqual(["instance", "monitoring", "authentication"]);
     expect(system.items.map((item) => item.key)).toEqual([
       "settings",
       "backups",
@@ -144,6 +145,7 @@ describe("navSections", () => {
         "private-keys",
         "instance",
         "monitoring",
+        "authentication",
         "cleanup",
         "storages",
         "updates",

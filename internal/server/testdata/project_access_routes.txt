@@ -224,8 +224,6 @@ project POST /api/v1/databases/{id}/start
 project POST /api/v1/databases/{id}/stop
 personal POST /api/v1/incidents/{id}/acknowledge
 personal POST /api/v1/incidents/{id}/snooze
-owner POST /api/v1/instance/settings/control-plane-url/confirm
-owner POST /api/v1/instance/settings/control-plane-url/revert
 owner POST /api/v1/invites
 project POST /api/v1/mcp/applications
 project POST /api/v1/mcp/applications/{id}/deploy

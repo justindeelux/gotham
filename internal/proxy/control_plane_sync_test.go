@@ -25,7 +25,7 @@ func (r *panelSettingsRepo) SaveCleanup(_ context.Context, _ uuid.UUID, rec inst
 	return nil
 }
 
-func TestControlPlaneTrialSyncIgnoresOtherApplications(t *testing.T) {
+func TestControlPlaneURLChangeIgnoresOtherApplications(t *testing.T) {
 	for _, failure := range []string{"", "write", "panel route"} {
 		t.Run("failure="+failure, func(t *testing.T) {
 			ctx := context.Background()
@@ -52,46 +52,30 @@ func TestControlPlaneTrialSyncIgnoresOtherApplications(t *testing.T) {
 			repo := &panelSettingsRepo{rec: instance.Stored{ControlPlaneURL: &old}}
 			var logs bytes.Buffer
 			svc := instance.NewService(repo, slog.New(slog.NewTextHandler(&logs, nil)))
-			t.Cleanup(svc.Close)
 			svc.ResyncProxy = f.service.SyncControlPlane
 			f.service.controlPlaneURLs = svc.ControlPlaneURLs
 			state, err := svc.UpdateGeneral(ctx, uuid.Nil, instance.GeneralInput{
 				ControlPlaneURL: "https://new.example.com", InstanceName: "Gotham",
 			})
-			if err != nil || state.PendingControlPlaneURL == nil || state.PendingControlPlaneURL.Synced != (failure == "") {
-				t.Fatalf("trial=%+v err=%v", state, err)
+			if err != nil || state.General.ControlPlaneURL.Value != "https://new.example.com" {
+				t.Fatalf("save=%+v err=%v", state, err)
 			}
-			if failure != "" {
-				if _, err := svc.ConfirmControlPlaneURL(ctx, uuid.Nil, "new.example.com"); !errors.Is(err, instance.ErrDomainNotSynced) {
-					t.Fatalf("confirm failed panel=%v", err)
+			if repo.rec.ControlPlaneURL == nil || *repo.rec.ControlPlaneURL != "https://new.example.com" {
+				t.Fatal("URL not applied directly")
+			}
+			if failure == "" {
+				var content string
+				for _, file := range f.agent.calls[len(f.agent.calls)-1].Files {
+					content += string(file.Content)
 				}
-				f.agent.respond = nil
-				f.service.serverPort = 9074
-				state, err = svc.Get(ctx)
-				if err != nil || !state.PendingControlPlaneURL.Synced {
-					t.Fatalf("retry=%+v err=%v", state, err)
+				for _, want := range []string{"panel-web", "new.example.com"} {
+					if !strings.Contains(content, want) {
+						t.Fatalf("panel config missing %s: %s", want, content)
+					}
 				}
-			}
-			var content string
-			for _, file := range f.agent.calls[len(f.agent.calls)-1].Files {
-				content += string(file.Content)
-			}
-			for _, want := range []string{"panel-web", "panel-previous-web", "old.example.com", "new.example.com"} {
-				if !strings.Contains(content, want) {
-					t.Fatalf("trial config missing %s: %s", want, content)
+				if strings.Contains(content, "panel-previous-web") || strings.Contains(content, "old.example.com") {
+					t.Fatalf("retired trial route still pushed: %s", content)
 				}
-			}
-			state, err = svc.ConfirmControlPlaneURL(ctx, uuid.Nil, "new.example.com")
-			if err != nil || state.PendingControlPlaneURL != nil {
-				t.Fatalf("confirm=%+v err=%v", state, err)
-			}
-			if _, err := svc.UpdateGeneral(ctx, uuid.Nil, instance.GeneralInput{
-				ControlPlaneURL: "https://third.example.com", InstanceName: "Gotham",
-			}); err != nil {
-				t.Fatal(err)
-			}
-			if _, err := svc.RevertControlPlaneURL(ctx, uuid.Nil); err != nil {
-				t.Fatal(err)
 			}
 			if strings.Contains(logs.String(), "proxy cleanup failed") {
 				t.Fatalf("unrelated route caused cleanup warning: %s", logs.String())

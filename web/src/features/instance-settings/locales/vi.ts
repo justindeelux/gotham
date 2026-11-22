@@ -13,6 +13,8 @@ const vi: typeof en = {
     title: "Instance",
     url: "URL control plane",
     urlHint: "URL công khai dùng cho đăng ký agent, OAuth redirect và webhook.",
+    urlChangedHint:
+      "Đã lưu. Nếu tên miền mới chưa sẵn sàng, bảng điều khiển vẫn truy cập được qua địa chỉ IP của máy chủ.",
     name: "Tên instance",
     submit: "Lưu cài đặt",
     saved: "Đã lưu cài đặt.",
@@ -53,15 +55,6 @@ const vi: typeof en = {
     readFailed: "Không đọc được trạng thái router localhost. Hãy kiểm tra node và thử lại.",
     unsaved: "Lưu URL trước khi tạo và đồng bộ router tương ứng.",
     refresh: "Làm mới trạng thái",
-  },
-  pendingConfirm: {
-    title: "Thay đổi URL control plane đang chờ xác nhận",
-    body: "URL control plane giờ là {url}. Hãy mở Gotham tại địa chỉ đó để giữ thay đổi.",
-    hint:
-      "Chỉ có thể giữ thay đổi từ địa chỉ mới. Nếu không truy cập được Gotham tại đó, hãy để nguyên: địa chỉ trước được khôi phục khi hết thời gian đếm ngược.",
-    countdownStart: "Thay đổi URL control plane sẽ tự hoàn tác sau {time}.",
-    keep: "Giữ thay đổi",
-    revert: "Hoàn tác ngay",
   },
   oauth: {
     eyebrow: "Hệ thống · Chủ sở hữu",

@@ -118,11 +118,10 @@ depends on DNS and on ports 80/443 reaching that node.
   keep the proxy off until a certificate exists.
 - **The node must run Traefik.** HTTPS for the panel uses the registered
   `localhost` node, so that node needs Traefik and open inbound 80 and 443.
-- **The trial must be confirmed.** Saving the instance `control_plane_url` as
-  `https://...` starts a confirmation trial and creates a panel certificate
-  intent. Confirm through the proposed host before the trial expires. Both the
-  proposed and the previous host stay routed during the trial; revert restores
-  the previous host if issuance fails.
+- **The new URL applies at once.** Saving the instance `control_plane_url` as
+  `https://...` creates a panel certificate intent for that host; there is no
+  confirmation step. Until issuance succeeds, reach the panel at
+  `http://<server-ip>:9074`.
 - **HTTP stays up until issuance succeeds.** The panel redirects to HTTPS only
   after the local agent reports an unexpired certificate (readiness is refreshed
   every 30 seconds). Pending or failed issuance keeps HTTP available.

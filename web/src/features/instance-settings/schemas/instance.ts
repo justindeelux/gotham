@@ -59,15 +59,6 @@ export const stateEnvelopeSchema = z.object({
       control_plane_url: settingFieldSchema,
       instance_name: settingFieldSchema,
     }),
-    pending_control_plane_url: z
-      .object({
-        previous: z.string().nullable(),
-        proposed: z.string(),
-        deadline: z.string(),
-        synced: z.boolean(),
-      })
-      .nullable()
-      .optional(),
     cleanup: cleanupRetentionSchema,
   }),
 });

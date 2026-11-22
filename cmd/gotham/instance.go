@@ -55,7 +55,6 @@ func instanceSetURL(raw string) error {
 	defer pool.Close()
 	st := store.New(pool)
 	svc := instance.NewService(instance.NewStoreRepository(st), nil)
-	defer svc.Close()
 	current, err := svc.ControlPlaneURL(ctx)
 	if err != nil {
 		return err
@@ -108,35 +107,14 @@ func newInstanceContainers(nodes instanceAgentRegistry, redisAddr string) *conta
 	return service
 }
 
-func mustPanelHost(raw string) string {
-	u, _ := url.Parse(raw)
-	return u.Host
-}
-
 func setInstanceURL(ctx context.Context, svc *instance.Service, raw string) (instance.State, error) {
 	state, err := svc.Get(ctx)
 	if err != nil {
 		return instance.State{}, err
 	}
-	state, err = svc.UpdateGeneral(ctx, uuid.Nil, instance.GeneralInput{
+	return svc.UpdateGeneral(ctx, uuid.Nil, instance.GeneralInput{
 		ControlPlaneURL: raw, InstanceName: state.General.InstanceName.Value,
 	})
-	if err != nil {
-		return instance.State{}, err
-	}
-	if p := state.PendingControlPlaneURL; p != nil {
-		if !p.Synced {
-			if _, err := svc.RevertControlPlaneURL(ctx, uuid.Nil); err != nil {
-				return instance.State{}, fmt.Errorf("proxy sync failed; rollback: %w", err)
-			}
-			return instance.State{}, instance.ErrDomainNotSynced
-		}
-		// This CLI runs as root on the host, so the operator is its own
-		// recovery path; an install has no browser session that could confirm
-		// the trial within its window.
-		return svc.ConfirmControlPlaneURL(ctx, uuid.Nil, mustPanelHost(raw))
-	}
-	return state, nil
 }
 
 // Check before the instance service starts Traefik and takes these ports.

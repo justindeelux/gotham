@@ -129,69 +129,44 @@ func TestPanelCertificateReadiness(t *testing.T) {
 	}
 }
 
-func TestPanelTrialCertificateLifecycle(t *testing.T) {
-	for _, action := range []string{"confirm", "revert", "issuance failure"} {
-		t.Run(action, func(t *testing.T) {
-			ctx := context.Background()
-			f := panelFixture(t)
-			st := newFakeSSLStore()
-			f.service.panelCertificates = st
-			f.service.certificateStatus = fixedPanelStatus{CertificateStatusObservation{Status: CertificateStatusAbsent}}
-			old := "https://old.example.com"
-			if err := f.service.ReconcilePanelCertificates(ctx, []string{old}); err != nil {
-				t.Fatal(err)
-			}
-			repo := &panelSettingsRepo{rec: instance.Stored{ControlPlaneURL: &old}}
-			svc := instance.NewService(repo, nil)
-			t.Cleanup(svc.Close)
-			svc.SyncPanelCertificates = f.service.ReconcilePanelCertificates
-			svc.ResyncProxy = f.service.SyncControlPlane
-			f.service.controlPlaneURLs = svc.ControlPlaneURLs
-			if action == "issuance failure" {
-				f.service.certificateStatus = fixedPanelStatus{CertificateStatusObservation{Status: CertificateStatusUnknown}}
-			}
-			state, err := svc.UpdateGeneral(ctx, uuid.Nil, instance.GeneralInput{ControlPlaneURL: "https://new.example.com", InstanceName: "Gotham"})
-			if err != nil || !state.PendingControlPlaneURL.Synced {
-				t.Fatalf("save=%+v err=%v", state, err)
-			}
-			if len(st.certificates) != 1 || st.certificates[0].Domain != "old.example.com" {
-				t.Fatalf("trial certificates=%+v", st.certificates)
-			}
-			rows, err := f.service.ListRouters(ctx, f.serverID)
-			if err != nil || len(rows.Routers) != 2 || rows.Nodes[0].SyncStatus != RouterSyncSynced {
-				t.Fatalf("trial routers=%+v err=%v", rows, err)
-			}
-			found := false
-			for _, router := range rows.Routers {
-				if router.Host == "new.example.com" && router.Kind == RouterKindControlPlane {
-					found = true
-				}
-			}
-			routes, _, _, _ := f.service.gatherRoutes(ctx, nil, nil, nil, f.serverID, nil, nil)
-			for _, route := range routes {
-				if route.Domain == "new.example.com" && route.Certificate != nil {
-					t.Fatal("unconfirmed host requested a certificate")
-				}
-			}
-			if !found {
-				t.Fatal("proposed host absent during trial")
-			}
-			if action == "revert" {
-				_, err = svc.RevertControlPlaneURL(ctx, uuid.Nil)
-			} else {
-				_, err = svc.ConfirmControlPlaneURL(ctx, uuid.Nil, "new.example.com")
-			}
-			if err != nil {
-				t.Fatal(err)
-			}
-			expected := "new.example.com"
-			if action == "revert" {
-				expected = "old.example.com"
-			}
-			if len(st.certificates) != 1 || st.certificates[0].Domain != expected {
-				t.Fatalf("settled certificates=%+v", st.certificates)
-			}
-		})
+func TestPanelCertificateFollowsURLChange(t *testing.T) {
+	ctx := context.Background()
+	f := panelFixture(t)
+	st := newFakeSSLStore()
+	f.service.panelCertificates = st
+	f.service.certificateStatus = fixedPanelStatus{CertificateStatusObservation{Status: CertificateStatusAbsent}}
+	old := "https://old.example.com"
+	if err := f.service.ReconcilePanelCertificates(ctx, []string{old}); err != nil {
+		t.Fatal(err)
+	}
+	repo := &panelSettingsRepo{rec: instance.Stored{ControlPlaneURL: &old}}
+	svc := instance.NewService(repo, nil)
+	svc.SyncPanelCertificates = f.service.ReconcilePanelCertificates
+	svc.ResyncProxy = f.service.SyncControlPlane
+	f.service.controlPlaneURLs = svc.ControlPlaneURLs
+	state, err := svc.UpdateGeneral(ctx, uuid.Nil, instance.GeneralInput{ControlPlaneURL: "https://new.example.com", InstanceName: "Gotham"})
+	if err != nil || state.General.ControlPlaneURL.Value != "https://new.example.com" {
+		t.Fatalf("save=%+v err=%v", state, err)
+	}
+	if len(st.certificates) != 1 || st.certificates[0].Domain != "new.example.com" {
+		t.Fatalf("certificates=%+v", st.certificates)
+	}
+	rows, err := f.service.ListRouters(ctx, f.serverID)
+	if err != nil || len(rows.Routers) != 1 || rows.Nodes[0].SyncStatus != RouterSyncSynced {
+		t.Fatalf("routers=%+v err=%v", rows, err)
+	}
+	if rows.Routers[0].Host != "new.example.com" || rows.Routers[0].Kind != RouterKindControlPlane {
+		t.Fatalf("router=%+v", rows.Routers[0])
+	}
+	routes, _, _, _ := f.service.gatherRoutes(ctx, nil, nil, nil, f.serverID, nil, nil)
+	served := false
+	for _, route := range routes {
+		if route.Domain == "new.example.com" && route.Certificate != nil {
+			served = true
+		}
+	}
+	if !served {
+		t.Fatal("new host does not request a certificate")
 	}
 }
 
@@ -284,7 +259,6 @@ func TestPanelCertificateRetryPreservesDNSConfiguration(t *testing.T) {
 	raw := "https://panel.example.com"
 	repo := &panelSettingsRepo{rec: instance.Stored{ControlPlaneURL: &raw}}
 	svc := instance.NewService(repo, nil)
-	t.Cleanup(svc.Close)
 	svc.SyncPanelCertificates = f.service.ReconcilePanelCertificates
 	st.certCreateErr = errors.New("temporary store failure")
 	input := instance.GeneralInput{ControlPlaneURL: raw, InstanceName: "Gotham"}
@@ -378,44 +352,6 @@ func TestStoredPanelCertificateReconciliationRetries(t *testing.T) {
 	}
 	if err := f.service.refreshPanelCertificates(context.Background()); err != nil {
 		t.Fatal(err)
-	}
-}
-
-func TestPanelCertificateStartupDuringTrial(t *testing.T) {
-	for _, previous := range []string{"https://old.example.com", "http://old.example.com", ""} {
-		t.Run(previous, func(t *testing.T) {
-			f := panelFixture(t)
-			st := newFakeSSLStore()
-			f.service.panelCertificates = st
-			st.certificates = []DomainCertificate{{ID: uuid.New(), Domain: "new.example.com", Enabled: true, Challenge: ChallengeHTTP01}}
-			proposed := "https://new.example.com"
-			repo := &panelSettingsRepo{rec: instance.Stored{
-				ControlPlaneURL: &proposed,
-				PendingControlPlaneURL: &instance.PendingControlPlaneURL{
-					Previous: &previous, Proposed: proposed, Deadline: time.Now().Add(time.Minute), Synced: true,
-				},
-			}}
-			svc := instance.NewService(repo, nil)
-			t.Cleanup(svc.Close)
-			svc.SyncPanelCertificates = f.service.ReconcilePanelCertificates
-			f.service.reconcilePanel = svc.ReconcilePanelCertificates
-			f.service.controlPlaneURLs = svc.ControlPlaneURLs
-			for range 2 {
-				if err := f.service.reconcileStoredPanelCertificates(context.Background()); err != nil {
-					t.Fatal(err)
-				}
-			}
-			want := 0
-			if strings.HasPrefix(previous, "https:") {
-				want = 1
-			}
-			if len(st.certificates) != want {
-				t.Fatalf("trial intents=%+v", st.certificates)
-			}
-			if want == 1 && st.certificates[0].Domain != "old.example.com" {
-				t.Fatal("fallback intent missing")
-			}
-		})
 	}
 }
 

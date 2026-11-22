@@ -44,7 +44,6 @@ const state: InstanceState = {
     instance_name: { value: "Gotham", source: "db", locked: false },
   },
   cleanup: { history_days: 30, backup_file_min_age_days: 7 },
-  pending_control_plane_url: null,
 };
 
 const github = {

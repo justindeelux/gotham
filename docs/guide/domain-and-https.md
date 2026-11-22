@@ -46,13 +46,12 @@ the domain later in the panel.
 1. Open the panel on `http://<server-ip>:9074`.
 2. In **System → Settings → General**, set the instance `control_plane_url` to
    `https://panel.example.com` and save.
-3. Open the proposed host over HTTP and confirm the change before the trial
-   expires.
+3. Return to the panel at `http://<server-ip>:9074` until the certificate is
+   issued; then use the new address.
 
-Saving starts a confirmation trial and creates a panel-owned certificate
-intent; no application is required. Both the proposed and previous hosts stay
-routed during the trial, and a revert restores the previous host if issuance
-fails.
+Saving applies the URL immediately and creates a panel-owned certificate intent;
+no application is required. Until issuance succeeds, the panel stays reachable
+at `http://<server-ip>:9074`.
 
 The HTTPS router starts ACME issuance while HTTP continues forwarding to the
 panel. HTTP redirects to HTTPS only after the local agent reports an unexpired
@@ -73,7 +72,7 @@ issued.
 
 ## What the panel and API report
 
-The routers API reports the proposed host during a trial and adds
+The routers API reports the control-plane host and adds
 `certificate.status` (`issued`, `pending`, or `failed`) and
 `certificate.not_after` for panel rows. The owner-only
 `GET /api/v1/proxy/panel-certificates` API lists panel intents with the existing

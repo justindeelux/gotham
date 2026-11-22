@@ -45,12 +45,12 @@ chỉ HTTP của máy chủ khả dụng; bạn có thể đặt tên miền sau
 1. Mở bảng điều khiển tại `http://<server-ip>:9074`.
 2. Trong **Hệ thống → Cài đặt → Chung**, đặt `control_plane_url` của instance thành
    `https://panel.example.com` rồi lưu.
-3. Mở host được đề xuất qua HTTP và xác nhận thay đổi trước khi phiên thử hết hạn.
+3. Quay lại bảng điều khiển tại `http://<server-ip>:9074` cho tới khi chứng chỉ
+   được cấp; sau đó dùng địa chỉ mới.
 
-Việc lưu bắt đầu một phiên xác nhận và tạo một bản ghi ý định chứng chỉ thuộc
-bảng điều khiển; không cần ứng dụng nào. Trong phiên thử, cả host được đề xuất
-lẫn host trước đó đều được định tuyến, và hoàn tác sẽ khôi phục host trước đó nếu
-việc cấp chứng chỉ thất bại.
+Việc lưu áp dụng URL ngay và tạo một bản ghi ý định chứng chỉ thuộc bảng điều
+khiển; không cần ứng dụng nào. Cho tới khi cấp thành công, bảng điều khiển vẫn
+truy cập được tại `http://<server-ip>:9074`.
 
 Router HTTPS bắt đầu việc cấp ACME trong khi HTTP vẫn chuyển tiếp tới bảng điều
 khiển. HTTP chỉ chuyển hướng sang HTTPS sau khi agent cục bộ báo một chứng chỉ
@@ -71,7 +71,7 @@ dùng các trường `challenge` và `dns_provider_id` sẵn có. DNS-01 cần m
 
 ## Bảng điều khiển và API báo gì
 
-API routers báo host được đề xuất trong một phiên thử và thêm
+API routers báo host control plane và thêm
 `certificate.status` (`issued`, `pending` hoặc `failed`) cùng
 `certificate.not_after` cho các dòng bảng điều khiển. API chỉ dành cho chủ sở hữu
 `GET /api/v1/proxy/panel-certificates` liệt kê các ý định chứng chỉ của bảng điều

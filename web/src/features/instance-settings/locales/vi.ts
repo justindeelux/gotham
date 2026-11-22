@@ -64,6 +64,7 @@ const vi: typeof en = {
     revert: "Hoàn tác ngay",
   },
   oauth: {
+    eyebrow: "Hệ thống · Chủ sở hữu",
     title: "Đăng nhập",
     description:
       "Cho phép mọi người đăng nhập bằng GitHub hoặc Google. Lưu client ID và secret là bật nhà cung cấp ngay; secret được mã hóa khi lưu và không bao giờ hiển thị lại.",

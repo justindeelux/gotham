@@ -62,6 +62,7 @@ const en = {
     revert: "Revert now",
   },
   oauth: {
+    eyebrow: "System · Owner",
     title: "Authentication",
     description:
       "Let people sign in with GitHub or Google. Saving a client ID and secret turns the provider on immediately; the secret is stored encrypted and never shown again.",

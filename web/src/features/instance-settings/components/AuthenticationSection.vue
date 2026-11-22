@@ -1,7 +1,6 @@
 <script setup lang="ts">
 import { NAlert } from "naive-ui";
 import { computed, onMounted, ref } from "vue";
-import { useI18n } from "vue-i18n";
 
 import {
   getOAuthProviders,
@@ -19,7 +18,6 @@ interface Props {
 }
 
 const props = defineProps<Props>();
-const { t } = useI18n();
 
 function emptyProviders(): Record<OAuthProviderName, OAuthProviderInfo> {
   return Object.fromEntries(
@@ -71,11 +69,6 @@ function callbackUrl(name: OAuthProviderName): string {
 
 <template>
   <section class="oauth-section">
-    <div>
-      <h2 class="oauth-title">{{ t("instance-settings.oauth.title") }}</h2>
-      <p class="oauth-description">{{ t("instance-settings.oauth.description") }}</p>
-    </div>
-
     <NAlert v-if="loadError" type="error" :show-icon="true">{{ loadError }}</NAlert>
 
     <OAuthProviderCard
@@ -93,18 +86,5 @@ function callbackUrl(name: OAuthProviderName): string {
   display: flex;
   flex-direction: column;
   gap: var(--space-4);
-}
-
-.oauth-title {
-  margin: 0 0 var(--space-1);
-  font-size: var(--text-xl);
-  color: var(--fg-2);
-}
-
-.oauth-description {
-  margin: 0;
-  font-size: var(--text-sm);
-  color: var(--muted);
-  line-height: 1.6;
 }
 </style>

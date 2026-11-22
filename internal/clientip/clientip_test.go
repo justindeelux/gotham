@@ -58,6 +58,18 @@ func TestParse(t *testing.T) {
 	})
 }
 
+func TestDefaultTrusted(t *testing.T) {
+	trusted := DefaultTrusted()
+	for _, peer := range []string{"127.0.0.1", "::1", "172.17.0.2"} {
+		if !isTrusted(netip.MustParseAddr(peer), trusted) {
+			t.Errorf("DefaultTrusted() does not contain %s", peer)
+		}
+	}
+	if isTrusted(netip.MustParseAddr("203.0.113.7"), trusted) {
+		t.Error("DefaultTrusted() contains a public address")
+	}
+}
+
 func TestClientIP(t *testing.T) {
 	private := mustParse(t, "10.0.0.0/8", "127.0.0.1", "::1")
 

@@ -21,6 +21,7 @@ import (
 	"github.com/google/uuid"
 
 	"github.com/justindeelux/gotham/internal/auth"
+	"github.com/justindeelux/gotham/internal/clientip"
 	"github.com/justindeelux/gotham/internal/config"
 	"github.com/justindeelux/gotham/internal/instance"
 )
@@ -718,6 +719,73 @@ func TestOAuthLoginRejectsInsecureFlowForHTTPSOrigin(t *testing.T) {
 	}
 	if loc := rec.Header().Get("Location"); loc != oauthFailureRedirect {
 		t.Fatalf("Location = %q, want %s", loc, oauthFailureRedirect)
+	}
+}
+
+func oauthProxyLogin(t *testing.T, s *Server, remoteAddr, forwardedFor string) *httptest.ResponseRecorder {
+	t.Helper()
+
+	rec := httptest.NewRecorder()
+	s.Handler().ServeHTTP(rec, oauthProxyRequest(t, remoteAddr, forwardedFor))
+	return rec
+}
+
+func oauthProxyRequest(t *testing.T, remoteAddr, forwardedFor string) *http.Request {
+	t.Helper()
+
+	req := httptest.NewRequest(http.MethodGet, "/api/v1/auth/oauth/github/login", nil)
+	req.RemoteAddr = remoteAddr
+	req.Header.Set("X-Forwarded-Proto", "https")
+	req.Header.Set("X-Forwarded-For", forwardedFor)
+	return req
+}
+
+func TestOAuthLoginThroughBundledProxySucceeds(t *testing.T) {
+	s := newOAuthTestServer(t, defaultOAuthConfig(), &fakeOAuthService{})
+	t.Setenv(instance.EnvPublicURL, "https://gotham.example")
+
+	rec := oauthProxyLogin(t, s, "172.17.0.2:54321", "203.0.113.7")
+
+	if rec.Code != http.StatusFound {
+		t.Fatalf("status = %d, want 302 (body %s)", rec.Code, rec.Body.String())
+	}
+	if loc := rec.Header().Get("Location"); loc != "https://github.example/authorize?state=test-state" {
+		t.Fatalf("Location = %q, want the provider authorize URL", loc)
+	}
+	if setCookieValue(rec, auth.StateCookieNameSecure) == nil {
+		t.Error("secure state cookie not set behind the HTTPS proxy")
+	}
+}
+
+func TestOAuthLoginIgnoresForwardedHeadersFromUntrustedPeer(t *testing.T) {
+	s := newOAuthTestServer(t, defaultOAuthConfig(), &fakeOAuthService{})
+	t.Setenv(instance.EnvPublicURL, "https://gotham.example")
+
+	rec := oauthProxyLogin(t, s, "203.0.113.9:54321", "198.51.100.1")
+
+	if loc := rec.Header().Get("Location"); loc != oauthFailureRedirect {
+		t.Fatalf("Location = %q, want %s", loc, oauthFailureRedirect)
+	}
+	spoofed := oauthProxyRequest(t, "203.0.113.9:54321", "198.51.100.1")
+	if got := clientip.ClientIP(spoofed, s.trustedProxies); got != "203.0.113.9" {
+		t.Errorf("ClientIP = %q, want the direct peer 203.0.113.9", got)
+	}
+}
+
+func TestOAuthLoginExplicitTrustedProxiesOverrideDefault(t *testing.T) {
+	cfg := defaultOAuthConfig()
+	cfg.Server.TrustedProxies = []string{"10.9.9.9"}
+	s := newOAuthTestServer(t, cfg, &fakeOAuthService{})
+	t.Setenv(instance.EnvPublicURL, "https://gotham.example")
+
+	bundled := oauthProxyLogin(t, s, "172.17.0.2:54321", "203.0.113.7")
+	if loc := bundled.Header().Get("Location"); loc != oauthFailureRedirect {
+		t.Fatalf("bundled proxy Location = %q, want %s once trusted proxies are set", loc, oauthFailureRedirect)
+	}
+
+	explicit := oauthProxyLogin(t, s, "10.9.9.9:54321", "203.0.113.7")
+	if loc := explicit.Header().Get("Location"); loc != "https://github.example/authorize?state=test-state" {
+		t.Fatalf("configured proxy Location = %q, want the provider authorize URL", loc)
 	}
 }
 

@@ -55,9 +55,6 @@ func (s *Server) handleOAuthProviderUpdate(w http.ResponseWriter, r *http.Reques
 		writeJSON(w, http.StatusInternalServerError, apiError{Message: "internal error"})
 	default:
 		s.logger.Info("oauth: provider updated", "provider", provider, "enabled", info.Enabled)
-		if info.Enabled && len(s.trustedProxies) == 0 {
-			s.logger.Warn("no trusted proxies configured: X-Forwarded-For and X-Forwarded-Proto are ignored. Behind a TLS-terminating proxy this downgrades secure cookies and makes OAuth fail closed; set GOTHAM_TRUSTED_PROXIES to the proxy's address.")
-		}
 		writeJSON(w, http.StatusOK, info)
 	}
 }

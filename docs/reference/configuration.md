@@ -115,22 +115,22 @@ effect.
   keypair at startup and sessions do not survive a restart. A configured path
   that cannot be read fails startup.
 
-## OAuth (GitHub)
+## OAuth sign-in
 
-GitHub is the only OAuth provider. The provider is disabled while its client ID
-or secret is empty, and its login route then answers 404.
+OAuth sign-in providers are configured in the Gotham UI's instance settings, not
+in this file or the environment. The client ID, the client secret and whether
+the provider is on are stored in the database; the secret is encrypted with the
+instance secret key.
 
-| Key | Environment variable | Default | Required |
-|---|---|---|---|
-| `oauth.github.client_id` | `GOTHAM_OAUTH_GITHUB_CLIENT_ID` | empty — provider off | to enable |
-| `oauth.github.client_secret` | `GOTHAM_OAUTH_GITHUB_CLIENT_SECRET` | empty — provider off | to enable |
-| `oauth.github.redirect_url` | `GOTHAM_OAUTH_GITHUB_REDIRECT_URL` | derived from the control-plane URL | no |
-
-- The GitHub OAuth app's authorization callback URL must match the effective
-  redirect: `/api/v1/auth/oauth/github/callback` on the control plane's origin.
-- When `redirect_url` is empty, the callback is derived from the instance's
-  configured control-plane URL. With neither set, no redirect is sent and
-  GitHub uses the OAuth app's registered callback.
+- Saving the credentials enables the provider without a restart. Disabling it
+  makes its login route answer 404 again.
+- `GOTHAM_OAUTH_GITHUB_CLIENT_ID`, `GOTHAM_OAUTH_GITHUB_CLIENT_SECRET`,
+  `GOTHAM_OAUTH_GITHUB_REDIRECT_URL` and an `oauth:` block are ignored. An
+  instance that used them keeps signing in with email and password until the
+  provider is entered in the UI.
+- The app's authorization callback URL is
+  `/api/v1/auth/oauth/<provider>/callback` on the instance's control-plane
+  origin, for example `https://gotham.example/api/v1/auth/oauth/github/callback`.
 
 ## Git source policy
 

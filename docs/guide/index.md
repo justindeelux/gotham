@@ -35,10 +35,10 @@ through single-use invite links created on **Users**
 Open the URL the installer printed (the panel listens on port 9074 by default)
 and sign in with email and password. Two more sign-in paths exist:
 
-- **GitHub OAuth.** Available when the instance has GitHub OAuth configured with
-  `GOTHAM_OAUTH_GITHUB_CLIENT_ID`, `GOTHAM_OAUTH_GITHUB_CLIENT_SECRET` and a
-  redirect URL registered with the GitHub OAuth app. It is the only OAuth
-  provider.
+- **GitHub OAuth.** Available when the GitHub OAuth app's client ID and secret
+  are saved in the instance settings. Register the app's authorization callback
+  URL as `/api/v1/auth/oauth/github/callback` on the instance's control-plane
+  origin.
 - **Two-factor authentication.** Optional per account: enable TOTP in
   **Profile → Two-factor authentication**, scan the QR code with an
   authenticator app, and store the recovery codes — they are shown once and each

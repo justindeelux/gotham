@@ -219,6 +219,20 @@ Bản phát hành này thay mô hình nhóm bằng một chủ sở hữu và nh
 
 Xem [Thành viên và quyền truy cập](/vi/using/members-access) để biết mô hình mới.
 
+## Ghi chú phát hành: đăng nhập OAuth chuyển vào Cài đặt
+
+Đăng nhập GitHub giờ được cấu hình trong phần cài đặt instance của giao diện
+Gotham, không phải trong `gotham.yaml` hay biến môi trường.
+`GOTHAM_OAUTH_GITHUB_CLIENT_ID`, `GOTHAM_OAUTH_GITHUB_CLIENT_SECRET`,
+`GOTHAM_OAUTH_GITHUB_REDIRECT_URL` và khối `oauth:` bị bỏ qua; không có giá trị
+nào được nhập từ chúng.
+
+Instance từng dùng chúng vẫn đăng nhập bằng email và mật khẩu cho đến khi client ID
+và secret của ứng dụng GitHub OAuth được nhập trong cài đặt instance. URL callback
+ủy quyền của ứng dụng là `/api/v1/auth/oauth/github/callback` trên origin control
+plane của instance. Lưu thông tin đăng nhập là bật nhà cung cấp ngay, không cần
+khởi động lại.
+
 ## Phạm vi xác minh
 
 Với cả hai tệp nhị phân, manifest được ký bằng khóa phát hành nhúng trong tệp nhị

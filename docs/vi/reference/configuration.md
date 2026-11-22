@@ -113,22 +113,22 @@ giữ hiệu lực.
   lúc khởi động và các phiên không sống qua lần khởi động lại. Một đường dẫn đã cấu
   hình nhưng không đọc được làm khởi động thất bại.
 
-## OAuth (GitHub)
+## Đăng nhập OAuth
 
-GitHub là nhà cung cấp OAuth duy nhất. Nhà cung cấp bị tắt khi client ID hoặc client
-secret còn rỗng, và tuyến đăng nhập của nó khi đó trả lời 404.
+Các nhà cung cấp đăng nhập OAuth được cấu hình trong phần cài đặt instance của giao
+diện Gotham, không phải trong tệp này hay biến môi trường. Client ID, client secret
+và trạng thái bật/tắt của nhà cung cấp được lưu trong cơ sở dữ liệu; secret được mã
+hóa bằng khóa secret của instance.
 
-| Khóa | Biến môi trường | Mặc định | Bắt buộc |
-|---|---|---|---|
-| `oauth.github.client_id` | `GOTHAM_OAUTH_GITHUB_CLIENT_ID` | rỗng — nhà cung cấp tắt | để bật |
-| `oauth.github.client_secret` | `GOTHAM_OAUTH_GITHUB_CLIENT_SECRET` | rỗng — nhà cung cấp tắt | để bật |
-| `oauth.github.redirect_url` | `GOTHAM_OAUTH_GITHUB_REDIRECT_URL` | suy ra từ URL control plane | không |
-
-- URL callback ủy quyền của ứng dụng OAuth GitHub phải khớp với redirect hiệu lực:
-  `/api/v1/auth/oauth/github/callback` trên origin của control plane.
-- Khi `redirect_url` rỗng, callback được suy ra từ URL control plane đã cấu hình của
-  instance. Không đặt cả hai thì không có redirect nào được gửi và GitHub dùng
-  callback đã đăng ký của ứng dụng OAuth.
+- Lưu thông tin đăng nhập là bật nhà cung cấp ngay, không cần khởi động lại. Tắt nó
+  thì tuyến đăng nhập của nó trả lời 404 trở lại.
+- `GOTHAM_OAUTH_GITHUB_CLIENT_ID`, `GOTHAM_OAUTH_GITHUB_CLIENT_SECRET`,
+  `GOTHAM_OAUTH_GITHUB_REDIRECT_URL` và khối `oauth:` bị bỏ qua. Instance từng dùng
+  chúng vẫn đăng nhập bằng email và mật khẩu cho đến khi nhà cung cấp được nhập
+  trong giao diện.
+- URL callback ủy quyền của ứng dụng là
+  `/api/v1/auth/oauth/<provider>/callback` trên origin control plane của instance,
+  ví dụ `https://gotham.example/api/v1/auth/oauth/github/callback`.
 
 ## Chính sách nguồn Git
 

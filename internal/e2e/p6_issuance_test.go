@@ -1378,12 +1378,12 @@ func TestP6IssuanceTXTValueOwnership(t *testing.T) {
 }
 
 func TestP6IssuanceChainVerificationRejectsForgery(t *testing.T) {
-	forgedRoot, forgedLeaf := p6ForgeChain(t, "(STAGING) Ersatz Emmental X1", "gotham.deelux.dev")
+	forgedRoot, forgedLeaf := p6ForgeChain(t, "(STAGING) Ersatz Emmental X1", "example.com")
 	forged := []*x509.Certificate{forgedLeaf, forgedRoot}
 
 	signerRoots := x509.NewCertPool()
 	signerRoots.AddCert(forgedRoot)
-	if err := p6VerifyChain("gotham.deelux.dev", forged, signerRoots); err != nil {
+	if err := p6VerifyChain("example.com", forged, signerRoots); err != nil {
 		t.Fatalf("verification rejected a chain signed by the provided anchor: %v", err)
 	}
 
@@ -1391,7 +1391,7 @@ func TestP6IssuanceChainVerificationRejectsForgery(t *testing.T) {
 	if err != nil {
 		t.Fatalf("staging anchors: %v", err)
 	}
-	if err := p6VerifyChain("gotham.deelux.dev", forged, stagingRoots); err == nil {
+	if err := p6VerifyChain("example.com", forged, stagingRoots); err == nil {
 		t.Fatal("forged staging chain with matching issuer names was accepted")
 	}
 
@@ -1399,7 +1399,7 @@ func TestP6IssuanceChainVerificationRejectsForgery(t *testing.T) {
 	if err != nil {
 		t.Fatalf("production anchors: %v", err)
 	}
-	if err := p6VerifyChain("gotham.deelux.dev", forged, productionRoots); err == nil {
+	if err := p6VerifyChain("example.com", forged, productionRoots); err == nil {
 		t.Fatal("forged production chain with matching issuer names was accepted")
 	}
 
@@ -1536,7 +1536,7 @@ func TestP6IssuanceACMENewOrder(t *testing.T) {
 				return
 			}
 			if len(payload.Identifiers) != 1 || payload.Identifiers[0]["type"] != "dns" ||
-				payload.Identifiers[0]["value"] != "gotham.deelux.dev" {
+				payload.Identifiers[0]["value"] != "example.com" {
 				t.Errorf("server: new order payload = %#v", payload)
 				w.WriteHeader(http.StatusBadRequest)
 				return
@@ -1547,7 +1547,7 @@ func TestP6IssuanceACMENewOrder(t *testing.T) {
 			}
 			writeJSON(t, w, status, map[string]any{
 				"status":         "pending",
-				"identifiers":    []map[string]string{{"type": "dns", "value": "gotham.deelux.dev"}},
+				"identifiers":    []map[string]string{{"type": "dns", "value": "example.com"}},
 				"authorizations": []string{authzURL},
 				"finalize":       server.URL + "/finalize/1",
 			})
@@ -1564,7 +1564,7 @@ func TestP6IssuanceACMENewOrder(t *testing.T) {
 		KID:          acme.KeyID(accountURL),
 	}
 	for call := 1; call <= 2; call++ {
-		order, err := p6ACMENewOrder(context.Background(), client, "gotham.deelux.dev")
+		order, err := p6ACMENewOrder(context.Background(), client, "example.com")
 		if err != nil {
 			t.Fatalf("new order call %d: %v", call, err)
 		}

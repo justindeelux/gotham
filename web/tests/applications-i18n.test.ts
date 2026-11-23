@@ -335,12 +335,14 @@ describe("wizard env prefill copy follows the locale", () => {
       name: "storefront",
       env: [{ key: "DATABASE_URL", value: "" }],
       storage: [],
+      workingDir: "",
     });
     const state = {
       form,
       buildPackLabel: computed(() => ""),
       reviewSource: computed(() => "https://github.com/acme/demo.git"),
       isCompose: computed(() => false),
+      isRepoSource: computed(() => true),
       envKeyWarnings: computed(() => false),
       prefilledEnvKeys: computed<string[]>(() => ["DATABASE_URL"]),
       droppedEnvRows: computed(() => 0),

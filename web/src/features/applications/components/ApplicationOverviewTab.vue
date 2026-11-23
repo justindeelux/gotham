@@ -18,6 +18,7 @@ import ComposeEditor from "@/features/applications/components/ComposeEditor.vue"
 import DeploymentHistoryTable from "@/features/applications/components/DeploymentHistoryTable.vue";
 import DockerfileEditor from "@/features/applications/components/DockerfileEditor.vue";
 import GitPrivateSourcePanel from "@/features/applications/components/GitPrivateSourcePanel.vue";
+import WorkingDirPanel from "@/features/applications/components/WorkingDirPanel.vue";
 import type { PipelineStep } from "@/features/applications/utils/deployPipeline";
 import { commitLineText } from "@/features/applications/utils/deploymentCommit";
 import { durationText } from "@/features/applications/utils/deploymentDuration";
@@ -67,6 +68,18 @@ const commitLine = computed<string>(() =>
 
 const isCompose = computed<boolean>(() => props.application?.source_type === "compose");
 
+// Only a cloned repository has a folder to pick; a pasted compose document, a
+// Dockerfile and an image reference build from what they carry.
+const hasRepoSource = computed<boolean>(() => {
+  const sourceType = props.application?.source_type;
+  return (
+    sourceType === "git_public" ||
+    sourceType === "git_private" ||
+    sourceType === "github_app" ||
+    sourceType === "gitlab_app"
+  );
+});
+
 </script>
 
 <template>
@@ -75,6 +88,11 @@ const isCompose = computed<boolean>(() => props.application?.source_type === "co
     <GitPrivateSourcePanel
       v-if="props.application?.source_type === 'git_private'"
       :application-id="props.application.id"
+    />
+    <WorkingDirPanel
+      v-if="props.application && hasRepoSource"
+      :application="props.application"
+      :can-write="props.canWrite"
     />
     <NCard v-if="props.application" :title="t('applications.overview.title')">
       <NDescriptions :column="props.descColumns" bordered label-placement="left">

@@ -45,6 +45,7 @@ type CreateApplicationInput struct {
 	ComposeContent    string
 	ComposeFile       string
 	ComposeService    string
+	WorkingDir        string
 	ServerID          uuid.UUID
 	Env               []EnvEntry
 	Storage           []Storage
@@ -65,6 +66,7 @@ type UpdateApplicationInput struct {
 	ComposeContent    *string
 	ComposeFile       *string
 	ComposeService    *string
+	WorkingDir        *string
 	MonitorEnabled    *bool
 	MonitorGrace      *int
 }
@@ -81,7 +83,7 @@ func (in UpdateApplicationInput) empty() bool {
 		in.ServerID == nil && in.EnvironmentID == nil && in.GitHubAppID == nil &&
 		in.DockerfileContent == nil && in.BuildArgs == nil &&
 		in.ComposeContent == nil && in.ComposeFile == nil && in.ComposeService == nil &&
-		in.MonitorEnabled == nil && in.MonitorGrace == nil
+		in.WorkingDir == nil && in.MonitorEnabled == nil && in.MonitorGrace == nil
 }
 
 func (s *Service) CreateApplication(ctx context.Context, userID uuid.UUID, in CreateApplicationInput) (Application, error) {
@@ -119,6 +121,11 @@ func (s *Service) CreateApplication(ctx context.Context, userID uuid.UUID, in Cr
 	if err := validateRegistryCredential(app.RegistryUsername, registryPassword); err != nil {
 		return Application{}, err
 	}
+	workingDir, err := normalizeWorkingDir(in.WorkingDir)
+	if err != nil {
+		return Application{}, err
+	}
+	app.WorkingDir = workingDir
 	if app.SourceType == SourceDockerfile {
 		app.Repo = ""
 		app.CloneURL = ""
@@ -143,6 +150,9 @@ func (s *Service) CreateApplication(ctx context.Context, userID uuid.UUID, in Cr
 	}
 	if app.SourceType == SourceCompose && strings.TrimSpace(app.ComposeContent) != "" {
 		app.Branch = ""
+	}
+	if !repoBacked(app) {
+		app.WorkingDir = ""
 	}
 	if err := validateApplication(app, true); err != nil {
 		return Application{}, err
@@ -405,6 +415,13 @@ func (s *Service) UpdateApplication(ctx context.Context, userID, appID uuid.UUID
 	if in.BuildPack != nil {
 		app.BuildPack = strings.TrimSpace(*in.BuildPack)
 	}
+	if in.WorkingDir != nil {
+		dir, err := normalizeWorkingDir(*in.WorkingDir)
+		if err != nil {
+			return Application{}, err
+		}
+		app.WorkingDir = dir
+	}
 	if IsComposeBuildPack(app.BuildPack) && strings.TrimSpace(app.ComposeFile) == "" && in.ComposeFile == nil {
 		app.ComposeFile = DefaultComposeFile
 	}
@@ -476,6 +493,9 @@ func (s *Service) UpdateApplication(ctx context.Context, userID, appID uuid.UUID
 	}
 	if app.SourceType == SourceCompose && strings.TrimSpace(app.ComposeContent) != "" {
 		app.Branch = ""
+	}
+	if !repoBacked(app) {
+		app.WorkingDir = ""
 	}
 	if isComposeApp(app) {
 		if err := validateComposeTarget(app); err != nil {

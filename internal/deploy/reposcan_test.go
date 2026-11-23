@@ -63,7 +63,7 @@ func TestDetectRepositoryMarkers(t *testing.T) {
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
-			result := detectRepository(writeScanDir(t, tc.files))
+			result := detectRepository(writeScanDir(t, tc.files), "")
 			if result.BuildPack != tc.pack || result.MarkerFile != tc.marker {
 				t.Fatalf("detect = pack %q marker %q, want %q %q",
 					result.BuildPack, result.MarkerFile, tc.pack, tc.marker)
@@ -104,7 +104,7 @@ func TestDetectRepositoryPrecedence(t *testing.T) {
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
-			result := detectRepository(writeScanDir(t, tc.files))
+			result := detectRepository(writeScanDir(t, tc.files), "")
 			if result.BuildPack != tc.pack || result.MarkerFile != tc.marker {
 				t.Fatalf("detect = pack %q marker %q, want %q %q",
 					result.BuildPack, result.MarkerFile, tc.pack, tc.marker)
@@ -120,7 +120,7 @@ func TestDetectRepositoryListsComposeCandidates(t *testing.T) {
 		"compose.yml":         "services:\n  web:\n    image: example.com/web:1.0\n",
 		"compose.yaml":        "services:\n  web:\n    image: example.com/web:1.0\n",
 		"deploy/compose.yaml": "services:\n  hidden:\n    image: example.com/hidden:1.0\n",
-	}))
+	}), "")
 	want := []string{"compose.yaml", "compose.yml", "docker-compose.yaml", "docker-compose.yml"}
 	if strings.Join(result.ComposeFiles, ",") != strings.Join(want, ",") {
 		t.Fatalf("compose files = %v, want %v", result.ComposeFiles, want)
@@ -133,7 +133,7 @@ func TestDetectRepositoryListsComposeCandidates(t *testing.T) {
 func TestDetectRepositoryParsesComposeServices(t *testing.T) {
 	result := detectRepository(writeScanDir(t, map[string]string{
 		"docker-compose.yml": "services:\n  worker:\n    image: example.com/worker:1.0\n  web:\n    image: example.com/web:1.0\n",
-	}))
+	}), "")
 	if strings.Join(result.ComposeServices, ",") != "web,worker" {
 		t.Fatalf("services = %v, want the sorted declared services", result.ComposeServices)
 	}
@@ -142,7 +142,7 @@ func TestDetectRepositoryParsesComposeServices(t *testing.T) {
 func TestDetectRepositoryKeepsFreeTextForUnsupportedCompose(t *testing.T) {
 	result := detectRepository(writeScanDir(t, map[string]string{
 		"docker-compose.yml": "services:\n  web:\n    image: x\n    env_file: .env\n",
-	}))
+	}), "")
 	if result.BuildPack != "docker_compose" || result.ComposeFile != "docker-compose.yml" {
 		t.Fatalf("detect = %+v, want the compose pack", result)
 	}
@@ -154,7 +154,7 @@ func TestDetectRepositoryKeepsFreeTextForUnsupportedCompose(t *testing.T) {
 func TestDetectRepositoryListsServicesOfABuiltCompose(t *testing.T) {
 	result := detectRepository(writeScanDir(t, map[string]string{
 		"docker-compose.yml": "services:\n  db:\n    image: postgres:16\n  web:\n    build: .\n",
-	}))
+	}), "")
 	if result.BuildPack != "docker_compose" {
 		t.Fatalf("build pack = %q, want the compose pack", result.BuildPack)
 	}
@@ -179,7 +179,7 @@ func TestDetectRepositoryReadsEnvKeys(t *testing.T) {
 			"  SPACED_KEY = value  \n" +
 			"SECOND_KEY='single'\n",
 		"env.txt": "ALSO_IGNORED=1\n",
-	}))
+	}), "")
 	want := []string{"DATABASE_URL", "SPACED_KEY", "SECOND_KEY", "SECRET_KEY", "EXPORTED_KEY"}
 	if strings.Join(result.EnvKeys, ",") != strings.Join(want, ",") {
 		t.Fatalf("env keys = %v, want %v", result.EnvKeys, want)
@@ -196,7 +196,7 @@ func TestDetectRepositoryReadsEnvKeys(t *testing.T) {
 }
 
 func TestDetectRepositoryWithoutEnvFiles(t *testing.T) {
-	result := detectRepository(writeScanDir(t, map[string]string{"README.md": "hello\n"}))
+	result := detectRepository(writeScanDir(t, map[string]string{"README.md": "hello\n"}), "")
 	if len(result.EnvKeys) != 0 {
 		t.Fatalf("env keys = %v, want none", result.EnvKeys)
 	}
@@ -210,7 +210,7 @@ func TestDetectRepositoryCapsEnvKeys(t *testing.T) {
 	for i := 0; i < maxEnvKeys+20; i++ {
 		fmt.Fprintf(&content, "KEY_%03d=value\n", i)
 	}
-	result := detectRepository(writeScanDir(t, map[string]string{".env": content.String()}))
+	result := detectRepository(writeScanDir(t, map[string]string{".env": content.String()}), "")
 	if len(result.EnvKeys) != maxEnvKeys {
 		t.Fatalf("env keys = %d, want %d", len(result.EnvKeys), maxEnvKeys)
 	}
@@ -223,7 +223,7 @@ func TestDetectRepositoryIgnoresOversizedEnvFiles(t *testing.T) {
 	padding := strings.Repeat("# pad\n", maxEnvFileBytes/6+1)
 	result := detectRepository(writeScanDir(t, map[string]string{
 		".env": padding + "LATE_KEY=1\n",
-	}))
+	}), "")
 	if len(result.EnvKeys) != 0 {
 		t.Fatalf("env keys = %v, want none past the size cap", result.EnvKeys)
 	}
@@ -247,7 +247,7 @@ func TestDetectRepositoryIgnoresSymlinksAndDirectories(t *testing.T) {
 	if err := os.Mkdir(filepath.Join(dir, "package.json"), 0o755); err != nil {
 		t.Fatalf("mkdir: %v", err)
 	}
-	result := detectRepository(dir)
+	result := detectRepository(dir, "")
 	if result.BuildPack != "" || result.MarkerFile != "" {
 		t.Fatalf("detect = %+v, want nothing for symlinks and directories", result)
 	}
@@ -256,6 +256,122 @@ func TestDetectRepositoryIgnoresSymlinksAndDirectories(t *testing.T) {
 	}
 	if len(result.EnvKeys) != 0 {
 		t.Fatalf("env keys = %v, want nothing read outside the root", result.EnvKeys)
+	}
+}
+
+func TestDetectRepositoryReadsOnlyTheWorkingDirectory(t *testing.T) {
+	root := writeScanDir(t, map[string]string{
+		"package.json":    "{}",
+		"docs/Dockerfile": "FROM scratch\n",
+		"apps/api/go.mod": "module api\n",
+		"apps/web/.env":   "API_URL=http://localhost\n",
+	})
+	cases := []struct {
+		name   string
+		dir    string
+		pack   string
+		marker string
+	}{
+		{"root", "", string(builds.EngineRailpack), "package.json"},
+		{"dockerfile folder", "docs", string(builds.EngineDockerfile), "Dockerfile"},
+		{"nested folder", "apps/api", string(builds.EngineRailpack), "go.mod"},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			result := detectRepository(root, tc.dir)
+			if result.Error != "" {
+				t.Fatalf("scan error = %q, want none", result.Error)
+			}
+			if result.BuildPack != tc.pack || result.MarkerFile != tc.marker {
+				t.Errorf("detect = pack %q marker %q, want %q %q",
+					result.BuildPack, result.MarkerFile, tc.pack, tc.marker)
+			}
+		})
+	}
+	result := detectRepository(root, "docs")
+	if len(result.EnvKeys) != 0 {
+		t.Errorf("env keys = %v, want none from the repository root", result.EnvKeys)
+	}
+	web := detectRepository(root, "apps/web")
+	if strings.Join(web.EnvKeys, ",") != "API_URL" {
+		t.Errorf("env keys = %v, want the ones inside apps/web", web.EnvKeys)
+	}
+	if web.BuildPack != "" {
+		t.Errorf("build pack = %q, want none for a folder without markers", web.BuildPack)
+	}
+}
+
+func TestDetectRepositoryReportsAMissingWorkingDirectory(t *testing.T) {
+	root := writeScanDir(t, map[string]string{"package.json": "{}"})
+	result := detectRepository(root, "docs")
+	if !strings.Contains(result.Error, "not in the repository") {
+		t.Fatalf("error = %q, want the missing folder", result.Error)
+	}
+	if result.BuildPack != "" {
+		t.Errorf("build pack = %q, want none for a missing folder", result.BuildPack)
+	}
+}
+
+func TestDetectRepositoryListsFoldersForThePicker(t *testing.T) {
+	root := writeScanDir(t, map[string]string{
+		"README.md":       "hello\n",
+		"apps/web/app.js": "console.log(1)\n",
+		"apps/api/go.mod": "module api\n",
+	})
+	result := detectRepository(root, "")
+	want := []string{"apps", "apps/api", "apps/web"}
+	if strings.Join(result.Directories, ",") != strings.Join(want, ",") {
+		t.Fatalf("directories = %v, want %v", result.Directories, want)
+	}
+}
+
+func TestDetectRepositoryCapsAndSkipsGitFolders(t *testing.T) {
+	files := map[string]string{".git/objects/info/keep": ""}
+	for _, name := range []string{"a", "b", "c"} {
+		files[name+"/keep"] = ""
+	}
+	root := writeScanDir(t, files)
+	result := detectRepository(root, "")
+	if strings.Join(result.Directories, ",") != "a,b,c" {
+		t.Fatalf("directories = %v, want a,b,c without .git", result.Directories)
+	}
+}
+
+func TestScanRepositoryRejectsAPathTraversal(t *testing.T) {
+	svc := scanTestService(t, &writeFileSource{files: map[string]string{"Dockerfile": "FROM scratch\n"}})
+	_, err := svc.ScanRepository(context.Background(), uuid.New(), ScanRepositoryInput{
+		SourceType: SourceGitPublic,
+		CloneURL:   "https://github.com/acme/demo.git",
+		Branch:     "main",
+		WorkingDir: "../etc",
+	})
+	if !errors.Is(err, ErrValidation) {
+		t.Fatalf("err = %v, want ErrValidation", err)
+	}
+}
+
+func TestScanRepositoryScansTheWorkingDirectory(t *testing.T) {
+	svc := scanTestService(t, &writeFileSource{files: map[string]string{
+		"package.json":    "{}",
+		"docs/Dockerfile": "FROM scratch\n",
+	}})
+	scan, err := svc.ScanRepository(context.Background(), uuid.New(), ScanRepositoryInput{
+		SourceType: SourceGitPublic,
+		CloneURL:   "https://github.com/acme/demo.git",
+		Branch:     "main",
+		WorkingDir: "docs",
+	})
+	if err != nil {
+		t.Fatalf("scan: %v", err)
+	}
+	if scan.Error != "" {
+		t.Fatalf("scan error = %q, want none", scan.Error)
+	}
+	if scan.BuildPack != string(builds.EngineDockerfile) || scan.MarkerFile != "Dockerfile" {
+		t.Fatalf("scan = %+v, want the Dockerfile inside docs", scan)
+	}
+	if strings.Join(scan.Directories, ",") != "docs" {
+		t.Fatalf("directories = %v, want docs", scan.Directories)
 	}
 }
 

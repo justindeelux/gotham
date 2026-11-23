@@ -83,6 +83,7 @@ export interface WizardForm {
   composeContent: string;
   composeFile: string;
   composeService: string;
+  workingDir: string;
   branch: string;
   imageRef: string;
   registryUsername: string;
@@ -181,6 +182,7 @@ export function useCreateAppWizard(
     composeFiles: [] as string[],
     composeFile: "",
     composeServices: [] as string[],
+    directories: [] as string[],
   });
   const buildPackTouched = ref(false);
   // Keys added from the repository's .env* files, so the Env step can say
@@ -391,6 +393,7 @@ export function useCreateAppWizard(
     composeContent: "",
     composeFile: "docker-compose.yml",
     composeService: "",
+    workingDir: "",
     branch: "main",
     imageRef: "",
     registryUsername: "",
@@ -655,6 +658,13 @@ export function useCreateAppWizard(
     scan.composeServices.map((name) => ({ label: name, value: name })),
   );
 
+  // The repository root is an explicit choice: empty is what the stored setting
+  // means, so the select offers it instead of relying on "cleared".
+  const scanDirectoryOptions = computed<Array<{ label: string; value: string }>>(() => [
+    { label: tr("applications.wizard.workingDirRoot"), value: "" },
+    ...scan.directories.map((dir) => ({ label: dir, value: dir })),
+  ]);
+
   function scanPack(value: string): BuildPack {
     switch (value) {
       case "dockerfile":
@@ -678,6 +688,7 @@ export function useCreateAppWizard(
       repo: "",
       clone_url: "",
       branch: form.branch.trim(),
+      working_dir: form.workingDir.trim(),
     };
     if (form.sourceType === "git_public") {
       if (!publicCloneUrlSchema.safeParse(form.publicCloneUrl).success) {
@@ -723,6 +734,7 @@ export function useCreateAppWizard(
     scan.composeFiles = [];
     scan.composeFile = "";
     scan.composeServices = [];
+    scan.directories = [];
   }
 
   function markBuildPackTouched(): void {
@@ -749,6 +761,7 @@ export function useCreateAppWizard(
     scan.composeFiles = result.compose_files;
     scan.composeFile = result.compose_file;
     scan.composeServices = result.compose_services;
+    scan.directories = result.directories;
     applyScanEnvKeys(scan.failed ? [] : result.env_keys);
     if (buildPackTouched.value) {
       return;
@@ -921,6 +934,7 @@ export function useCreateAppWizard(
       form.composeContent = "";
       form.composeFile = "docker-compose.yml";
       form.composeService = "";
+      form.workingDir = "";
       noSshUrl.value = false;
       if (form.sourceType === "github_app") {
         void githubAppStore.fetchApps().catch(() => undefined);
@@ -1095,6 +1109,7 @@ export function useCreateAppWizard(
       github_app_id: isGitHubAppFlow.value ? form.providerId : undefined,
       dockerfile_content: form.sourceType === "dockerfile" ? form.dockerfileContent : undefined,
       build_args: form.sourceType === "dockerfile" ? buildArgsPayload(form.buildArgs) : undefined,
+      working_dir: form.workingDir.trim() === "" ? undefined : form.workingDir.trim(),
       branch: form.branch.trim(),
       build_pack: form.sourceType === "dockerfile" ? "" : form.buildPack,
       ...(isComposePack.value
@@ -1392,6 +1407,7 @@ export function useCreateAppWizard(
     markBuildPackTouched,
     scanComposeFileOptions,
     scannedComposeServiceOptions,
+    scanDirectoryOptions,
     stepPosition,
     stepTotal,
     visibleStepNames,

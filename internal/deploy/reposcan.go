@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"io"
+	"io/fs"
 	"os"
 	"path/filepath"
 	"regexp"
@@ -28,6 +29,9 @@ type ScanRepositoryInput struct {
 	GitHubAppID        uuid.UUID
 	CredentialUsername string
 	CredentialToken    string
+	// WorkingDir is the folder the user picked inside the repository; empty
+	// scans the root.
+	WorkingDir string
 }
 
 // RepositoryScan reports what the repository root implies for the build pack
@@ -41,6 +45,7 @@ type RepositoryScan struct {
 	ComposeFile     string
 	ComposeServices []string
 	EnvKeys         []string
+	Directories     []string
 	Error           string
 }
 
@@ -53,6 +58,9 @@ const (
 	// to one scan response.
 	maxEnvFileBytes = 256 << 10
 	maxEnvKeys      = 100
+	// maxScanDirectories bounds the folder picker: the first folders in
+	// lexical order are enough to find a monorepo package.
+	maxScanDirectories = 200
 )
 
 var envKeyPattern = regexp.MustCompile(`^[A-Za-z_][A-Za-z0-9_]*$`)
@@ -100,7 +108,11 @@ func (s *Service) ScanRepository(ctx context.Context, userID uuid.UUID, in ScanR
 	if err := s.scanSource(app, in).Clone(ctx, app, dir, nil); err != nil {
 		return scanFailure(scanErrorMessage(err, strings.TrimSpace(in.CredentialToken))), nil
 	}
-	return detectRepository(dir), nil
+	workingDir, err := normalizeWorkingDir(in.WorkingDir)
+	if err != nil {
+		return RepositoryScan{}, err
+	}
+	return detectRepository(dir, workingDir), nil
 }
 
 func scanApplication(userID uuid.UUID, in ScanRepositoryInput) (Application, error) {
@@ -203,6 +215,7 @@ func scanFailure(message string) RepositoryScan {
 		ComposeFiles:    []string{},
 		ComposeServices: []string{},
 		EnvKeys:         []string{},
+		Directories:     []string{},
 		Error:           message,
 	}
 }
@@ -215,19 +228,28 @@ func scanErrorMessage(err error, secret string) string {
 	return tail(message, 300)
 }
 
-// detectRepository is the one place that decides a repository's build pack
-// from its root. Precedence, first match wins: a compose file (compose.yaml,
-// compose.yml, docker-compose.yaml, docker-compose.yml) selects Docker Compose;
-// then Dockerfile selects Dockerfile; then a language marker selects Railpack
-// with package.json for Node, go.mod for Go, and requirements.txt or
-// pyproject.toml for Python. Railpack is the existing language auto-detection
-// pack, so the scan never names a pack id the platform cannot build.
-func detectRepository(dir string) RepositoryScan {
+// detectRepository is the one place that decides a repository's build pack.
+// workingDir narrows the markers to a monorepo folder, exactly like the build
+// context the deploy uses. Precedence, first match wins: a compose file
+// (compose.yaml, compose.yml, docker-compose.yaml, docker-compose.yml) selects
+// Docker Compose; then Dockerfile selects Dockerfile; then a language marker
+// selects Railpack with package.json for Node, go.mod for Go, and
+// requirements.txt or pyproject.toml for Python. Railpack is the existing
+// language auto-detection pack, so the scan never names a pack id the platform
+// cannot build.
+func detectRepository(root, workingDir string) RepositoryScan {
 	result := RepositoryScan{
 		ComposeFiles:    []string{},
 		ComposeServices: []string{},
-		EnvKeys:         envKeysFromRoot(dir),
+		EnvKeys:         []string{},
+		Directories:     repoDirectories(root),
 	}
+	dir := filepath.Join(root, workingDir)
+	if !isDirectory(dir) {
+		result.Error = fmt.Sprintf("working directory %q is not in the repository", workingDir)
+		return result
+	}
+	result.EnvKeys = envKeysFromRoot(dir)
 	for _, name := range composeCandidateFiles {
 		if isRegularFile(filepath.Join(dir, name)) {
 			result.ComposeFiles = append(result.ComposeFiles, name)
@@ -255,6 +277,38 @@ func detectRepository(dir string) RepositoryScan {
 		}
 	}
 	return result
+}
+
+// repoDirectories lists the folders the picker offers as relative slash paths,
+// skipping .git, and stops at maxScanDirectories. Symlinks are not followed.
+func repoDirectories(root string) []string {
+	dirs := []string{}
+	err := filepath.WalkDir(root, func(current string, entry fs.DirEntry, walkErr error) error {
+		if walkErr != nil || !entry.IsDir() {
+			return nil
+		}
+		if entry.Name() == ".git" {
+			return fs.SkipDir
+		}
+		rel, relErr := filepath.Rel(root, current)
+		if relErr != nil || rel == "." {
+			return nil
+		}
+		dirs = append(dirs, filepath.ToSlash(rel))
+		if len(dirs) >= maxScanDirectories {
+			return fs.SkipAll
+		}
+		return nil
+	})
+	if err != nil {
+		return []string{}
+	}
+	return dirs
+}
+
+func isDirectory(path string) bool {
+	info, err := os.Lstat(path)
+	return err == nil && info.IsDir()
 }
 
 // isRegularFile ignores symlinks, so a checked-out file cannot point the scan

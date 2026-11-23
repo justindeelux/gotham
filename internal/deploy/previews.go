@@ -55,6 +55,7 @@ func (s *Service) CreatePreviewApplication(ctx context.Context, baseAppID uuid.U
 		ComposeContent:    base.ComposeContent,
 		ComposeFile:       base.ComposeFile,
 		ComposeService:    base.ComposeService,
+		WorkingDir:        base.WorkingDir,
 		IsPreview:         true,
 	}
 	if app.Branch == "" {

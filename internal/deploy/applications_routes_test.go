@@ -27,6 +27,7 @@ const applicationBody = `{
 	"clone_url": "https://github.com/acme/demo.git",
 	"branch": "main",
 	"build_pack": "dockerfile",
+	"working_dir": "apps/web",
 	"environment_id": "%s",
 	"server_id": "%s",
 	"env": [
@@ -42,7 +43,7 @@ var applicationWireKeys = []string{
 	"id", "name", "environment_id", "environment_name", "project_id",
 	"project_name", "provider", "repo", "clone_url", "source_type", "github_app_id",
 	"dockerfile_content", "build_args",
-	"compose_content", "compose_file", "compose_service",
+	"compose_content", "compose_file", "compose_service", "working_dir",
 	"branch", "build_pack",
 	"image_ref", "has_registry_credential",
 	"primary_domain", "server_id",
@@ -53,7 +54,7 @@ var applicationListWireKeys = []string{
 	"id", "name", "environment_id", "environment_name", "project_id",
 	"project_name", "provider", "repo", "clone_url", "source_type",
 	"github_app_id",
-	"compose_file", "compose_service",
+	"compose_file", "compose_service", "working_dir",
 	"branch", "build_pack",
 	"image_ref", "has_registry_credential",
 	"primary_domain", "server_id",
@@ -126,6 +127,9 @@ func TestRoutesCreateApplication(t *testing.T) {
 	}
 	if in.ServerID != serverID {
 		t.Errorf("server_id = %s, want %s", in.ServerID, serverID)
+	}
+	if in.WorkingDir != "apps/web" {
+		t.Errorf("working_dir = %q, want apps/web", in.WorkingDir)
 	}
 	if len(in.Env) != 2 || in.Env[1].Key != "API_TOKEN" || in.Env[1].Value != "secret:super-secret" {
 		t.Errorf("env = %+v, want the nested environment as sent", in.Env)
@@ -513,7 +517,7 @@ func TestRoutesUpdateApplication(t *testing.T) {
 
 		rec := httptest.NewRecorder()
 		srv.ServeHTTP(rec, httptest.NewRequest(http.MethodPut, applicationsPath+"/"+appID.String(),
-			strings.NewReader(`{"name":"renamed","branch":"release"}`)))
+			strings.NewReader(`{"name":"renamed","branch":"release","working_dir":"apps/web"}`)))
 
 		if rec.Code != http.StatusOK {
 			t.Fatalf("status = %d, want 200 (body %s)", rec.Code, rec.Body.String())
@@ -524,6 +528,9 @@ func TestRoutesUpdateApplication(t *testing.T) {
 		}
 		if in.Branch == nil || *in.Branch != "release" {
 			t.Errorf("branch = %v, want the patched value", in.Branch)
+		}
+		if in.WorkingDir == nil || *in.WorkingDir != "apps/web" {
+			t.Errorf("working_dir = %v, want the patched value", in.WorkingDir)
 		}
 		if in.BuildPack != nil || in.ServerID != nil {
 			t.Errorf("unpatched fields were sent: %+v", in)

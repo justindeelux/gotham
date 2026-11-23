@@ -138,6 +138,15 @@ API or a log. Fill each one in yourself; rows you already edited are kept and a
 rescan never adds a key twice. Rows still missing a value are flagged in the
 summary, and deploying is still allowed.
 
+**Monorepos.** Set **Working directory** in the **Build pack** step, or later in
+the app's Overview, to build one folder of a repository. Detection, the build and
+the compose file path all run inside that folder, so a repository that holds
+several apps deploys one of them. The list comes from the scan; you can also type
+a folder the scan did not list. The value is a relative path inside the
+repository: `apps/web` works, `/apps/web` and `../apps` are rejected. Leave it
+empty to build from the repository root, which is what every app created before
+this setting does.
+
 A pasted Dockerfile source always builds from its saved text. A pasted Docker
 Compose source has no build pack: it runs the document's services directly.
 Container-image sources have no build pack: the deploy pulls the reference.
@@ -216,7 +225,7 @@ The **Logs** tab has two panes:
 
 | Tab | What it shows |
 |---|---|
-| **Overview** | Source, branch, build pack, domain and node; latest pipeline and recent deployments; editors for the private-git credential, Dockerfile, compose document or image reference. |
+| **Overview** | Source, branch, build pack, domain and node; latest pipeline and recent deployments; editors for the working directory, private-git credential, Dockerfile, compose document or image reference. |
 | **Deployments** | Full deployment history and its log and rollback actions. |
 | **Logs** | Build log for one deployment and the live runtime log. |
 | **Environment** | The application's own variables, with inherited shared variables shown read-only. |

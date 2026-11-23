@@ -131,7 +131,7 @@ INSERT INTO applications (
     branch, build_pack, is_preview,
     source_type, github_app_id, dockerfile_content, build_args,
     image_ref, registry_username, registry_password_ciphertext,
-    compose_content, compose_file, compose_service
+    compose_content, compose_file, compose_service, working_dir
 )
 VALUES (
     COALESCE($1::uuid, gen_random_uuid()),
@@ -149,9 +149,10 @@ VALUES (
     $16, $17, $18,
     COALESCE($19::text, ''),
     COALESCE($20::text, ''),
-    COALESCE($21::text, '')
+    COALESCE($21::text, ''),
+    COALESCE($22::text, '')
 )
-RETURNING id, user_id, server_id, name, provider, repo, clone_url, branch, build_pack, created_at, updated_at, is_preview, environment_id, source_type, github_app_id, dockerfile_content, build_args, image_ref, registry_username, registry_password_ciphertext, compose_content, compose_file, compose_service, pending_changes
+RETURNING id, user_id, server_id, name, provider, repo, clone_url, branch, build_pack, created_at, updated_at, is_preview, environment_id, source_type, github_app_id, dockerfile_content, build_args, image_ref, registry_username, registry_password_ciphertext, compose_content, compose_file, compose_service, pending_changes, working_dir
 `
 
 type CreateApplicationParams struct {
@@ -176,6 +177,7 @@ type CreateApplicationParams struct {
 	ComposeContent             string      `json:"compose_content"`
 	ComposeFile                string      `json:"compose_file"`
 	ComposeService             string      `json:"compose_service"`
+	WorkingDir                 string      `json:"working_dir"`
 }
 
 // The id is optional: a caller that must know the application id before the
@@ -205,6 +207,7 @@ func (q *Queries) CreateApplication(ctx context.Context, arg CreateApplicationPa
 		arg.ComposeContent,
 		arg.ComposeFile,
 		arg.ComposeService,
+		arg.WorkingDir,
 	)
 	var i Application
 	err := row.Scan(
@@ -232,6 +235,7 @@ func (q *Queries) CreateApplication(ctx context.Context, arg CreateApplicationPa
 		&i.ComposeFile,
 		&i.ComposeService,
 		&i.PendingChanges,
+		&i.WorkingDir,
 	)
 	return i, err
 }
@@ -385,7 +389,7 @@ func (q *Queries) GetActiveDeploymentByApp(ctx context.Context, applicationID pg
 }
 
 const getApplication = `-- name: GetApplication :one
-SELECT id, user_id, server_id, name, provider, repo, clone_url, branch, build_pack, created_at, updated_at, is_preview, environment_id, source_type, github_app_id, dockerfile_content, build_args, image_ref, registry_username, registry_password_ciphertext, compose_content, compose_file, compose_service, pending_changes FROM applications WHERE id = $1
+SELECT id, user_id, server_id, name, provider, repo, clone_url, branch, build_pack, created_at, updated_at, is_preview, environment_id, source_type, github_app_id, dockerfile_content, build_args, image_ref, registry_username, registry_password_ciphertext, compose_content, compose_file, compose_service, pending_changes, working_dir FROM applications WHERE id = $1
 `
 
 func (q *Queries) GetApplication(ctx context.Context, id pgtype.UUID) (Application, error) {
@@ -416,6 +420,7 @@ func (q *Queries) GetApplication(ctx context.Context, id pgtype.UUID) (Applicati
 		&i.ComposeFile,
 		&i.ComposeService,
 		&i.PendingChanges,
+		&i.WorkingDir,
 	)
 	return i, err
 }
@@ -564,7 +569,7 @@ func (q *Queries) InsertStorage(ctx context.Context, arg InsertStorageParams) (S
 }
 
 const listApplicationsByEnvironment = `-- name: ListApplicationsByEnvironment :many
-SELECT id, user_id, server_id, name, provider, repo, clone_url, branch, build_pack, created_at, updated_at, is_preview, environment_id, source_type, github_app_id, dockerfile_content, build_args, image_ref, registry_username, registry_password_ciphertext, compose_content, compose_file, compose_service, pending_changes FROM applications
+SELECT id, user_id, server_id, name, provider, repo, clone_url, branch, build_pack, created_at, updated_at, is_preview, environment_id, source_type, github_app_id, dockerfile_content, build_args, image_ref, registry_username, registry_password_ciphertext, compose_content, compose_file, compose_service, pending_changes, working_dir FROM applications
 WHERE environment_id = $1 AND (is_preview = false OR $2::bool = true)
 ORDER BY created_at DESC, id DESC
 `
@@ -610,6 +615,7 @@ func (q *Queries) ListApplicationsByEnvironment(ctx context.Context, arg ListApp
 			&i.ComposeFile,
 			&i.ComposeService,
 			&i.PendingChanges,
+			&i.WorkingDir,
 		); err != nil {
 			return nil, err
 		}
@@ -622,7 +628,7 @@ func (q *Queries) ListApplicationsByEnvironment(ctx context.Context, arg ListApp
 }
 
 const listApplicationsByProject = `-- name: ListApplicationsByProject :many
-SELECT a.id, a.user_id, a.server_id, a.name, a.provider, a.repo, a.clone_url, a.branch, a.build_pack, a.created_at, a.updated_at, a.is_preview, a.environment_id, a.source_type, a.github_app_id, a.dockerfile_content, a.build_args, a.image_ref, a.registry_username, a.registry_password_ciphertext, a.compose_content, a.compose_file, a.compose_service, a.pending_changes FROM applications a
+SELECT a.id, a.user_id, a.server_id, a.name, a.provider, a.repo, a.clone_url, a.branch, a.build_pack, a.created_at, a.updated_at, a.is_preview, a.environment_id, a.source_type, a.github_app_id, a.dockerfile_content, a.build_args, a.image_ref, a.registry_username, a.registry_password_ciphertext, a.compose_content, a.compose_file, a.compose_service, a.pending_changes, a.working_dir FROM applications a
 JOIN environments e ON e.id = a.environment_id
 WHERE e.project_id = $1 AND (a.is_preview = false OR $2::bool = true)
 ORDER BY a.created_at DESC, a.id DESC
@@ -669,6 +675,7 @@ func (q *Queries) ListApplicationsByProject(ctx context.Context, arg ListApplica
 			&i.ComposeFile,
 			&i.ComposeService,
 			&i.PendingChanges,
+			&i.WorkingDir,
 		); err != nil {
 			return nil, err
 		}
@@ -714,7 +721,7 @@ func (q *Queries) ListApplicationsByServer(ctx context.Context, serverID pgtype.
 }
 
 const listApplicationsByUser = `-- name: ListApplicationsByUser :many
-SELECT id, user_id, server_id, name, provider, repo, clone_url, branch, build_pack, created_at, updated_at, is_preview, environment_id, source_type, github_app_id, dockerfile_content, build_args, image_ref, registry_username, registry_password_ciphertext, compose_content, compose_file, compose_service, pending_changes FROM applications
+SELECT id, user_id, server_id, name, provider, repo, clone_url, branch, build_pack, created_at, updated_at, is_preview, environment_id, source_type, github_app_id, dockerfile_content, build_args, image_ref, registry_username, registry_password_ciphertext, compose_content, compose_file, compose_service, pending_changes, working_dir FROM applications
 WHERE can_access_environment($1::uuid, environment_id) AND is_preview = false
 ORDER BY created_at DESC, id DESC
 `
@@ -753,6 +760,7 @@ func (q *Queries) ListApplicationsByUser(ctx context.Context, userID pgtype.UUID
 			&i.ComposeFile,
 			&i.ComposeService,
 			&i.PendingChanges,
+			&i.WorkingDir,
 		); err != nil {
 			return nil, err
 		}
@@ -1103,9 +1111,10 @@ SET name = $2,
     compose_content = $13,
     compose_file = $14,
     compose_service = $15,
+    working_dir = $16,
     updated_at = now()
 WHERE id = $1
-RETURNING id, user_id, server_id, name, provider, repo, clone_url, branch, build_pack, created_at, updated_at, is_preview, environment_id, source_type, github_app_id, dockerfile_content, build_args, image_ref, registry_username, registry_password_ciphertext, compose_content, compose_file, compose_service, pending_changes
+RETURNING id, user_id, server_id, name, provider, repo, clone_url, branch, build_pack, created_at, updated_at, is_preview, environment_id, source_type, github_app_id, dockerfile_content, build_args, image_ref, registry_username, registry_password_ciphertext, compose_content, compose_file, compose_service, pending_changes, working_dir
 `
 
 type UpdateApplicationParams struct {
@@ -1124,6 +1133,7 @@ type UpdateApplicationParams struct {
 	ComposeContent             string      `json:"compose_content"`
 	ComposeFile                string      `json:"compose_file"`
 	ComposeService             string      `json:"compose_service"`
+	WorkingDir                 string      `json:"working_dir"`
 }
 
 func (q *Queries) UpdateApplication(ctx context.Context, arg UpdateApplicationParams) (Application, error) {
@@ -1143,6 +1153,7 @@ func (q *Queries) UpdateApplication(ctx context.Context, arg UpdateApplicationPa
 		arg.ComposeContent,
 		arg.ComposeFile,
 		arg.ComposeService,
+		arg.WorkingDir,
 	)
 	var i Application
 	err := row.Scan(
@@ -1170,6 +1181,7 @@ func (q *Queries) UpdateApplication(ctx context.Context, arg UpdateApplicationPa
 		&i.ComposeFile,
 		&i.ComposeService,
 		&i.PendingChanges,
+		&i.WorkingDir,
 	)
 	return i, err
 }

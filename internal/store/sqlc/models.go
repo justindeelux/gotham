@@ -46,6 +46,7 @@ type Application struct {
 	ComposeFile                string             `json:"compose_file"`
 	ComposeService             string             `json:"compose_service"`
 	PendingChanges             []string           `json:"pending_changes"`
+	WorkingDir                 string             `json:"working_dir"`
 }
 
 type ApplicationDeployKey struct {

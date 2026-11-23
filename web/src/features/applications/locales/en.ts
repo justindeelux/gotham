@@ -489,6 +489,20 @@ const en = {
     confirm: "Roll back to {id}? The current container is kept for a roll-forward.",
     untagged: "untagged",
   },
+  workingDir: {
+    title: "Working directory",
+    hint: "The app builds from this folder inside the repository. Leave it on the repository root for a single-project repo; the next deploy picks up a change.",
+    field: "Build folder",
+    root: "Repository root",
+    hintDetail:
+      "A relative path such as apps/web. Pick a scanned folder or type one the scan did not list.",
+    invalid: "Use a relative path inside the repository: no leading / and no .. segments.",
+    loadFolders: "Scan folders",
+    scanFailed: "Couldn't read the repository, so the folder list stays manual.",
+    save: "Save working directory",
+    saved: "Working directory saved. Redeploy to build from it.",
+    redeployHint: "Applies to the next deploy.",
+  },
   compose: {
     title: "Compose source",
     hint: "The compose document this application deploys. A redeploy pulls the images and runs up -d with the latest saved file.",
@@ -591,6 +605,10 @@ const en = {
     composeContentHint: "The full compose document. Deploys pull its images and run up -d with it on the node.",
     composeSecretsHint:
       "Do not paste secrets into the document. Use environment variables or sealed secrets instead — they substitute as the compose project env at deploy time.",
+    workingDir: "Working directory",
+    workingDirRoot: "Repository root",
+    workingDirHint:
+      "For a monorepo: the folder inside the repository this app builds. Detection and the build run there, and the compose file path starts from it.",
     composeFile: "Compose file path",
     composeFileHint: "Path inside the repository, e.g. docker-compose.yml.",
     composeService: "Web service",

@@ -61,6 +61,23 @@ type runState struct {
 	commitDone    bool
 }
 
+// buildDir is the folder the deploy treats as the project root: the clone
+// root, or the app's working directory inside it (GOTHAM-268).
+func (st *runState) buildDir() string {
+	dir := strings.TrimSpace(st.app.WorkingDir)
+	if dir == "" {
+		return st.repoDir
+	}
+	joined := filepath.Join(st.repoDir, dir)
+	// Only normalizeWorkingDir writes this field; a stale row or a hand edit
+	// must never point the build context outside the clone.
+	if rel, err := filepath.Rel(st.repoDir, joined); err != nil || rel == ".." ||
+		strings.HasPrefix(rel, ".."+string(filepath.Separator)) {
+		return st.repoDir
+	}
+	return joined
+}
+
 type Orchestrator struct {
 	repo       Repository
 	source     Source
@@ -459,7 +476,7 @@ func (o *Orchestrator) build(ctx context.Context, st *runState) error {
 
 	st.log("building with engine " + string(kind))
 	ref, err := registry.Build(ctx, builds.BuildOptions{
-		RepoDir:        st.repoDir,
+		RepoDir:        st.buildDir(),
 		AppID:          st.app.ID,
 		DeployID:       st.dep.ID,
 		BuildPack:      kind,

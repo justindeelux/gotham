@@ -182,7 +182,7 @@ func (o *Orchestrator) cloneCompose(ctx context.Context, st *runState) error {
 		st.commitDone = true
 		return nil
 	}
-	content, info, err := o.resolveComposeContent(ctx, st.app, st.repoDir, st.log)
+	content, info, err := o.resolveComposeContent(ctx, st.app, st.buildDir(), st.log)
 	if err != nil {
 		return err
 	}

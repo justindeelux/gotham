@@ -29,11 +29,16 @@ interface StepOptions {
     composeFiles?: string[];
     composeFile?: string;
     composeServices?: string[];
+    directories?: string[];
   };
 }
 
 function mountStep(options: StepOptions = {}) {
-  const form = reactive({ buildPack: options.buildPack ?? "", serverId: "srv-1" });
+  const form = reactive({
+    buildPack: options.buildPack ?? "",
+    serverId: "srv-1",
+    workingDir: "",
+  });
   const state = {
     form,
     isCompose: computed(() => false),
@@ -56,6 +61,10 @@ function mountStep(options: StepOptions = {}) {
     scanComposeFileOptions: computed(() =>
       (options.scan?.composeFiles ?? []).map((name) => ({ label: name, value: name })),
     ),
+    scanDirectoryOptions: computed(() => [
+      { label: "Repository root", value: "" },
+      ...(options.scan?.directories ?? []).map((dir) => ({ label: dir, value: dir })),
+    ]),
     scannedComposeServiceOptions: computed(() =>
       (options.scan?.composeServices ?? []).map((name) => ({ label: name, value: name })),
     ),
@@ -156,6 +165,20 @@ describe("repository scan hints", () => {
     expect(failed.text()).toContain("Couldn't scan the repository");
     expect(failed.text()).toContain("not blocked");
     failed.unmount();
+  });
+
+  it("offers the scanned folders as working directories", () => {
+    const wrapper = mountStep({
+      scan: { ran: true, markerFile: "package.json", directories: ["apps", "apps/web"] },
+    });
+    const select = wrapper.find(".app-working-dir");
+    expect(select.exists()).toBe(true);
+    const options = select.findComponent({ name: "Select" }).props("options") as Array<{
+      value: string;
+    }>;
+    expect(options.map((option) => option.value)).toEqual(["", "apps", "apps/web"]);
+    expect(wrapper.text()).toContain("Repository root");
+    wrapper.unmount();
   });
 
   it("uses the scanned compose files and services as selectors", () => {

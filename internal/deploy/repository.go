@@ -289,6 +289,7 @@ func (r *storeRepository) CreateApplication(
 		ComposeContent:             app.ComposeContent,
 		ComposeFile:                app.ComposeFile,
 		ComposeService:             app.ComposeService,
+		WorkingDir:                 app.WorkingDir,
 	}
 	row, err := r.store.CreateApplicationWithConfig(ctx,
 		appParams,
@@ -323,6 +324,7 @@ func (r *storeRepository) UpdateApplication(ctx context.Context, app Application
 		ComposeContent:             app.ComposeContent,
 		ComposeFile:                app.ComposeFile,
 		ComposeService:             app.ComposeService,
+		WorkingDir:                 app.WorkingDir,
 	})
 	if err != nil {
 		if errors.Is(err, pgx.ErrNoRows) {
@@ -1048,6 +1050,7 @@ func applicationFromRow(row sqlc.Application) Application {
 		ComposeContent:             row.ComposeContent,
 		ComposeFile:                row.ComposeFile,
 		ComposeService:             row.ComposeService,
+		WorkingDir:                 row.WorkingDir,
 		PendingChanges:             append([]string(nil), row.PendingChanges...),
 		IsPreview:                  row.IsPreview,
 		CreatedAt:                  timeFromPG(row.CreatedAt),

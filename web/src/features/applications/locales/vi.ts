@@ -491,6 +491,20 @@ const vi: ApplicationsMessages = {
     confirm: "Quay lui về {id}? Container hiện tại được giữ lại để tiến lên khi cần.",
     untagged: "không có tag",
   },
+  workingDir: {
+    title: "Thư mục làm việc",
+    hint: "Ứng dụng build từ thư mục này trong kho. Để nguyên thư mục gốc cho kho chỉ có một project; lần triển khai kế tiếp sẽ dùng thay đổi.",
+    field: "Thư mục build",
+    root: "Thư mục gốc của kho",
+    hintDetail:
+      "Đường dẫn tương đối, ví dụ apps/web. Chọn một thư mục đã quét hoặc nhập thư mục mà lần quét chưa liệt kê.",
+    invalid: "Dùng đường dẫn tương đối trong kho: không bắt đầu bằng / và không có đoạn ..",
+    loadFolders: "Quét thư mục",
+    scanFailed: "Không đọc được kho nên danh sách thư mục vẫn nhập tay.",
+    save: "Lưu thư mục làm việc",
+    saved: "Đã lưu thư mục làm việc. Triển khai lại để build từ đó.",
+    redeployHint: "Áp dụng cho lần triển khai tiếp theo.",
+  },
   compose: {
     title: "Nguồn Compose",
     hint: "Tài liệu compose mà ứng dụng này triển khai. Mỗi lần triển khai lại sẽ pull image và chạy up -d với file mới nhất đã lưu.",
@@ -592,6 +606,10 @@ const vi: ApplicationsMessages = {
     composeContentHint: "Toàn bộ tài liệu compose. Khi triển khai sẽ pull image và chạy up -d với file này trên node.",
     composeSecretsHint:
       "Không dán secret vào tài liệu. Hãy dùng biến môi trường hoặc secret đã niêm phong — chúng được thay thế làm môi trường project compose khi triển khai.",
+    workingDir: "Thư mục làm việc",
+    workingDirRoot: "Thư mục gốc của kho",
+    workingDirHint:
+      "Với monorepo: thư mục trong kho mà ứng dụng này build. Việc nhận diện và build chạy trong thư mục đó, và đường dẫn file compose tính từ đó.",
     composeFile: "Đường dẫn file compose",
     composeFileHint: "Đường dẫn trong repository, ví dụ docker-compose.yml.",
     composeService: "Service web",

@@ -506,6 +506,25 @@ export const composeFileSchema = z
   .refine((value) => !value.startsWith("/") && value !== "." && value !== "..")
   .refine((value) => !/(^|\/)\.\.(\/|$)/.test(value));
 
+// The build folder inside a monorepo clone. Empty means the repository root,
+// so the same rules the control plane applies are checked here first.
+export const MAX_WORKING_DIR_LENGTH = 255;
+
+export const workingDirSchema = z
+  .string()
+  .trim()
+  .refine((value) => new TextEncoder().encode(value).length <= MAX_WORKING_DIR_LENGTH)
+  .refine((value) => !value.startsWith("/") && !value.includes("\\"))
+  .refine((value) =>
+    value
+      .split("/")
+      .every(
+        (segment) =>
+          value === "" ||
+          (segment !== "" && segment !== "." && segment !== ".." && segment !== ".git"),
+      ),
+  );
+
 export const repositoryScanSchema = z.object({
   detected_build_pack: z.string(),
   marker_file: z.string(),
@@ -513,6 +532,7 @@ export const repositoryScanSchema = z.object({
   compose_file: z.string(),
   compose_services: z.array(z.string()),
   env_keys: z.array(z.string()).default([]),
+  directories: z.array(z.string()).default([]),
   error: z.string().optional(),
 });
 

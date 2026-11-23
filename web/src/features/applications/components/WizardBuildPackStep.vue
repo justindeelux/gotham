@@ -41,6 +41,17 @@ useEventListener(window, "focus", () => wizard.subscribeNodeTools());
       </NText>
     </template>
     <template v-else>
+      <NFormItem :label="t('applications.wizard.workingDir')">
+        <NSelect
+          v-model:value="form.workingDir"
+          :options="wizard.scanDirectoryOptions.value"
+          :loading="wizard.scan.loading"
+          filterable
+          tag
+          class="app-working-dir"
+        />
+        <span class="app-compose-pack-hint">{{ t("applications.wizard.workingDirHint") }}</span>
+      </NFormItem>
       <NText depth="3">
         {{ t("applications.wizard.buildPackIntro") }}
       </NText>
@@ -189,6 +200,11 @@ useEventListener(window, "focus", () => wizard.subscribeNodeTools());
 }
 
 .app-compose-pack-mono {
+  font-family: var(--font-mono);
+}
+
+.app-working-dir {
+  width: 100%;
   font-family: var(--font-mono);
 }
 

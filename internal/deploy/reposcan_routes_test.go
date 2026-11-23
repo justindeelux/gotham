@@ -59,13 +59,14 @@ func TestRoutesScanRepository(t *testing.T) {
 			body["repo"] = "acme/demo"
 			body["clone_url"] = "https://github.com/acme/demo.git"
 			body["github_app_id"] = appID.String()
+			body["working_dir"] = "apps/web"
 		}))))
 
 	if rec.Code != http.StatusOK {
 		t.Fatalf("status = %d, want 200 (body %s)", rec.Code, rec.Body.String())
 	}
 	assertJSONKeys(t, rec.Body.Bytes(),
-		"detected_build_pack", "marker_file", "compose_files", "compose_file", "compose_services", "env_keys")
+		"detected_build_pack", "marker_file", "compose_files", "compose_file", "compose_services", "env_keys", "directories")
 	var payload struct {
 		EnvKeys []string `json:"env_keys"`
 	}
@@ -84,6 +85,9 @@ func TestRoutesScanRepository(t *testing.T) {
 	}
 	if svc.seenScan.Branch != "main" {
 		t.Errorf("branch = %q, want main", svc.seenScan.Branch)
+	}
+	if svc.seenScan.WorkingDir != "apps/web" {
+		t.Errorf("working_dir = %q, want apps/web", svc.seenScan.WorkingDir)
 	}
 }
 

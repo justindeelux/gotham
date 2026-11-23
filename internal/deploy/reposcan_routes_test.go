@@ -48,6 +48,7 @@ func TestRoutesScanRepository(t *testing.T) {
 		ComposeFile:     "docker-compose.yml",
 		ComposeServices: []string{"web", "worker"},
 		EnvKeys:         []string{"DATABASE_URL", "SECRET_KEY"},
+		EnvDefaults:     []EnvDefault{{Key: "SECRET_KEY", Value: "example", File: ".env.example"}},
 	}}
 	srv := newRouteServer(svc, alwaysUser(userID))
 
@@ -66,15 +67,20 @@ func TestRoutesScanRepository(t *testing.T) {
 		t.Fatalf("status = %d, want 200 (body %s)", rec.Code, rec.Body.String())
 	}
 	assertJSONKeys(t, rec.Body.Bytes(),
-		"detected_build_pack", "marker_file", "compose_files", "compose_file", "compose_services", "env_keys", "directories")
+		"detected_build_pack", "marker_file", "compose_files", "compose_file", "compose_services", "env_keys", "env_defaults", "directories")
 	var payload struct {
-		EnvKeys []string `json:"env_keys"`
+		EnvKeys     []string     `json:"env_keys"`
+		EnvDefaults []EnvDefault `json:"env_defaults"`
 	}
 	if err := json.Unmarshal(rec.Body.Bytes(), &payload); err != nil {
 		t.Fatalf("decode body: %v", err)
 	}
 	if strings.Join(payload.EnvKeys, ",") != "DATABASE_URL,SECRET_KEY" {
 		t.Errorf("env keys = %v, want the scanned names", payload.EnvKeys)
+	}
+	if len(payload.EnvDefaults) != 1 || payload.EnvDefaults[0].Value != "example" ||
+		payload.EnvDefaults[0].File != ".env.example" {
+		t.Errorf("env defaults = %v, want the scanned default", payload.EnvDefaults)
 	}
 
 	if svc.seenUser != userID {

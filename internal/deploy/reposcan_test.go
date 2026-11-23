@@ -184,13 +184,67 @@ func TestDetectRepositoryReadsEnvKeys(t *testing.T) {
 	if strings.Join(result.EnvKeys, ",") != strings.Join(want, ",") {
 		t.Fatalf("env keys = %v, want %v", result.EnvKeys, want)
 	}
+	wantDefaults := []string{"SECRET_KEY=abc@.env.example", "EXPORTED_KEY=quoted = value@.env.example"}
+	if got := envDefaultsString(result.EnvDefaults); strings.Join(got, ",") != strings.Join(wantDefaults, ",") {
+		t.Fatalf("env defaults = %v, want %v", got, wantDefaults)
+	}
 	encoded, err := json.Marshal(result)
 	if err != nil {
 		t.Fatalf("marshal scan: %v", err)
 	}
-	for _, value := range []string{"abc", "postgres://hidden", "quoted", "single", "value"} {
+	// A plain .env may hold a real secret: none of its values may leave the scan.
+	for _, value := range []string{"postgres://hidden", "single"} {
 		if strings.Contains(string(encoded), value) {
-			t.Errorf("scan JSON leaks a value: %s", encoded)
+			t.Errorf("scan JSON leaks a value from .env: %s", encoded)
+		}
+	}
+	if !strings.Contains(string(encoded), "abc") {
+		t.Errorf("scan JSON drops the template default: %s", encoded)
+	}
+}
+
+func envDefaultsString(defaults []EnvDefault) []string {
+	out := make([]string, 0, len(defaults))
+	for _, item := range defaults {
+		out = append(out, item.Key+"="+item.Value+"@"+item.File)
+	}
+	return out
+}
+
+func TestDetectRepositoryParsesEnvDefaults(t *testing.T) {
+	result := detectRepository(writeScanDir(t, map[string]string{
+		".env.example": "" +
+			"# A comment is not a value\n" +
+			"export PLAIN=plain\n" +
+			"DOUBLE=\"quoted value\"\n" +
+			"SINGLE='single value'\n" +
+			"TRAILING=value # note\n" +
+			"EMPTY=\n" +
+			"EMPTY_QUOTED=\"\"\n" +
+			"SPACED = padded \n" +
+			"NO_EQUALS\n" +
+			"broken-key=1\n" +
+			"UNTERMINATED=\"oops\n",
+		".env.sample": "PLAIN=second\nSECOND_FILE=from sample\n",
+		".env.local":  "REAL_SECRET=hidden\n",
+	}), "")
+	want := []string{
+		"PLAIN=plain@.env.example",
+		"DOUBLE=quoted value@.env.example",
+		"SINGLE=single value@.env.example",
+		"TRAILING=value@.env.example",
+		"SPACED=padded@.env.example",
+		"SECOND_FILE=from sample@.env.sample",
+	}
+	if got := envDefaultsString(result.EnvDefaults); strings.Join(got, ",") != strings.Join(want, ",") {
+		t.Fatalf("env defaults = %v, want %v", got, want)
+	}
+	if !strings.Contains(strings.Join(result.EnvKeys, ","), "REAL_SECRET") {
+		t.Errorf("env keys = %v, want the .env.local name", result.EnvKeys)
+	}
+	for _, item := range result.EnvDefaults {
+		if item.File == ".env.local" {
+			t.Fatalf("env defaults = %v, want no value from .env.local", result.EnvDefaults)
 		}
 	}
 }
@@ -261,10 +315,12 @@ func TestDetectRepositoryIgnoresSymlinksAndDirectories(t *testing.T) {
 
 func TestDetectRepositoryReadsOnlyTheWorkingDirectory(t *testing.T) {
 	root := writeScanDir(t, map[string]string{
-		"package.json":    "{}",
-		"docs/Dockerfile": "FROM scratch\n",
-		"apps/api/go.mod": "module api\n",
-		"apps/web/.env":   "API_URL=http://localhost\n",
+		"package.json":          "{}",
+		"docs/Dockerfile":       "FROM scratch\n",
+		"apps/api/go.mod":       "module api\n",
+		"apps/web/.env":         "API_URL=http://localhost\n",
+		"apps/web/.env.example": "API_URL=http://example.test\nWEB_PORT=3000\n",
+		".env.example":          "ROOT_ONLY=root\n",
 	})
 	cases := []struct {
 		name   string
@@ -293,8 +349,12 @@ func TestDetectRepositoryReadsOnlyTheWorkingDirectory(t *testing.T) {
 		t.Errorf("env keys = %v, want none from the repository root", result.EnvKeys)
 	}
 	web := detectRepository(root, "apps/web")
-	if strings.Join(web.EnvKeys, ",") != "API_URL" {
+	if strings.Join(web.EnvKeys, ",") != "API_URL,WEB_PORT" {
 		t.Errorf("env keys = %v, want the ones inside apps/web", web.EnvKeys)
+	}
+	wantDefaults := []string{"API_URL=http://example.test@.env.example", "WEB_PORT=3000@.env.example"}
+	if got := envDefaultsString(web.EnvDefaults); strings.Join(got, ",") != strings.Join(wantDefaults, ",") {
+		t.Errorf("env defaults = %v, want %v", got, wantDefaults)
 	}
 	if web.BuildPack != "" {
 		t.Errorf("build pack = %q, want none for a folder without markers", web.BuildPack)

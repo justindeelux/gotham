@@ -310,14 +310,15 @@ type scanRepositoryRequest struct {
 }
 
 type repositoryScanResponse struct {
-	DetectedBuildPack string   `json:"detected_build_pack"`
-	MarkerFile        string   `json:"marker_file"`
-	ComposeFiles      []string `json:"compose_files"`
-	ComposeFile       string   `json:"compose_file"`
-	ComposeServices   []string `json:"compose_services"`
-	EnvKeys           []string `json:"env_keys"`
-	Directories       []string `json:"directories"`
-	Error             string   `json:"error,omitempty"`
+	DetectedBuildPack string       `json:"detected_build_pack"`
+	MarkerFile        string       `json:"marker_file"`
+	ComposeFiles      []string     `json:"compose_files"`
+	ComposeFile       string       `json:"compose_file"`
+	ComposeServices   []string     `json:"compose_services"`
+	EnvKeys           []string     `json:"env_keys"`
+	EnvDefaults       []EnvDefault `json:"env_defaults"`
+	Directories       []string     `json:"directories"`
+	Error             string       `json:"error,omitempty"`
 }
 
 type handler struct {
@@ -1037,6 +1038,7 @@ func (h *handler) scanRepository(w http.ResponseWriter, r *http.Request) {
 		ComposeFile:       scan.ComposeFile,
 		ComposeServices:   append([]string{}, scan.ComposeServices...),
 		EnvKeys:           append([]string{}, scan.EnvKeys...),
+		EnvDefaults:       append([]EnvDefault{}, scan.EnvDefaults...),
 		Directories:       append([]string{}, scan.Directories...),
 		Error:             scan.Error,
 	})

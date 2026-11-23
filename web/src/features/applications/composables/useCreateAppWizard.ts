@@ -63,6 +63,7 @@ import {
   sourceTypeImplemented,
   sourceTypeSchema,
   type RepositoryScan,
+  type RepositoryScanEnvDefault,
   type SourceType,
 } from "@/features/applications/schemas/applications";
 import type { BuildArgRow } from "@/features/applications/utils/buildArgs";
@@ -185,9 +186,9 @@ export function useCreateAppWizard(
     directories: [] as string[],
   });
   const buildPackTouched = ref(false);
-  // Keys added from the repository's .env* files, so the Env step can say
-  // where those rows came from.
-  const envPrefilled = ref<string[]>([]);
+  // Rows added from the repository's .env* files, so the Env step can say
+  // where they came from and drop the hint once the user removes them.
+  const envPrefilled = ref<Array<{ key: string; file: string; valued: boolean }>>([]);
 
   const createdKey = ref<{ application: Application; publicKey: string } | null>(null);
   const keyRecovery = ref<{ application: Application } | null>(null);
@@ -614,10 +615,23 @@ export function useCreateAppWizard(
   // Keys the scan added that still have a row, so the hint disappears once the
   // user removes them.
   const prefilledEnvKeys = computed<string[]>(() =>
-    envPrefilled.value.filter((key) =>
-      form.env.some((row) => row.key.trim() === key),
-    ),
+    envPrefilled.value
+      .filter((item) => form.env.some((row) => row.key.trim() === item.key))
+      .map((item) => item.key),
   );
+
+  // Template files that supplied a value for a row the user still has.
+  const prefilledEnvFiles = computed<string[]>(() => {
+    const present = new Set(prefilledEnvKeys.value);
+    const files: string[] = [];
+    for (const item of envPrefilled.value) {
+      if (!item.valued || !present.has(item.key) || files.includes(item.file)) {
+        continue;
+      }
+      files.push(item.file);
+    }
+    return files;
+  });
 
   const envRowsWithoutValue = computed<number>(() =>
     countEnvRowsWithoutValue(form.env),
@@ -743,13 +757,23 @@ export function useCreateAppWizard(
 
   // Appends only: a row the user typed, reordered or deleted is never touched,
   // and a key already present (including the default NODE_ENV) is not repeated.
-  function applyScanEnvKeys(keys: string[]): void {
+  // A template default fills the value; without one the row stays empty.
+  function applyScanEnvKeys(
+    keys: string[],
+    defaults: RepositoryScanEnvDefault[],
+  ): void {
+    const byKey = new Map(defaults.map((item) => [item.key, item]));
     for (const key of keys) {
       if (form.env.some((row) => row.key.trim() === key)) {
         continue;
       }
-      form.env.push({ key, value: "" });
-      envPrefilled.value.push(key);
+      const fallback = byKey.get(key);
+      form.env.push({ key, value: fallback?.value ?? "" });
+      envPrefilled.value.push({
+        key,
+        file: fallback?.file ?? "",
+        valued: fallback !== undefined,
+      });
     }
   }
 
@@ -762,7 +786,10 @@ export function useCreateAppWizard(
     scan.composeFile = result.compose_file;
     scan.composeServices = result.compose_services;
     scan.directories = result.directories;
-    applyScanEnvKeys(scan.failed ? [] : result.env_keys);
+    applyScanEnvKeys(
+      scan.failed ? [] : result.env_keys,
+      scan.failed ? [] : result.env_defaults,
+    );
     if (buildPackTouched.value) {
       return;
     }
@@ -1399,6 +1426,7 @@ export function useCreateAppWizard(
     envKeyWarnings,
     droppedEnvRows,
     prefilledEnvKeys,
+    prefilledEnvFiles,
     envRowsWithoutValue,
     canContinue,
     buildPackLabel,

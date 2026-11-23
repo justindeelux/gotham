@@ -51,6 +51,12 @@ const envNeedsValueText = computed<string>(() =>
       <template v-if="!wizard.isCompose.value">
         <dt>{{ t("applications.wizard.reviewBuildPack") }}</dt>
         <dd>{{ wizard.buildPackLabel.value }}</dd>
+        <template v-if="wizard.isRepoSource.value">
+          <dt>{{ t("applications.wizard.workingDir") }}</dt>
+          <dd class="mono">
+            {{ form.workingDir.trim() || t("applications.wizard.workingDirRoot") }}
+          </dd>
+        </template>
       </template>
       <dt>{{ t("applications.wizard.reviewEnvVolumes") }}</dt>
       <dd class="mono">{{ envVolumesText }}</dd>

@@ -93,6 +93,7 @@ type applicationResponse struct {
 	ComposeContent        string               `json:"compose_content"`
 	ComposeFile           string               `json:"compose_file"`
 	ComposeService        string               `json:"compose_service"`
+	WorkingDir            string               `json:"working_dir"`
 	ServerID              *string              `json:"server_id"`
 	ServerName            string               `json:"server_name"`
 	PendingChanges        []string             `json:"pending_changes"`
@@ -152,6 +153,7 @@ type applicationListItem struct {
 	PrimaryDomain         string               `json:"primary_domain"`
 	ComposeFile           string               `json:"compose_file"`
 	ComposeService        string               `json:"compose_service"`
+	WorkingDir            string               `json:"working_dir"`
 	ServerID              *string              `json:"server_id"`
 	ServerName            string               `json:"server_name"`
 	PendingChanges        []string             `json:"pending_changes"`
@@ -231,6 +233,7 @@ type createApplicationRequest struct {
 	ComposeContent    string            `json:"compose_content"`
 	ComposeFile       string            `json:"compose_file"`
 	ComposeService    string            `json:"compose_service"`
+	WorkingDir        string            `json:"working_dir"`
 }
 
 type updateApplicationRequest struct {
@@ -248,6 +251,7 @@ type updateApplicationRequest struct {
 	ComposeContent    *string            `json:"compose_content"`
 	ComposeFile       *string            `json:"compose_file"`
 	ComposeService    *string            `json:"compose_service"`
+	WorkingDir        *string            `json:"working_dir"`
 	MonitorEnabled    *bool              `json:"monitor_enabled"`
 	MonitorGrace      *int               `json:"monitor_grace_seconds"`
 }
@@ -302,6 +306,7 @@ type scanRepositoryRequest struct {
 	GitHubAppID        string `json:"github_app_id"`
 	CredentialUsername string `json:"credential_username"`
 	CredentialToken    string `json:"credential_token"`
+	WorkingDir         string `json:"working_dir"`
 }
 
 type repositoryScanResponse struct {
@@ -311,6 +316,7 @@ type repositoryScanResponse struct {
 	ComposeFile       string   `json:"compose_file"`
 	ComposeServices   []string `json:"compose_services"`
 	EnvKeys           []string `json:"env_keys"`
+	Directories       []string `json:"directories"`
 	Error             string   `json:"error,omitempty"`
 }
 
@@ -418,6 +424,7 @@ func (h *handler) createApplication(w http.ResponseWriter, r *http.Request) {
 		ComposeContent:    req.ComposeContent,
 		ComposeFile:       req.ComposeFile,
 		ComposeService:    req.ComposeService,
+		WorkingDir:        req.WorkingDir,
 	})
 	if err != nil {
 		if requestreplay.WriteError(w, err) {
@@ -548,6 +555,7 @@ func (h *handler) updateApplication(w http.ResponseWriter, r *http.Request) {
 		ComposeContent:    req.ComposeContent,
 		ComposeFile:       req.ComposeFile,
 		ComposeService:    req.ComposeService,
+		WorkingDir:        req.WorkingDir,
 		MonitorEnabled:    req.MonitorEnabled,
 		MonitorGrace:      req.MonitorGrace,
 	}
@@ -1016,6 +1024,7 @@ func (h *handler) scanRepository(w http.ResponseWriter, r *http.Request) {
 		GitHubAppID:        githubAppID,
 		CredentialUsername: req.CredentialUsername,
 		CredentialToken:    req.CredentialToken,
+		WorkingDir:         req.WorkingDir,
 	})
 	if err != nil {
 		h.writeServiceError(w, err)
@@ -1028,6 +1037,7 @@ func (h *handler) scanRepository(w http.ResponseWriter, r *http.Request) {
 		ComposeFile:       scan.ComposeFile,
 		ComposeServices:   append([]string{}, scan.ComposeServices...),
 		EnvKeys:           append([]string{}, scan.EnvKeys...),
+		Directories:       append([]string{}, scan.Directories...),
 		Error:             scan.Error,
 	})
 }
@@ -1403,6 +1413,7 @@ func newApplicationResponse(application Application) applicationResponse {
 		ComposeContent: application.ComposeContent,
 		ComposeFile:    application.ComposeFile,
 		ComposeService: application.ComposeService,
+		WorkingDir:     application.WorkingDir,
 		PrimaryDomain:  primaryDomainName(application),
 		ServerName:     application.ServerName,
 		PendingChanges: append([]string{}, application.PendingChanges...),
@@ -1439,6 +1450,7 @@ func newApplicationListItem(application Application) applicationListItem {
 			application.RegistryPasswordCiphertext != "",
 		ComposeFile:    application.ComposeFile,
 		ComposeService: application.ComposeService,
+		WorkingDir:     application.WorkingDir,
 		PrimaryDomain:  primaryDomainName(application),
 		ServerName:     application.ServerName,
 		PendingChanges: append([]string{}, application.PendingChanges...),

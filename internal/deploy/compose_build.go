@@ -140,8 +140,8 @@ func (o *Orchestrator) buildComposeImages(ctx context.Context, st *runState, ren
 	}
 
 	// Compose resolves a build context relative to the compose file, not the
-	// repository root.
-	baseDir := filepath.Join(st.repoDir, filepath.Dir(st.app.ComposeFile))
+	// project root.
+	baseDir := filepath.Join(st.buildDir(), filepath.Dir(st.app.ComposeFile))
 	logs := newLineLog(st.log)
 	builder := newNodeBuilder(st.node, st.app.ID, st.dep.ID, func(chunk []byte) {
 		_, _ = logs.Write(chunk)

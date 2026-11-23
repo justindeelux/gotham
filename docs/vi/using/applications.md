@@ -135,6 +135,14 @@ log. Bạn tự điền từng giá trị; các dòng đã sửa được giữ 
 không thêm khóa trùng. Dòng còn thiếu giá trị được nhắc ở phần tóm tắt, và vẫn
 triển khai được.
 
+**Monorepo.** Đặt **Thư mục làm việc** ở bước **Gói build**, hoặc sau đó ở tab
+Tổng quan của ứng dụng, để chỉ build một thư mục trong kho. Việc phát hiện, bước
+build và đường dẫn tệp compose đều chạy trong thư mục đó, nên một kho chứa nhiều
+ứng dụng vẫn triển khai được từng ứng dụng. Danh sách lấy từ lần quét; bạn cũng
+có thể tự nhập thư mục mà lần quét chưa liệt kê. Giá trị là đường dẫn tương đối
+trong kho: `apps/web` hợp lệ, `/apps/web` và `../apps` bị từ chối. Để trống nghĩa
+là build từ thư mục gốc của kho, đúng như mọi ứng dụng tạo trước thiết lập này.
+
 Nguồn Dockerfile được dán luôn build từ văn bản đã lưu. Nguồn Docker Compose được
 dán không có gói build: nó chạy trực tiếp các dịch vụ trong tài liệu. Nguồn
 container image không có gói build: lần triển khai pull tham chiếu.
@@ -212,7 +220,7 @@ Tab **Nhật ký** có hai khung:
 
 | Tab | Nó hiển thị gì |
 |---|---|
-| **Tổng quan** | Nguồn, nhánh, gói build, tên miền và node; pipeline mới nhất và các lần triển khai gần đây; trình soạn thảo cho thông tin đăng nhập git riêng, Dockerfile, tài liệu compose hoặc tham chiếu image. |
+| **Tổng quan** | Nguồn, nhánh, gói build, tên miền và node; pipeline mới nhất và các lần triển khai gần đây; trình soạn thảo cho thư mục làm việc, thông tin đăng nhập git riêng, Dockerfile, tài liệu compose hoặc tham chiếu image. |
 | **Đợt triển khai** | Toàn bộ lịch sử triển khai cùng các thao tác xem log và quay lui. |
 | **Nhật ký** | Log build của một lần triển khai và log runtime trực tiếp. |
 | **Biến môi trường** | Biến riêng của ứng dụng, với biến dùng chung được kế thừa hiển thị chỉ đọc. |

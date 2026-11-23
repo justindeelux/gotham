@@ -25,6 +25,7 @@ export interface Application {
   compose_content?: string;
   compose_file?: string;
   compose_service?: string;
+  working_dir: string;
   branch: string;
   build_pack: string;
   image_ref: string;
@@ -117,6 +118,7 @@ export interface CreateApplicationInput {
   compose_content?: string;
   compose_file?: string;
   compose_service?: string;
+  working_dir?: string;
   branch: string;
   build_pack: string;
   image_ref: string;
@@ -141,6 +143,7 @@ export interface UpdateApplicationInput {
   compose_content?: string;
   compose_file?: string;
   compose_service?: string;
+  working_dir?: string;
   monitor_enabled?: boolean;
   monitor_grace_seconds?: number;
 }
@@ -717,6 +720,7 @@ export interface ScanRepositoryInput {
   github_app_id?: string;
   credential_username?: string;
   credential_token?: string;
+  working_dir?: string;
 }
 
 // The control plane bounds the scan at 60s; keep the client slightly later so

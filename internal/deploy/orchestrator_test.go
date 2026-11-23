@@ -236,6 +236,102 @@ func TestOrchestratorRoutesToolchainEngineToNode(t *testing.T) {
 	}
 }
 
+// A monorepo app builds only its working directory: the clone root holds no
+// Dockerfile here, so the build only succeeds when the folder is the context.
+func TestOrchestratorBuildsFromTheWorkingDirectory(t *testing.T) {
+	app := testApplication(uuid.New())
+	app.WorkingDir = "docs"
+	repo := &fakeRepository{app: app}
+	dep := seedDeployment(t, repo, app, Deployment{Kind: KindDeploy})
+
+	node := newMockNode()
+	o := newTestOrchestrator(Config{
+		Repository: repo,
+		Source:     &writeFileSource{files: map[string]string{"docs/Dockerfile": "FROM scratch\n"}},
+		Dial:       dialAlways(node),
+	})
+
+	o.run(context.Background(), job{app: app, dep: dep})
+
+	stored, ok := repo.deployment(dep.ID)
+	if !ok {
+		t.Fatal("deployment row is gone")
+	}
+	if stored.State != StateRunning {
+		t.Fatalf("state = %s (%s), want running", stored.State, stored.Error)
+	}
+	if node.buildCalls != 1 {
+		t.Errorf("build calls = %d, want 1", node.buildCalls)
+	}
+}
+
+// The default stays the clone root, so apps created before GOTHAM-268 build as
+// they did.
+func TestOrchestratorBuildsFromTheRepositoryRootWithoutAWorkingDir(t *testing.T) {
+	app := testApplication(uuid.New())
+	repo := &fakeRepository{app: app}
+	dep := seedDeployment(t, repo, app, Deployment{Kind: KindDeploy})
+
+	node := newMockNode()
+	o := newTestOrchestrator(Config{
+		Repository: repo,
+		Source:     &fakeSource{},
+		Dial:       dialAlways(node),
+	})
+
+	o.run(context.Background(), job{app: app, dep: dep})
+
+	if stored, _ := repo.deployment(dep.ID); stored.State != StateRunning {
+		t.Fatalf("state = %s (%s), want running", stored.State, stored.Error)
+	}
+}
+
+func TestBuildDirStaysInsideTheClone(t *testing.T) {
+	st := &runState{repoDir: "/tmp/clone"}
+	st.app.WorkingDir = ""
+	if got := st.buildDir(); got != "/tmp/clone" {
+		t.Errorf("buildDir = %q, want the clone root", got)
+	}
+	st.app.WorkingDir = "apps/web"
+	if got := st.buildDir(); got != "/tmp/clone/apps/web" {
+		t.Errorf("buildDir = %q, want the folder inside the clone", got)
+	}
+	st.app.WorkingDir = "../elsewhere"
+	if got := st.buildDir(); got != "/tmp/clone" {
+		t.Errorf("buildDir = %q, want the clone root for an escaping value", got)
+	}
+}
+
+func TestOrchestratorFailsOnAMissingWorkingDirectory(t *testing.T) {
+	app := testApplication(uuid.New())
+	app.WorkingDir = "missing"
+	repo := &fakeRepository{app: app}
+	dep := seedDeployment(t, repo, app, Deployment{Kind: KindDeploy})
+
+	node := newMockNode()
+	o := newTestOrchestrator(Config{
+		Repository: repo,
+		Source:     &fakeSource{},
+		Dial:       dialAlways(node),
+	})
+
+	o.run(context.Background(), job{app: app, dep: dep})
+
+	stored, ok := repo.deployment(dep.ID)
+	if !ok {
+		t.Fatal("deployment row is gone")
+	}
+	if stored.State != StateFailed {
+		t.Errorf("state = %s, want failed", stored.State)
+	}
+	if !strings.Contains(stored.Error, "missing") {
+		t.Errorf("error = %q, want it to name the folder", stored.Error)
+	}
+	if node.runCalls != 0 {
+		t.Errorf("run calls = %d, want 0", node.runCalls)
+	}
+}
+
 func TestOrchestratorStreamsBuildLogs(t *testing.T) {
 	app := testApplication(uuid.New())
 	repo := &fakeRepository{app: app}

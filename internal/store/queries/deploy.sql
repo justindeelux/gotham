@@ -8,7 +8,7 @@ INSERT INTO applications (
     branch, build_pack, is_preview,
     source_type, github_app_id, dockerfile_content, build_args,
     image_ref, registry_username, registry_password_ciphertext,
-    compose_content, compose_file, compose_service
+    compose_content, compose_file, compose_service, working_dir
 )
 VALUES (
     COALESCE(sqlc.arg(id)::uuid, gen_random_uuid()),
@@ -26,7 +26,8 @@ VALUES (
     sqlc.arg(image_ref), sqlc.arg(registry_username), sqlc.arg(registry_password_ciphertext),
     COALESCE(sqlc.arg(compose_content)::text, ''),
     COALESCE(sqlc.arg(compose_file)::text, ''),
-    COALESCE(sqlc.arg(compose_service)::text, '')
+    COALESCE(sqlc.arg(compose_service)::text, ''),
+    COALESCE(sqlc.arg(working_dir)::text, '')
 )
 RETURNING *;
 
@@ -121,6 +122,7 @@ SET name = $2,
     compose_content = $13,
     compose_file = $14,
     compose_service = $15,
+    working_dir = $16,
     updated_at = now()
 WHERE id = $1
 RETURNING *;

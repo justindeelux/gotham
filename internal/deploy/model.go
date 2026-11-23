@@ -94,17 +94,20 @@ type Application struct {
 	ComposeContent             string
 	ComposeFile                string
 	ComposeService             string
-	IsPreview                  bool
-	GitHubAppID                uuid.UUID
-	PrimaryDomain              *ApplicationDomain
-	EnvironmentName            string
-	ProjectID                  uuid.UUID
-	ProjectName                string
-	ServerName                 string
-	PendingChanges             []string
-	RuntimeHealth              *runtimewatch.Health
-	CreatedAt                  time.Time
-	UpdatedAt                  time.Time
+	// WorkingDir is the folder inside the clone the build runs in; empty
+	// builds from the repository root.
+	WorkingDir      string
+	IsPreview       bool
+	GitHubAppID     uuid.UUID
+	PrimaryDomain   *ApplicationDomain
+	EnvironmentName string
+	ProjectID       uuid.UUID
+	ProjectName     string
+	ServerName      string
+	PendingChanges  []string
+	RuntimeHealth   *runtimewatch.Health
+	CreatedAt       time.Time
+	UpdatedAt       time.Time
 }
 
 // PendingChange categories match what a container reads at creation time, so

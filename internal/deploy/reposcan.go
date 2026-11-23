@@ -297,14 +297,17 @@ func detectRepository(root, workingDir string) RepositoryScan {
 }
 
 // repoDirectories lists the folders the picker offers as relative slash paths,
-// skipping .git, and stops at maxScanDirectories. Symlinks are not followed.
+// skipping .git, hidden folders (.github, .opencode, ...) and dependency
+// folders (node_modules, vendor), and stops at maxScanDirectories. A hidden
+// folder can still be typed as the working directory. Symlinks are not
+// followed.
 func repoDirectories(root string) []string {
 	dirs := []string{}
 	err := filepath.WalkDir(root, func(current string, entry fs.DirEntry, walkErr error) error {
 		if walkErr != nil || !entry.IsDir() {
 			return nil
 		}
-		if entry.Name() == ".git" {
+		if skipScanDirectory(entry.Name()) {
 			return fs.SkipDir
 		}
 		rel, relErr := filepath.Rel(root, current)
@@ -321,6 +324,12 @@ func repoDirectories(root string) []string {
 		return []string{}
 	}
 	return dirs
+}
+
+// skipScanDirectory keeps git metadata, tooling folders and installed
+// dependencies out of the picker; they are never an app.
+func skipScanDirectory(name string) bool {
+	return strings.HasPrefix(name, ".") || name == "node_modules" || name == "vendor"
 }
 
 func isDirectory(path string) bool {

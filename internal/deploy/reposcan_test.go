@@ -374,14 +374,41 @@ func TestDetectRepositoryReportsAMissingWorkingDirectory(t *testing.T) {
 
 func TestDetectRepositoryListsFoldersForThePicker(t *testing.T) {
 	root := writeScanDir(t, map[string]string{
-		"README.md":       "hello\n",
-		"apps/web/app.js": "console.log(1)\n",
-		"apps/api/go.mod": "module api\n",
+		"README.md":                      "hello\n",
+		"apps/web/app.js":                "console.log(1)\n",
+		"apps/api/go.mod":                "module api\n",
+		".github/workflows/ci.yml":       "on: push\n",
+		".opencode/skills/demo/SKILL.md": "# demo\n",
+		"apps/.next/cache/keep":          "",
+		"node_modules/left-pad/index.js": "module.exports = 1\n",
+		"vendor/github.com/x/y.go":       "package y\n",
 	})
 	result := detectRepository(root, "")
 	want := []string{"apps", "apps/api", "apps/web"}
 	if strings.Join(result.Directories, ",") != strings.Join(want, ",") {
 		t.Fatalf("directories = %v, want %v", result.Directories, want)
+	}
+}
+
+func TestScanRepositoryAcceptsAHiddenWorkingDirectory(t *testing.T) {
+	svc := scanTestService(t, &writeFileSource{files: map[string]string{
+		"package.json":           "{}",
+		".github/actions/go.mod": "module actions\n",
+	}})
+	result, err := svc.ScanRepository(context.Background(), uuid.New(), ScanRepositoryInput{
+		SourceType: SourceGitPublic,
+		CloneURL:   "https://github.com/acme/demo.git",
+		Branch:     "main",
+		WorkingDir: ".github/actions",
+	})
+	if err != nil {
+		t.Fatalf("scan: %v", err)
+	}
+	if result.MarkerFile != "go.mod" {
+		t.Fatalf("marker = %q, want go.mod from the typed hidden folder", result.MarkerFile)
+	}
+	if strings.Join(result.Directories, ",") != "" {
+		t.Fatalf("directories = %v, want the hidden folders out of the picker", result.Directories)
 	}
 }
 

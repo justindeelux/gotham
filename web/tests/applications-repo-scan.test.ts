@@ -259,15 +259,15 @@ describe("repository scan prefills env keys", () => {
     expect(scanned).toHaveBeenCalledTimes(2);
     expect(w.form.env).toEqual([
       { key: "NODE_ENV", value: "production" },
-      { key: "DATABASE_URL", value: "" },
       { key: "MANUAL_KEY", value: "typed" },
+      { key: "DATABASE_URL", value: "" },
       { key: "REDIS_URL", value: "" },
     ]);
     expect(w.envRowsWithoutValue.value).toBe(2);
     wrapper.unmount();
   });
 
-  it("fills template defaults and never replaces a value already set", async () => {
+  it("fills template defaults and never overrides a typed value", async () => {
     vi.useFakeTimers();
     const { w, wrapper } = mountWizard();
     scanned.mockResolvedValue({
@@ -305,10 +305,11 @@ describe("repository scan prefills env keys", () => {
     w.form.publicCloneUrl = "https://github.com/acme/other.git";
     await settle();
 
+    // The untouched row follows the new template; the typed value stays.
     expect(w.form.env).toEqual([
       { key: "NODE_ENV", value: "production" },
-      { key: "DATABASE_URL", value: "postgres://db/app" },
       { key: "SECRET_KEY", value: "typed" },
+      { key: "DATABASE_URL", value: "postgres://other/app" },
     ]);
     wrapper.unmount();
   });
@@ -326,6 +327,81 @@ describe("repository scan prefills env keys", () => {
 
     expect(w.form.env).toEqual([{ key: "NODE_ENV", value: "production" }]);
     expect(w.prefilledEnvKeys.value).toEqual([]);
+    wrapper.unmount();
+  });
+});
+
+describe("a scan for another repository drops the untouched rows", () => {
+  const scanWith = (
+    envKeys: string[],
+    envDefaults: Array<{ key: string; value: string; file: string }> = [],
+  ) => ({
+    detected_build_pack: "railpack",
+    marker_file: "package.json",
+    compose_files: [],
+    compose_file: "",
+    compose_services: [],
+    env_keys: envKeys,
+    env_defaults: envDefaults,
+  });
+
+  it("keeps only the rows the new repository scans", async () => {
+    vi.useFakeTimers();
+    const { w, wrapper } = mountWizard();
+    scanned.mockResolvedValue(
+      scanWith(["DATABASE_URL", "SECRET_KEY"], [
+        { key: "DATABASE_URL", value: "postgres://a/app", file: ".env.example" },
+      ]),
+    );
+
+    w.form.publicCloneUrl = "https://github.com/acme/a.git";
+    await settle();
+    expect(w.form.env).toEqual([
+      { key: "NODE_ENV", value: "production" },
+      { key: "DATABASE_URL", value: "postgres://a/app" },
+      { key: "SECRET_KEY", value: "" },
+    ]);
+
+    scanned.mockResolvedValue(scanWith(["REDIS_URL"]));
+    w.form.publicCloneUrl = "https://github.com/acme/b.git";
+    await settle();
+
+    expect(w.form.env).toEqual([
+      { key: "NODE_ENV", value: "production" },
+      { key: "REDIS_URL", value: "" },
+    ]);
+    expect(w.prefilledEnvKeys.value).toEqual(["REDIS_URL"]);
+    wrapper.unmount();
+  });
+
+  it("keeps a row the user added and a row the user edited", async () => {
+    vi.useFakeTimers();
+    const { w, wrapper } = mountWizard();
+    scanned.mockResolvedValue(
+      scanWith(["DATABASE_URL", "SECRET_KEY"], [
+        { key: "SECRET_KEY", value: "change-me", file: ".env.example" },
+      ]),
+    );
+
+    w.form.publicCloneUrl = "https://github.com/acme/a.git";
+    await settle();
+    const secret = w.form.env.find((row) => row.key === "SECRET_KEY");
+    if (secret === undefined) {
+      throw new Error("SECRET_KEY row missing");
+    }
+    secret.value = "typed";
+    w.form.env.push({ key: "MANUAL_KEY", value: "manual" });
+
+    scanned.mockResolvedValue(scanWith(["REDIS_URL"]));
+    w.form.publicCloneUrl = "https://github.com/acme/b.git";
+    await settle();
+
+    expect(w.form.env).toEqual([
+      { key: "NODE_ENV", value: "production" },
+      { key: "SECRET_KEY", value: "typed" },
+      { key: "MANUAL_KEY", value: "manual" },
+      { key: "REDIS_URL", value: "" },
+    ]);
     wrapper.unmount();
   });
 });

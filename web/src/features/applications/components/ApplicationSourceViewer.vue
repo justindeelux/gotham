@@ -18,6 +18,7 @@ import { useI18n } from "vue-i18n";
 import type {
   Application,
   ApplicationSource,
+  ApplicationSourceWarning,
 } from "@/features/applications/api/applications";
 import { getApplicationSource } from "@/features/applications/api/applications";
 import CodeEditor from "@/features/files/components/CodeEditor.vue";
@@ -47,6 +48,10 @@ const text = computed<string>(() => {
 });
 
 const hasSource = computed<boolean>(() => source.value !== null && source.value.kind !== "");
+
+const warnings = computed<ApplicationSourceWarning[]>(
+  () => source.value?.warnings ?? [],
+);
 
 const hint = computed<string>(() => {
   if (view.value === "raw") {
@@ -120,6 +125,25 @@ function copySource(): void {
         </NRadioButton>
       </NRadioGroup>
       <NText depth="3" class="small">{{ hint }}</NText>
+      <NAlert
+        v-if="warnings.length > 0"
+        type="warning"
+        :title="t('applications.source.droppedTitle')"
+      >
+        <ul class="warnings">
+          <li
+            v-for="warning in warnings"
+            :key="`${warning.service}.${warning.key}`"
+          >
+            {{
+              t("applications.source.droppedKey", {
+                service: warning.service,
+                key: warning.key,
+              })
+            }}
+          </li>
+        </ul>
+      </NAlert>
       <CodeEditor
         :model-value="text"
         :preset="source.kind === 'dockerfile' ? 'dockerfile' : 'yaml'"
@@ -135,6 +159,12 @@ function copySource(): void {
 
 <style scoped>
 .small {
+  font-size: var(--text-xs);
+}
+
+.warnings {
+  margin: 0;
+  padding-left: var(--space-4);
   font-size: var(--text-xs);
 }
 </style>

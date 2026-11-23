@@ -656,7 +656,7 @@ func TestRenderComposeDocumentInjectsAppEnvironment(t *testing.T) {
 	repo.secrets = []Secret{{Key: "POSTGRES_PASSWORD", Ciphertext: sealed}}
 
 	o := newTestOrchestrator(Config{Repository: repo, Source: &fakeSource{}})
-	rendered, _, err := o.renderComposeDocument(context.Background(), app, app.ComposeContent)
+	rendered, _, _, err := o.renderComposeDocument(context.Background(), app, app.ComposeContent)
 	if err != nil {
 		t.Fatalf("render = %v, want nil", err)
 	}
@@ -712,7 +712,7 @@ func TestRenderComposeDocumentSkipsGeneratedPort(t *testing.T) {
 		seedDomain(t, repo, app, 3000)
 
 		o := newTestOrchestrator(Config{Repository: repo, Source: &fakeSource{}})
-		rendered, _, err := o.renderComposeDocument(context.Background(), app, content)
+		rendered, _, _, err := o.renderComposeDocument(context.Background(), app, content)
 		if err != nil {
 			t.Fatalf("render = %v, want nil", err)
 		}
@@ -741,7 +741,7 @@ func TestRenderComposeDocumentSkipsGeneratedPort(t *testing.T) {
 		seedDomain(t, repo, app, 3000)
 
 		o := newTestOrchestrator(Config{Repository: repo, Source: &fakeSource{}})
-		rendered, _, err := o.renderComposeDocument(context.Background(), app, content)
+		rendered, _, _, err := o.renderComposeDocument(context.Background(), app, content)
 		if err != nil {
 			t.Fatalf("render = %v, want nil", err)
 		}
@@ -1868,5 +1868,58 @@ func TestComposeDefaultEscapeRejected(t *testing.T) {
 	}
 	if node.composeUpCalls != 0 {
 		t.Errorf("compose up calls = %d, want 0 (rejected before the node)", node.composeUpCalls)
+	}
+}
+
+func TestOrchestratorComposeDropsManagedServiceKey(t *testing.T) {
+	userID := uuid.New()
+	app := testComposeApp(userID)
+	app.ComposeContent = `services:
+  web:
+    image: example.com/app:1.0
+    container_name: my-web
+  worker:
+    image: example.com/worker:1.0
+    container_name: my-worker
+`
+	repo := &fakeRepository{app: app}
+	dep := seedDeployment(t, repo, app, Deployment{Kind: KindDeploy})
+	node := newMockNode()
+	node.composeContainers = []ComposeContainer{{ID: "web-container-id", Service: "web", State: "running"}}
+	node.listed = []*agentv1.ContainerInfo{{Id: "web-container-id", State: "running", Status: "Up 5 seconds"}}
+	pub := &recordPublisher{}
+	o := newTestOrchestrator(Config{
+		Repository: repo,
+		Source:     &fakeSource{},
+		Dial:       dialAlways(node),
+		Emitter:    NewEmitter(pub),
+	})
+
+	o.run(context.Background(), job{app: app, dep: dep})
+
+	stored, ok := repo.deployment(dep.ID)
+	if !ok {
+		t.Fatal("deployment row is gone")
+	}
+	if stored.State != StateRunning {
+		t.Fatalf("state = %s (error %q), want running", stored.State, stored.Error)
+	}
+	if len(node.composeDocuments) != 1 {
+		t.Fatalf("compose documents = %d, want 1", len(node.composeDocuments))
+	}
+	if strings.Contains(node.composeDocuments[0], "container_name") {
+		t.Errorf("deployed document still holds container_name:\n%s", node.composeDocuments[0])
+	}
+	if !strings.Contains(app.ComposeContent, "container_name") || !strings.Contains(stored.ComposeDocument, "container_name") {
+		t.Error("the saved compose source was rewritten")
+	}
+	logged := false
+	for _, event := range pub.payloads() {
+		if strings.Contains(event.Data, "container_name") {
+			logged = true
+		}
+	}
+	if !logged {
+		t.Error("the deploy log does not report the dropped key")
 	}
 }

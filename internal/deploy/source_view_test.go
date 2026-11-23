@@ -4,6 +4,7 @@ import (
 	"context"
 	"os"
 	"path/filepath"
+	"reflect"
 	"strings"
 	"testing"
 
@@ -100,6 +101,9 @@ func TestApplicationSourceComposeMatchesDeployedDocument(t *testing.T) {
 	}
 	if source.Raw != app.ComposeContent {
 		t.Errorf("raw = %q, want the stored content", source.Raw)
+	}
+	if len(source.Warnings) != 0 {
+		t.Errorf("warnings = %v, want none", source.Warnings)
 	}
 	for _, value := range injected {
 		if strings.Contains(source.Deployable, value) {
@@ -242,5 +246,31 @@ func TestApplicationSourceEmptyForImageAndBuildPack(t *testing.T) {
 				t.Errorf("source = %+v, want an empty view", source)
 			}
 		})
+	}
+}
+
+func TestApplicationSourceComposeDropsManagedKey(t *testing.T) {
+	userID := uuid.New()
+	app := testComposeApp(userID)
+	app.ComposeContent = `services:
+  web:
+    image: example.com/app:1.0
+    container_name: my-web
+`
+	s := &Service{Orchestrator: newTestOrchestrator(Config{Repository: &fakeRepository{app: app}})}
+
+	source, err := s.applicationSource(context.Background(), app)
+	if err != nil {
+		t.Fatalf("applicationSource = %v, want nil", err)
+	}
+	if !strings.Contains(source.Raw, "container_name") {
+		t.Errorf("raw lost the saved key:\n%s", source.Raw)
+	}
+	if strings.Contains(source.Deployable, "container_name") {
+		t.Errorf("deployable still holds the dropped key:\n%s", source.Deployable)
+	}
+	want := []ComposeWarning{{Service: "web", Key: "container_name"}}
+	if !reflect.DeepEqual(source.Warnings, want) {
+		t.Errorf("warnings = %v, want %v", source.Warnings, want)
 	}
 }

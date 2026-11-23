@@ -22,6 +22,14 @@ type ApplicationSource struct {
 	Kind       string
 	Raw        string
 	Deployable string
+	Warnings   []ComposeWarning
+}
+
+// ComposeWarning reports a service key Gotham removed from the document it
+// deploys because Gotham sets that key itself.
+type ComposeWarning struct {
+	Service string `json:"service"`
+	Key     string `json:"key"`
 }
 
 func (s *Service) GetApplicationSource(ctx context.Context, userID, appID uuid.UUID) (ApplicationSource, error) {
@@ -52,7 +60,7 @@ func (s *Service) applicationSource(ctx context.Context, app Application) (Appli
 	if err != nil {
 		return ApplicationSource{}, err
 	}
-	rendered, _, err := s.renderComposeDocument(ctx, app, raw)
+	rendered, _, warnings, err := s.renderComposeDocument(ctx, app, raw)
 	if err != nil {
 		return ApplicationSource{}, err
 	}
@@ -64,7 +72,7 @@ func (s *Service) applicationSource(ctx context.Context, app Application) (Appli
 	if err != nil {
 		return ApplicationSource{}, err
 	}
-	return ApplicationSource{Kind: SourceCompose, Raw: raw, Deployable: deployable}, nil
+	return ApplicationSource{Kind: SourceCompose, Raw: raw, Deployable: deployable, Warnings: warnings}, nil
 }
 
 // redactComposeDocument masks the values Gotham injects into the rendered

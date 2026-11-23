@@ -823,7 +823,7 @@ func (s *Service) composeDownApp(ctx context.Context, serverID uuid.UUID, app Ap
 		s.logger.Error("deploy: compose teardown cannot resolve the stored document; tearing down by project name",
 			"application_id", app.ID, "error", err)
 		content = teardownStubDocument()
-	} else if rendered, _, renderErr := s.renderComposeDocument(opCtx, app, content); renderErr == nil {
+	} else if rendered, _, _, renderErr := s.renderComposeDocument(opCtx, app, content); renderErr == nil {
 		content = rendered
 	} else {
 		s.logger.Error("deploy: compose teardown cannot render the stored document; tearing down by project name",

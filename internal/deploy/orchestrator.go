@@ -243,7 +243,7 @@ func (o *Orchestrator) run(ctx context.Context, j job) {
 			o.fail(ctx, st, fmt.Errorf("%w: rollback has no stored compose document", ErrValidation))
 			return
 		}
-		if err := guardValidate(j.dep.ComposeDocument, j.app.ID); err != nil {
+		if _, _, err := sanitizeCompose(j.dep.ComposeDocument, j.app.ID); err != nil {
 			o.fail(ctx, st, err)
 			return
 		}

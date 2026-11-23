@@ -512,6 +512,9 @@ const en = {
     rawHint: "Exactly the document you saved.",
     deployableHint:
       "The document Gotham hands to Docker on the next deploy, with its own environment, labels and networks applied and the values of the environment variables it injects masked.",
+    droppedTitle: "Gotham removed some settings from the deployed document",
+    droppedKey:
+      "The {key} setting on service {service} was removed: Gotham manages it itself.",
     dockerfileDeployableHint:
       "The Dockerfile Gotham builds on the next deploy. Environment, labels and networks are added when the container runs, not in this file.",
     copy: "Copy",

@@ -40,10 +40,16 @@ export interface Application {
 
 export type ApplicationSourceKind = "dockerfile" | "compose" | "";
 
+export interface ApplicationSourceWarning {
+  service: string;
+  key: string;
+}
+
 export interface ApplicationSource {
   kind: ApplicationSourceKind;
   raw: string;
   deployable: string;
+  warnings: ApplicationSourceWarning[];
 }
 
 export type DeploymentKind = "deploy" | "rollback";

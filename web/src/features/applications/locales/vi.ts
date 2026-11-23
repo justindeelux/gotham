@@ -514,6 +514,9 @@ const vi: ApplicationsMessages = {
     rawHint: "Đúng nội dung bạn đã lưu.",
     deployableHint:
       "Tệp Gotham đưa cho Docker ở lần triển khai kế tiếp, sau khi áp dụng biến môi trường, nhãn và mạng của Gotham, với giá trị của các biến môi trường Gotham thêm vào được che.",
+    droppedTitle: "Gotham đã bỏ một số thiết lập khỏi tệp triển khai",
+    droppedKey:
+      "Thiết lập {key} của service {service} đã bị bỏ: Gotham tự quản lý thiết lập này.",
     dockerfileDeployableHint:
       "Dockerfile Gotham build ở lần triển khai kế tiếp. Biến môi trường, nhãn và mạng được thêm khi container chạy, không nằm trong tệp này.",
     copy: "Sao chép",

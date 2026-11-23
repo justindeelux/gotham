@@ -139,6 +139,20 @@ func guardValidate(content string, appID uuid.UUID) error {
 	return nil
 }
 
+// sanitizeCompose drops the service keys Gotham manages itself and returns the
+// document to deploy plus one warning per removed key.
+func sanitizeCompose(content string, appID uuid.UUID) (string, []ComposeWarning, error) {
+	cleaned, dropped, err := composeguard.Sanitize(content, guardOptions(appID))
+	if err != nil {
+		return "", nil, fmt.Errorf("%w: %v", ErrValidation, err)
+	}
+	warnings := make([]ComposeWarning, 0, len(dropped))
+	for _, key := range dropped {
+		warnings = append(warnings, ComposeWarning{Service: key.Service, Key: key.Key})
+	}
+	return cleaned, warnings, nil
+}
+
 func ValidateComposeContent(content string, appID uuid.UUID) error {
 	if strings.TrimSpace(content) == "" {
 		return fmt.Errorf("%w: compose content is required", ErrValidation)
@@ -149,7 +163,8 @@ func ValidateComposeContent(content string, appID uuid.UUID) error {
 	if len(content) > MaxComposeBytes {
 		return fmt.Errorf("%w: compose content exceeds %d bytes", ErrValidation, MaxComposeBytes)
 	}
-	return guardValidate(content, appID)
+	_, _, err := sanitizeCompose(content, appID)
+	return err
 }
 
 func isComposeApp(app Application) bool {
@@ -293,41 +308,42 @@ func (o *Orchestrator) composeDomainTargets(ctx context.Context, app Application
 	return targets, primaryPort, nil
 }
 
-func (o *Orchestrator) renderComposeDocument(ctx context.Context, app Application, raw string) (rendered string, env map[string]string, err error) {
+func (o *Orchestrator) renderComposeDocument(ctx context.Context, app Application, raw string) (rendered string, env map[string]string, warnings []ComposeWarning, err error) {
 	targets, primaryPort, err := o.composeDomainTargets(ctx, app, raw)
 	if err != nil {
-		return "", nil, err
+		return "", nil, nil, err
 	}
 	env, generated, err := o.loadComposeEnv(ctx, app, primaryPort)
 	if err != nil {
-		return "", nil, err
+		return "", nil, nil, err
 	}
 	spec, err := services.Render(raw, env)
 	if err != nil {
-		return "", nil, composeValidationError(services.RedactError(err, env))
+		return "", nil, nil, composeValidationError(services.RedactError(err, env))
 	}
 	if err := composeguard.CheckNoInterpolation(spec.ComposeYAML); err != nil {
-		return "", nil, composeValidationError(err)
+		return "", nil, nil, composeValidationError(err)
 	}
-	if err := guardValidate(spec.ComposeYAML, app.ID); err != nil {
-		return "", nil, composeValidationError(services.RedactError(err, env))
-	}
-	injected, err := InjectComposeDomainPorts(spec.ComposeYAML, targets)
+	cleaned, warnings, err := sanitizeCompose(spec.ComposeYAML, app.ID)
 	if err != nil {
-		return "", nil, err
+		return "", nil, nil, services.RedactError(err, env)
+	}
+	injected, err := InjectComposeDomainPorts(cleaned, targets)
+	if err != nil {
+		return "", nil, nil, err
 	}
 	injected, err = RewriteComposeManagedVolumes(injected, managedVolumeRoot(), app.ID)
 	if err != nil {
-		return "", nil, err
+		return "", nil, nil, err
 	}
 	injected, err = InjectComposeEnvironment(injected, composeAppEnv(env, generated))
 	if err != nil {
-		return "", nil, composeValidationError(services.RedactError(err, env))
+		return "", nil, nil, composeValidationError(services.RedactError(err, env))
 	}
 	if err := guardValidate(injected, app.ID); err != nil {
-		return "", nil, composeValidationError(services.RedactError(err, env))
+		return "", nil, nil, composeValidationError(services.RedactError(err, env))
 	}
-	return injected, env, nil
+	return injected, env, warnings, nil
 }
 
 func composeValidationError(err error) error {
@@ -341,9 +357,12 @@ func (o *Orchestrator) buildCompose(ctx context.Context, st *runState) error {
 	if strings.TrimSpace(st.composeRaw) == "" {
 		return fmt.Errorf("%w: compose: no document resolved", ErrValidation)
 	}
-	rendered, env, err := o.renderComposeDocument(ctx, st.app, st.composeRaw)
+	rendered, env, warnings, err := o.renderComposeDocument(ctx, st.app, st.composeRaw)
 	if err != nil {
 		return err
+	}
+	for _, warning := range warnings {
+		st.log("compose: " + warning.Key + " is set by Gotham and was removed from service " + warning.Service)
 	}
 	rendered, built, err := o.buildComposeImages(ctx, st, rendered)
 	if err != nil {

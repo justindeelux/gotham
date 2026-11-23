@@ -1,6 +1,7 @@
 package composeguard
 
 import (
+	"reflect"
 	"strings"
 	"testing"
 )
@@ -81,7 +82,6 @@ func TestValidateBypassTable(t *testing.T) {
 		{"build bad args", serviceDoc("    build:\n      context: .\n      args:\n        A: [1]\n"), "services.web.build.args"},
 		{"extends", serviceDoc("    extends:\n      service: base\n"), "services.web"},
 		{"env file", serviceDoc("    env_file: .env\n"), "services.web"},
-		{"container name", serviceDoc("    container_name: web\n"), "services.web"},
 		{"extra hosts", serviceDoc("    extra_hosts:\n      - host.docker.internal:host-gateway\n"), "services.web"},
 		{"hostname", serviceDoc("    hostname: web\n"), "services.web"},
 		{"dns", serviceDoc("    dns:\n      - 8.8.8.8\n"), "services.web"},
@@ -495,5 +495,55 @@ func TestServiceRouteLabelsOption(t *testing.T) {
 		if err := Validate(serviceDoc(body), opts); err == nil {
 			t.Errorf("label in %q was accepted with the service option", body)
 		}
+	}
+}
+
+func TestSanitizeDropsManagedServiceKeys(t *testing.T) {
+	content := "services:\n" +
+		"  web:\n    image: x\n    container_name: my-web\n    restart: always\n" +
+		"  worker:\n    image: y\n    container_name: my-worker\n"
+	cleaned, dropped, err := Sanitize(content, guardOpts())
+	if err != nil {
+		t.Fatalf("Sanitize = %v, want nil", err)
+	}
+	want := []DroppedKey{
+		{Service: "web", Key: "container_name"},
+		{Service: "worker", Key: "container_name"},
+	}
+	if !reflect.DeepEqual(dropped, want) {
+		t.Errorf("dropped = %v, want %v", dropped, want)
+	}
+	if strings.Contains(cleaned, "container_name") {
+		t.Errorf("sanitized document still holds the dropped key:\n%s", cleaned)
+	}
+	if !strings.Contains(cleaned, "restart: always") {
+		t.Errorf("sanitized document lost an unrelated key:\n%s", cleaned)
+	}
+	if !strings.Contains(content, "container_name") {
+		t.Fatal("Sanitize rewrote the source document")
+	}
+	if err := Validate(cleaned, guardOpts()); err != nil {
+		t.Errorf("Validate(sanitized) = %v, want nil", err)
+	}
+}
+
+func TestSanitizeKeepsDocumentWithoutDroppedKeys(t *testing.T) {
+	content := serviceDoc("    restart: always\n")
+	cleaned, dropped, err := Sanitize(content, guardOpts())
+	if err != nil {
+		t.Fatalf("Sanitize = %v, want nil", err)
+	}
+	if cleaned != content {
+		t.Errorf("sanitized document = %q, want it unchanged", cleaned)
+	}
+	if len(dropped) != 0 {
+		t.Errorf("dropped = %v, want none", dropped)
+	}
+}
+
+func TestSanitizeRejectsUnsafeKeys(t *testing.T) {
+	content := serviceDoc("    container_name: web\n    privileged: true\n")
+	if _, _, err := Sanitize(content, guardOpts()); err == nil {
+		t.Fatal("Sanitize accepted a privileged service")
 	}
 }

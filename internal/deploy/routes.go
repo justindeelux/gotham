@@ -112,9 +112,10 @@ type applicationSourceEnvelope struct {
 }
 
 type applicationSourceResponse struct {
-	Kind       string `json:"kind"`
-	Raw        string `json:"raw"`
-	Deployable string `json:"deployable"`
+	Kind       string           `json:"kind"`
+	Raw        string           `json:"raw"`
+	Deployable string           `json:"deployable"`
+	Warnings   []ComposeWarning `json:"warnings"`
 }
 
 type webhookOutcome struct {

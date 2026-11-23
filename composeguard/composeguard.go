@@ -28,27 +28,106 @@ type Options struct {
 	ServiceRouteLabels bool
 }
 
+// DroppedKey is a service key the guard removed from the document it deploys
+// because Gotham sets it itself.
+type DroppedKey struct {
+	Service string
+	Key     string
+}
+
+// droppedServiceKeys are service keys Gotham manages itself. Removing them
+// keeps a compose file deployable instead of failing the whole deploy on a key
+// the runtime does not need; every other unsupported key stays rejected.
+var droppedServiceKeys = map[string]bool{
+	"container_name": true,
+}
+
 func Validate(content string, opts Options) error {
+	_, _, err := parse(content, opts)
+	return err
+}
+
+// Sanitize removes the service keys Gotham manages itself and validates the
+// document that remains. It returns content unchanged when nothing was dropped.
+func Sanitize(content string, opts Options) (string, []DroppedKey, error) {
+	doc, dropped, err := parse(content, opts)
+	if err != nil {
+		return "", nil, err
+	}
+	if len(dropped) == 0 {
+		return content, nil, nil
+	}
+	out, err := yaml.Marshal(doc)
+	if err != nil {
+		return "", nil, fmt.Errorf("compose document cannot be written: %v", err)
+	}
+	return string(out), dropped, nil
+}
+
+func parse(content string, opts Options) (*yaml.Node, []DroppedKey, error) {
 	if strings.ContainsRune(content, 0) {
-		return fmt.Errorf("compose document must not contain NUL bytes")
+		return nil, nil, fmt.Errorf("compose document must not contain NUL bytes")
 	}
 	if !utf8.ValidString(content) {
-		return fmt.Errorf("compose document must be valid UTF-8")
+		return nil, nil, fmt.Errorf("compose document must be valid UTF-8")
 	}
 	root, appID, err := opts.valid()
 	if err != nil {
-		return err
+		return nil, nil, err
 	}
 	doc, err := singleDocument(content)
 	if err != nil {
-		return err
+		return nil, nil, err
 	}
+	dropped := dropServiceKeys(doc)
 	var decoded map[string]any
 	if err := doc.Decode(&decoded); err != nil {
-		return fmt.Errorf("compose document is not valid YAML: %v", err)
+		return nil, nil, fmt.Errorf("compose document is not valid YAML: %v", err)
 	}
 	v := &validator{root: root, appID: appID, serviceRouteLabels: opts.ServiceRouteLabels}
-	return v.document(decoded)
+	return doc, dropped, v.document(decoded)
+}
+
+// dropServiceKeys edits the parsed document in place and reports every key it
+// removed, in document order.
+func dropServiceKeys(doc *yaml.Node) []DroppedKey {
+	if doc.Kind != yaml.DocumentNode || len(doc.Content) != 1 {
+		return nil
+	}
+	root := doc.Content[0]
+	if root.Kind != yaml.MappingNode {
+		return nil
+	}
+	services := mappingValue(root, "services")
+	if services == nil || services.Kind != yaml.MappingNode {
+		return nil
+	}
+	var dropped []DroppedKey
+	for i := 0; i+1 < len(services.Content); i += 2 {
+		service := services.Content[i+1]
+		if service.Kind != yaml.MappingNode {
+			continue
+		}
+		kept := service.Content[:0]
+		for j := 0; j+1 < len(service.Content); j += 2 {
+			if !droppedServiceKeys[service.Content[j].Value] {
+				kept = append(kept, service.Content[j], service.Content[j+1])
+				continue
+			}
+			dropped = append(dropped, DroppedKey{Service: services.Content[i].Value, Key: service.Content[j].Value})
+		}
+		service.Content = kept
+	}
+	return dropped
+}
+
+func mappingValue(node *yaml.Node, key string) *yaml.Node {
+	for i := 0; i+1 < len(node.Content); i += 2 {
+		if node.Content[i].Kind == yaml.ScalarNode && node.Content[i].Value == key {
+			return node.Content[i+1]
+		}
+	}
+	return nil
 }
 
 func (o Options) valid() (root, appID string, err error) {

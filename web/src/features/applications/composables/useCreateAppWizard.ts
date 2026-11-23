@@ -187,8 +187,11 @@ export function useCreateAppWizard(
   });
   const buildPackTouched = ref(false);
   // Rows added from the repository's .env* files, so the Env step can say
-  // where they came from and drop the hint once the user removes them.
-  const envPrefilled = ref<Array<{ key: string; file: string; valued: boolean }>>([]);
+  // where they came from and drop the hint once the user removes them. The
+  // value is the one the scan wrote, so an edited row is no longer ours.
+  const envPrefilled = ref<
+    Array<{ key: string; value: string; file: string; valued: boolean }>
+  >([]);
 
   const createdKey = ref<{ application: Application; publicKey: string } | null>(null);
   const keyRecovery = ref<{ application: Application } | null>(null);
@@ -768,13 +771,32 @@ export function useCreateAppWizard(
         continue;
       }
       const fallback = byKey.get(key);
-      form.env.push({ key, value: fallback?.value ?? "" });
+      const value = fallback?.value ?? "";
+      form.env.push({ key, value });
       envPrefilled.value.push({
         key,
+        value,
         file: fallback?.file ?? "",
         valued: fallback !== undefined,
       });
     }
+  }
+
+  // Drops the rows the previous scan added and the user left alone, so a scan
+  // for another repository does not keep the old one's keys and defaults. A
+  // row that was renamed, given a value or deleted is the user's and stays.
+  function dropScanEnvRows(): void {
+    const ours = envPrefilled.value;
+    envPrefilled.value = [];
+    if (ours.length === 0) {
+      return;
+    }
+    form.env = form.env.filter(
+      (row) =>
+        !ours.some(
+          (item) => item.key === row.key.trim() && item.value === row.value,
+        ),
+    );
   }
 
   function applyScanResult(result: RepositoryScan): void {
@@ -786,6 +808,7 @@ export function useCreateAppWizard(
     scan.composeFile = result.compose_file;
     scan.composeServices = result.compose_services;
     scan.directories = result.directories;
+    dropScanEnvRows();
     applyScanEnvKeys(
       scan.failed ? [] : result.env_keys,
       scan.failed ? [] : result.env_defaults,

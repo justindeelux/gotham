@@ -668,7 +668,9 @@ const en = {
     envConvention:
       "One or more variable names do not follow the usual ^[A-Z][A-Z0-9_]*$ convention. The API accepts them, so they are not blocked — but a non-standard name may not be injected as you expect.",
     envPrefilled:
-      "Keys read from the repository's .env files are listed below. Only names are read, never values — so fill each one in.",
+      "Keys read from the repository's .env files are listed below. Fill in each value.",
+    envPrefilledValues:
+      "Defaults from {files} are filled in. Check them before creating the app.",
     droppedRows: "{count} variable rows without a name will be ignored on create. | {count} variable row without a name will be ignored on create. | {count} variable rows without a name will be ignored on create.",
     reviewTitle: "Summary",
     reviewApp: "Application",

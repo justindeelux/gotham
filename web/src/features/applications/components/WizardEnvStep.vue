@@ -21,6 +21,13 @@ const droppedText = computed<string>(() =>
     ),
   ),
 );
+
+const prefilledText = computed<string>(() => {
+  const files = wizard.prefilledEnvFiles.value.join(", ");
+  return files === ""
+    ? String(t("applications.wizard.envPrefilled"))
+    : String(t("applications.wizard.envPrefilledValues", { files }));
+});
 </script>
 
 <template>
@@ -33,7 +40,7 @@ const droppedText = computed<string>(() =>
         depth="3"
         class="env-prefilled"
       >
-        {{ t("applications.wizard.envPrefilled") }}
+        {{ prefilledText }}
       </NText>
     </div>
     <div>

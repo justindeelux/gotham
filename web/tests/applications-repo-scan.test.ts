@@ -75,6 +75,7 @@ describe("repository scan preselects the build pack", () => {
       compose_file: "docker-compose.yml",
       compose_services: ["web", "worker"],
       env_keys: [],
+      env_defaults: [],
     });
 
     w.form.publicCloneUrl = "https://github.com/acme/demo.git";
@@ -105,6 +106,7 @@ describe("repository scan preselects the build pack", () => {
       compose_file: "compose.yaml",
       compose_services: ["web"],
       env_keys: [],
+      env_defaults: [],
     });
 
     w.form.publicCloneUrl = "https://github.com/acme/demo.git";
@@ -128,6 +130,7 @@ describe("repository scan preselects the build pack", () => {
       compose_file: "",
       compose_services: [],
       env_keys: [],
+      env_defaults: [],
     });
 
     w.form.publicCloneUrl = "https://github.com/acme/demo.git";
@@ -150,6 +153,7 @@ describe("manual build-pack choice wins", () => {
       compose_file: "docker-compose.yml",
       compose_services: ["web"],
       env_keys: [],
+      env_defaults: [],
     });
 
     w.form.publicCloneUrl = "https://github.com/acme/demo.git";
@@ -195,6 +199,7 @@ describe("a failed scan never blocks creation", () => {
       compose_file: "",
       compose_services: [],
       env_keys: [],
+      env_defaults: [],
       error: "git clone failed",
     });
 
@@ -215,6 +220,7 @@ describe("repository scan prefills env keys", () => {
     compose_file: "",
     compose_services: [],
     env_keys: envKeys,
+    env_defaults: [],
   });
 
   it("adds each key with an empty value and keeps the default row", async () => {
@@ -261,6 +267,52 @@ describe("repository scan prefills env keys", () => {
     wrapper.unmount();
   });
 
+  it("fills template defaults and never replaces a value already set", async () => {
+    vi.useFakeTimers();
+    const { w, wrapper } = mountWizard();
+    scanned.mockResolvedValue({
+      ...scanWithEnvKeys(["DATABASE_URL", "SECRET_KEY", "NODE_ENV"]),
+      env_defaults: [
+        { key: "DATABASE_URL", value: "postgres://db/app", file: ".env.example" },
+        { key: "SECRET_KEY", value: "change-me", file: ".env.example" },
+        { key: "NODE_ENV", value: "development", file: ".env.example" },
+      ],
+    });
+
+    w.form.publicCloneUrl = "https://github.com/acme/demo.git";
+    await settle();
+
+    expect(w.form.env).toEqual([
+      { key: "NODE_ENV", value: "production" },
+      { key: "DATABASE_URL", value: "postgres://db/app" },
+      { key: "SECRET_KEY", value: "change-me" },
+    ]);
+    expect(w.envRowsWithoutValue.value).toBe(0);
+    expect(w.prefilledEnvFiles.value).toEqual([".env.example"]);
+
+    const secret = w.form.env.find((row) => row.key === "SECRET_KEY");
+    if (secret === undefined) {
+      throw new Error("SECRET_KEY row missing");
+    }
+    secret.value = "typed";
+    scanned.mockResolvedValue({
+      ...scanWithEnvKeys(["DATABASE_URL", "SECRET_KEY"]),
+      env_defaults: [
+        { key: "DATABASE_URL", value: "postgres://other/app", file: ".env.example" },
+        { key: "SECRET_KEY", value: "other-default", file: ".env.example" },
+      ],
+    });
+    w.form.publicCloneUrl = "https://github.com/acme/other.git";
+    await settle();
+
+    expect(w.form.env).toEqual([
+      { key: "NODE_ENV", value: "production" },
+      { key: "DATABASE_URL", value: "postgres://db/app" },
+      { key: "SECRET_KEY", value: "typed" },
+    ]);
+    wrapper.unmount();
+  });
+
   it("leaves the env rows unchanged when the scan fails", async () => {
     vi.useFakeTimers();
     const { w, wrapper } = mountWizard();
@@ -289,6 +341,7 @@ describe("private git scans carry the inline credential", () => {
       compose_file: "",
       compose_services: [],
       env_keys: [],
+      env_defaults: [],
     });
 
     w.form.sourceType = "git_private";
@@ -323,6 +376,7 @@ describe("scan requests stay debounced", () => {
       compose_file: "",
       compose_services: [],
       env_keys: [],
+      env_defaults: [],
     });
 
     w.form.publicCloneUrl = "https://github.com/acme/d";

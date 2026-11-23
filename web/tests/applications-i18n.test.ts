@@ -345,6 +345,7 @@ describe("wizard env prefill copy follows the locale", () => {
       isRepoSource: computed(() => true),
       envKeyWarnings: computed(() => false),
       prefilledEnvKeys: computed<string[]>(() => ["DATABASE_URL"]),
+      prefilledEnvFiles: computed<string[]>(() => []),
       droppedEnvRows: computed(() => 0),
       envRowsWithoutValue: computed(() => 1),
     };
@@ -365,6 +366,26 @@ describe("wizard env prefill copy follows the locale", () => {
     expect(envStep.text()).toContain("Các khóa đọc từ tệp .env trong kho");
     expect(envStep.text()).not.toContain("applications.wizard.envPrefilled");
     envStep.unmount();
+
+    const valuedState = {
+      ...state,
+      prefilledEnvFiles: computed<string[]>(() => [".env.example"]),
+    };
+    const valuedStep = mount(WizardEnvStep as never, {
+      global: {
+        plugins: [i18n],
+        provide: { [createWizardKey as symbol]: valuedState },
+      },
+    });
+    expect(valuedStep.text()).toContain(
+      "Đã điền sẵn giá trị mặc định từ .env.example.",
+    );
+    setLocale("en", null);
+    await valuedStep.vm.$nextTick();
+    expect(valuedStep.text()).toContain("Defaults from .env.example are filled in.");
+    expect(valuedStep.text()).not.toContain("applications.wizard.envPrefilledValues");
+    valuedStep.unmount();
+    setLocale("vi", null);
 
     const reviewStep = mountStep(WizardReviewStep);
     expect(reviewStep.text()).toContain("1 biến chưa có giá trị.");

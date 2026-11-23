@@ -669,7 +669,9 @@ const vi: ApplicationsMessages = {
     envConvention:
       "Một hoặc nhiều tên biến không theo quy ước ^[A-Z][A-Z0-9_]*$ thường dùng. API vẫn chấp nhận nên không bị chặn — nhưng tên không chuẩn có thể không được nạp như mong đợi.",
     envPrefilled:
-      "Các khóa đọc từ tệp .env trong kho được thêm sẵn bên dưới. Chỉ tên khóa được đọc, không đọc giá trị — nên bạn cần điền giá trị cho từng dòng.",
+      "Các khóa đọc từ tệp .env trong kho được thêm sẵn bên dưới. Hãy điền giá trị cho từng dòng.",
+    envPrefilledValues:
+      "Đã điền sẵn giá trị mặc định từ {files}. Kiểm tra lại trước khi tạo ứng dụng.",
     droppedRows: "{count} biến không tên sẽ bị bỏ qua khi tạo. | {count} biến không tên sẽ bị bỏ qua khi tạo. | {count} biến không tên sẽ bị bỏ qua khi tạo.",
     reviewTitle: "Tóm tắt",
     reviewApp: "Ứng dụng",

@@ -35,9 +35,10 @@ type ScanRepositoryInput struct {
 }
 
 // RepositoryScan reports what the repository root implies for the build pack
-// and the env step. A failed scan keeps BuildPack and EnvKeys empty and
-// explains itself in Error; the wizard treats both as a hint, never as a
-// blocker. EnvKeys carries variable names only, never a value.
+// and the env step. A failed scan keeps BuildPack, EnvKeys and EnvDefaults
+// empty and explains itself in Error; the wizard treats all of them as a hint,
+// never as a blocker. EnvKeys carries variable names only; EnvDefaults adds the
+// values the documented template files ship for those names.
 type RepositoryScan struct {
 	BuildPack       string
 	MarkerFile      string
@@ -45,8 +46,16 @@ type RepositoryScan struct {
 	ComposeFile     string
 	ComposeServices []string
 	EnvKeys         []string
+	EnvDefaults     []EnvDefault
 	Directories     []string
 	Error           string
+}
+
+// EnvDefault is one value a template .env file gives a scanned key.
+type EnvDefault struct {
+	Key   string `json:"key"`
+	Value string `json:"value"`
+	File  string `json:"file"`
 }
 
 const repositoryScanTimeout = 60 * time.Second
@@ -54,16 +63,22 @@ const repositoryScanTimeout = 60 * time.Second
 const scanFailureWorkspace = "the scan workspace could not be created"
 
 const (
-	// maxEnvFileBytes and maxEnvKeys bound what a committed .env* file can add
-	// to one scan response.
-	maxEnvFileBytes = 256 << 10
-	maxEnvKeys      = 100
+	// maxEnvFileBytes, maxEnvKeys and maxEnvValueBytes bound what a committed
+	// .env* file can add to one scan response.
+	maxEnvFileBytes  = 256 << 10
+	maxEnvKeys       = 100
+	maxEnvValueBytes = 1024
 	// maxScanDirectories bounds the folder picker: the first folders in
 	// lexical order are enough to find a monorepo package.
 	maxScanDirectories = 200
 )
 
 var envKeyPattern = regexp.MustCompile(`^[A-Za-z_][A-Za-z0-9_]*$`)
+
+// envDefaultFiles are the documented templates a repository ships for its
+// variables. Their values are placeholders meant to be copied, so they are the
+// only .env* files whose values leave the scan.
+var envDefaultFiles = []string{".env.example", ".env.sample", ".env.template", ".env.dist"}
 
 var composeCandidateFiles = []string{
 	"compose.yaml",
@@ -215,6 +230,7 @@ func scanFailure(message string) RepositoryScan {
 		ComposeFiles:    []string{},
 		ComposeServices: []string{},
 		EnvKeys:         []string{},
+		EnvDefaults:     []EnvDefault{},
 		Directories:     []string{},
 		Error:           message,
 	}
@@ -242,6 +258,7 @@ func detectRepository(root, workingDir string) RepositoryScan {
 		ComposeFiles:    []string{},
 		ComposeServices: []string{},
 		EnvKeys:         []string{},
+		EnvDefaults:     []EnvDefault{},
 		Directories:     repoDirectories(root),
 	}
 	dir := filepath.Join(root, workingDir)
@@ -249,7 +266,7 @@ func detectRepository(root, workingDir string) RepositoryScan {
 		result.Error = fmt.Sprintf("working directory %q is not in the repository", workingDir)
 		return result
 	}
-	result.EnvKeys = envKeysFromRoot(dir)
+	result.EnvKeys, result.EnvDefaults = envScanFromDir(dir)
 	for _, name := range composeCandidateFiles {
 		if isRegularFile(filepath.Join(dir, name)) {
 			result.ComposeFiles = append(result.ComposeFiles, name)
@@ -318,14 +335,18 @@ func isRegularFile(path string) bool {
 	return err == nil && info.Mode().IsRegular()
 }
 
-// envKeysFromRoot lists the variable names declared by the root .env* files.
-// Values stay on disk: a committed .env may hold real secrets, so only names
-// reach the response, the wizard or a log. Symlinks are skipped like every
-// other root marker.
-func envKeysFromRoot(dir string) []string {
+// envScanFromDir lists the variable names every .env* file in dir declares and
+// the defaults envDefaultFiles give them. Names are collected in the lexical
+// file order the previous scan used, so callers see the same key list. Values
+// come from the documented templates only: a committed plain .env or
+// .env.local may hold real secrets, so only names come out of those. When two
+// template files set a key, the first in envDefaultFiles order wins, and a
+// blank value never becomes a default. Symlinks are skipped like every other
+// root marker.
+func envScanFromDir(dir string) ([]string, []EnvDefault) {
 	entries, err := os.ReadDir(dir)
 	if err != nil {
-		return []string{}
+		return []string{}, []EnvDefault{}
 	}
 	keys := []string{}
 	seen := make(map[string]struct{})
@@ -336,21 +357,46 @@ func envKeysFromRoot(dir string) []string {
 		if !strings.HasPrefix(entry.Name(), ".env") || !entry.Type().IsRegular() {
 			continue
 		}
-		for _, key := range envFileKeys(filepath.Join(dir, entry.Name())) {
-			if _, ok := seen[key]; ok {
+		for _, item := range readEnvFile(filepath.Join(dir, entry.Name())) {
+			if _, ok := seen[item.key]; ok {
 				continue
 			}
-			seen[key] = struct{}{}
-			keys = append(keys, key)
+			seen[item.key] = struct{}{}
+			keys = append(keys, item.key)
 			if len(keys) >= maxEnvKeys {
 				break
 			}
 		}
 	}
-	return keys
+	defaults := []EnvDefault{}
+	withDefault := make(map[string]struct{})
+	for _, name := range envDefaultFiles {
+		if !isRegularFile(filepath.Join(dir, name)) {
+			continue
+		}
+		for _, entry := range readEnvFile(filepath.Join(dir, name)) {
+			if entry.value == "" {
+				continue
+			}
+			if _, ok := seen[entry.key]; !ok {
+				continue
+			}
+			if _, ok := withDefault[entry.key]; ok {
+				continue
+			}
+			withDefault[entry.key] = struct{}{}
+			defaults = append(defaults, EnvDefault{Key: entry.key, Value: entry.value, File: name})
+		}
+	}
+	return keys, defaults
 }
 
-func envFileKeys(path string) []string {
+type envEntry struct {
+	key   string
+	value string
+}
+
+func readEnvFile(path string) []envEntry {
 	file, err := os.Open(path)
 	if err != nil {
 		return nil
@@ -360,32 +406,57 @@ func envFileKeys(path string) []string {
 	if err != nil {
 		return nil
 	}
-	keys := []string{}
+	entries := []envEntry{}
 	for _, line := range strings.Split(string(data), "\n") {
-		if key := envLineKey(line); key != "" {
-			keys = append(keys, key)
+		if key, value, ok := envLine(line); ok {
+			entries = append(entries, envEntry{key: key, value: value})
 		}
 	}
-	return keys
+	return entries
 }
 
-// envLineKey reads the name half of a KEY=value line and drops everything from
-// the first "=" on, so a value never leaves this function.
-func envLineKey(line string) string {
+// envLine reads one KEY=value line, with or without the export prefix. The
+// caller decides whether the value may leave the process.
+func envLine(line string) (string, string, bool) {
 	line = strings.TrimSpace(line)
 	if line == "" || strings.HasPrefix(line, "#") {
-		return ""
+		return "", "", false
 	}
 	line = strings.TrimSpace(strings.TrimPrefix(line, "export "))
-	key, _, found := strings.Cut(line, "=")
+	key, value, found := strings.Cut(line, "=")
 	if !found {
-		return ""
+		return "", "", false
 	}
 	key = strings.TrimSpace(key)
 	if !envKeyPattern.MatchString(key) {
+		return "", "", false
+	}
+	return key, envLineValue(value), true
+}
+
+// envValue strips the quotes or the trailing comment around a value.
+// shortcut: escapes in a double-quoted value stay literal, enough for the
+// placeholders templates ship.
+func envLineValue(raw string) string {
+	value := strings.TrimSpace(raw)
+	switch {
+	case value == "":
+		return ""
+	case value[0] == '"' || value[0] == '\'':
+		end := strings.IndexByte(value[1:], value[0])
+		if end < 0 {
+			return ""
+		}
+		value = value[1 : end+1]
+	default:
+		if comment := strings.Index(value, " #"); comment >= 0 {
+			value = strings.TrimSpace(value[:comment])
+		}
+	}
+	if len(value) > maxEnvValueBytes {
 		return ""
 	}
-	return key
+	return value
 }
 
 // composeServiceNames lists services through the same parser the deploy uses,

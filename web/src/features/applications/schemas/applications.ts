@@ -525,6 +525,12 @@ export const workingDirSchema = z
       ),
   );
 
+export const repositoryScanEnvDefaultSchema = z.object({
+  key: z.string(),
+  value: z.string(),
+  file: z.string(),
+});
+
 export const repositoryScanSchema = z.object({
   detected_build_pack: z.string(),
   marker_file: z.string(),
@@ -532,8 +538,11 @@ export const repositoryScanSchema = z.object({
   compose_file: z.string(),
   compose_services: z.array(z.string()),
   env_keys: z.array(z.string()).default([]),
+  env_defaults: z.array(repositoryScanEnvDefaultSchema).default([]),
   directories: z.array(z.string()).default([]),
   error: z.string().optional(),
 });
+
+export type RepositoryScanEnvDefault = z.infer<typeof repositoryScanEnvDefaultSchema>;
 
 export type RepositoryScan = z.infer<typeof repositoryScanSchema>;

@@ -110,7 +110,6 @@ const vi = {
       "Mọi thứ đang chạy cho {project} trong {environment}. Mỗi tài nguyên gắn với một máy chủ.",
     environmentSwitcher: "Môi trường",
     siblingAria: "Môi trường cùng dự án",
-    variablesButton: "Biến",
     addResource: "Thêm tài nguyên",
     tabs: {
       all: "Tất cả",

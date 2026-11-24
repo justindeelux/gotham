@@ -62,12 +62,6 @@ const tabs = computed<Array<{ key: EnvironmentResourceTab; label: string }>>(() 
   { key: "databases", label: t("projects.environment.tabs.databases") },
 ]);
 
-function scrollToVariables(): void {
-  document
-    .querySelector(".variables-section")
-    ?.scrollIntoView({ behavior: "smooth", block: "start" });
-}
-
 function tabCount(tab: EnvironmentResourceTab): number {
   return page.counts.value[tab];
 }
@@ -197,9 +191,6 @@ function afterServiceCreate(service: Service): void {
           </div>
         </div>
         <div class="page-actions">
-          <NButton @click="scrollToVariables()">
-            {{ t("projects.environment.variablesButton") }}
-          </NButton>
           <NButton
             v-if="page.canWrite.value"
             type="primary"
@@ -598,10 +589,6 @@ function afterServiceCreate(service: Service): void {
 
 .small {
   font-size: var(--text-xs);
-}
-
-.variables-section {
-  scroll-margin-top: var(--space-4);
 }
 
 @container (max-width: 560px) {

@@ -50,7 +50,7 @@ const widePage = computed(() => route.meta.wide === true);
     <div class="main">
       <AppTopbar />
 
-      <main class="view">
+      <main class="view" :class="{ 'view--fixed': fillViewport }">
         <div class="page" :class="{ 'page--fill': fillViewport, 'page--wide': widePage }">
           <RouterView />
         </div>
@@ -103,6 +103,11 @@ const widePage = computed(() => route.meta.wide === true);
   overflow-y: auto;
   overflow-x: hidden;
   overscroll-behavior: contain;
+}
+
+/* A page that owns its scroll regions never moves as a whole. */
+.view.view--fixed {
+  overflow: hidden;
 }
 
 .page {

@@ -223,6 +223,9 @@ test("environment page shows project rows read-only above its own editor", async
     await mockApi(page);
     await page.goto(`${baseURL}/projects/${projectId}/environments/${environmentId}`);
     await page.locator(".environment-page .title").waitFor();
+    await expect(
+      page.getByRole("button", { name: "Variables", exact: true }),
+    ).toHaveCount(0);
     const section = page.locator(".variables-section");
     await section.scrollIntoViewIfNeeded();
     await expect(section).toContainText("SENTRY_DSN");

@@ -3640,6 +3640,7 @@ function onFolderMenu(key: string): void {
   min-height: 0;
   overflow-x: auto;
   overflow-y: auto;
+  overscroll-behavior: contain;
   border: 1px solid var(--border);
   border-radius: var(--radius-md);
 }
@@ -3960,6 +3961,7 @@ function onFolderMenu(key: string): void {
   flex: 1 1 auto;
   min-height: 0;
   overflow-y: auto;
+  overscroll-behavior: contain;
   align-content: start;
 }
 

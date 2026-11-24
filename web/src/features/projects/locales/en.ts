@@ -110,7 +110,6 @@ const en = {
       "Everything that runs for {project} in {environment}. Each resource is pinned to one server.",
     environmentSwitcher: "Environment",
     siblingAria: "Sibling environment",
-    variablesButton: "Variables",
     addResource: "Add resource",
     tabs: {
       all: "All",

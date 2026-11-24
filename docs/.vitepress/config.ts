@@ -5,7 +5,6 @@ export default defineConfig({
   title: "Gotham",
   description: "Self-hosted PaaS: control plane, node agent and web console.",
   cleanUrls: true,
-  lastUpdated: true,
   themeConfig: {
     search: { provider: "local" },
     socialLinks: [{ icon: "github", link: "https://github.com/justindeelux/gotham" }],

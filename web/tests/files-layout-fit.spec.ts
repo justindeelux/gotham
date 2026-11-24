@@ -235,6 +235,84 @@ test("the browser fills the viewport and only the entry list scrolls", async ({
   }
 });
 
+async function paneBox(page: Page, index = 0) {
+  return (await page.locator(".files-browser").nth(index).boundingBox())!;
+}
+
+async function wheelOver(page: Page, selector: string, index = 0): Promise<void> {
+  const box = (await page.locator(selector).nth(index).boundingBox())!;
+  await page.mouse.move(box.x + box.width / 2, box.y + box.height / 2);
+  await page.mouse.wheel(0, 500);
+  await settleLayout(page);
+}
+
+async function pageScrollTop(page: Page): Promise<number> {
+  return page.evaluate(
+    () => (document.querySelector(".view") as HTMLElement).scrollTop,
+  );
+}
+
+// A page that owns its scroll regions must never move: the view scroller stays put
+// even when the page box overflows it by a hair.
+async function leakPageOverflow(page: Page): Promise<void> {
+  await page.addStyleTag({
+    content: ".page.page--fill { height: calc(100% + 2px) !important; }",
+  });
+  await settleLayout(page);
+}
+
+test("a wheel over the pane chrome never moves the pane", async ({ page }) => {
+  await page.setViewportSize({ width: 1280, height: 800 });
+  await mockApi(page);
+  await installListing(page, manyEntries().slice(0, 2));
+  await page.goto(`${baseURL}/servers/${server1}/files`);
+  await expect(page.locator(".fm-table .fm-row:not(.fm-head)")).toHaveCount(2);
+  await leakPageOverflow(page);
+
+  const chrome = [".fm-topbar", ".fm-tabstrip", ".fm-foot", ".fm-pathbar"];
+  for (const matches of [false, true]) {
+    if (matches) {
+      await page.getByRole("button", { name: "Split view" }).click();
+      await expect(page.locator(".files-browser")).toHaveCount(2);
+      await leakPageOverflow(page);
+    }
+    const before = await paneBox(page);
+    for (const selector of chrome) {
+      for (let index = 0; index < (matches ? 2 : 1); index += 1) {
+        await wheelOver(page, selector, index);
+      }
+    }
+    const after = await paneBox(page);
+    expect(await pageScrollTop(page), "page scroller stays put").toBe(0);
+    expect(Math.abs(after.y - before.y), "pane top").toBeLessThanOrEqual(1);
+    expect(Math.abs(after.height - before.height), "pane height").toBeLessThanOrEqual(1);
+  }
+});
+
+test("a long folder scrolls inside the list and keeps the chrome in place", async ({
+  page,
+}) => {
+  await page.setViewportSize({ width: 1280, height: 800 });
+  await mockApi(page);
+  await page.goto(`${baseURL}/servers/${server1}/files`);
+  await expect(page.locator(".fm-table .fm-row:not(.fm-head)")).toHaveCount(60);
+  await leakPageOverflow(page);
+
+  const before = await paneBox(page);
+  const headBefore = (await page.locator(".fm-head").boundingBox())!;
+  await wheelOver(page, ".table-wrap");
+  const headAfter = (await page.locator(".fm-head").boundingBox())!;
+  expect(
+    await page.evaluate(
+      () => (document.querySelector(".table-wrap") as HTMLElement).scrollTop,
+    ),
+    "the entry list scrolls",
+  ).toBeGreaterThan(0);
+  expect(Math.abs(headAfter.y - headBefore.y), "header stays pinned").toBeLessThanOrEqual(1);
+  expect(Math.abs((await paneBox(page)).y - before.y), "pane stays put").toBeLessThanOrEqual(1);
+  expect(await pageScrollTop(page), "page scroller stays put").toBe(0);
+});
+
 test("the top breadcrumb is gone and the header node selector switches nodes", async ({
   page,
 }) => {
